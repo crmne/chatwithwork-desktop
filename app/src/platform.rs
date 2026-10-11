@@ -45,7 +45,7 @@ pub fn accent_color() -> Option<[u8; 3]> {
     #[cfg(target_os = "linux")]
     {
         // GNOME 47 and later name one of a fixed set of accents.
-        let name = gsettings("org.gnome.desktop.interface", "accent-color")?;
+        let name = fastframe_desktop::setting("org.gnome.desktop.interface", "accent-color")?;
         Some(match name.as_str() {
             "teal" => [0x21, 0x90, 0xa4],
             "green" => [0x3a, 0x94, 0x4a],
@@ -69,11 +69,14 @@ pub fn text_rendering() -> fastframe_text::TextRendering {
 }
 
 /// Dark mode on Linux desktops, which winit can't always read on Wayland:
-/// the freedesktop color-scheme setting, as GNOME, KDE and Omarchy set it.
+/// GNOME's color-scheme setting, as GNOME, KDE and Omarchy set it, read
+/// through the desktop portal.
 pub fn prefers_dark() -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
-        if let Some(scheme) = gsettings("org.gnome.desktop.interface", "color-scheme") {
+        if let Some(scheme) =
+            fastframe_desktop::setting("org.gnome.desktop.interface", "color-scheme")
+        {
             return Some(scheme == "prefer-dark");
         }
         std::env::var("GTK_THEME")
@@ -84,24 +87,6 @@ pub fn prefers_dark() -> Option<bool> {
     {
         None
     }
-}
-
-#[cfg(target_os = "linux")]
-fn gsettings(schema: &str, key: &str) -> Option<String> {
-    let out = std::process::Command::new("gsettings")
-        .args(["get", schema, key])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .trim_matches('\'')
-            .to_string(),
-    )
 }
 
 /// One face of the system UI font: a file, and for variable fonts the axis

@@ -1350,6 +1350,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "env_logger",
+ "fastframe-desktop",
  "fastframe-emoji",
  "fastframe-instance",
  "fastframe-macos",
@@ -1995,6 +1996,14 @@ name = "fastdivide"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
+
+[[package]]
+name = "fastframe-desktop"
+version = "0.5.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.5.0#075ba9d4d7b9d2c13ca20d1bdb7cc158dba62c22"
+dependencies = [
+ "zbus",
+]
 
 [[package]]
 name = "fastframe-emoji"
