@@ -271,8 +271,9 @@ fn stop_cancels_the_answer_being_written() {
     fx.wait_for_label("Q3 budget review");
     fx.open(12);
     fx.wait_for_label("Q3 spending came in at €1.28M");
-    fx.harness
-        .get_by_label("Searching Drive and Slack · Reading Q3 actuals.xlsx");
+    // What's written so far can arrive before the chat's read, and the
+    // activity with it.
+    fx.wait_for_label("Searching Drive and Slack · Reading Q3 actuals.xlsx");
     fx.harness.get_by_label("Stop response").click();
     fx.wait_for_request("chat_cancel", |r| r["chat"] == "12");
     fx.wait_for_label("Send message");
@@ -766,6 +767,15 @@ impl Fixture {
         });
     }
 
+    /// Wait until the open chat is followed and its catch-up read is in.
+    fn caught_up(&mut self) {
+        self.wait("the chat to catch up", |h| {
+            h.state().chat_state().is_some_and(|s| {
+                s.following == super::state::Following::Live && !s.loading && !s.stale
+            })
+        });
+    }
+
     /// Wait for the chats and the models.
     fn ready(&mut self) {
         self.wait("the models", |h| {
@@ -883,6 +893,9 @@ fn answers_offer_what_the_chat_allows() {
     // A project chat started by someone else: no retry, and no share.
     fx.chat().open(6);
     fx.wait_for_label("Interviews for the third role finish on Thursday.");
+    // The read that catches up once the chat is followed can land under
+    // a click and move the buttons: let it in first.
+    fx.caught_up();
     fx.harness.run_steps(5);
     fx.harness.get_by_label("Branch into a new chat");
     assert!(fx.harness.query_by_label("Retry this answer").is_none());
