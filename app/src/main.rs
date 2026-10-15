@@ -19,7 +19,6 @@ mod events;
 mod icons;
 mod instance;
 mod model;
-mod notifications;
 mod pairing;
 mod paths;
 mod platform;
@@ -31,6 +30,7 @@ mod ui;
 
 use std::path::PathBuf;
 
+use cww_notification_broker as notifications;
 use ui::Page;
 
 const USAGE: &str = "\

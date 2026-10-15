@@ -198,7 +198,6 @@ struct Active<H> {
     handle: H,
     generation: u64,
     attempt: Option<u64>,
-    closing: bool,
 }
 
 struct Observation {
@@ -293,13 +292,15 @@ impl<B: Backend> Broker<B> {
                         handle,
                         generation,
                         attempt,
-                        closing: false,
                     },
                 );
             }
             Command::Withdraw { id } => {
-                if let Some(active) = self.active.get_mut(&id) {
-                    active.closing = true;
+                if let Some(active) = self.active.remove(&id) {
+                    // Retire immediately, so an oldest-ID withdrawal followed
+                    // by a new show can make room at capacity. Fastframe's
+                    // queued Close wins over dropping this handle. Removal is
+                    // best effort; no native completion is claimed here.
                     self.backend.close(&active.handle);
                 } else {
                     // Cross-restart withdrawal is available on macOS/Windows.
@@ -327,18 +328,6 @@ impl<B: Backend> Broker<B> {
             return None;
         }
         let attempt = active.attempt;
-        if active.closing {
-            match event {
-                NativeEvent::Shown => return None,
-                NativeEvent::Activated | NativeEvent::Action(_) => {
-                    // A response can have reached the callback immediately
-                    // before close. It is terminal even when no longer routed.
-                    self.active.remove(&id);
-                    return None;
-                }
-                _ => {}
-            }
-        }
         if !matches!(event, NativeEvent::Shown) {
             self.active.remove(&id);
         }
@@ -619,42 +608,23 @@ mod tests {
     }
 
     #[test]
-    fn withdrawal_waits_for_a_real_terminal_event_and_does_not_route_late_clicks() {
-        for terminal in [
+    fn withdrawal_retires_the_observation_without_a_fake_native_completion() {
+        let fake = Fake::default();
+        let (mut broker, mut events, _) = broker(fake.clone());
+        assert!(broker.command(show("a")).is_ok());
+        assert!(broker.command(Command::Withdraw { id: "a".into() }).is_ok());
+        assert_eq!(*fake.closed.lock().unwrap(), vec![0]);
+        assert!(broker.active.is_empty());
+        assert!(events.try_recv().is_err());
+        for late in [
+            NativeEvent::Shown,
             NativeEvent::Closed,
             NativeEvent::Dismissed,
             NativeEvent::Activated,
+            NativeEvent::Failed(Error::Delivery),
         ] {
-            let fake = Fake::default();
-            let (mut broker, mut events, _) = broker(fake.clone());
-            assert!(broker.command(show("a")).is_ok());
-            assert!(broker.command(Command::Withdraw { id: "a".into() }).is_ok());
-            assert_eq!(*fake.closed.lock().unwrap(), vec![0]);
-            assert!(events.try_recv().is_err());
-            fake.send(0, NativeEvent::Shown);
+            fake.send(0, late);
             assert_eq!(broker.observation(events.try_recv().unwrap()), None);
-            fake.send(0, terminal.clone());
-            let event = broker.observation(events.try_recv().unwrap());
-            match terminal {
-                NativeEvent::Closed => assert_eq!(
-                    event,
-                    Some(Event::Closed {
-                        id: "a".into(),
-                        attempt: None
-                    })
-                ),
-                NativeEvent::Dismissed => {
-                    assert_eq!(
-                        event,
-                        Some(Event::Dismissed {
-                            id: "a".into(),
-                            attempt: None
-                        })
-                    )
-                }
-                _ => assert_eq!(event, None),
-            }
-            assert!(broker.active.is_empty());
         }
     }
 
@@ -733,6 +703,13 @@ mod tests {
             Some(Event::Dismissed { .. })
         ));
         assert!(broker.command(show("new")).is_ok());
+        assert_eq!(broker.active.len(), protocol::MAX_ACTIVE);
+        // Eviction must make room before an asynchronous native close returns.
+        assert!(broker.command(Command::Withdraw { id: "0".into() }).is_ok());
+        assert!(broker.command(show("next")).is_ok());
+        assert_eq!(broker.active.len(), protocol::MAX_ACTIVE);
+        fake.send(protocol::MAX_ACTIVE, NativeEvent::Closed);
+        assert_eq!(broker.observation(events.try_recv().unwrap()), None);
         assert_eq!(broker.active.len(), protocol::MAX_ACTIVE);
     }
 

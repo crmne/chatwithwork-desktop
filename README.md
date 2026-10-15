@@ -10,7 +10,7 @@ The Chat with Work Local Agent (`cww` on the command line) is the open-source co
 
 ## Install
 
-All packages include **Chat with Work**, the desktop app, **`cww`**, the terminal interface, and the background agent. Nothing is shared until you pair the computer and choose a folder. Linux and macOS run the daemon as `cww daemon run`; Windows also includes `cww-agent.exe` so the daemon runs without a console window.
+The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the terminal interface, and the background agent. Nothing is shared until you pair the computer and choose a folder. Linux and macOS run the daemon as `cww daemon run`; Windows also includes `cww-agent.exe` so the daemon runs without a console window.
 
 | Platform | Install | Open |
 |---|---|---|
@@ -55,6 +55,8 @@ Windows builds are not signed yet. If SmartScreen warns, choose **More info**, t
 
 The `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` archive contains both executables, the service, launcher, icon, documentation and licenses. Put `cww-app` and `cww` on your PATH, `cww-app.desktop` in `~/.local/share/applications/`, and `cww-app.svg` in `~/.local/share/icons/hicolor/scalable/apps/`. Then run `cww daemon install`.
 
+The terminal-only `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` archive includes `cww` and `cww-notify`. Keep both executables together on your PATH so native notifications can work without the desktop app. Install its `cww-app.desktop` and `cww-app.svg` in the same locations above; this desktop entry is hidden from application menus. A headless server without a desktop notification service retains the browser notification fallback.
+
 **From source** (Rust 1.98 or newer for the desktop app)
 
 ```sh
@@ -63,6 +65,8 @@ cargo install --locked --path app
 ```
 
 Run these commands from a checkout. They install both commands; the packages or one-line installer also provide desktop integration. The terminal agent alone needs Rust 1.90 or newer.
+
+For a Linux terminal-only build with native notification support, install `notification-broker` instead of `app` in the second command. The notification helper needs Rust 1.98 or newer. On macOS, native notifications require the packaged application bundle, including its identity and signature; loose development binaries are insufficient.
 
 Release archives come with SHA-256 checksums, signed for the desktop app's updater, and GitHub artifact attestations. To check a download:
 

@@ -621,9 +621,17 @@ mod tests {
         // A tiny executable fixture, without a desktop session or native APIs.
         let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let path = dir.path().join("helper");
+        // Nix's build sandbox supplies its shell through PATH, not /bin/sh.
+        let shell = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|directory| directory.join("sh"))
+            .find(|candidate| candidate.is_absolute() && candidate.is_file())
+            .expect("test shell");
         std::fs::write(
             &path,
-            format!("#!/bin/sh\n[ \"$1\" = --notification-broker ] || exit 9\n{script}\n"),
+            format!(
+                "#!{}\n[ \"$1\" = --notification-broker ] || exit 9\n{script}\n",
+                shell.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();

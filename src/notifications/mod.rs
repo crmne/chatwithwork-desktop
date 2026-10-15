@@ -4,5 +4,6 @@
 //! supervisor owns the broker's pipes; the sandboxed daemon never opens an OS
 //! notification connection itself.
 
+pub mod helper;
 pub mod protocol;
 pub mod supervisor;

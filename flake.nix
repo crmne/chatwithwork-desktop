@@ -32,8 +32,9 @@
             cargoLock.allowBuiltinFetchGit = true;
             cargoBuildFlags = [ "--workspace" ];
             cargoTestFlags = [ "--workspace" ];
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.makeWrapper pkgs.pkg-config ]
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns ];
+            nativeBuildInputs = [ pkgs.makeWrapper ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns pkgs.rcodesign ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
 
             # The end-to-end test binds a local port; the rest touches only
@@ -58,8 +59,20 @@
               substitute packaging/macos/Info.plist "$app/Contents/Info.plist" \
                 --replace-fail __VERSION__ ${((pkgs.lib.importTOML ./Cargo.toml).package.version)}
               png2icns "$app/Contents/Resources/cww-app.icns" app/assets/icon-1024.png
-              ln -s "$out/bin/cww" "$app/Contents/MacOS/cww"
-              ln -s "$out/bin/cww-app" "$app/Contents/MacOS/cww-app"
+              # Native notifications require the real executable in the bundle.
+              for binary in cww cww-app; do
+                mv "$out/bin/$binary" "$app/Contents/MacOS/$binary"
+                makeWrapper "$app/Contents/MacOS/$binary" "$out/bin/$binary"
+              done
+              # The standalone helper is for Linux CLI-only archives. macOS
+              # uses the broker entry point of the bundled application.
+              rm -f "$out/bin/cww-notify"
+            '';
+
+            # Strip/fixup would invalidate an earlier signature.
+            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              rcodesign sign --entitlements-xml-file packaging/macos/entitlements.plist \
+                "$out/Applications/Chat with Work.app"
             '';
 
             meta = {

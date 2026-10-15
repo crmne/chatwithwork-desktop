@@ -50,6 +50,11 @@ jobs:
             echo "::error::The app and agent versions must match."
             exit 1
           fi
+          helper_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' notification-broker/Cargo.toml | head -n 1)
+          if [ "$helper_version" != "$version" ]; then
+            echo "::error::The notification helper and agent versions must match."
+            exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]] && [[ "$GITHUB_REF_NAME" != *-* ]]; then
             test -s "packaging/release-notes/$GITHUB_REF_NAME.md" || {
               echo "::error::Commit the release notes before tagging."
@@ -116,16 +121,26 @@ jobs:
         if: runner.os == 'Windows'
         run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
+      - name: Build the CLI notification helper
+        if: runner.os == 'Linux'
+        run: mbx build --locked --release --target ${{ matrix.target }} -p cww-notification-broker --bin cww-notify
+      - uses: ruby/setup-ruby@v1
+        if: runner.os == 'Linux'
+        with:
+          ruby-version: '4.0'
+
       - name: Check the binary is static
         if: runner.os == 'Linux'
         run: |
-          bin="target/${{ matrix.target }}/release/cww"
-          if readelf -d "$bin" | grep -q NEEDED; then
-            readelf -d "$bin"
-            echo "::error::$bin links shared libraries"
-            exit 1
-          fi
-          "$bin" --version
+          for name in cww cww-notify; do
+            bin="target/${{ matrix.target }}/release/$name"
+            if readelf -d "$bin" | grep -q NEEDED; then
+              readelf -d "$bin"
+              echo "::error::$bin links shared libraries"
+              exit 1
+            fi
+            "$bin" --version
+          done
 
       - name: Sign binaries (Azure Artifact Signing)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
@@ -177,9 +192,10 @@ jobs:
             rm -rf "dist/$app"
             7z l "dist/$app.zip"
           else
-            cp "target/${{ matrix.target }}/release/cww" "dist/$name/"
-            cp --parents packaging/systemd/cww.service "dist/$name/"
-            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            ruby packaging/linux/cli-archive.rb \
+              "target/${{ matrix.target }}/release/cww" \
+              "target/${{ matrix.target }}/release/cww-notify" \
+              "$VERSION" "${{ matrix.target }}" dist
           fi
           rm -rf "dist/$name"
 

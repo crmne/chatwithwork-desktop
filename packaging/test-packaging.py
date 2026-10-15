@@ -58,6 +58,32 @@ exit "${TEST_DAEMON_EXIT:-0}"
                 for name in ("cww", "cww-app"):
                     self.assertEqual(archive.getmember(base + name).mode, 0o755)
 
+    def test_static_cli_archive_includes_native_helper_and_identity(self):
+        helper = self.bin / "cww-notify"
+        executable(helper, "#!/bin/sh\necho 'cww-notify 9.8.7'\n")
+        for target in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
+            with self.subTest(target=target):
+                result = run("ruby", str(ROOT / "packaging/linux/cli-archive.rb"),
+                             str(self.cww), str(helper), "9.8.7", target,
+                             str(self.work / "release"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                name = f"cww-v9.8.7-{target}"
+                with tarfile.open(self.work / "release" / f"{name}.tar.gz") as archive:
+                    for binary in ("cww", "cww-notify"):
+                        self.assertEqual(archive.getmember(f"{name}/{binary}").mode, 0o755)
+                    self.assertTrue(archive.getmember(f"{name}/cww-app.svg").isfile())
+                    desktop = archive.extractfile(f"{name}/cww-app.desktop").read().decode()
+                    self.assertIn("Icon=cww-app\n", desktop)
+                    self.assertIn("NoDisplay=true\n", desktop)
+                    self.assertIn("Exec=cww\n", desktop)
+
+    def test_cli_archive_requires_the_helper(self):
+        result = run("ruby", str(ROOT / "packaging/linux/cli-archive.rb"),
+                     str(self.cww), str(self.bin / "missing"), "9.8.7",
+                     "x86_64-unknown-linux-musl", str(self.work / "release"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.work / "release").exists())
+
     def test_arch_package_functions_install_gui_cli_service_and_launcher(self):
         archive = self.archive()
         source = self.work / "src"

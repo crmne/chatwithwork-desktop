@@ -77,7 +77,7 @@ fastframe-scroll = { version = "0.6.0", git = "https://github.com/crmne/fastfram
 # notification area on Windows, and the menu bar on macOS.
 fastframe-tray = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Native delivery for the supervisor's pipe-only notification broker.
-fastframe-notifications = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
+cww-notification-broker = { path = "../notification-broker" }
 # Maps the system UI font instead of reading it: San Francisco is 8 MB.
 memmap2 = "0.9"
 # Waits for the daemon's socket to appear instead of polling for it.
@@ -90,7 +90,7 @@ resvg = { version = "0.48", default-features = false }
 # Answers in chats are Markdown (CommonMark with GitHub's tables and
 # strikethrough), parsed here and drawn as the web app draws them.
 pulldown-cmark = { version = "0.13", default-features = false }
-# Bounded broker channels and completion; the demo also needs a runtime.
+# Shared async control and demo support.
 tokio = { version = "1.53", features = ["sync", "macros"] }
 # Only for --demo, whose stand-in daemon uses the real listener.
 tokio-util = { version = "0.7", features = ["io-util"], optional = true }

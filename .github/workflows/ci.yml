@@ -34,6 +34,9 @@ jobs:
           cache-generation: test-v1
       - run: cargo fmt --check
       - run: mbx clippy --all-targets --locked -- -D warnings
+      - run: cargo fmt -p cww-notification-broker --check
+      - run: mbx clippy -p cww-notification-broker --all-targets --locked -- -D warnings
+      - run: mbx test -p cww-notification-broker --locked
       - run: mbx test --locked --no-run
       - run: mbx test --locked
         timeout-minutes: 5

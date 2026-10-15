@@ -1412,6 +1412,7 @@ dependencies = [
  "blocking",
  "cpal",
  "cww",
+ "cww-notification-broker",
  "directories",
  "eframe",
  "egui",
@@ -1421,7 +1422,6 @@ dependencies = [
  "fastframe-desktop",
  "fastframe-emoji",
  "fastframe-instance",
- "fastframe-notifications",
  "fastframe-scroll",
  "fastframe-text",
  "fastframe-theme",
@@ -1448,6 +1448,18 @@ dependencies = [
  "windows-sys 0.61.2",
  "winit",
  "winresource",
+]
+
+[[package]]
+name = "cww-notification-broker"
+version = "0.3.1"
+dependencies = [
+ "anyhow",
+ "cww",
+ "fastframe-notifications",
+ "pollster 0.4.0",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

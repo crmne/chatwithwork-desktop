@@ -10,8 +10,9 @@
 //!
 //! The broker retains at most [`MAX_ACTIVE`] observations. At capacity, a new
 //! ID fails; replacing or withdrawing an existing ID remains possible. The
-//! parent owns retention, fallback and durable routing. An unknown-key
-//! withdrawal is best effort and emits no synthetic `Closed` acknowledgement.
+//! parent owns retention, fallback and durable routing. Withdrawal queues a
+//! best-effort native close and immediately retires the observation, so new
+//! notifications can use its slot. It emits no completion acknowledgement.
 //! EOF or `Exit` releases observations, leaving delivered OS history intact.
 
 use serde::{Deserialize, Serialize};

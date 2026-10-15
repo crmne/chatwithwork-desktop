@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Chat with Work
+Comment=Chat with Work local agent
+Exec=cww
+Icon=cww-app
+Terminal=true
+NoDisplay=true
+Categories=Utility;
