@@ -39,10 +39,10 @@ rm -rf "$(dirname "$iconset")"
 # Sign the inner command first, then the bundle.
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$app/Contents/MacOS/cww"
-    codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$app"
+    codesign --force --timestamp --options runtime --entitlements "$here/entitlements.plist" --sign "$CODESIGN_IDENTITY" "$app"
 else
     codesign --force --sign - "$app/Contents/MacOS/cww"
-    codesign --force --sign - "$app"
+    codesign --force --entitlements "$here/entitlements.plist" --sign - "$app"
 fi
 codesign --verify --strict --deep "$app"
 plutil -lint "$app/Contents/Info.plist" >/dev/null

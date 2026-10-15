@@ -492,6 +492,9 @@ impl Demo {
                 answer
             }
             "asset" => assets::serve(request["path"].as_str().unwrap_or_default()),
+            "dictation" => {
+                json!({ "ok": true, "cloud": false, "reason": "Dictation is off in the demo." })
+            }
             "deny" => deny(),
             "audit_tail" => {
                 let n = request["lines"].as_u64().unwrap_or(50) as usize;

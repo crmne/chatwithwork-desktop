@@ -12,6 +12,7 @@ pub enum Cmd {
     Project,
     Attach,
     Download,
+    Dictate,
     Detach,
     Copy,
     Open,
@@ -99,6 +100,14 @@ pub const COMMANDS: &[Command] = &[
         "[on|off]",
         false,
         "Turn web search on or off",
+    ),
+    command(
+        Cmd::Dictate,
+        "dictate",
+        &[],
+        "",
+        false,
+        "Dictate using credits; Escape stops, Ctrl-C discards",
     ),
     command(
         Cmd::Project,

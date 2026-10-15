@@ -10,6 +10,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod agent;
+mod audio;
 mod autostart;
 mod control;
 #[cfg(any(test, feature = "demo"))]
@@ -48,6 +49,11 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 fn main() {
+    // A pipe-only helper for the desktop and terminal composers. No tray,
+    // window, single-instance handling, or log may write to its protocol.
+    if std::env::args().skip(1).eq(["--record-audio"]) {
+        std::process::exit(audio::record());
+    }
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("CWW_APP_LOG", "warn")).init();
     match parse(std::env::args().skip(1)) {
         Ok(Some(options)) => {

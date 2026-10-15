@@ -56,6 +56,9 @@ jobs:
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: app-v1
+      - name: Install microphone build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - run: cargo fmt -p cww-app --check
       - run: mbx clippy -p cww-app --all-targets --locked -- -D warnings
       - run: mbx clippy -p cww-app --features demo --all-targets --locked -- -D warnings

@@ -544,6 +544,9 @@ fn main_pane(
 /// What just happened, or went wrong, above the composer until the next
 /// key.
 pub(super) fn notice_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    if app.chat.dictation.phase != super::dictation::Phase::Idle {
+        return notice_line(app.chat.dictation.phase.label(), Signal::Idle, width, theme);
+    }
     match &app.notice {
         Some(notice) => {
             let mut lines = notice_line(&notice.text, notice.signal, width, theme);

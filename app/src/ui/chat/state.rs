@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use cww::tui::dictation::{self, Phase};
 use serde_json::Value;
 
 use cww::tui::chat::{
@@ -15,6 +16,9 @@ use cww::tui::chat::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    Dictate(u64),
+    StopDictation,
+    CancelDictation,
     /// Read the list of chats.
     List,
     /// Read one chat.
@@ -51,6 +55,7 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
+    Dictation(u64, dictation::Update),
     Listed(Result<ChatList, Failure>),
     Shown {
         chat: u64,
@@ -260,6 +265,7 @@ pub struct ChatState {
     /// The question just sent, until the chat shows it.
     pub pending_question: Option<String>,
     pub input: String,
+    pub dictation: dictation::State,
     pub sending: bool,
     pub stopping: bool,
     /// About the open chat: it's gone, or couldn't be read.
@@ -308,6 +314,7 @@ impl Default for ChatState {
             progress: None,
             pending_question: None,
             input: String::new(),
+            dictation: dictation::State::default(),
             sending: false,
             stopping: false,
             error: None,
@@ -447,8 +454,11 @@ impl ChatState {
         self.loading = true;
         self.stale = false;
         self.following = Following::Starting;
+        let cancel = self.cancel_dictation();
         self.leave_chat();
-        vec![Command::Open(number), Command::Follow(Some(number))]
+        let mut commands = cancel;
+        commands.extend([Command::Open(number), Command::Follow(Some(number))]);
+        commands
     }
 
     /// An empty conversation: the first question starts the chat.
@@ -465,12 +475,12 @@ impl ChatState {
         self.stale = false;
         self.stopping = false;
         self.following = Following::No;
+        let mut commands = self.cancel_dictation();
         self.leave_chat();
         if followed {
-            vec![Command::Follow(None)]
-        } else {
-            Vec::new()
+            commands.push(Command::Follow(None));
         }
+        commands
     }
 
     /// What belongs to the chat that was open goes with it, as a page
@@ -504,6 +514,7 @@ impl ChatState {
         if self.can_send().is_err() {
             return Vec::new();
         }
+        let mut commands = self.cancel_dictation();
         let text = self.input.trim().to_string();
         self.input.clear();
         self.error = None;
@@ -514,7 +525,7 @@ impl ChatState {
             .into_iter()
             .filter_map(|a| a.signed_id)
             .collect();
-        vec![Command::Send(Ask {
+        commands.push(Command::Send(Ask {
             chat: self.open,
             text,
             // A chat in a project starts on the project's page on the web.
@@ -522,7 +533,34 @@ impl ChatState {
             model: self.model_for_question(),
             web_search: self.web_search_control().map(|c| c.on),
             attachments,
-        })]
+        }));
+        commands
+    }
+
+    pub fn dictate(&mut self) -> Vec<Command> {
+        match self.dictation.phase {
+            Phase::Idle if self.ready() && self.locked_reason().is_none() => {
+                let generation = self.dictation.start();
+                self.notice = None;
+                vec![Command::Dictate(generation)]
+            }
+            Phase::Recording => {
+                self.dictation.phase = Phase::Transcribing;
+                self.notice = None;
+                vec![Command::StopDictation]
+            }
+            Phase::Starting | Phase::Transcribing => self.cancel_dictation(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn cancel_dictation(&mut self) -> Vec<Command> {
+        if self.dictation.phase == Phase::Idle {
+            return Vec::new();
+        }
+        self.dictation.cancel();
+        self.notice = None;
+        vec![Command::CancelDictation]
     }
 
     /// Files are still on their way up.
@@ -774,6 +812,23 @@ impl ChatState {
 
     pub fn update(&mut self, msg: Msg) -> Vec<Command> {
         match msg {
+            Msg::Dictation(generation, update) => {
+                if let Some(result) = self.dictation.update(generation, update) {
+                    match result {
+                        Ok(text) if !text.is_empty() => {
+                            if !self.input.is_empty() && !self.input.ends_with(char::is_whitespace)
+                            {
+                                self.input.push(' ');
+                            }
+                            self.input.push_str(&text);
+                            self.notice = None;
+                        }
+                        Ok(_) => self.notice = Some("No speech detected. Try again.".into()),
+                        Err(failure) => self.notice = Some(failure.message),
+                    }
+                }
+                return Vec::new();
+            }
             Msg::Listed(Ok(list)) => {
                 let was_ready = self.ready();
                 self.access = Access::Ready;
@@ -1379,6 +1434,67 @@ mod tests {
         );
         assert!(state.ready());
         state
+    }
+
+    #[test]
+    fn dictation_stops_into_an_editable_draft_and_ignores_late_results() {
+        let mut state = ready();
+        state.input = "Please".into();
+        let Command::Dictate(generation) = state.dictate()[0] else {
+            panic!("dictate")
+        };
+        state.update(Msg::Dictation(generation, dictation::Update::Recording));
+        assert_eq!(state.dictate(), vec![Command::StopDictation]);
+        state.update(Msg::Dictation(
+            generation,
+            dictation::Update::Finished(Ok("make a plan.".into())),
+        ));
+        assert_eq!(state.input, "Please make a plan.");
+        assert!(!state.sending);
+        let Command::Dictate(generation) = state.dictate()[0] else {
+            panic!("dictate")
+        };
+        assert!(state.new_chat().contains(&Command::CancelDictation));
+        state.input = "New draft".into();
+        state.update(Msg::Dictation(
+            generation,
+            dictation::Update::Finished(Ok("old words".into())),
+        ));
+        assert_eq!(state.input, "New draft");
+        let Command::Dictate(generation) = state.dictate()[0] else {
+            panic!("dictate")
+        };
+        assert!(state.send().contains(&Command::CancelDictation));
+        state.update(Msg::Dictation(
+            generation,
+            dictation::Update::Finished(Ok("too late".into())),
+        ));
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn dictation_failures_keep_the_draft_and_escape_discards_transcription() {
+        let mut state = ready();
+        state.input = "Keep this".into();
+        let Command::Dictate(generation) = state.dictate()[0] else {
+            panic!("dictate")
+        };
+        state.update(Msg::Dictation(
+            generation,
+            dictation::Update::Finished(Err(Failure::new("locked", "No credits left"))),
+        ));
+        assert_eq!(state.input, "Keep this");
+        assert_eq!(state.notice.as_deref(), Some("No credits left"));
+        let Command::Dictate(generation) = state.dictate()[0] else {
+            panic!("dictate")
+        };
+        state.update(Msg::Dictation(generation, dictation::Update::Transcribing));
+        assert_eq!(state.dictate(), vec![Command::CancelDictation]);
+        state.update(Msg::Dictation(
+            generation,
+            dictation::Update::Finished(Ok("Discard this".into())),
+        ));
+        assert_eq!(state.input, "Keep this");
     }
 
     fn at(minutes_ago: i64) -> String {

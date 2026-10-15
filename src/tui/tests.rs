@@ -15,11 +15,82 @@ use super::chat::{
     AccessRequest, ChatList, ChatSummary, Entry, Failure, ListLive, Live, Named, Project, Source,
     Step, Transcript,
 };
+use super::commands::Cmd;
 use super::theme::{Depth, Signal, Theme};
 use super::ui::render;
 use crate::audit::{AuditEntry, Decision};
 
 const NOW: OffsetDateTime = datetime!(2026-09-25 08:20:00 UTC);
+
+#[test]
+fn dictation_puts_words_at_the_cursor_and_never_sends_them() {
+    use super::dictation::{Phase, Update};
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    app.chat.input.set("Please today");
+    for _ in 0..5 {
+        app.chat.input.left();
+    }
+    let Effect::Chat(ChatCommand::Dictate(generation)) = app.run_command(Cmd::Dictate, "")[0]
+    else {
+        panic!("dictate")
+    };
+    app.update(Msg::Chat(ChatMsg::Dictation(generation, Update::Recording)));
+    assert_eq!(app.chat.dictation.phase, Phase::Recording);
+    type_text(&mut app, "");
+    assert!(render_to_string(&app, 100, 30).contains("Listening"));
+    assert_eq!(
+        app.update(key(KeyCode::Esc)),
+        vec![Effect::Chat(ChatCommand::StopDictation)]
+    );
+    assert!(
+        app.update(Msg::Chat(ChatMsg::Dictation(
+            generation,
+            Update::Finished(Ok("make a plan ".into()))
+        )))
+        .is_empty()
+    );
+    assert_eq!(app.chat.input, "Please make a plan today");
+    assert!(!app.chat.sending);
+}
+
+#[test]
+fn dictation_is_cancelled_by_navigation_and_ignores_old_words() {
+    use super::dictation::Update;
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let Effect::Chat(ChatCommand::Dictate(generation)) = app.run_command(Cmd::Dictate, "")[0]
+    else {
+        panic!("dictate")
+    };
+    assert!(
+        app.run_command(Cmd::New, "")
+            .contains(&Effect::Chat(ChatCommand::CancelDictation))
+    );
+    app.chat.input.set("Another draft");
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Finished(Ok("old words".into())),
+    )));
+    assert_eq!(app.chat.input, "Another draft");
+    let Effect::Chat(ChatCommand::Dictate(generation)) = app.run_command(Cmd::Dictate, "")[0]
+    else {
+        panic!("dictate")
+    };
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Transcribing,
+    )));
+    assert_eq!(
+        app.update(key(KeyCode::Esc)),
+        vec![Effect::Chat(ChatCommand::CancelDictation)]
+    );
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Finished(Ok("discard".into())),
+    )));
+    assert_eq!(app.chat.input, "Another draft");
+}
 
 fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

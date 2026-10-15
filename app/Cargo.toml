@@ -44,6 +44,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # pollster, so the window keeps drawing and AppKit runs no nested loop.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 pollster = "0.4"
+# Microphone capture stays in the app; the daemon remains a static binary.
+cpal = { version = "0.18.2", default-features = false }
 # The Documents folder of each platform (XDG user dirs, Known Folders).
 directories = "6"
 # Opens the config file and the log in their default apps.

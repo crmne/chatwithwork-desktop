@@ -22,7 +22,7 @@ desktop caret-up-down dots-three pencil-simple trash arrows-clockwise git-branch
 export hand-palm hourglass-medium warning file file-image file-ppt file-txt
 file-code file-audio file-video laptop plugs-connected list-checks buildings
 users-three folder-simple chat-circle chats-circle user-circle chart-bar folders
-credit-card sparkle bell link clock terminal-window"
+credit-card sparkle bell link clock terminal-window microphone"
 
 cells=()
 for name in $ICONS; do

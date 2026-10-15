@@ -163,3 +163,25 @@ workbook sheets. A preview that could not be checked displays the computer’s
 warning. Raw tool arguments are replaced by these rows and previews. Deciding
 still uses the same approval endpoint; the server and daemon enforce ownership,
 access level and the file hash checked when preparing the preview.
+
+## Dictation
+
+The microphone beside the paperclip starts an in-memory recording after the
+paired server confirms that dictation is available and credits allow it.
+Its tooltip explains the credit charge and EU transcription. The composer
+shows Listening or Transcribing; the microphone becomes Stop. Escape stops
+and transcribes; while transcription runs it discards the result. The words
+are appended to the editable draft, never sent automatically. Sending the
+draft, changing chats, leaving the chat page or closing the window cancels
+recording and ignores any late transcription.
+
+The app runs its own `--record-audio` helper through pipes, with no window or
+tray. CPAL opens the default input device only for that request. It downmixes
+to mono 16 kHz PCM WAV, holds at most five minutes (9.6 MB) in memory, closes
+the microphone before returning audio, and drops silence (less than 300 ms
+above RMS 0.02). The daemon relays transcription to the paired server. Audio
+is never written to disk or logs. There are no idle audio threads. Cancelling
+a transcription already sent discards its result; it cannot undo the charge.
+The terminal uses the same helper, with `/dictate` or Ctrl-R to start/stop,
+Escape to stop or discard, and Ctrl-C to discard. Its words enter at the cursor.
+Tests use generated audio and a fake helper, never the host's microphone.

@@ -32,6 +32,7 @@ pub struct WebControl {
 }
 
 pub struct Composer<'a> {
+    pub dictation: cww::tui::dictation::Phase,
     pub web_search: Option<WebControl>,
     pub placeholder: &'a str,
     /// Why nothing can be asked, and the way out.
@@ -57,6 +58,7 @@ pub struct Composer<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    Dictate,
     Send,
     Stop,
     /// The locked composer's way out.
@@ -143,20 +145,25 @@ impl Composer<'_> {
         let lock = self
             .locked
             .map_or(0.0, |reason| self.lock_height(ui, reason, width));
-        8.0 + 10.0
-            + self.chips_height()
-            + lines
-            + 10.0
-            + lock
-            + self.web_note_height(ui, width)
-            + 48.0
+        8.0 + 10.0 + self.chips_height() + lines + 10.0 + lock + self.notes_height(ui, width) + 48.0
     }
 
-    fn web_note_height(&self, ui: &Ui, width: f32) -> f32 {
+    fn notes(&self) -> Vec<&str> {
         self.web_search
             .as_ref()
-            .and_then(|w| w.note.as_ref())
-            .map_or(0.0, |note| {
+            .and_then(|w| w.note.as_deref())
+            .into_iter()
+            .chain(
+                (self.dictation != cww::tui::dictation::Phase::Idle)
+                    .then(|| self.dictation.label()),
+            )
+            .collect()
+    }
+
+    fn notes_height(&self, ui: &Ui, width: f32) -> f32 {
+        self.notes()
+            .iter()
+            .map(|note| {
                 8.0 + paint::layout(
                     ui.painter(),
                     paint::job(note, scale::SMALLER, Color32::WHITE, width - 32.0),
@@ -164,6 +171,7 @@ impl Composer<'_> {
                 .size()
                 .y
             })
+            .sum()
     }
 
     fn lock_height(&self, ui: &Ui, reason: &str, width: f32) -> f32 {
@@ -381,15 +389,15 @@ impl Composer<'_> {
             bar_top += 4.0 + text_rect.height();
         }
 
-        if let Some(note) = self.web_search.as_ref().and_then(|w| w.note.as_ref()) {
+        for note in self.notes() {
             let galley = paint::layout(
                 ui.painter(),
                 paint::job(note, scale::SMALLER, p.ink_muted, rect.width() - 32.0),
             );
             let pos = pos2(rect.left() + 16.0, bar_top + 4.0);
             widgets::label(ui, Rect::from_min_size(pos, galley.size()), note);
+            bar_top += galley.size().y + 8.0;
             ui.painter().galley(pos, galley, p.ink_muted);
-            bar_top += self.web_note_height(ui, rect.width());
         }
 
         // The bar: paperclip on the left, send or stop on the right, their
@@ -412,8 +420,43 @@ impl Composer<'_> {
             event = Some(e);
         }
 
+        let dictating = self.dictation != cww::tui::dictation::Phase::Idle;
+        let mic = widgets::IconButton {
+            icon: if dictating {
+                Icon::Stop
+            } else {
+                Icon::Microphone
+            },
+            icon_size: 18.0,
+            label: if dictating {
+                "Stop dictation"
+            } else {
+                "Dictate"
+            },
+            tooltip: Some(if dictating {
+                self.dictation.label()
+            } else {
+                cww::tui::dictation::HELP
+            }),
+            color: if dictating { p.orange_ink } else { p.ink_muted },
+            hover_color: p.ink,
+            wash: 7.0,
+            radius: control_radius,
+            enabled: !locked || dictating,
+        }
+        .show(
+            ui,
+            id.with("dictate"),
+            attach_rect.translate(vec2(38.0, 0.0)),
+            images,
+            p,
+        );
+        if mic.clicked() {
+            event = Some(Event::Dictate);
+        }
+
         if let Some(web) = &self.web_search {
-            let button = attach_rect.translate(vec2(38.0, 0.0));
+            let button = attach_rect.translate(vec2(76.0, 0.0));
             let response = widgets::IconButton {
                 icon: Icon::GlobeSimple,
                 icon_size: 18.0,
@@ -454,8 +497,18 @@ impl Composer<'_> {
         if let Some(e) = self.picker(
             ui,
             id.with("model"),
-            send_rect.left() - 6.0,
-            bar_center,
+            Rect::from_min_max(
+                pos2(
+                    attach_rect.right()
+                        + if self.web_search.is_some() {
+                            88.0
+                        } else {
+                            50.0
+                        },
+                    bar_center - 16.0,
+                ),
+                pos2(send_rect.left() - 6.0, bar_center + 16.0),
+            ),
             images,
             p,
         ) {
@@ -683,13 +736,12 @@ impl Composer<'_> {
     }
 
     /// `.model-picker`: the model's mark and name and a caret, opening the
-    /// list of models above it. `right` is where it ends.
+    /// list of models above it. `bounds` leaves room for the other composer controls.
     fn picker(
         &self,
         ui: &mut Ui,
         id: Id,
-        right: f32,
-        center_y: f32,
+        bounds: Rect,
         images: &Images,
         p: &Palette,
     ) -> Option<Event> {
@@ -705,11 +757,14 @@ impl Composer<'_> {
                 &name,
                 ty,
                 p.ink_muted,
-                240.0 - 8.0 - 16.0 - 7.0 - 7.0 - 12.0 - 7.0,
+                bounds.width().clamp(65.0, 240.0) - 8.0 - 16.0 - 7.0 - 7.0 - 12.0 - 7.0,
             ),
         );
         let width = 8.0 + 16.0 + 7.0 + label.size().x + 7.0 + 12.0 + 7.0;
-        let rect = Rect::from_min_size(pos2(right - width, center_y - 16.0), vec2(width, 32.0));
+        let rect = Rect::from_min_size(
+            pos2(bounds.right() - width, bounds.top()),
+            vec2(width, 32.0),
+        );
         let open_id = id.with("open");
         let mut open = ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false)) && !locked;
         let response = ui.interact(

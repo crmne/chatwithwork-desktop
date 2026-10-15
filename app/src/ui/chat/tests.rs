@@ -1436,6 +1436,72 @@ fn web_search_explains_cost_and_privacy_before_sending() {
 }
 
 #[test]
+fn dictation_checks_the_server_before_opening_a_microphone() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.chat().state.input = "Keep this draft".into();
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Dictate").click();
+    fx.wait_for_request("dictation", |_| true);
+    fx.wait_for_label("Dictation is off in the demo.");
+    assert_eq!(fx.chat().state.input, "Keep this draft");
+    assert_eq!(
+        fx.chat().state.dictation.phase,
+        cww::tui::dictation::Phase::Idle
+    );
+    assert!(!fx.server.requests().iter().any(|r| r["cmd"] == "dictate"));
+}
+
+#[test]
+fn renders_dictation_controls_without_recording_audio() {
+    for dark in [false, true] {
+        for (name, size) in [
+            ("chat-dictation", [1280.0, 820.0]),
+            ("chat-dictation-narrow", [760.0, 820.0]),
+        ] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                return;
+            };
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            enable_web_search(&mut fx);
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            {
+                let state = &mut fx.chat().state;
+                let generation = state.dictation.start();
+                state.update(super::state::Msg::Dictation(
+                    generation,
+                    cww::tui::dictation::Update::Recording,
+                ));
+                state.input = "Summarize the meeting".into();
+            }
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            fx.harness.get_by_label_contains("Listening.");
+            fx.harness.get_by_label("Stop dictation");
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &image,
+                    format!("{name}-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(1000),
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn renders_web_search_and_schedule_context() {
     for dark in [false, true] {
         for (name, size) in [

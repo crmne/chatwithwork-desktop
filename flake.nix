@@ -32,8 +32,9 @@
             cargoLock.allowBuiltinFetchGit = true;
             cargoBuildFlags = [ "--workspace" ];
             cargoTestFlags = [ "--workspace" ];
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.makeWrapper ]
+            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.makeWrapper pkgs.pkg-config ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns ];
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
 
             # The end-to-end test binds a local port; the rest touches only
             # temporary directories.

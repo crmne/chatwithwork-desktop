@@ -13,6 +13,7 @@ pub mod chat;
 pub mod commands;
 pub mod composer;
 mod daemon;
+pub mod dictation;
 mod history;
 pub mod markdown;
 mod pages;
@@ -89,6 +90,7 @@ pub fn run(paths: Paths) -> Result<()> {
     }
     out.chats.follow(None);
     out.chats.follow_list(false);
+    out.chats.recording.lock().expect("recording").take();
     if mouse {
         let _ = execute!(stdout(), DisableMouseCapture);
     }
@@ -209,6 +211,7 @@ fn spawn_input(tx: Sender<Msg>) {
 
 /// The chat pane's calls to the daemon. Each blocks, so each gets a thread.
 struct ChatRunner {
+    recording: Mutex<Option<dictation::Recording>>,
     chats: Chats,
     tx: Sender<Msg>,
     /// The chat followed now: set its flag to stop it, and close its
@@ -237,6 +240,7 @@ impl Follower {
 impl ChatRunner {
     fn new(chats: Chats, tx: Sender<Msg>) -> Self {
         Self {
+            recording: Mutex::new(None),
             chats,
             tx,
             following: Mutex::new(None),
@@ -251,6 +255,29 @@ impl ChatRunner {
             let _ = tx.send(Msg::Chat(msg));
         };
         match command {
+            ChatCommand::Dictate(generation) => {
+                let tx = self.tx.clone();
+                let result = dictation::installed_helper().and_then(|helper| {
+                    dictation::Recording::start(chats, helper, move |update| {
+                        let _ = tx.send(Msg::Chat(ChatMsg::Dictation(generation, update)));
+                    })
+                });
+                match result {
+                    Ok(recording) => *self.recording.lock().expect("recording") = Some(recording),
+                    Err(failure) => send(ChatMsg::Dictation(
+                        generation,
+                        dictation::Update::Finished(Err(failure)),
+                    )),
+                }
+            }
+            ChatCommand::StopDictation => {
+                if let Some(recording) = self.recording.lock().expect("recording").as_ref() {
+                    recording.stop();
+                }
+            }
+            ChatCommand::CancelDictation => {
+                self.recording.lock().expect("recording").take();
+            }
             ChatCommand::List => {
                 thread::spawn(move || send(ChatMsg::Listed(chats.list())));
             }

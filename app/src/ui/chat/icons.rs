@@ -64,6 +64,7 @@ pub enum Icon {
     Link,
     Clock,
     TerminalWindow,
+    Microphone,
 }
 
 const COUNT: usize = Icon::TerminalWindow as usize + 1;

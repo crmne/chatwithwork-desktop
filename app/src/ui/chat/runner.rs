@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use cww::control::Closer;
 use cww::tui::chat::Chats;
+use cww::tui::dictation::{Recording, Update};
 
 use super::state::{Acted, ChatAction, Command, Decision, Msg};
 
@@ -20,6 +21,7 @@ const ACCESS_POLL: Duration = Duration::from_secs(5);
 const ACCESS_WAIT: Duration = Duration::from_secs(15 * 60);
 
 pub struct Runner {
+    recording: Mutex<Option<Recording>>,
     chats: Chats,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -66,6 +68,7 @@ impl Runner {
     pub fn new(socket: &Path) -> Self {
         let (tx, rx) = channel();
         Self {
+            recording: Mutex::new(None),
             chats: Chats::new(socket),
             tx,
             rx,
@@ -104,6 +107,35 @@ impl Runner {
             }
         };
         match command {
+            Command::Dictate(generation) => {
+                let result = std::env::current_exe()
+                    .map_err(|_| {
+                        cww::tui::chat::Failure::new(
+                            "unavailable",
+                            "Could not find the microphone helper.",
+                        )
+                    })
+                    .and_then(|helper| {
+                        let wake = wake.clone();
+                        Recording::start(chats, helper, move |update| {
+                            wake.send(Msg::Dictation(generation, update));
+                        })
+                    });
+                match result {
+                    Ok(recording) => *self.recording.lock().expect("recording") = Some(recording),
+                    Err(failure) => {
+                        wake.send(Msg::Dictation(generation, Update::Finished(Err(failure))));
+                    }
+                }
+            }
+            Command::StopDictation => {
+                if let Some(recording) = self.recording.lock().expect("recording").as_ref() {
+                    recording.stop();
+                }
+            }
+            Command::CancelDictation => {
+                self.recording.lock().expect("recording").take();
+            }
             Command::List => spawn(
                 "cww-chats",
                 Box::new(move || {
@@ -319,6 +351,7 @@ impl Runner {
 
     /// Stop following, as the window closes.
     pub fn stop(&self) {
+        self.recording.lock().expect("recording").take();
         if let Some(follower) = self.following.lock().expect("following").take() {
             follower.stop();
         }

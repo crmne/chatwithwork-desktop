@@ -455,14 +455,15 @@ jobs:
         with:
           backend: local
       # No compiler cache, as above.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
-      - name: Check the app needs only the C library, glibc 2.35 or older
+      - name: Check the app needs only C and ALSA libraries, glibc 2.35 or older
         run: |
           bin="target/${{ matrix.target }}/release/cww-app"
           readelf -d "$bin" | grep NEEDED
-          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
-            echo "::error::$bin links more than the C library"
+          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libasound\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
+            echo "::error::$bin links more than the C and ALSA libraries"
             exit 1
           fi
           newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)

@@ -400,6 +400,11 @@ impl SettingsApp {
         let status = self.shared.status();
         let p = self.theme.palette;
         self.style_for_page(ui.ctx());
+        if self.page != Page::Chat
+            && let Some(chat) = &mut self.chat
+        {
+            chat.cancel_dictation();
+        }
 
         if ui.input(|i| i.viewport().close_requested()) {
             // The shell closes just this window, keeping the agent in the tray.

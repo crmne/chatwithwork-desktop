@@ -19,6 +19,7 @@ use super::chat::{
 };
 use super::commands::{self, Cmd, Command};
 use super::composer::{Composer, History};
+use super::dictation::{self, Phase};
 use crate::audit::AuditEntry;
 use crate::control::PROTOCOL_VERSION;
 
@@ -377,6 +378,9 @@ pub enum PairingMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatCommand {
+    Dictate(u64),
+    StopDictation,
+    CancelDictation,
     /// Read the list of chats.
     List,
     /// Read one chat as a transcript.
@@ -500,6 +504,7 @@ pub enum DaemonMsg {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMsg {
+    Dictation(u64, dictation::Update),
     Listed(Result<ChatList, Failure>),
     Shown {
         chat: u64,
@@ -615,6 +620,7 @@ pub struct ChatPane {
     /// The question just sent, until the chat shows it.
     pub pending_question: Option<String>,
     pub input: Composer,
+    pub dictation: dictation::State,
     /// Questions asked before, for Up and Down.
     pub history: History,
     /// The selected row of the slash command list.
@@ -676,6 +682,7 @@ impl Default for ChatPane {
             progress: None,
             pending_question: None,
             input: Composer::default(),
+            dictation: dictation::State::default(),
             history: History::default(),
             menu: 0,
             menu_closed: false,
@@ -1308,6 +1315,9 @@ impl App {
 
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
         let mut effects = self.handle(msg);
+        if self.view != View::Chat || !self.chat.ready() || self.quit {
+            effects.extend(self.cancel_dictation());
+        }
         effects.append(&mut self.later);
         effects
     }
@@ -1788,6 +1798,9 @@ impl App {
     /// Ctrl-C clears what's typed; with nothing to clear, pressing it twice
     /// in a row quits.
     fn ctrl_c(&mut self) -> Vec<Effect> {
+        if self.chat.dictation.phase != Phase::Idle {
+            return self.cancel_dictation();
+        }
         let chat = &mut self.chat;
         let typed = !chat.input.is_empty() || chat.picker.is_some() || chat.reason;
         if self.focus == Focus::Composer && typed && self.modal.is_none() {
@@ -1810,6 +1823,12 @@ impl App {
     }
 
     fn composer_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return self.dictate();
+        }
+        if key.code == KeyCode::Esc && self.chat.dictation.phase != Phase::Idle {
+            return self.dictate();
+        }
         if self.chat.picker.is_some() {
             return self.picker_key(key);
         }
@@ -2053,6 +2072,7 @@ impl App {
                 | Cmd::Web
                 | Cmd::Project
                 | Cmd::Download
+                | Cmd::Dictate
                 | Cmd::Attach
                 | Cmd::Copy
                 | Cmd::Retry
@@ -2138,6 +2158,7 @@ impl App {
             Cmd::Project => return self.pick_project(args),
             Cmd::Attach => return self.attach(args),
             Cmd::Download => return self.download(args),
+            Cmd::Dictate => return self.dictate(),
             Cmd::Detach => {
                 self.chat.attachments.clear();
                 self.notice(Signal::Idle, "No files attached.");
@@ -2855,6 +2876,7 @@ impl App {
             return Vec::new();
         }
         let mut effects = self.remember(&entered);
+        effects.extend(self.cancel_dictation());
         self.chat.input.clear();
         self.typed();
         self.chat.error = None;
@@ -3108,6 +3130,7 @@ impl App {
         if self.chat.open == Some(number) && self.chat.transcript.is_some() {
             return Vec::new();
         }
+        let mut effects = self.cancel_dictation();
         let chat = &mut self.chat;
         chat.open = Some(number);
         chat.transcript = None;
@@ -3126,14 +3149,16 @@ impl App {
         chat.deciding = false;
         chat.decision_for = None;
         chat.form = Form::default();
-        vec![
+        effects.extend([
             Effect::Chat(ChatCommand::Open(number)),
             Effect::Chat(ChatCommand::Follow(Some(number))),
-        ]
+        ]);
+        effects
     }
 
     /// An empty conversation: the first question starts the chat.
     fn new_chat(&mut self) -> Vec<Effect> {
+        let mut effects = self.cancel_dictation();
         self.chat.web_search = None;
         self.chat.pending_web = None;
         let followed = self.chat.open.is_some();
@@ -3162,9 +3187,38 @@ impl App {
         self.view = View::Chat;
         self.focus = Focus::Composer;
         if followed {
-            vec![Effect::Chat(ChatCommand::Follow(None))]
-        } else {
-            Vec::new()
+            effects.push(Effect::Chat(ChatCommand::Follow(None)));
+        }
+        effects
+    }
+
+    fn cancel_dictation(&mut self) -> Vec<Effect> {
+        if self.chat.dictation.phase == Phase::Idle {
+            return Vec::new();
+        }
+        self.chat.dictation.cancel();
+        self.notice = None;
+        vec![Effect::Chat(ChatCommand::CancelDictation)]
+    }
+
+    fn dictate(&mut self) -> Vec<Effect> {
+        match self.chat.dictation.phase {
+            Phase::Idle
+                if self.chat.ready()
+                    && self.chat.locked_reason().is_none()
+                    && !self.chat.reason
+                    && self.chat.form.editing.is_none() =>
+            {
+                let generation = self.chat.dictation.start();
+                self.notice(super::theme::Signal::Idle, dictation::HELP);
+                vec![Effect::Chat(ChatCommand::Dictate(generation))]
+            }
+            Phase::Recording => {
+                self.chat.dictation.phase = Phase::Transcribing;
+                vec![Effect::Chat(ChatCommand::StopDictation)]
+            }
+            Phase::Starting | Phase::Transcribing => self.cancel_dictation(),
+            _ => Vec::new(),
         }
     }
 
@@ -3502,6 +3556,26 @@ impl App {
     fn chat_msg(&mut self, msg: ChatMsg) -> Vec<Effect> {
         use super::theme::Signal;
         match msg {
+            ChatMsg::Dictation(generation, update) => {
+                if let Some(result) = self.chat.dictation.update(generation, update) {
+                    match result {
+                        Ok(text) if !text.is_empty() => {
+                            let cursor = self.chat.input.cursor();
+                            if cursor > 0
+                                && !self.chat.input[..cursor].ends_with(char::is_whitespace)
+                            {
+                                self.chat.input.insert(' ');
+                            }
+                            self.chat.input.insert_str(&text);
+                            self.typed();
+                            self.notice = None;
+                        }
+                        Ok(_) => self.notice(Signal::Idle, "No speech detected. Try again."),
+                        Err(failure) => self.notice(Signal::Attention, &failure.message),
+                    }
+                }
+                return Vec::new();
+            }
             ChatMsg::Listed(Ok(list)) => {
                 let was_ready = self.chat.ready();
                 self.chat.access = Access::Ready;

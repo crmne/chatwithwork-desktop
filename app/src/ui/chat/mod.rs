@@ -192,6 +192,11 @@ impl ChatPage {
         self.runner.stop();
     }
 
+    pub fn cancel_dictation(&mut self) {
+        let commands = self.state.cancel_dictation();
+        self.run(commands);
+    }
+
     fn run(&mut self, commands: Vec<Command>) {
         for command in commands {
             self.runner.run(command);
@@ -292,6 +297,9 @@ impl ChatPage {
             ctx.input(|i| i.time)
         };
         let full = ui.max_rect();
+        if !self.state.ready() {
+            self.cancel_dictation();
+        }
         let mut action = None;
         let wide = full.width() >= tokens::WIDE;
         let docked = wide && !self.collapsed;
@@ -323,7 +331,11 @@ impl ChatPage {
         if focus {
             self.focus_composer = true;
         }
-        if escape && self.drawer {
+        if escape && self.state.dictation.phase != cww::tui::dictation::Phase::Idle {
+            ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+            let commands = self.state.dictate();
+            self.run(commands);
+        } else if escape && self.drawer {
             self.drawer = false;
         }
 
@@ -739,6 +751,11 @@ impl ChatPage {
                 let commands = self.state.stop();
                 self.run(commands);
             }
+            Some(composer::Event::Dictate) => {
+                let commands = self.state.dictate();
+                self.run(commands);
+                self.focus_composer = true;
+            }
             Some(composer::Event::Action) => self.lock_action(env, action),
             Some(composer::Event::Attach) => self.pick_files(),
             Some(composer::Event::Detach(key)) => self.state.detach(key),
@@ -757,6 +774,7 @@ impl ChatPage {
             .as_ref()
             .map(|(reason, action)| (reason.as_str(), *action));
         Composer {
+            dictation: self.state.dictation.phase,
             web_search: self.state.web_search_control(),
             placeholder: if self.state.open.is_some() {
                 "Reply to Chat with Work"
