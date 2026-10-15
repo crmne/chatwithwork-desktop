@@ -1577,6 +1577,7 @@ fn show_code_run(fx: &mut Fixture) {
     fx.ready();
     fx.chat().open(11);
     fx.wait_for_label("When does the Acme contract renew");
+    fx.caught_up();
     fx.logos();
     fx.chat().set_still(true);
     let entry = serde_json::from_value(serde_json::json!({
@@ -1592,6 +1593,7 @@ fn show_code_run(fx: &mut Fixture) {
 
 fn show_local_preview(fx: &mut Fixture) {
     fx.open_waiting(5, "Waiting for your approval.");
+    fx.caught_up();
     fx.logos();
     fx.chat().set_still(true);
     let transcript = fx.chat().state.transcript.as_mut().unwrap();
