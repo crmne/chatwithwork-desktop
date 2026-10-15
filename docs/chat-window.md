@@ -145,3 +145,6 @@ Rendered offscreen with wgpu by the UI tests against the stand-in daemon's synth
 | A question from a connected service | ![](../app/tests/snapshots/chat-question-light.png) | ![](../app/tests/snapshots/chat-question-dark.png) |
 
 `cargo test -p cww-app renders_review_screens` with `CWW_PARITY_DIR` set renders the model picker, attached files, the row menu and rename, and each dialog too, for checking beside the web's own pages.
+
+
+Web search follows the organization's policy and the chosen model. The globe starts off for a new chat, shows the search rate on hover, and explains where searches go before the first question with it on. A model without web search disables the globe. Scheduled chats show the schedule's name and timing to its owner, or only the owner's name to a teammate; their sidebar rows have a clock.

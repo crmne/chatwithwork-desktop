@@ -23,7 +23,16 @@ pub const ID: &str = "chat-composer";
 const MAX_LINES: f32 = 9.0;
 const RADIUS: f32 = tokens::RADIUS_PANEL;
 
+#[derive(Clone)]
+pub struct WebControl {
+    pub on: bool,
+    pub enabled: bool,
+    pub help: String,
+    pub note: Option<String>,
+}
+
 pub struct Composer<'a> {
+    pub web_search: Option<WebControl>,
     pub placeholder: &'a str,
     /// Why nothing can be asked, and the way out.
     pub locked: Option<&'a str>,
@@ -58,6 +67,7 @@ pub enum Event {
     Detach(u64),
     /// A model picked in the picker, by ID.
     PickModel(String),
+    ToggleWebSearch,
 }
 
 /// The chips' column, as Lexxy's `.attachment`: at most 320 wide, 56 high,
@@ -133,7 +143,27 @@ impl Composer<'_> {
         let lock = self
             .locked
             .map_or(0.0, |reason| self.lock_height(ui, reason, width));
-        8.0 + 10.0 + self.chips_height() + lines + 10.0 + lock + 48.0
+        8.0 + 10.0
+            + self.chips_height()
+            + lines
+            + 10.0
+            + lock
+            + self.web_note_height(ui, width)
+            + 48.0
+    }
+
+    fn web_note_height(&self, ui: &Ui, width: f32) -> f32 {
+        self.web_search
+            .as_ref()
+            .and_then(|w| w.note.as_ref())
+            .map_or(0.0, |note| {
+                8.0 + paint::layout(
+                    ui.painter(),
+                    paint::job(note, scale::SMALLER, Color32::WHITE, width - 32.0),
+                )
+                .size()
+                .y
+            })
     }
 
     fn lock_height(&self, ui: &Ui, reason: &str, width: f32) -> f32 {
@@ -351,6 +381,17 @@ impl Composer<'_> {
             bar_top += 4.0 + text_rect.height();
         }
 
+        if let Some(note) = self.web_search.as_ref().and_then(|w| w.note.as_ref()) {
+            let galley = paint::layout(
+                ui.painter(),
+                paint::job(note, scale::SMALLER, p.ink_muted, rect.width() - 32.0),
+            );
+            let pos = pos2(rect.left() + 16.0, bar_top + 4.0);
+            widgets::label(ui, Rect::from_min_size(pos, galley.size()), note);
+            ui.painter().galley(pos, galley, p.ink_muted);
+            bar_top += self.web_note_height(ui, rect.width());
+        }
+
         // The bar: paperclip on the left, send or stop on the right, their
         // corners concentric with the box's.
         let control = 32.0;
@@ -369,6 +410,37 @@ impl Composer<'_> {
             p,
         ) {
             event = Some(e);
+        }
+
+        if let Some(web) = &self.web_search {
+            let button = attach_rect.translate(vec2(38.0, 0.0));
+            let response = widgets::IconButton {
+                icon: Icon::GlobeSimple,
+                icon_size: 18.0,
+                label: "Search the web",
+                tooltip: Some(&web.help),
+                color: if web.on && web.enabled {
+                    p.blue
+                } else {
+                    p.ink_muted
+                },
+                hover_color: p.ink,
+                wash: 7.0,
+                radius: control_radius,
+                enabled: web.enabled && !locked,
+            }
+            .show(ui, id.with("web-search"), button, images, p);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    web.enabled && !locked,
+                    web.on,
+                    "Search the web",
+                )
+            });
+            if response.clicked() {
+                event = Some(Event::ToggleWebSearch);
+            }
         }
 
         let send_rect = Rect::from_center_size(

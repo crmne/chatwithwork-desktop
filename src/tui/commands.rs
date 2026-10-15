@@ -8,6 +8,7 @@ pub enum Cmd {
     Resume,
     Search,
     Model,
+    Web,
     Project,
     Attach,
     Detach,
@@ -89,6 +90,14 @@ pub const COMMANDS: &[Command] = &[
         "[name]",
         false,
         "Pick the model for this chat",
+    ),
+    command(
+        Cmd::Web,
+        "web",
+        &[],
+        "[on|off]",
+        false,
+        "Turn web search on or off",
     ),
     command(
         Cmd::Project,

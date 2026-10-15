@@ -687,6 +687,7 @@ impl ChatPage {
             Some(composer::Event::Attach) => self.pick_files(),
             Some(composer::Event::Detach(key)) => self.state.detach(key),
             Some(composer::Event::PickModel(id)) => self.state.pick_model(&id),
+            Some(composer::Event::ToggleWebSearch) => self.state.toggle_web_search(),
             None => {}
         }
     }
@@ -700,6 +701,7 @@ impl ChatPage {
             .as_ref()
             .map(|(reason, action)| (reason.as_str(), *action));
         Composer {
+            web_search: self.state.web_search_control(),
             placeholder: if self.state.open.is_some() {
                 "Reply to Chat with Work"
             } else {

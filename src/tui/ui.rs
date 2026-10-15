@@ -414,12 +414,17 @@ fn chat_row(
     } else {
         None
     };
-    let room = width.saturating_sub(if dot.is_some() { 4 } else { 2 });
+    let room = width.saturating_sub(
+        if dot.is_some() { 4 } else { 2 } + if chat.schedule.is_some() { 2 } else { 0 },
+    );
     let title = ellipsize(&chat.title, room);
     let mut spans = vec![marker, Span::raw(" ")];
     if let Some(dot) = dot {
         spans.push(Span::styled(DOT, dot));
         spans.push(Span::raw(" "));
+    }
+    if chat.schedule.is_some() {
+        spans.push(Span::styled("◷ ", theme.faint()));
     }
     if (open && pane.working()) || (pane.list_live && chat.processing()) {
         spans.extend(theme.shimmer_text(&title, sweep(now)));
@@ -980,6 +985,24 @@ fn transcript(
             Span::styled(spinner(now), theme.signal(Signal::Live)),
             Span::styled(" Reading the chat…", theme.faint()),
         ]));
+    }
+    if let Some(schedule) = pane.open_summary().and_then(|c| c.schedule.as_ref()) {
+        lines.extend(
+            wrap(&format!("◷ {}", schedule.label()), width)
+                .into_iter()
+                .map(|l| Line::styled(l, theme.muted())),
+        );
+        lines.push(Line::raw(""));
+    }
+    if pane.list.web_search.allowed
+        && pane
+            .web_search
+            .unwrap_or_else(|| pane.open_summary().is_some_and(|c| c.web_search))
+    {
+        lines.push(Line::styled(
+            format!("Web search on · {}", pane.list.web_search.rate),
+            theme.muted(),
+        ));
     }
     let mut answered: Vec<u64> = Vec::new();
     let mut live_activity = false;

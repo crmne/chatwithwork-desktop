@@ -269,6 +269,7 @@ pub struct ChatState {
     pub models: ModelList,
     /// The model picked in the composer, if another than the chat's.
     pub model: Option<ModelChoice>,
+    pub web_search: Option<bool>,
     /// Files picked for the next question.
     pub attachments: Vec<Attached>,
     next_key: u64,
@@ -313,6 +314,7 @@ impl Default for ChatState {
             notice: None,
             models: ModelList::Unknown,
             model: None,
+            web_search: None,
             attachments: Vec::new(),
             next_key: 1,
             dialog: None,
@@ -474,6 +476,7 @@ impl ChatState {
     /// What belongs to the chat that was open goes with it, as a page
     /// change does on the web.
     fn leave_chat(&mut self) {
+        self.web_search = None;
         self.attachments.clear();
         self.dialog = None;
         self.deciding = None;
@@ -517,7 +520,7 @@ impl ChatState {
             // A chat in a project starts on the project's page on the web.
             project: None,
             model: self.model_for_question(),
-            web_search: None,
+            web_search: self.web_search_control().map(|c| c.on),
             attachments,
         })]
     }
@@ -558,6 +561,41 @@ impl ChatState {
             None => models
                 .and_then(|m| m.default_model_id.as_deref())
                 .and_then(named),
+        }
+    }
+
+    pub fn web_search_control(&self) -> Option<super::composer::WebControl> {
+        let ModelList::Ready(models) = &self.models else {
+            return None;
+        };
+        if !self.list.web_search.allowed || !models.models.iter().any(|m| m.searches_web) {
+            return None;
+        }
+        let model = self.current_model().and_then(|(id, _)| models.get(&id));
+        let enabled = model.is_some_and(|m| m.searches_web);
+        let on = self
+            .web_search
+            .unwrap_or_else(|| self.open_summary().is_some_and(|c| c.web_search));
+        Some(super::composer::WebControl {
+            on,
+            enabled,
+            help: if enabled {
+                format!("Search the web · {}", self.list.web_search.rate)
+            } else {
+                format!(
+                    "{} can't search the web",
+                    model.map_or("This model", |m| m.name.as_str())
+                )
+            },
+            note: (on && enabled)
+                .then(|| self.list.web_search.note.clone())
+                .flatten(),
+        })
+    }
+
+    pub fn toggle_web_search(&mut self) {
+        if let Some(control) = self.web_search_control().filter(|c| c.enabled) {
+            self.web_search = Some(!control.on);
         }
     }
 
@@ -1636,6 +1674,40 @@ mod tests {
             ]
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn web_search_is_off_first_and_follows_the_model_and_organization() {
+        let mut state = ready();
+        let mut choices = models();
+        choices.models[0].searches_web = true;
+        state.update(Msg::Models(Ok(choices)));
+        assert!(state.web_search_control().is_none());
+        state.list.web_search = cww::tui::chat::WebSearch {
+            allowed: true,
+            rate: "1.4 credits per search".into(),
+            note: Some("Outside the EU".into()),
+        };
+        assert!(!state.web_search_control().unwrap().on);
+        state.toggle_web_search();
+        assert_eq!(
+            state.web_search_control().unwrap().note.as_deref(),
+            Some("Outside the EU")
+        );
+        state.pick_model("3");
+        let disabled = state.web_search_control().unwrap();
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.help, "Large can't search the web");
+        assert!(disabled.note.is_none());
+        state.toggle_web_search();
+        assert_eq!(state.web_search, Some(true));
+        state.pick_model("1");
+        state.toggle_web_search();
+        assert_eq!(state.web_search, Some(false));
+        state.list.web_search.allowed = false;
+        assert!(state.web_search_control().is_none());
+        state.new_chat();
+        assert_eq!(state.web_search, None);
     }
 
     #[test]

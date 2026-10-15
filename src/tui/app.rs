@@ -391,6 +391,7 @@ pub enum ChatCommand {
         text: String,
         /// A model picked with `/model`.
         model: Option<String>,
+        web_search: Option<bool>,
         /// A project for a new chat, picked with `/project`.
         project: Option<u64>,
         /// Uploaded files, by `signed_id`.
@@ -620,6 +621,8 @@ pub struct ChatPane {
     pub models: ModelList,
     /// The model picked with `/model`, for the chat it was picked in.
     pub model: Option<ModelChoice>,
+    pub web_search: Option<bool>,
+    pending_web: Option<String>,
     /// The project the next new chat starts in.
     pub project: Option<Project>,
     /// Files for the next question.
@@ -674,6 +677,8 @@ impl Default for ChatPane {
             picker: None,
             models: ModelList::Unknown,
             model: None,
+            web_search: None,
+            pending_web: None,
             project: None,
             attachments: Vec::new(),
             decision: 0,
@@ -2040,6 +2045,7 @@ impl App {
                 | Cmd::Resume
                 | Cmd::Search
                 | Cmd::Model
+                | Cmd::Web
                 | Cmd::Project
                 | Cmd::Attach
                 | Cmd::Copy
@@ -2068,6 +2074,61 @@ impl App {
                 self.chat.selected = usize::from(!self.chat.visible().is_empty());
             }
             Cmd::Model => return self.pick_model(args),
+            Cmd::Web => {
+                if matches!(self.chat.models, ModelList::Unknown | ModelList::Loading) {
+                    self.chat.pending_web = Some(args.to_string());
+                    if self.chat.models == ModelList::Unknown {
+                        self.chat.models = ModelList::Loading;
+                        return vec![Effect::Chat(ChatCommand::Models)];
+                    }
+                    return Vec::new();
+                }
+                let enabled = match &self.chat.models {
+                    ModelList::Ready(models) => self
+                        .chat
+                        .current_model_id()
+                        .and_then(|id| models.get(id))
+                        .is_some_and(|m| m.searches_web),
+                    _ => false,
+                };
+                if !self.chat.list.web_search.allowed || !enabled {
+                    self.notice(
+                        Signal::Attention,
+                        "Web search isn't available with this model and organization.",
+                    );
+                    return Vec::new();
+                }
+                let on = match args.trim() {
+                    "on" => true,
+                    "off" => false,
+                    "" => !self
+                        .chat
+                        .web_search
+                        .unwrap_or_else(|| self.chat.open_summary().is_some_and(|c| c.web_search)),
+                    _ => {
+                        self.notice(Signal::Attention, "Use /web on or /web off.");
+                        return Vec::new();
+                    }
+                };
+                self.chat.web_search = Some(on);
+                self.notice(
+                    Signal::Idle,
+                    &if on {
+                        format!(
+                            "Web search on · {}. {}",
+                            self.chat.list.web_search.rate,
+                            self.chat
+                                .list
+                                .web_search
+                                .note
+                                .as_deref()
+                                .unwrap_or_default()
+                        )
+                    } else {
+                        "Web search off.".into()
+                    },
+                );
+            }
             Cmd::Project => return self.pick_project(args),
             Cmd::Attach => return self.attach(args),
             Cmd::Detach => {
@@ -2753,6 +2814,13 @@ impl App {
             chat: self.chat.open,
             text,
             model: self.chat.model_for_question(),
+            web_search: self
+                .chat
+                .list
+                .web_search
+                .allowed
+                .then_some(self.chat.web_search)
+                .flatten(),
             project: if self.chat.open.is_none() {
                 self.chat.project.as_ref().map(|p| p.id)
             } else {
@@ -2977,6 +3045,8 @@ impl App {
 
     /// Show a chat, read it, and follow it live.
     fn open_chat(&mut self, number: u64) -> Vec<Effect> {
+        self.chat.web_search = None;
+        self.chat.pending_web = None;
         self.view = View::Chat;
         self.focus = Focus::Composer;
         if self.chat.open == Some(number) && self.chat.transcript.is_some() {
@@ -3008,6 +3078,8 @@ impl App {
 
     /// An empty conversation: the first question starts the chat.
     fn new_chat(&mut self) -> Vec<Effect> {
+        self.chat.web_search = None;
+        self.chat.pending_web = None;
         let followed = self.chat.open.is_some();
         let chat = &mut self.chat;
         chat.open = None;
@@ -3546,11 +3618,15 @@ impl App {
             }
             ChatMsg::Models(Ok(models)) => {
                 self.chat.models = ModelList::Ready(models);
+                if let Some(args) = self.chat.pending_web.take() {
+                    return self.run_command(Cmd::Web, &args);
+                }
                 if let Some(picker) = self.chat.picker.as_mut() {
                     picker.selected = 0;
                 }
             }
             ChatMsg::Models(Err(failure)) => {
+                self.chat.pending_web = None;
                 let why = match failure.code.as_str() {
                     "unsupported" => Some(failure.message.clone()),
                     "daemon_outdated" => Some(

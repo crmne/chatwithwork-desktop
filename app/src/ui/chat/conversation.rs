@@ -125,6 +125,44 @@ impl Conversation<'_> {
     ) -> (Vec<Event>, bool) {
         let mut events = Vec::new();
         let mut animating = false;
+        if let Some(schedule) = state.open_summary().and_then(|c| c.schedule.as_ref()) {
+            let label = schedule.label();
+            let galley = paint::layout(
+                ui.painter(),
+                paint::job(
+                    &label,
+                    scale::SMALLER,
+                    self.palette.ink_muted,
+                    ui.available_width() - 24.0,
+                ),
+            );
+            let (rect, response) = ui.allocate_exact_size(
+                vec2(ui.available_width(), galley.size().y + 14.0),
+                if schedule.url.is_some() {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
+            );
+            widgets::label(ui, rect, &label);
+            self.images.icon_at(
+                ui.painter(),
+                pos2(rect.left() + 8.0, rect.center().y),
+                16.0,
+                Icon::Clock,
+                self.palette.ink_muted,
+            );
+            ui.painter().galley(
+                pos2(rect.left() + 24.0, rect.top() + 7.0),
+                galley,
+                self.palette.ink_muted,
+            );
+            if response.clicked()
+                && let Some(url) = &schedule.url
+            {
+                events.push(Event::OpenUrl(url.clone()));
+            }
+        }
         view.latest_user = None;
         let entries: &[Entry] = state.transcript.as_ref().map_or(&[], |t| &t.entries);
         let mut items: Vec<Item> = entries.iter().map(Item::Entry).collect();

@@ -1084,6 +1084,8 @@ fn summary(number: u64, title: &str, updated_at: &str) -> ChatSummary {
         url: format!("https://chatwithwork.com/482139075/chats/{number}"),
         model: None,
         share: None,
+        web_search: false,
+        schedule: None,
         can: None,
     }
 }
@@ -1118,6 +1120,7 @@ fn chat_list() -> ChatList {
             ..Named::default()
         },
         locked_reason: None,
+        web_search: Default::default(),
         credits: Some(super::chat::Credits {
             left: 1250,
             capacity: 5000,
@@ -1548,6 +1551,7 @@ fn a_streamed_answer_builds_up_then_the_chat_is_read_back() {
         vec![
             Effect::Remember("q3 budget?".into()),
             Effect::Chat(ChatCommand::Send {
+                web_search: None,
                 chat: None,
                 text: "q3 budget?".into(),
                 model: None,
@@ -1951,6 +1955,7 @@ fn commands_run_from_the_composer() {
     type_text(&mut app, "//etc/hosts?");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
+        web_search: None,
         chat: Some(42),
         text: "/etc/hosts?".into(),
         model: None,
@@ -2121,6 +2126,7 @@ fn snapshot_chat_model_picker() {
     type_text(&mut app, "And Q4?");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
+        web_search: None,
         chat: Some(42),
         text: "And Q4?".into(),
         model: Some("15".into()),
@@ -2201,6 +2207,7 @@ fn projects_and_chats_are_picked_from_lists() {
     type_text(&mut app, "Plan?");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
+        web_search: None,
         chat: None,
         text: "Plan?".into(),
         model: None,
@@ -2482,6 +2489,7 @@ fn files_go_with_the_next_question() {
     assert!(screen.contains("+ notes.txt · 2.0 KB"), "{screen}");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
+        web_search: None,
         chat: Some(42),
         text: "Summarize".into(),
         model: None,
@@ -2747,6 +2755,7 @@ fn snapshot_a_project_from_the_sidebar() {
     type_text(&mut app, "Plan?");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
+        web_search: None,
         chat: None,
         text: "Plan?".into(),
         model: None,
@@ -3145,4 +3154,41 @@ fn a_decided_change_leaves_in_place_and_a_race_is_no_error() {
     assert_eq!(effects, vec![Effect::Chat(ChatCommand::Open(42))]);
     assert!(app.notice.is_none(), "settled, not an error");
     assert!(app.chat.transcript.as_ref().unwrap().approvals.is_empty());
+}
+
+#[test]
+fn web_search_checks_the_model_and_keeps_the_choice_with_the_question() {
+    use super::commands::Cmd;
+    let mut app = app();
+    chats_ready(&mut app);
+    app.chat.list.web_search = super::chat::WebSearch {
+        allowed: true,
+        rate: "1.4 credits per search".into(),
+        note: Some("Searches leave the EU.".into()),
+    };
+    assert_eq!(
+        app.run_command(Cmd::Web, "on"),
+        vec![Effect::Chat(ChatCommand::Models)]
+    );
+    let mut choices = models();
+    choices.models[0].searches_web = true;
+    app.update(Msg::Chat(ChatMsg::Models(Ok(choices))));
+    assert_eq!(app.chat.web_search, Some(true));
+    type_text(&mut app, "Find the announcement");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Chat(ChatCommand::Send {
+            web_search: Some(true),
+            ..
+        })
+    )));
+    app.chat.sending = false;
+    app.run_command(Cmd::New, "");
+    assert_eq!(app.chat.web_search, None);
+    app.run_command(Cmd::Web, "off");
+    assert_eq!(app.chat.web_search, Some(false));
+    app.chat.list.web_search.allowed = false;
+    app.run_command(Cmd::Web, "on");
+    assert_eq!(app.chat.web_search, Some(false));
 }

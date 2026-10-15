@@ -818,6 +818,11 @@ impl Sidebar<'_> {
             painter.circle_filled(pos2(x + 3.0, cy), 3.0, p.attention);
             x += 6.0 + 8.0;
         }
+        if chat.schedule.is_some() {
+            self.images
+                .icon_at(painter, pos2(x + 7.0, cy), 14.0, Icon::Clock, p.ink_muted);
+            x += 20.0;
+        }
         let color = if selected || chat.processing() {
             p.ink
         } else {

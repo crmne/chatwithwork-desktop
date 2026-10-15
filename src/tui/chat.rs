@@ -50,6 +50,8 @@ pub struct ChatSummary {
     /// Its public link while it has one, only for the person who started
     /// it.
     pub share: Option<ShareLink>,
+    pub web_search: bool,
+    pub schedule: Option<Schedule>,
     /// What this person may do with it; `None` from an older server, which
     /// offers none of it here.
     pub can: Option<Can>,
@@ -63,6 +65,37 @@ impl ChatSummary {
     /// Whether the server says this chat allows `action`.
     pub fn can(&self, action: impl Fn(&Can) -> bool) -> bool {
         self.can.as_ref().is_some_and(action)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct WebSearch {
+    pub allowed: bool,
+    pub rate: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Schedule {
+    pub mine: bool,
+    pub name: String,
+    pub timing: String,
+    pub url: Option<String>,
+    pub owner: Option<String>,
+}
+
+impl Schedule {
+    pub fn label(&self) -> String {
+        if self.mine {
+            format!("{} · {}", self.name, self.timing)
+        } else {
+            format!(
+                "Scheduled by {}",
+                self.owner.as_deref().unwrap_or("a teammate")
+            )
+        }
     }
 }
 
@@ -177,6 +210,8 @@ pub struct Model {
     pub rate: Option<String>,
     /// False when it can't be used right now, for `reason`.
     pub selectable: bool,
+    pub free: bool,
+    pub searches_web: bool,
     pub reason: Option<String>,
 }
 
@@ -190,6 +225,8 @@ impl Default for Model {
             description: None,
             rate: None,
             selectable: true,
+            free: false,
+            searches_web: false,
             reason: None,
         }
     }
@@ -231,6 +268,7 @@ pub struct ChatList {
     pub user: Named,
     /// The organization's credits; `None` from an older server.
     pub credits: Option<Credits>,
+    pub web_search: WebSearch,
     /// Why a new question can't be asked right now, as the composer says it.
     pub locked_reason: Option<String>,
     /// What the person pinned on the web, in pin order. Not streamed: as
@@ -302,6 +340,7 @@ pub struct AccountUpdate {
     pub account: Named,
     pub user: Named,
     pub credits: Option<Credits>,
+    pub web_search: WebSearch,
     pub locked_reason: Option<String>,
 }
 
@@ -311,6 +350,7 @@ impl ChatList {
         self.account = update.account;
         self.user = update.user;
         self.credits = update.credits;
+        self.web_search = update.web_search;
         self.locked_reason = update.locked_reason;
     }
 }

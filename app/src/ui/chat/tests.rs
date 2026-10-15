@@ -1369,6 +1369,15 @@ fn renders_review_screens() {
             fx.harness.run_steps(4);
             (screen.setup)(&mut fx);
             fx.logos();
+            // The initial follow can refresh the transcript after it opens.
+            fx.chat().state.transcript.as_mut().unwrap().chat.schedule =
+                Some(cww::tui::chat::Schedule {
+                    mine: true,
+                    name: "Morning briefing".into(),
+                    timing: "Every weekday at 8:30".into(),
+                    url: Some("https://chatwithwork.com/settings/schedules/1".into()),
+                    owner: None,
+                });
             fx.harness.event(egui::Event::PointerGone);
             // Your name, hovered, as the web's link shows it.
             if screen.name == "account" {
@@ -1401,4 +1410,103 @@ fn copying_a_message_says_copied_then_turns_back() {
     fx.harness.run_steps(10);
     assert!(fx.harness.query_all_by_label("Copied").next().is_none());
     fx.harness.get_by_label("Copy message");
+}
+
+fn enable_web_search(fx: &mut Fixture) {
+    fx.ready();
+    let state = &mut fx.chat().state;
+    state.list.web_search = cww::tui::chat::WebSearch {
+        allowed: true, rate: "1.4 credits per search".into(),
+        note: Some("Web searches go to Google for Gemini models and to Bing for GPT models, outside the EU.".into()),
+    };
+    if let super::state::ModelList::Ready(models) = &mut state.models {
+        models.models[0].searches_web = true;
+    }
+    fx.harness.run_steps(2);
+}
+
+#[test]
+fn web_search_explains_cost_and_privacy_before_sending() {
+    let mut fx = fixture(Options::default());
+    enable_web_search(&mut fx);
+    fx.harness.get_by_label("Search the web").click();
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label_contains("outside the EU.");
+    fx.harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput)
+        .focus();
+    fx.harness
+        .event(egui::Event::Text("Find the announcement".into()));
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Send message").click();
+    let sent = fx.wait_for_request("chat_send", |_| true);
+    assert_eq!(sent["web_search"], true);
+}
+
+#[test]
+fn renders_web_search_and_schedule_context() {
+    for dark in [false, true] {
+        for (name, size) in [
+            ("chat-web", [1280.0, 820.0]),
+            ("chat-web-narrow", [760.0, 820.0]),
+        ] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            enable_web_search(&mut fx);
+            fx.chat().set_still(true);
+            fx.chat().open(11);
+            fx.wait("the transcript", |h| {
+                h.state()
+                    .chat_state()
+                    .is_some_and(|s| s.transcript.is_some())
+            });
+            {
+                let state = &mut fx.chat().state;
+                state.web_search = Some(true);
+                state.transcript.as_mut().unwrap().chat.schedule = Some(cww::tui::chat::Schedule {
+                    mine: true,
+                    name: "Morning briefing".into(),
+                    timing: "Every weekday at 8:30".into(),
+                    url: Some("https://chatwithwork.com/settings/schedules/1".into()),
+                    owner: None,
+                });
+            }
+            fx.logos();
+            // The initial follow can refresh the transcript after it opens.
+            fx.chat().state.transcript.as_mut().unwrap().chat.schedule =
+                Some(cww::tui::chat::Schedule {
+                    mine: true,
+                    name: "Morning briefing".into(),
+                    timing: "Every weekday at 8:30".into(),
+                    url: Some("https://chatwithwork.com/settings/schedules/1".into()),
+                    owner: None,
+                });
+            // A short scheduled answer keeps its context in the viewport.
+            fx.chat().state.transcript.as_mut().unwrap().entries = vec![cww::tui::chat::Entry::Assistant {
+                id: 9001, content: "Your morning briefing is ready. The Acme contract renews on March 1; Dana owns the review.".into(), sources: vec![],
+            }];
+            fx.chat().pin = 3;
+            fx.chat().pinned = None;
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(15);
+            fx.harness
+                .get_by_label("Morning briefing · Every weekday at 8:30");
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &image,
+                    format!("{name}-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(1000),
+                );
+            }
+        }
+    }
 }
