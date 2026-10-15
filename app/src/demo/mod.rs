@@ -44,6 +44,8 @@ struct State {
     listed: Vec<Value>,
     /// Refuse the `chats` topic, as a daemon from before live lists does.
     old_daemon: bool,
+    /// Web search is available in the list and the first model.
+    web_search: bool,
     /// The organization's credits left, of 5,000.
     credits_left: u64,
     /// The projects the person is on.
@@ -113,6 +115,11 @@ impl Server {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn act_old(&self) {
         self.demo.change(|s| s.old_daemon = true);
+    }
+
+    #[cfg(test)]
+    pub fn enable_web_search(&self) {
+        self.demo.change(|s| s.web_search = true);
     }
 
     /// A chat started on the web: it shows up being answered.
@@ -230,6 +237,7 @@ fn fresh() -> State {
         chat_events: Vec::new(),
         list_events: Vec::new(),
         old_daemon: false,
+        web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
         held: false,
@@ -342,6 +350,7 @@ fn sample() -> State {
         chat_events: Vec::new(),
         list_events: Vec::new(),
         old_daemon: false,
+        web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
         held: false,
@@ -610,6 +619,13 @@ impl Demo {
                 answer["ok"] = json!(true);
                 answer["chats"] = json!(list);
                 answer["projects"] = json!(state.projects);
+                if state.web_search {
+                    answer["web_search"] = json!({
+                        "allowed": true,
+                        "rate": "1.4 credits per search",
+                        "note": "Web searches go to Google for Gemini models and to Bing for GPT models, outside the EU.",
+                    });
+                }
                 answer
             }
             "chat" => {
@@ -633,6 +649,9 @@ impl Demo {
             "models" => {
                 let mut models = chats::models();
                 models["ok"] = json!(true);
+                if self.state.lock().expect("demo lock").web_search {
+                    models["models"][0]["searches_web"] = json!(true);
+                }
                 models
             }
             "chat_download" => {

@@ -37,6 +37,7 @@ struct Options {
     /// The daemon refuses to keep the list current, as one from before
     /// live lists does.
     old_daemon: bool,
+    web_search: bool,
     renderer: Option<egui_kittest::wgpu::WgpuTestRenderer>,
 }
 
@@ -48,6 +49,7 @@ impl Default for Options {
             dark: false,
             held: true,
             old_daemon: false,
+            web_search: false,
             renderer: None,
         }
     }
@@ -58,6 +60,9 @@ fn fixture(options: Options) -> Fixture {
     server.hold_streams(options.held);
     if options.old_daemon {
         server.act_old();
+    }
+    if options.web_search {
+        server.enable_web_search();
     }
     if options.scenario == Scenario::Sample {
         AppState { onboarded: true }.save(&server.paths);
@@ -1404,23 +1409,13 @@ fn copying_a_message_says_copied_then_turns_back() {
     fx.harness.get_by_label("Copy message");
 }
 
-fn enable_web_search(fx: &mut Fixture) {
-    fx.ready();
-    let state = &mut fx.chat().state;
-    state.list.web_search = cww::tui::chat::WebSearch {
-        allowed: true, rate: "1.4 credits per search".into(),
-        note: Some("Web searches go to Google for Gemini models and to Bing for GPT models, outside the EU.".into()),
-    };
-    if let super::state::ModelList::Ready(models) = &mut state.models {
-        models.models[0].searches_web = true;
-    }
-    fx.harness.run_steps(2);
-}
-
 #[test]
 fn web_search_explains_cost_and_privacy_before_sending() {
-    let mut fx = fixture(Options::default());
-    enable_web_search(&mut fx);
+    let mut fx = fixture(Options {
+        web_search: true,
+        ..Options::default()
+    });
+    fx.wait_for_label("Search the web");
     fx.harness.get_by_label("Search the web").click();
     fx.harness.run_steps(2);
     fx.harness.get_by_label_contains("outside the EU.");
@@ -1466,10 +1461,11 @@ fn renders_dictation_controls_without_recording_audio() {
             let mut fx = fixture(Options {
                 size,
                 dark,
+                web_search: true,
                 renderer: Some(renderer),
                 ..Options::default()
             });
-            enable_web_search(&mut fx);
+            fx.wait_for_label("Search the web");
             fx.chat().set_still(true);
             fx.chat().set_greeting(4);
             {
@@ -1516,10 +1512,11 @@ fn renders_web_search_and_schedule_context() {
             let mut fx = fixture(Options {
                 size,
                 dark,
+                web_search: true,
                 renderer: Some(renderer),
                 ..Options::default()
             });
-            enable_web_search(&mut fx);
+            fx.wait_for_label("Search the web");
             fx.chat().set_still(true);
             fx.chat().open(11);
             fx.wait("the transcript", |h| {
@@ -1527,6 +1524,7 @@ fn renders_web_search_and_schedule_context() {
                     .chat_state()
                     .is_some_and(|s| s.transcript.is_some())
             });
+            fx.caught_up();
             {
                 let state = &mut fx.chat().state;
                 state.web_search = Some(true);
@@ -1539,15 +1537,6 @@ fn renders_web_search_and_schedule_context() {
                 });
             }
             fx.logos();
-            // The initial follow can refresh the transcript after it opens.
-            fx.chat().state.transcript.as_mut().unwrap().chat.schedule =
-                Some(cww::tui::chat::Schedule {
-                    mine: true,
-                    name: "Morning briefing".into(),
-                    timing: "Every weekday at 8:30".into(),
-                    url: Some("https://chatwithwork.com/settings/schedules/1".into()),
-                    owner: None,
-                });
             // A short scheduled answer keeps its context in the viewport.
             fx.chat().state.transcript.as_mut().unwrap().entries = vec![cww::tui::chat::Entry::Assistant {
                 id: 9001, content: "Your morning briefing is ready. The Acme contract renews on March 1; Dana owns the review.".into(), sources: vec![],
