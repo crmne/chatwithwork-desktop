@@ -378,6 +378,9 @@ impl SettingsApp {
         if !self.attached {
             // Fonts take effect from the next pass, so draw nothing now.
             self.attached = true;
+            fastframe_titlebar::set_enabled(true);
+            egui_extras::install_image_loaders(ui.ctx());
+            fastframe_titlebar::install(ui.ctx());
             if self.system_fonts {
                 theme::install_fonts(ui.ctx(), &self.theme.text);
             } else {
@@ -398,9 +401,13 @@ impl SettingsApp {
         let p = self.theme.palette;
         self.style_for_page(ui.ctx());
 
-        if chrome::show(ui, &self.theme, self.page) {
+        if ui.input(|i| i.viewport().close_requested()) {
+            // The shell closes just this window, keeping the agent in the tray.
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.shared.close_requested.store(true, Ordering::SeqCst);
         }
+        chrome::show(ui, &self.theme, self.page);
         if self.page == Page::Chat {
             self.chat_page(ui, status.as_ref());
             chrome::resize(ui, self.theme.platform);
@@ -900,7 +907,7 @@ impl SettingsApp {
 
 impl eframe::App for SettingsApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        fastframe_macos::align_traffic_lights(frame, ctx, chrome::HEIGHT);
+        fastframe_titlebar::align_traffic_lights(frame, ctx, chrome::HEIGHT);
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {

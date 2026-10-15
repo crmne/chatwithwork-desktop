@@ -68,6 +68,8 @@ struct Shell<'a> {
 }
 
 pub fn run(paths: Paths, options: Options) -> anyhow::Result<()> {
+    fastframe_titlebar::init();
+    fastframe_titlebar::set_enabled(true);
     // Finds the color emoji font off the main thread; text shows monochrome
     // emoji until it is ready.
     fastframe_emoji::EmojiSetup::default()
@@ -167,7 +169,7 @@ fn create_window<'a>(
         viewport: egui::ViewportBuilder::default()
             .with_title("Chat with Work")
             .with_app_id("cww-app")
-            .with_decorations(cfg!(target_os = "macos"))
+            .with_decorations(!fastframe_titlebar::enabled())
             .with_fullsize_content_view(cfg!(target_os = "macos"))
             .with_titlebar_shown(false)
             .with_title_shown(false)

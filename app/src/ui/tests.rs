@@ -417,6 +417,7 @@ fn welcome_is_centered_at_each_window_size() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn seamless_window_controls_keep_the_agent_in_the_tray() {
     for platform in [Platform::Windows, Platform::Linux] {
         let (_tmp, mut harness) = welcome_harness([840.0, 620.0], platform, false, None);
@@ -437,6 +438,19 @@ fn seamless_window_controls_keep_the_agent_in_the_tray() {
         harness.get_by_label("Close window").click();
         harness.step();
         assert!(
+            harness.output().viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::Close)
+        );
+        harness
+            .input_mut()
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .push(egui::ViewportEvent::Close);
+        harness.step();
+        assert!(
             harness
                 .state()
                 .shared
@@ -444,11 +458,15 @@ fn seamless_window_controls_keep_the_agent_in_the_tray() {
                 .load(std::sync::atomic::Ordering::SeqCst)
         );
         assert!(
-            !harness.output().viewport_output[&egui::ViewportId::ROOT]
+            harness.output().viewport_output[&egui::ViewportId::ROOT]
                 .commands
-                .contains(&egui::ViewportCommand::Close)
+                .contains(&egui::ViewportCommand::CancelClose)
         );
     }
+}
+
+#[test]
+fn macos_keeps_its_native_traffic_lights() {
     let (_tmp, harness) = welcome_harness([840.0, 620.0], Platform::MacOs, false, None);
     assert!(
         harness.query_by_label("Close window").is_none(),
@@ -457,6 +475,7 @@ fn seamless_window_controls_keep_the_agent_in_the_tray() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn seamless_window_can_be_resized_at_every_edge_and_corner() {
     use egui::{ResizeDirection as D, ViewportCommand};
     for (position, direction) in [
@@ -491,6 +510,7 @@ fn seamless_window_can_be_resized_at_every_edge_and_corner() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn seamless_header_drags_and_fullscreen_has_no_caption_controls() {
     let (_tmp, mut harness) = welcome_harness([840.0, 620.0], Platform::Windows, false, None);
     harness.hover_at(egui::pos2(300.0, 20.0));
