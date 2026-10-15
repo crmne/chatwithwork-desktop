@@ -849,7 +849,11 @@ impl Failure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Live {
     /// Answer text as it's written.
-    Chunk { message_id: u64, text: String },
+    Chunk {
+        message_id: u64,
+        seq: Option<u64>,
+        text: String,
+    },
     /// What the running tool step is doing.
     Progress(String),
     /// Anything else: read the chat again.
@@ -883,6 +887,10 @@ impl Live {
         Some(match update["type"].as_str().unwrap_or_default() {
             "chunk" => Self::Chunk {
                 message_id: update["message_id"].as_u64()?,
+                seq: match update.get("seq") {
+                    None | Some(Value::Null) => None,
+                    Some(seq) => Some(seq.as_u64()?),
+                },
                 text: update["text"].as_str()?.to_string(),
             },
             "progress" => Self::Progress(update["text"].as_str()?.to_string()),
@@ -1506,8 +1514,23 @@ mod tests {
             Live::from_update(&json!({ "type": "chunk", "message_id": 5, "text": "Hi" })),
             Some(Live::Chunk {
                 message_id: 5,
+                seq: None,
                 text: "Hi".into()
             })
+        );
+        assert_eq!(
+            Live::from_update(&json!({ "type": "chunk", "message_id": 5, "seq": 7, "text": "Hi" })),
+            Some(Live::Chunk {
+                message_id: 5,
+                seq: Some(7),
+                text: "Hi".into()
+            })
+        );
+        assert_eq!(
+            Live::from_update(
+                &json!({ "type": "chunk", "message_id": 5, "seq": -1, "text": "Hi" })
+            ),
+            None
         );
         assert_eq!(
             Live::from_update(&json!({ "type": "anything" })),

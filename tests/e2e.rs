@@ -1923,7 +1923,7 @@ async fn relays_chats_for_the_terminal() {
     }
     assert_eq!(next(&mut live_rx).await, Live::Watching);
     ws.send(Message::text(
-        json!({ "identifier": chat_identifier, "message": { "type": "chunk", "message_id": 5, "text": "It's €40k" } })
+        json!({ "identifier": chat_identifier, "message": { "type": "chunk", "message_id": 5, "seq": 12, "text": "It's €40k" } })
             .to_string(),
     ))
     .await
@@ -1932,6 +1932,7 @@ async fn relays_chats_for_the_terminal() {
         next(&mut live_rx).await,
         Live::Chunk {
             message_id: 5,
+            seq: Some(12),
             text: "It's €40k".into()
         }
     );

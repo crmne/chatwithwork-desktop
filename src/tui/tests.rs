@@ -1671,11 +1671,12 @@ fn a_streamed_answer_builds_up_then_the_chat_is_read_back() {
             .is_empty()
         );
     }
-    for text in ["It's ", "€40k."] {
+    for (seq, text) in [(7, "€40k."), (2, "It's "), (7, "€40k.")] {
         app.update(Msg::Chat(ChatMsg::Live {
             chat: 43,
             live: Live::Chunk {
                 message_id: 9,
+                seq: Some(seq),
                 text: text.into(),
             },
         }));
@@ -1733,6 +1734,16 @@ fn a_streamed_answer_builds_up_then_the_chat_is_read_back() {
     assert!(app.chat.streamed.is_empty());
     assert!(!app.chat.working());
     assert_eq!(app.next_wakeup(NOW), None, "nothing moves once it's done");
+    app.update(Msg::Chat(ChatMsg::Live {
+        chat: 43,
+        live: Live::Chunk {
+            message_id: 9,
+            seq: Some(7),
+            text: "€40k.".into(),
+        },
+    }));
+    assert!(app.chat.streamed.is_empty());
+    assert!(!app.chat.working());
 }
 
 #[test]
@@ -1826,6 +1837,7 @@ fn live_updates_for_another_chat_are_ignored_and_offline_shows() {
             chat: 7,
             live: Live::Chunk {
                 message_id: 1,
+                seq: None,
                 text: "x".into()
             }
         }))
@@ -2811,6 +2823,7 @@ fn thinking_shimmers_in_grey_rather_than_the_rainbow() {
         chat: 42,
         live: Live::Chunk {
             message_id: 7,
+            seq: None,
             text: "It's".into(),
         },
     }));
@@ -3189,6 +3202,7 @@ fn a_sent_question_stays_near_the_top_while_its_answer_grows() {
         chat: 42,
         live: Live::Chunk {
             message_id: 77,
+            seq: None,
             text: long,
         },
     }));

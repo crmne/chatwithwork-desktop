@@ -4,7 +4,6 @@
 //! chat event) and returns the effects to run. It does no I/O and never reads
 //! the clock, so tests can drive it directly.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -614,7 +613,7 @@ pub struct ChatPane {
     pub stale: bool,
     pub following: Following,
     /// Answer text streamed in and not read back yet, by message.
-    pub streamed: BTreeMap<u64, String>,
+    pub streamed: super::streaming::Answers,
     /// What the running step reports doing.
     pub progress: Option<String>,
     /// The question just sent, until the chat shows it.
@@ -678,7 +677,7 @@ impl Default for ChatPane {
             loading: false,
             stale: false,
             following: Following::No,
-            streamed: BTreeMap::new(),
+            streamed: super::streaming::Answers::default(),
             progress: None,
             pending_question: None,
             input: Composer::default(),
@@ -3707,14 +3706,14 @@ impl App {
                     return Vec::new();
                 }
                 match live {
-                    Live::Chunk { message_id, text } => {
+                    Live::Chunk {
+                        message_id,
+                        seq,
+                        text,
+                    } => {
                         self.chat.following = Following::Live;
                         self.chat.progress = None;
-                        self.chat
-                            .streamed
-                            .entry(message_id)
-                            .or_default()
-                            .push_str(&text);
+                        self.chat.streamed.push(message_id, seq, text);
                     }
                     Live::Progress(text) => self.chat.progress = Some(text),
                     Live::Changed | Live::Watching => {
@@ -4002,11 +4001,11 @@ impl App {
             if let Entry::Assistant { id, content, .. } = entry
                 && !content.trim().is_empty()
             {
-                chat.streamed.remove(id);
+                chat.streamed.settle(*id);
             }
         }
         if !transcript.chat.processing() {
-            chat.streamed.clear();
+            chat.streamed.finish();
             chat.progress = None;
             chat.stopping = false;
         }

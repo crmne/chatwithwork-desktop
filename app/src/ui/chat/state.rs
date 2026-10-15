@@ -3,7 +3,6 @@
 //! the same control API. It does no I/O; the commands it returns are run
 //! by `runner.rs`.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cww::tui::dictation::{self, Phase};
@@ -259,7 +258,7 @@ pub struct ChatState {
     pub stale: bool,
     pub following: Following,
     /// Answer text streamed in and not read back yet, by message.
-    pub streamed: BTreeMap<u64, String>,
+    pub streamed: cww::tui::streaming::Answers,
     /// What the running step reports doing.
     pub progress: Option<String>,
     /// The question just sent, until the chat shows it.
@@ -310,7 +309,7 @@ impl Default for ChatState {
             loading: false,
             stale: false,
             following: Following::No,
-            streamed: BTreeMap::new(),
+            streamed: cww::tui::streaming::Answers::default(),
             progress: None,
             pending_question: None,
             input: String::new(),
@@ -1000,10 +999,14 @@ impl ChatState {
                     return Vec::new();
                 }
                 match live {
-                    Live::Chunk { message_id, text } => {
+                    Live::Chunk {
+                        message_id,
+                        seq,
+                        text,
+                    } => {
                         self.following = Following::Live;
                         self.progress = None;
-                        self.streamed.entry(message_id).or_default().push_str(&text);
+                        self.streamed.push(message_id, seq, text);
                     }
                     Live::Progress(text) => self.progress = Some(text),
                     Live::Changed | Live::Watching => {
@@ -1190,11 +1193,11 @@ impl ChatState {
             if let Entry::Assistant { id, content, .. } = entry
                 && !content.trim().is_empty()
             {
-                self.streamed.remove(id);
+                self.streamed.settle(*id);
             }
         }
         if !transcript.chat.processing() {
-            self.streamed.clear();
+            self.streamed.finish();
             self.progress = None;
             self.stopping = false;
         }
@@ -1618,15 +1621,17 @@ mod tests {
     fn streamed_text_stays_until_the_chat_has_it() {
         let mut state = ready();
         state.open_chat(2);
-        let chunk = |text: &str| Msg::Live {
+        let chunk = |seq, text: &str| Msg::Live {
             chat: 2,
             live: Live::Chunk {
                 message_id: 9,
+                seq: Some(seq),
                 text: text.into(),
             },
         };
-        state.update(chunk("The budget "));
-        state.update(chunk("is €40k."));
+        state.update(chunk(8, "is €40k."));
+        state.update(chunk(2, "The budget "));
+        state.update(chunk(8, "is €40k."));
         assert_eq!(state.streamed[&9], "The budget is €40k.");
         // A read without the message's text yet leaves the stream.
         state.update(Msg::Shown {
@@ -1657,6 +1662,8 @@ mod tests {
                 ..Transcript::default()
             }),
         });
+        assert!(state.streamed.is_empty() && !state.working());
+        state.update(chunk(8, "is €40k."));
         assert!(state.streamed.is_empty() && !state.working());
     }
 

@@ -17,6 +17,7 @@ pub mod dictation;
 mod history;
 pub mod markdown;
 mod pages;
+pub mod streaming;
 pub mod theme;
 pub mod ui;
 
