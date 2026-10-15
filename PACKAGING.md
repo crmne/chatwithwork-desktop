@@ -66,6 +66,10 @@ For a stable tag, `packaging.yml` then runs the shared [native-packages](https:/
 
 ## Signing
 
+The MSI, WinGet manifests and Linux package metadata display **Plenty** as the
+publisher or vendor. Signing identities retain the company's full name as
+issued on the certificates.
+
 A complete set of secrets turns each kind of signing on. With none, the release is built unsigned; an incomplete set fails the build.
 
 ### macOS

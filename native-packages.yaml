@@ -8,7 +8,7 @@ tool:
 nfpm:
   name: chatwithwork-local-agent
   maintainer: Carmine Paolino <carmine@paolino.me>
-  vendor: "PlentyLabs UG (haftungsbeschränkt) & Co. KG"
+  vendor: Plenty
   homepage: https://chatwithwork.com
   description: |-
     Chat with Work: desktop app, terminal interface and local background agent.

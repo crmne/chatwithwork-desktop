@@ -2,7 +2,7 @@
 PackageIdentifier: ChatWithWork.LocalAgent
 PackageVersion: @VERSION@
 PackageLocale: en-US
-Publisher: "PlentyLabs UG (haftungsbeschränkt) & Co. KG"
+Publisher: Plenty
 PublisherUrl: https://chatwithwork.com
 PublisherSupportUrl: https://github.com/crmne/chatwithwork-local-agent/issues
 PrivacyUrl: https://chatwithwork.com/privacy
