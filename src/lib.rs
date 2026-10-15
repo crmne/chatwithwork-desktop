@@ -15,6 +15,7 @@ pub mod daemon;
 pub mod error;
 pub mod limits;
 pub mod logging;
+pub mod notifications;
 pub mod paths;
 pub mod policy;
 pub mod proxy;

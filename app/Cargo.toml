@@ -52,29 +52,32 @@ directories = "6"
 open = "5"
 # Local times in the activity log.
 jiff = "0.2"
-# Every fastframe crate comes from the same release, so they share one
-# version. Move them together.
+# Every Fastframe crate comes from the same revision. Move them together.
+# This owner-requested revision adds shared native notifications; return to a
+# common release tag when a release includes the notification crate.
 # Follows the desktop's font rendering (hinting, sub-pixel positions, and
 # linear coverage on Linux), shared with the other fastframe apps.
-fastframe-text = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-text = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Reveals a switch between light and dark from the middle of the window
 # outwards, as Omarchy does.
-fastframe-theme = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-theme = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Draws color emoji in the platform's own style in every egui text, such
 # as folder and file names.
-fastframe-emoji = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-emoji = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Native traffic lights and desktop caption controls, drag, and resizing.
-fastframe-titlebar = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-titlebar = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # One running copy per user: a second launch asks it to open its window.
-fastframe-instance = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-instance = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Scrolling that feels like the platform's: a wheel notch scrolls as far
 # as in other apps, and on Linux touchpad gestures keep their speed and
 # glide on after the fingers lift.
-fastframe-scroll = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-scroll = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # The tray item with the platform's own menu: a StatusNotifierItem on
 # Linux (Waybar, KDE, GNOME with the AppIndicator extension), the
 # notification area on Windows, and the menu bar on macOS.
-fastframe-tray = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-tray = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
+# Native delivery for the supervisor's pipe-only notification broker.
+fastframe-notifications = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 # Maps the system UI font instead of reading it: San Francisco is 8 MB.
 memmap2 = "0.9"
 # Waits for the daemon's socket to appear instead of polling for it.
@@ -87,8 +90,9 @@ resvg = { version = "0.48", default-features = false }
 # Answers in chats are Markdown (CommonMark with GitHub's tables and
 # strikethrough), parsed here and drawn as the web app draws them.
 pulldown-cmark = { version = "0.13", default-features = false }
+# Bounded broker channels and completion; the demo also needs a runtime.
+tokio = { version = "1.53", features = ["sync", "macros"] }
 # Only for --demo, whose stand-in daemon uses the real listener.
-tokio = { version = "1.53", features = ["rt-multi-thread"], optional = true }
 tokio-util = { version = "0.7", features = ["io-util"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -101,7 +105,7 @@ blocking = "=1.6.2"
 # Reads the accent color and dark mode through the desktop portal, which
 # works inside a Flatpak and starts no gsettings process. Same release as
 # the other fastframe crates.
-fastframe-desktop = { version = "0.6.0", git = "https://github.com/crmne/fastframe", tag = "v0.6.0" }
+fastframe-desktop = { version = "0.6.0", git = "https://github.com/crmne/fastframe", rev = "55505839343eb97040591a5b5b002ffdfa96dcad" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -118,7 +122,7 @@ winresource = "0.1"
 [features]
 # --demo: runs against a built-in fake daemon with sample folders and
 # activity, for screenshots and trying the window. Never in release builds.
-demo = ["dep:tokio", "dep:tokio-util"]
+demo = ["tokio/rt-multi-thread", "dep:tokio-util"]
 
 [dev-dependencies]
 # Drives the window through its accessibility tree. The chat page's tests

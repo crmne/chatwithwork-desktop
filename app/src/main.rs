@@ -19,6 +19,7 @@ mod events;
 mod icons;
 mod instance;
 mod model;
+mod notifications;
 mod pairing;
 mod paths;
 mod platform;
@@ -49,6 +50,15 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 fn main() {
+    // The supervisor owns this pipe-only helper even while every window is
+    // closed. macOS notification callbacks require the process's main loop.
+    if std::env::args().skip(1).eq(["--notification-broker"]) {
+        if let Err(error) = notifications::run_broker() {
+            eprintln!("notification broker: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // A pipe-only helper for the desktop and terminal composers. No tray,
     // window, single-instance handling, or log may write to its protocol.
     if std::env::args().skip(1).eq(["--record-audio"]) {
