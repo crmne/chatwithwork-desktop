@@ -26,6 +26,20 @@ function Run-Msi([string] $action) {
   }
   Write-Host "Completed msiexec $action"
 }
+function Stop-Agent {
+  $agentStatus = & (Join-Path $dir 'cww.exe') status --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or -not $agentStatus.pid) { throw 'Could not find the agent to stop' }
+  $agentProcess = Get-Process -Id $agentStatus.pid -ErrorAction Stop
+  try {
+    & (Join-Path $dir 'cww.exe') daemon stop
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the agent' }
+    # Shutdown closes the control pipe before all daemon threads exit.
+    # A failed status request does not mean a new process can bind it yet.
+    if (-not $agentProcess.WaitForExit(30000)) { throw 'The agent did not exit before the login test' }
+  } finally {
+    $agentProcess.Dispose()
+  }
+}
 $installed = $false
 try {
   Run-Msi "/i"
@@ -55,26 +69,14 @@ try {
     $shortcut = $shell.CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $dir 'cww-agent.exe')) { throw 'Startup points to the wrong agent' }
     # Exercise the same entry Explorer opens at login, after setup has exited.
-    & (Join-Path $dir 'cww.exe') daemon stop
-    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the agent before the login test' }
-    for ($i = 0; $i -lt 30; $i++) {
-      $status = & (Join-Path $dir 'cww.exe') status
-      if ($status -notmatch 'running \(pid') { break }
-      Start-Sleep -Milliseconds 200
-    }
+    Stop-Agent
     # Custom paths must survive shortcut argument quoting, too. Set this
     # after the MSI check: deferred installer actions have their own environment.
     $env:CWW_HOME = Join-Path $env:LOCALAPPDATA 'Cww smoke test\state & data'
     Write-Host 'Registering the agent with a custom state path'
     & (Join-Path $dir 'cww.exe') daemon install
     if ($LASTEXITCODE -ne 0) { throw 'Could not register the custom state path' }
-    & (Join-Path $dir 'cww.exe') daemon stop
-    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the custom agent' }
-    for ($i = 0; $i -lt 30; $i++) {
-      $status = & (Join-Path $dir 'cww.exe') status
-      if ($status -notmatch 'running \(pid') { break }
-      Start-Sleep -Milliseconds 200
-    }
+    Stop-Agent
     Start-Process -FilePath $startup
     Write-Host 'Opened the login shortcut'
     $running = $false
@@ -88,6 +90,12 @@ try {
     & (Join-Path $dir 'cww.exe') daemon install
     if ($LASTEXITCODE -ne 0) { throw 'Starting the agent again as a standard user failed' }
   }
+} catch {
+  if ($env:CWW_HOME) {
+    $agentLog = Join-Path $env:CWW_HOME 'state\daemon.log'
+    if (Test-Path -LiteralPath $agentLog) { Get-Content -LiteralPath $agentLog -Tail 100 | Write-Host }
+  }
+  throw
 } finally {
   if ($StandardUser -and $env:CWW_HOME) {
     Write-Host 'Removing the custom agent'
