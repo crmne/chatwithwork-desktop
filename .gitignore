@@ -3,3 +3,4 @@
 /.cache/
 /packaging/arch/build/
 /result
+/app/tests/snapshots/*.old.png
