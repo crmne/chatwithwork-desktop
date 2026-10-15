@@ -111,7 +111,7 @@ The page asks egui for another frame only while something on it moves: a transit
 - **Dialog backdrop.** The web blurs the page behind a dialog (`backdrop-filter: blur(3px)`); egui can't, so it's only dimmed.
 - **Reduced motion.** The browser honors "reduce motion"; egui doesn't expose it, so the animations always run.
 - **Selecting text.** Paragraphs, headings, list items and quotes in answers, and your questions, select with the mouse (across paragraphs too) and copy with the system shortcut, through egui's label selection. Code blocks and tables don't select; their Copy button and the answer's Copy do.
-- **Opening files.** On the web a question's file chips download the file; the chat API doesn't serve attachments, so they're labels here.
+- **Opening files.** A file chip opens a native Save dialog. The client downloads through the daemon from a signed path on the paired server, without sending the device token. Files are limited to 25 MB. The picker confirms replacements; cancelling leaves the filesystem alone.
 - **The caret.** The composer's caret is steady rather than blinking (see above).
 
 ## What the chat API doesn't say
@@ -123,7 +123,7 @@ The page follows the web wherever the chat API gives it what the web uses. Where
 - **Guests.** The web adds "· Guest" after a guest's name and shows them no meter. The chat API doesn't say whether the person is a guest.
 - **The people on a project.** The web's project line counts them ("shared with 4 people"); the chat API doesn't, so it says "shared with the people on it". Its Change link and "Hide from guests" or "Show to guests" aren't there either: the chat API has no way to move a chat or change who sees it.
 - **What a new chat can reach.** Under the new-chat composer the web draws the services a question can reach (its wires, each service's menu, and "+" to connect another) and questions to start from. The chat API sends neither the services nor the suggestions, so the app's new chat has the greeting and the composer only.
-- **Files sent with a question** download on the web; the chat API doesn't serve them, so they're labels here.
+- **Older servers** send no signed file path, so their attachments remain labels until the server is updated.
 
 Two differences are the app's own choices, kept for reasons outside the look:
 
@@ -148,3 +148,18 @@ Rendered offscreen with wgpu by the UI tests against the stand-in daemon's synth
 
 
 Web search follows the organization's policy and the chosen model. The globe starts off for a new chat, shows the search rate on hover, and explains where searches go before the first question with it on. A model without web search disables the globe. Scheduled chats show the schedule's name and timing to its owner, or only the owner's name to a teammate; their sidebar rows have a clock.
+
+## Code runs and file change previews
+
+The activity keeps generated files visible below its folded summary. Opening the
+steps shows the language, source, stdout, stderr, exit code and any run error,
+with a terminal glyph. Preview images used by the model are excluded by the
+server. The server sends tool output and download paths only to the person
+allowed to see the full result.
+
+Local file approvals show the folder label and relative path, the proposed text
+or colored diff, before/after replacements, a Word document’s Markdown, or
+workbook sheets. A preview that could not be checked displays the computer’s
+warning. Raw tool arguments are replaced by these rows and previews. Deciding
+still uses the same approval endpoint; the server and daemon enforce ownership,
+access level and the file hash checked when preparing the preview.

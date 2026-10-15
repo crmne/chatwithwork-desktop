@@ -137,7 +137,7 @@ cww        # or cww tui
 
 Run in a terminal, `cww` opens a terminal UI laid out like the desktop app's chat page. On the left: New chat, the search, Recent (your chats, newest first), and Pinned under it as on the web: the projects you pinned (picking one shows its chats and starts a new chat in it; picking it again shows every chat), then the chats you pinned, with your name at the foot, and your credits under it when they run low. The list stays current as chats start, change or go, on the web too. On the right, with no title over it, as on the web: the open chat and the composer, with the model on its edge. Your name, `,` or `/settings` open the settings, with the same pages as the desktop app: Shared folders (with their index state), Always private (the deny list, which only `config.toml` changes), Activity (every request from Chat with Work, colour-coded by decision), Account (the pairing, the connection, whether chats are allowed here, your organization and credits, and the web's own settings pages, which open in the browser) and General (the daemon, pausing, and where its files are). Nothing else stays on screen: a single word at the top right says when something needs you (the daemon stopped, offline, connecting, paused, not paired, revoked, or the open chat not live), and clicking it opens the page that helps.
 
-In the terminal, `/web on` and `/web off` choose web search for the current chat. The first use explains the rate and privacy note. The choice requires the organization's permission and a model that supports web search. Scheduled chats show their schedule context and a clock in the list.
+In the terminal, `/web on` and `/web off` choose web search for the current chat. The first use explains the rate and privacy note. The choice requires the organization's permission and a model that supports web search. Scheduled chats show their schedule context and a clock in the list. Code runs show their source and output under `/steps`; files they produce stay visible with the steps folded. `/download` lists files and `/download <number> <path>` saves one. Local file approvals include the proposed text, diff or document preview and any warning from the computer.
 
 | Key | Does |
 |---|---|
@@ -183,6 +183,7 @@ Typing `/` lists the commands and narrows them as you type; `↑` `↓` select, 
 | `/model [name]` | Pick the model for this chat, or the next new one, from what your plan offers; models you can't use now say why |
 | `/project [name]` | Start the next chat in a project (`/project none` for none) |
 | `/attach <path>`, `/detach` | Attach a file to your next question (up to 25 MB), or remove the attached files |
+| `/download [number path]` | List files in this chat, or save one to a chosen path without overwriting |
 | `/copy` | Copy the last answer to the clipboard |
 | `/open` | Open the chat in the browser |
 | `/retry`, `/branch`, `/rename [title]`, `/delete` | Answer the last question again, continue the chat in a new one, rename it, or delete it (after asking), where Chat with Work allows it |

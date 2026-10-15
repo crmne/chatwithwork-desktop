@@ -63,15 +63,19 @@ pub enum Icon {
     Bell,
     Link,
     Clock,
+    TerminalWindow,
 }
 
-const COUNT: usize = Icon::Clock as usize + 1;
+const COUNT: usize = Icon::TerminalWindow as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if
     /// the atlas has it.
     pub fn named(name: &str) -> Option<Icon> {
         Some(match name {
+            "terminal-window" => Icon::TerminalWindow,
+            "globe" | "globe-simple" => Icon::GlobeSimple,
+            "clock" => Icon::Clock,
             "buildings" => Icon::Buildings,
             "users-three" => Icon::UsersThree,
             "folder-simple" => Icon::FolderSimple,

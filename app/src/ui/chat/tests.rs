@@ -19,6 +19,7 @@ use crate::ui::{AppState, Page, SettingsApp, Shared};
 
 thread_local! {
     /// What the next file picker "picks": tests never open a window.
+    pub static SAVED: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
     pub static PICKED: std::cell::RefCell<Option<Vec<std::path::PathBuf>>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -1501,6 +1502,139 @@ fn renders_web_search_and_schedule_context() {
                         .threshold(2.0)
                         .max_failed_pixels(1000),
                 );
+            }
+        }
+    }
+}
+
+fn show_code_run(fx: &mut Fixture) {
+    fx.ready();
+    fx.chat().open(11);
+    fx.wait_for_label("When does the Acme contract renew");
+    fx.logos();
+    fx.chat().set_still(true);
+    let entry = serde_json::from_value(serde_json::json!({
+        "kind":"activity", "id":9801, "title":"Ran code", "services":["Code"], "logos":[null], "glyphs":["terminal-window"],
+        "steps":[{"summary":"Ran Python", "glyph":"terminal-window", "code":{"language":"python", "source":"total = 42000\nprint(total)", "stdout":"42000", "stderr":null, "exit_code":0, "error":null},
+            "downloads":[{"filename":"budget.csv", "byte_size":27, "content_type":"text/csv", "path":"/rails/active_storage/blobs/proxy/signed-token/budget.csv?disposition=attachment"}]}]
+    })).unwrap();
+    fx.chat().state.transcript.as_mut().unwrap().entries = vec![entry];
+    fx.chat().pin = 3;
+    fx.chat().pinned = None;
+    fx.harness.run_steps(10);
+}
+
+fn show_local_preview(fx: &mut Fixture) {
+    fx.open_waiting(5, "Waiting for your approval.");
+    fx.logos();
+    fx.chat().set_still(true);
+    let transcript = fx.chat().state.transcript.as_mut().unwrap();
+    transcript.entries.clear();
+    let approval = &mut transcript.approvals[0];
+    approval.summary = "Edit plan.md on Alex’s laptop".into();
+    approval.service = "Alex’s laptop".into();
+    approval.logo = None;
+    approval.details = vec![cww::tui::chat::Detail {
+        label: "Raw argument".into(),
+        value: "Do not show this instead of the preview".into(),
+    }];
+    approval.preview = Some(serde_json::from_value(serde_json::json!({
+        "action":"edit", "rows":[{"label":"File","value":"plan.md"},{"label":"In","value":"Shared work"}],
+        "body":{"kind":"diff","lines":[{"kind":"hunk","text":"@@ -1 +1 @@"},{"kind":"removed","text":"-Launch on Monday."},{"kind":"added","text":"+Launch on Thursday."}]},
+        "notes":[{"tone":"info","text":"If the file changes before approval, the edit will be refused."}]
+    })).unwrap());
+    fx.chat().pin = 3;
+    fx.chat().pinned = None;
+    fx.harness.run_steps(10);
+}
+
+#[test]
+fn code_files_are_available_while_steps_are_folded_and_save_through_the_daemon() {
+    let mut fx = fixture(Options::default());
+    show_code_run(&mut fx);
+    fx.harness.get_by_label("budget.csv, 27 Bytes");
+    assert!(fx.harness.query_by_label("Ran Python").is_none());
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("saved.csv");
+    SAVED.with(|p| *p.borrow_mut() = Some(destination.clone()));
+    fx.harness
+        .get_by_label("budget.csv, 27 Bytes")
+        .click_accesskit();
+    fx.wait_for_request("chat_download", |r| {
+        r["path"].as_str().unwrap().contains("/budget.csv?")
+    });
+    fx.wait("file saved", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.notice.as_deref() == Some("Saved budget.csv"))
+    });
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        b"Vendor,Total\nAcme,42000\n"
+    );
+    fx.harness.get_by_label("Ran code").click_accesskit();
+    fx.wait_for_label("Ran Python");
+    fx.harness.get_by_label_contains("total = 42000");
+    fx.harness.get_by_label_contains("Exit code: 0");
+}
+
+#[test]
+fn local_changes_show_the_preview_instead_of_raw_arguments() {
+    let mut fx = fixture(Options::default());
+    show_local_preview(&mut fx);
+    fx.harness.get_by_label("File: plan.md");
+    fx.harness.get_by_label_contains("+Launch on Thursday.");
+    fx.harness
+        .get_by_label_contains("If the file changes before approval");
+    assert!(
+        fx.harness
+            .query_by_label_contains("Do not show this")
+            .is_none()
+    );
+    fx.harness.get_by_label("Approve").click_accesskit();
+    fx.wait_for_request("chat_approve", |_| true);
+}
+
+#[test]
+fn renders_code_files_and_change_previews() {
+    for dark in [false, true] {
+        for (suffix, size) in [("", [1280.0, 820.0]), ("-narrow", [760.0, 820.0])] {
+            for preview in [false, true] {
+                let Ok(renderer) =
+                    std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+                else {
+                    return;
+                };
+                let mut fx = fixture(Options {
+                    size,
+                    dark,
+                    renderer: Some(renderer),
+                    ..Options::default()
+                });
+                if preview {
+                    show_local_preview(&mut fx);
+                } else {
+                    show_code_run(&mut fx);
+                    fx.harness.get_by_label("Ran code").click_accesskit();
+                }
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(12);
+                let image = fx.harness.render().expect("GPU rendering");
+                let name = if preview {
+                    "chat-local-change"
+                } else {
+                    "chat-code"
+                };
+                let theme = if dark { "dark" } else { "light" };
+                if cfg!(target_os = "linux") {
+                    egui_kittest::image_snapshot_options(
+                        &image,
+                        format!("{name}{suffix}-{theme}"),
+                        &egui_kittest::SnapshotOptions::new()
+                            .threshold(2.0)
+                            .max_failed_pixels(1000),
+                    );
+                }
             }
         }
     }

@@ -11,6 +11,7 @@ pub enum Cmd {
     Web,
     Project,
     Attach,
+    Download,
     Detach,
     Copy,
     Open,
@@ -114,6 +115,14 @@ pub const COMMANDS: &[Command] = &[
         "<path>",
         true,
         "Attach a file to your next question",
+    ),
+    command(
+        Cmd::Download,
+        "download",
+        &[],
+        "[number path]",
+        false,
+        "List or save files from this chat",
     ),
     command(
         Cmd::Detach,

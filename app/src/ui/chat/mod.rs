@@ -97,6 +97,7 @@ pub struct ChatPage {
     still: bool,
     /// The file picker is open; what's picked arrives here.
     picking: Option<std::sync::mpsc::Receiver<Vec<std::path::PathBuf>>>,
+    saving: Option<std::sync::mpsc::Receiver<Option<Result<String, cww::tui::chat::Failure>>>>,
     /// The window, to wake when the file picker closes.
     ctx: Option<egui::Context>,
     /// When the list was last read because a chat in it was running.
@@ -138,6 +139,7 @@ impl ChatPage {
             new_chat_since: None,
             still: false,
             picking: None,
+            saving: None,
             ctx: None,
             relisted: 0.0,
             socket: socket.to_path_buf(),
@@ -201,6 +203,15 @@ impl ChatPage {
         self.runner.attach(&ctx);
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
+        }
+        if let Some(rx) = &self.saving
+            && let Ok(result) = rx.try_recv()
+        {
+            self.saving = None;
+            self.state.notice = result.map(|r| match r {
+                Ok(name) => format!("Saved {name}"),
+                Err(e) => e.message,
+            });
         }
         // Files picked, or dropped on the window.
         if let Some(rx) = &self.picking
@@ -661,6 +672,51 @@ impl ChatPage {
         }
     }
 
+    fn save_file(&mut self, file: cww::tui::chat::Attachment) {
+        if self.saving.is_some() {
+            return;
+        }
+        let Some(path) = file.path.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.saving = Some(rx);
+        let chats = cww::tui::chat::Chats::new(&self.socket);
+        let name = file.save_name().to_string();
+        #[cfg(test)]
+        let picked = {
+            let destination = tests::SAVED.with(|p| p.borrow_mut().take());
+            async move { destination }
+        };
+        #[cfg(not(test))]
+        let picked = {
+            let dialog = rfd::AsyncFileDialog::new()
+                .set_title("Save File")
+                .set_file_name(&name)
+                .save_file();
+            async move { dialog.await.map(|f| f.path().to_path_buf()) }
+        };
+        let ctx = self.ctx.clone();
+        self.state.notice = Some(format!("Saving {name}…"));
+        if let Err(e) = std::thread::Builder::new()
+            .name("cww-chat-save".into())
+            .spawn(move || {
+                let result = pollster::block_on(picked).map(|destination| {
+                    chats
+                        .save_download(&path, &destination, true)
+                        .map(|()| name)
+                });
+                let _ = tx.send(result);
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            })
+        {
+            self.saving = None;
+            self.state.notice = Some(format!("Could not open the save dialog: {e}"));
+        }
+    }
+
     /// Files to attach: picked, or dropped on the window.
     pub fn attach(&mut self, paths: Vec<std::path::PathBuf>) {
         let commands = self.state.attach(paths);
@@ -867,6 +923,7 @@ impl ChatPage {
                 conversation::Event::OpenUrl(url) => super::open_url(&url),
                 conversation::Event::OpenChat => self.open_chat_in_browser(env),
                 conversation::Event::Copy(text) => ctx.copy_text(text),
+                conversation::Event::Download(file) => self.save_file(file),
                 conversation::Event::Retry { message, user } => {
                     if let Some(chat) = self.state.open {
                         self.state.dialog = Some(state::Dialog::Retry {

@@ -425,6 +425,10 @@ pub enum ChatCommand {
     },
     /// Read a file and upload it for the next question.
     Upload(String),
+    Download {
+        path: String,
+        destination: String,
+    },
     /// Retry, branch, rename, delete or share a chat.
     Act {
         chat: u64,
@@ -527,6 +531,7 @@ pub enum ChatMsg {
         result: Result<ChatSummary, Failure>,
     },
     /// A file for the next question was uploaded, or not.
+    Downloaded(Result<(), Failure>),
     Uploaded {
         path: String,
         result: Result<Uploaded, Failure>,
@@ -2047,6 +2052,7 @@ impl App {
                 | Cmd::Model
                 | Cmd::Web
                 | Cmd::Project
+                | Cmd::Download
                 | Cmd::Attach
                 | Cmd::Copy
                 | Cmd::Retry
@@ -2131,6 +2137,7 @@ impl App {
             }
             Cmd::Project => return self.pick_project(args),
             Cmd::Attach => return self.attach(args),
+            Cmd::Download => return self.download(args),
             Cmd::Detach => {
                 self.chat.attachments.clear();
                 self.notice(Signal::Idle, "No files attached.");
@@ -2431,6 +2438,55 @@ impl App {
     }
 
     /// `/attach <path>`: upload a file for the next question.
+    fn download(&mut self, args: &str) -> Vec<Effect> {
+        use super::theme::Signal;
+        let files = self
+            .chat
+            .transcript
+            .as_ref()
+            .map(|t| t.downloads())
+            .unwrap_or_default();
+        if args.trim().is_empty() {
+            let text = if files.is_empty() {
+                "This chat has no files to download.".into()
+            } else {
+                format!(
+                    "{}\nUse /download <number> <path> to save a file.",
+                    files
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| format!("{}. {}", i + 1, f.filename))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            };
+            self.notice(Signal::Idle, &text);
+            return vec![];
+        }
+        let choice = args
+            .trim()
+            .split_once(char::is_whitespace)
+            .and_then(|(number, path)| {
+                number
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .and_then(|n| files.get(n))
+                    .filter(|_| !path.trim().is_empty())
+                    .map(|file| (file.path.clone().unwrap(), path.trim().to_string()))
+            });
+        if let Some((path, destination)) = choice {
+            self.notice(Signal::Live, "Saving the file…");
+            vec![Effect::Chat(ChatCommand::Download { path, destination })]
+        } else {
+            self.notice(
+                Signal::Attention,
+                "Use /download to list files, then /download <number> <path>.",
+            );
+            vec![]
+        }
+    }
+
     fn attach(&mut self, path: &str) -> Vec<Effect> {
         use super::theme::Signal;
         let path = path.trim().trim_matches(['"', '\'']).to_string();
@@ -3673,6 +3729,10 @@ impl App {
                     Err(failure) => self.notice(Signal::Negative, &failure.message),
                 }
             }
+            ChatMsg::Downloaded(result) => match result {
+                Ok(()) => self.notice(Signal::Positive, "File saved."),
+                Err(e) => self.notice(Signal::Negative, &e.message),
+            },
             ChatMsg::Uploaded { path, result } => {
                 let at = self
                     .chat

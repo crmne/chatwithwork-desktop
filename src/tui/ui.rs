@@ -1204,12 +1204,25 @@ fn waiting_lines(
         detail_lines(
             lines,
             approval
-                .details
+                .fields()
                 .iter()
                 .map(|d| (d.label.as_str(), d.value.as_str())),
             width,
             theme,
         );
+        if let Some(preview) = &approval.preview {
+            if let Some(body) = &preview.body {
+                answer_lines(lines, &body.markdown(), &[], width, theme);
+            }
+            for note in &preview.notes {
+                let signal = if note.tone == "warning" {
+                    Signal::Attention
+                } else {
+                    Signal::Idle
+                };
+                lines.extend(notice_line(&note.text, signal, width, theme));
+            }
+        }
         let choices = ChatPane::choices(approval);
         let selected = pane.decision.min(choices.len() - 1);
         for (i, choice) in choices.iter().enumerate() {
@@ -1541,6 +1554,9 @@ fn activity_lines(
                     theme.muted(),
                 ),
             ]));
+            if let Some(code) = &step.code {
+                answer_lines(lines, &code.markdown(), &[], width, theme);
+            }
             for file in &step.files {
                 lines.push(Line::from(vec![
                     Span::raw("      "),
@@ -1548,6 +1564,15 @@ fn activity_lines(
                 ]));
             }
         }
+    }
+    for file in activity.steps.iter().flat_map(|s| &s.downloads) {
+        lines.push(Line::styled(
+            ellipsize(
+                &format!("↓ {} · {}", file.filename, size(file.byte_size)),
+                width,
+            ),
+            theme.ink(),
+        ));
     }
     lines.push(Line::raw(""));
 }

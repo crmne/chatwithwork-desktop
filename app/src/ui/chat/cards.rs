@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use egui::{Color32, Id, Rect, Sense, Ui, pos2, vec2};
+use egui::{Color32, Id, Rect, Sense, Ui, UiBuilder, pos2, vec2};
 
 use cww::tui::chat::{Approval, Question};
 
@@ -172,6 +172,52 @@ impl Cards<'_> {
             Card::Approval(approval) => {
                 y += 14.0;
                 y = self.fields(ui, inner_left, y, inner_w, approval, &tint);
+                if let Some(preview) = &approval.preview {
+                    let mut body = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt(id.with("preview"))
+                            .max_rect(Rect::from_min_size(
+                                pos2(inner_left, y + 14.0),
+                                vec2(inner_w, f32::INFINITY),
+                            ))
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
+                    if let Some(content) = &preview.body {
+                        let blocks = super::markdown::parse(&content.markdown(), &[]);
+                        let clicked = super::prose::Prose {
+                            palette: p,
+                            images: self.images,
+                            sources: &[],
+                            caret: false,
+                            time: ui.input(|i| i.time),
+                            id: id.with("preview-body"),
+                        }
+                        .show(&mut body, &blocks);
+                        match clicked {
+                            Some(super::prose::Clicked::Copy(text)) => ui.ctx().copy_text(text),
+                            Some(super::prose::Clicked::Link(url)) => {
+                                event = Some(CardEvent::OpenPage(url))
+                            }
+                            _ => {}
+                        }
+                    }
+                    for note in &preview.notes {
+                        body.add_space(8.0);
+                        let color = if note.tone == "warning" {
+                            p.attention
+                        } else {
+                            p.ink_muted
+                        };
+                        let galley = paint::layout(
+                            body.painter(),
+                            paint::job(&note.text, scale::SMALL, color, inner_w),
+                        );
+                        let (rect, _) = body.allocate_exact_size(galley.size(), Sense::hover());
+                        widgets::label(&mut body, rect, &note.text);
+                        body.painter().galley(rect.min, galley, color);
+                    }
+                    y = body.min_rect().bottom();
+                }
                 if destructive {
                     y += 14.0;
                     y = self.warning(ui, inner_left, y, inner_w);
@@ -183,7 +229,7 @@ impl Cards<'_> {
                 let (bottom, decided) = self
                     .approval_actions(ui, id, inner_left, y, inner_w, approval, input, &tint, busy);
                 y = bottom;
-                event = decided.map(CardEvent::Decide);
+                event = decided.map(CardEvent::Decide).or(event);
             }
             Card::Question(question) => {
                 y += 14.0;
@@ -370,7 +416,7 @@ impl Cards<'_> {
     ) -> f32 {
         let p = self.palette;
         let painter = ui.painter().clone();
-        if approval.details.is_empty() {
+        if approval.fields().is_empty() {
             let galley = paint::layout(
                 &painter,
                 paint::job(
@@ -395,7 +441,7 @@ impl Cards<'_> {
         let background = painter.add(egui::Shape::Noop);
         let mut y = top;
         let mut shapes = Vec::new();
-        for (n, detail) in approval.details.iter().enumerate() {
+        for (n, detail) in approval.fields().iter().enumerate() {
             if n > 0 {
                 shapes.push(egui::Shape::hline(
                     left..=left + width,

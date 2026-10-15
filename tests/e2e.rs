@@ -3330,6 +3330,30 @@ async fn relays_dictation_and_signed_downloads() {
     .unwrap();
     assert_eq!(file.bytes, b"month,total\nApril,42");
     assert_eq!(file.content_type, "text/csv");
+    let destination = fx.paths.config_dir.join("downloaded.csv");
+    let c = chats.clone();
+    blocking(move || {
+        let path =
+            "/rails/active_storage/blobs/proxy/signed-token/report.csv?disposition=attachment";
+        c.save_download(path, &destination, false).unwrap();
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"month,total\nApril,42"
+        );
+        std::fs::write(&destination, b"keep me").unwrap();
+        assert_eq!(
+            c.save_download(path, &destination, false).unwrap_err().code,
+            "exists"
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"keep me");
+        c.save_download(path, &destination, true).unwrap();
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"month,total\nApril,42"
+        );
+    })
+    .await;
+
     for (path, code) in [
         (
             "/rails/active_storage/blobs/proxy/signed-token/moved.csv?disposition=attachment",

@@ -374,6 +374,9 @@ pub struct Step {
     pub pending: bool,
     /// Names of the files it found, for the owner's own steps.
     pub files: Vec<String>,
+    pub code: Option<CodeRun>,
+    pub downloads: Vec<Attachment>,
+    pub glyph: Option<String>,
     /// The tool's own view (an MCP App), when the step has one. The
     /// server doesn't send this yet; the desktop app keeps a place for it.
     pub app: Option<StepApp>,
@@ -435,6 +438,8 @@ pub enum Entry {
         #[serde(default, deserialize_with = "assets")]
         logos: Vec<Option<Asset>>,
         #[serde(default)]
+        glyphs: Vec<Option<String>>,
+        #[serde(default)]
         pending: bool,
         #[serde(default)]
         steps: Vec<Step>,
@@ -445,10 +450,12 @@ pub enum Entry {
     Unknown,
 }
 
-/// A file sent with a question.
+/// A file sent with a question or produced by a tool.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Attachment {
+    /// Same-server signed proxy path; never an arbitrary URL.
+    pub path: Option<String>,
     pub filename: String,
     pub byte_size: u64,
     pub content_type: String,
@@ -470,6 +477,18 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    pub fn downloads(&self) -> Vec<&Attachment> {
+        self.entries
+            .iter()
+            .flat_map(|entry| match entry {
+                Entry::User { attachments, .. } => attachments.iter().collect::<Vec<_>>(),
+                Entry::Activity { steps, .. } => steps.iter().flat_map(|s| &s.downloads).collect(),
+                _ => Vec::new(),
+            })
+            .filter(|file| file.path.is_some())
+            .collect()
+    }
+
     /// The first change this person can decide, if any.
     pub fn next_decision(&self) -> Option<&Approval> {
         self.approvals.iter().find(|a| a.decidable)
@@ -557,6 +576,7 @@ pub struct Approval {
     /// "Create issue in Linear".
     pub summary: String,
     pub details: Vec<Detail>,
+    pub preview: Option<ChangePreview>,
     /// It can be approved for the rest of the chat.
     pub allow_for_rest_of_chat: bool,
     pub waiting_for: Option<String>,
@@ -567,6 +587,167 @@ pub struct Approval {
 pub struct Detail {
     pub label: String,
     pub value: String,
+}
+
+/// The code and output the server is allowed to show this person.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct CodeRun {
+    pub language: String,
+    pub source: String,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+impl CodeRun {
+    pub fn markdown(&self) -> String {
+        let mut text = fenced(&self.language, &self.source);
+        for (label, output) in [
+            ("Output", &self.stdout),
+            ("Errors", &self.stderr),
+            ("Error", &self.error),
+        ] {
+            if let Some(output) = output.as_ref().filter(|s| !s.is_empty()) {
+                text.push_str(&format!("\n\n**{label}**\n\n{}", fenced("text", output)));
+            }
+        }
+        if let Some(code) = self.exit_code {
+            text.push_str(&format!("\n\nExit code: {code}"));
+        }
+        text
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct ChangePreview {
+    pub action: String,
+    pub rows: Vec<Detail>,
+    pub body: Option<PreviewBody>,
+    pub notes: Vec<PreviewNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewBody {
+    Text {
+        text: String,
+    },
+    Diff {
+        lines: Vec<DiffLine>,
+    },
+    Replace {
+        old_text: String,
+        new_text: String,
+    },
+    Document {
+        markdown: String,
+    },
+    Sheets {
+        sheets: Vec<PreviewSheet>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DiffLine {
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PreviewSheet {
+    pub name: String,
+    pub header: bool,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PreviewNote {
+    pub tone: String,
+    pub text: String,
+}
+
+impl Approval {
+    pub fn fields(&self) -> &[Detail] {
+        self.preview.as_ref().map_or(&self.details, |p| &p.rows)
+    }
+}
+
+impl PreviewBody {
+    pub fn markdown(&self) -> String {
+        match self {
+            Self::Text { text } => fenced("text", text),
+            Self::Diff { lines } => fenced("diff", &lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")),
+            Self::Replace { old_text, new_text } => format!("**Replace**\n\n{}\n\n**With**\n\n{}", fenced("text", old_text), fenced("text", new_text)),
+            Self::Document { markdown } => markdown.clone(),
+            Self::Sheets { sheets } => sheets.iter().map(|sheet| {
+                let columns = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+                let mut text = format!("### {}\n\n", markdown_cell(&sheet.name));
+                if columns == 0 { return text; }
+                let row = |cells: &[String]| format!("| {} |\n", (0..columns).map(|i| markdown_cell(cells.get(i).map_or("", String::as_str))).collect::<Vec<_>>().join(" | "));
+                let skip = if sheet.header {
+                    text.push_str(&row(&sheet.rows[0]));
+                    1
+                } else {
+                    text.push_str(&row(&(1..=columns).map(|i| format!("Column {i}")).collect::<Vec<_>>()));
+                    0
+                };
+                text.push_str(&format!("| {} |\n", vec!["---"; columns].join(" | ")));
+                for cells in &sheet.rows[skip..] { text.push_str(&row(cells)); }
+                text
+            }).collect::<Vec<_>>().join("\n"),
+            Self::Unknown => "Preview unavailable in this version. Review this change on the web before approving.".into(),
+        }
+    }
+}
+
+/// Preserve literal output, even if it contains Markdown fences or links.
+fn fenced(language: &str, text: &str) -> String {
+    let fence = "`".repeat(
+        text.split(|c| c != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+            .max(2)
+            + 1,
+    );
+    let language: String = language
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    format!("{fence}{language}\n{text}\n{fence}")
+}
+
+fn markdown_cell(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace('`', "\\`")
+        .replace(['\n', '\r'], " ")
+}
+
+impl Attachment {
+    /// A suggested basename for a native Save dialog, never a server-chosen directory.
+    pub fn save_name(&self) -> &str {
+        self.filename
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+            .unwrap_or("download")
+    }
 }
 
 /// A file uploaded for a question.
@@ -846,6 +1027,37 @@ impl Chats {
             bytes,
             content_type: response["content_type"].as_str().unwrap_or_default().into(),
         })
+    }
+
+    /// Save only to the destination the person chose. The TUI never overwrites;
+    /// the desktop picker obtains overwrite confirmation before this call.
+    pub fn save_download(
+        &self,
+        path: &str,
+        destination: &Path,
+        overwrite: bool,
+    ) -> Result<(), Failure> {
+        use std::io::Write;
+        let data = self.download(path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        if overwrite {
+            options.create(true).truncate(true);
+        } else {
+            options.create_new(true);
+        }
+        let mut file = options.open(destination).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Failure::new("exists", "That file already exists. Choose another name.")
+            } else {
+                Failure::new(
+                    "save",
+                    "Could not create the file at the chosen destination.",
+                )
+            }
+        })?;
+        file.write_all(&data.bytes)
+            .map_err(|_| Failure::new("save", "Could not finish saving the file."))
     }
 
     /// Approve a change the answer stopped at. Answers with the chat.
@@ -1493,5 +1705,76 @@ mod tests {
             Some(Live::Refused)
         );
         assert_eq!(Live::from_event(&json!({ "event": "heartbeat" })), None);
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn code_output_keeps_literal_fences_and_failures() {
+        let code: CodeRun = serde_json::from_value(json!({"language":"python", "source":"print('```')", "stdout":"```\n[not a link](https://example.com)", "stderr":"failed", "exit_code":1, "error":"Timed out"})).unwrap();
+        let text = code.markdown();
+        assert!(text.starts_with("````python\n"));
+        assert!(text.contains("````text\n```\n[not a link]"));
+        assert!(text.contains("Exit code: 1"));
+        assert!(text.contains("Timed out"));
+    }
+
+    #[test]
+    fn change_previews_keep_each_body_and_escape_sheet_cells() {
+        for (body, expected) in [
+            (json!({"kind":"text","text":"hello"}), "hello"),
+            (
+                json!({"kind":"diff","lines":[{"kind":"removed","text":"-old"},{"kind":"added","text":"+new"}]}),
+                "-old\n+new",
+            ),
+            (
+                json!({"kind":"replace","old_text":"before","new_text":"after"}),
+                "**With**",
+            ),
+            (json!({"kind":"document","markdown":"# Plan"}), "# Plan"),
+            (
+                json!({"kind":"sheets","sheets":[{"name":"Budget","header":true,"rows":[["Item","Total"],["[link]|<tag>","42"]]}]}),
+                "\\[link\\]\\|&lt;tag&gt;",
+            ),
+            (
+                json!({"kind":"sheets","sheets":[{"name":"Data","rows":[["42"],["17","20"]]}]}),
+                "Column 2",
+            ),
+            (
+                json!({"kind":"sheets","sheets":[{"name":"Empty","header":true,"rows":[]}]}),
+                "### Empty",
+            ),
+            (json!({"kind":"future"}), "Review this change on the web"),
+        ] {
+            let preview: PreviewBody = serde_json::from_value(body).unwrap();
+            assert!(
+                preview.markdown().contains(expected),
+                "{}",
+                preview.markdown()
+            );
+        }
+    }
+
+    #[test]
+    fn download_names_never_choose_a_directory() {
+        for (name, expected) in [
+            ("/tmp/budget.csv", "budget.csv"),
+            ("C:\\Users\\budget.csv", "budget.csv"),
+            ("..", "download"),
+            ("", "download"),
+        ] {
+            assert_eq!(
+                Attachment {
+                    filename: name.into(),
+                    ..Default::default()
+                }
+                .save_name(),
+                expected
+            );
+        }
     }
 }

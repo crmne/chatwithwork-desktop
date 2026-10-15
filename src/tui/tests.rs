@@ -1166,6 +1166,7 @@ fn budget_transcript(state: &str) -> Transcript {
                 attachments: vec![],
             },
             Entry::Activity {
+                glyphs: vec![],
                 id: 2,
                 title: "Searched Drive and Carmine's MacBook".into(),
                 details: Some("2 searches, read 1 file".into()),
@@ -1175,6 +1176,9 @@ fn budget_transcript(state: &str) -> Transcript {
                 pending: false,
                 steps: vec![
                     Step {
+                        code: None,
+                        downloads: vec![],
+                        glyph: None,
                         summary: "Searched Drive for “q3 budget”".into(),
                         pending: false,
                         files: vec!["Q3 plan.pdf".into(), "Budget 2026.xlsx".into()],
@@ -1183,6 +1187,9 @@ fn budget_transcript(state: &str) -> Transcript {
                         logo: None,
                     },
                     Step {
+                        code: None,
+                        downloads: vec![],
+                        glyph: None,
                         summary: "Read plans/q3.md".into(),
                         pending: false,
                         files: vec![],
@@ -1256,6 +1263,7 @@ fn snapshot_chat_streaming() {
         attachments: vec![],
     });
     transcript.entries.push(Entry::Activity {
+        glyphs: vec![],
         id: 5,
         title: "Searching Carmine's MacBook".into(),
         details: Some("1 search".into()),
@@ -1264,6 +1272,9 @@ fn snapshot_chat_streaming() {
         logos: vec![],
         pending: true,
         steps: vec![Step {
+            code: None,
+            downloads: vec![],
+            glyph: None,
             summary: "Searching for “q4 budget”…".into(),
             pending: true,
             files: vec![],
@@ -2232,6 +2243,7 @@ fn projects_and_chats_are_picked_from_lists() {
 
 fn approval() -> super::chat::Approval {
     super::chat::Approval {
+        preview: None,
         id: 31,
         service: "Slack".into(),
         logo: None,
@@ -3191,4 +3203,63 @@ fn web_search_checks_the_model_and_keeps_the_choice_with_the_question() {
     app.chat.list.web_search.allowed = false;
     app.run_command(Cmd::Web, "on");
     assert_eq!(app.chat.web_search, Some(false));
+}
+
+#[test]
+fn code_deliverables_stay_visible_and_download_to_the_chosen_path() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let activity: Entry = serde_json::from_value(serde_json::json!({
+        "kind":"activity","id":900,"title":"Ran code","steps":[{
+            "summary":"Ran Python","code":{"language":"python","source":"print(42)","stdout":"42","exit_code":0},
+            "downloads":[{"filename":"budget.csv","byte_size":42,"path":"/rails/active_storage/blobs/proxy/signed-token/budget.csv?disposition=attachment"}]
+        }]
+    })).unwrap();
+    app.chat.transcript.as_mut().unwrap().entries = vec![activity];
+    let folded = render_to_string(&app, 100, 30);
+    assert!(folded.contains("budget.csv"), "{folded}");
+    assert!(!folded.contains("print(42)"), "{folded}");
+    app.chat.show_steps = true;
+    assert!(render_to_string(&app, 100, 40).contains("print(42)"));
+    type_text(&mut app, "/download");
+    app.update(key(KeyCode::Enter));
+    assert!(app.notice.as_ref().unwrap().text.contains("1. budget.csv"));
+    type_text(&mut app, "/download 1 ~/My report.csv");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects.contains(&Effect::Chat(ChatCommand::Download {
+            path:
+                "/rails/active_storage/blobs/proxy/signed-token/budget.csv?disposition=attachment"
+                    .into(),
+            destination: "~/My report.csv".into()
+        })),
+        "{effects:?}"
+    );
+    type_text(&mut app, "/download 0 /tmp/nope");
+    assert!(
+        !app.update(key(KeyCode::Enter))
+            .iter()
+            .any(|e| matches!(e, Effect::Chat(ChatCommand::Download { .. })))
+    );
+}
+
+#[test]
+fn local_change_previews_include_the_diff_and_unchecked_warning() {
+    let mut app = app();
+    let mut change = approval();
+    change.preview=Some(serde_json::from_value(serde_json::json!({"action":"edit","rows":[{"label":"File","value":"plan.md"}],"body":{"kind":"diff","lines":[{"kind":"removed","text":"-Monday"},{"kind":"added","text":"+Thursday"}]},"notes":[{"tone":"warning","text":"This preview was not checked against the file."}]})).unwrap());
+    waiting(&mut app, vec![change], vec![]);
+    let screen = render_to_string(&app, 100, 60);
+    for text in [
+        "plan.md",
+        "-Monday",
+        "+Thursday",
+        "not checked against the file",
+    ] {
+        assert!(screen.contains(text), "{screen}");
+    }
+    assert!(
+        !screen.contains("We shipped!"),
+        "raw details must not replace the preview: {screen}"
+    );
 }

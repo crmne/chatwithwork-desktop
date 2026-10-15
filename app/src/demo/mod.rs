@@ -484,9 +484,9 @@ impl Demo {
                 json!({ "ok": true })
             }
             "chats" | "chat" | "chat_send" | "chat_cancel" | "chat_access" | "models"
-            | "chat_upload" | "chat_approve" | "chat_deny" | "chat_answer" | "chat_decline"
-            | "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete" | "chat_share"
-            | "chat_unshare" => {
+            | "chat_download" | "chat_upload" | "chat_approve" | "chat_deny" | "chat_answer"
+            | "chat_decline" | "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete"
+            | "chat_share" | "chat_unshare" => {
                 let answer = self.chat_request(cmd, request);
                 self.sync_list();
                 answer
@@ -631,6 +631,9 @@ impl Demo {
                 let mut models = chats::models();
                 models["ok"] = json!(true);
                 models
+            }
+            "chat_download" => {
+                json!({"ok": true, "data": "VmVuZG9yLFRvdGFsCkFjbWUsNDIwMDAK", "content_type": "text/csv"})
             }
             "chat_upload" => self.upload(request),
             "chat_approve" | "chat_deny" | "chat_answer" | "chat_decline" => {

@@ -256,6 +256,21 @@ fn is_word_char(c: char) -> bool {
 pub fn job(code: &str, language: &str, palette: &Palette) -> LayoutJob {
     let mut job = LayoutJob::default();
     let language = language.to_ascii_lowercase();
+    if language == "diff" {
+        for line in code.split_inclusive('\n') {
+            let color = if line.starts_with('+') {
+                palette.green_ink
+            } else if line.starts_with('-') {
+                palette.negative()
+            } else if line.starts_with('@') {
+                palette.blue_ink
+            } else {
+                palette.ink_muted
+            };
+            job.append(line, 0.0, scale::CODE.format(color));
+        }
+        return job;
+    }
     for (kind, text) in tokens(code, &language) {
         let mut format = scale::CODE.format(color(kind, palette));
         format.italics = kind == Kind::Comment;

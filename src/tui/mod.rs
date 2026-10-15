@@ -324,6 +324,15 @@ impl ChatRunner {
                     send(ChatMsg::Decided { chat, result });
                 });
             }
+            ChatCommand::Download { path, destination } => {
+                thread::spawn(move || {
+                    send(ChatMsg::Downloaded(chats.save_download(
+                        &path,
+                        &expand_home(&destination),
+                        false,
+                    )))
+                });
+            }
             ChatCommand::Upload(path) => {
                 thread::spawn(move || {
                     let result = chats.upload(&expand_home(&path));

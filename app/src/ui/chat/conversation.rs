@@ -29,6 +29,7 @@ const COPIED_FOR: f64 = 2.0;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     OpenUrl(String),
+    Download(Attachment),
     /// Open this chat in the browser (a tool's view, for now).
     OpenChat,
     Copy(String),
@@ -384,6 +385,7 @@ impl Conversation<'_> {
                     progress,
                     services,
                     logos,
+                    glyphs,
                     pending,
                     steps,
                 }) => {
@@ -401,6 +403,7 @@ impl Conversation<'_> {
                         detail,
                         services,
                         logos,
+                        glyphs,
                         *pending,
                         steps,
                         &here,
@@ -517,7 +520,7 @@ impl Conversation<'_> {
             if !content.trim().is_empty() {
                 ui.add_space(6.0);
             }
-            self.file_chips(ui, id, attachments, max);
+            self.file_chips(ui, id, attachments, max, true, events);
         }
         // Copy and Retry, on hover.
         ui.add_space(6.0);
@@ -574,7 +577,16 @@ impl Conversation<'_> {
 
     /// `.message__attachments`: the files sent with a question, as
     /// `.file-chip`s, right-aligned and wrapping, at most `max` wide.
-    fn file_chips(&self, ui: &mut Ui, id: Id, attachments: &[Attachment], max: f32) {
+    #[allow(clippy::too_many_arguments)]
+    fn file_chips(
+        &self,
+        ui: &mut Ui,
+        id: Id,
+        attachments: &[Attachment],
+        max: f32,
+        right: bool,
+        events: &mut Vec<Event>,
+    ) {
         let p = self.palette;
         let width = ui.available_width();
         let painter = ui.painter().clone();
@@ -591,7 +603,7 @@ impl Conversation<'_> {
                         f32::INFINITY,
                     ),
                 );
-                let name_max = 288.0 - 8.0 - 24.0 - 8.0 - 8.0 - size.size().x - 12.0;
+                let name_max = max.min(288.0) - 8.0 - 24.0 - 8.0 - 8.0 - size.size().x - 12.0;
                 let name = paint::layout(
                     &painter,
                     paint::line_job(&a.filename, scale::SMALLER.weight(550.0), p.ink, name_max),
@@ -623,20 +635,47 @@ impl Conversation<'_> {
             let (line, _) = ui.allocate_exact_size(vec2(width, 36.0), Sense::hover());
             let total: f32 =
                 row.iter().map(|&n| chips[n].0).sum::<f32>() + 6.0 * (row.len() - 1) as f32;
-            let mut x = line.right() - total;
+            let mut x = if right {
+                line.right() - total
+            } else {
+                line.left()
+            };
             for &n in row {
                 let (w, name, size, attachment) = &chips[n];
                 let rect = Rect::from_min_size(pos2(x, line.top()), vec2(*w, 36.0));
                 x += w + 6.0;
                 let chip_id = id.with(("file", n));
-                let response = ui.interact(rect, chip_id, Sense::hover());
+                let downloadable = attachment.path.is_some();
+                let response = ui.interact(
+                    rect,
+                    chip_id,
+                    if downloadable {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    },
+                );
+                if downloadable && response.clicked() {
+                    events.push(Event::Download((*attachment).clone()));
+                }
+                if downloadable && response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
                 let label = format!(
                     "{}, {}",
                     attachment.filename,
                     rails_size(attachment.byte_size)
                 );
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &label)
+                    egui::WidgetInfo::labeled(
+                        if downloadable {
+                            egui::WidgetType::Button
+                        } else {
+                            egui::WidgetType::Label
+                        },
+                        true,
+                        &label,
+                    )
                 });
                 let t = widgets::hover(ui, chip_id, response.hovered(), tokens::FAST);
                 let painter = ui.painter();
@@ -1089,6 +1128,7 @@ impl Conversation<'_> {
         details: Option<&str>,
         services: &[String],
         logos: &[Option<Asset>],
+        glyphs: &[Option<String>],
         pending: bool,
         steps: &[Step],
         cards: &[(usize, Card)],
@@ -1126,7 +1166,14 @@ impl Conversation<'_> {
                 .iter()
                 .enumerate()
                 .take(4)
-                .map(|(n, name)| service_face(name, logos, n, steps))
+                .map(|(n, name)| {
+                    glyphs
+                        .get(n)
+                        .and_then(|g| g.as_deref())
+                        .and_then(Icon::named)
+                        .map(Face::Glyph)
+                        .unwrap_or_else(|| service_face(name, logos, n, steps))
+                })
                 .collect()
         };
         let avatar_w = if faces.is_empty() {
@@ -1277,6 +1324,21 @@ impl Conversation<'_> {
             for (n, step) in steps.iter().enumerate() {
                 let glyph = step_glyph(step, services, logos, steps);
                 self.step(&mut log, step, glyph, pending);
+                if let Some(code) = &step.code {
+                    let blocks = markdown::parse(&code.markdown(), &[]);
+                    let clicked = Prose {
+                        palette: p,
+                        images: self.images,
+                        sources: &[],
+                        caret: false,
+                        time: self.time,
+                        id: egui_id.with(("code", n)),
+                    }
+                    .show(&mut log, &blocks);
+                    if let Some(Clicked::Copy(text)) = clicked {
+                        events.push(Event::Copy(text));
+                    }
+                }
                 for (_, card) in cards.iter().filter(|(at, _)| *at == n) {
                     if let Some(e) = cards_ui.show(&mut log, *card, &mut view.inputs, review) {
                         events.push(card_event(e));
@@ -1317,6 +1379,21 @@ impl Conversation<'_> {
             }
             ui.allocate_exact_size(vec2(width, log_height), Sense::hover());
             ui.add_space(12.0 - 8.0);
+        }
+        let downloads: Vec<Attachment> = steps
+            .iter()
+            .flat_map(|s| s.downloads.iter().cloned())
+            .collect();
+        if !downloads.is_empty() {
+            ui.add_space(6.0);
+            self.file_chips(
+                ui,
+                egui_id.with("downloads"),
+                &downloads,
+                width,
+                false,
+                events,
+            );
         }
         ui.add_space(8.0);
         animating
@@ -1558,6 +1635,9 @@ fn service_face<'a>(
 /// `laptop` for a computer. An older server says nothing of it: guess from
 /// the summary, as before.
 fn step_glyph(step: &Step, services: &[String], logos: &[Option<Asset>], steps: &[Step]) -> Icon {
+    if let Some(icon) = step.glyph.as_deref().and_then(Icon::named) {
+        return icon;
+    }
     if !logos_known(logos, steps) {
         return step_icon(step);
     }
