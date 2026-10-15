@@ -5,3 +5,4 @@
 //! notification connection itself.
 
 pub mod protocol;
+pub mod supervisor;

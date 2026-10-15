@@ -4,6 +4,8 @@
 //! `Shown` means OS acceptance, not a visible banner. Only the supervisor's
 //! explicit `RequestPermission` command may open a native permission prompt.
 //! IDs are opaque, account-scoped replacement keys, never URLs or message text.
+//! A supervisor assigns each show an `attempt`, echoed by lifecycle events,
+//! so buffered callbacks cannot acknowledge a newer same-ID replacement.
 //! Activation reports an ID to the parent and never opens anything itself.
 //!
 //! The broker retains at most [`MAX_ACTIVE`] observations. At capacity, a new
@@ -14,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 pub const MAX_ACTIVE: usize = 32;
 pub const MAX_FRAME_BYTES: usize = 32 * 1024;
 pub const MAX_ID_BYTES: usize = 256;
@@ -26,6 +28,8 @@ pub const MAX_BODY_BYTES: usize = 4096;
 pub enum Command {
     Show {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
         title: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<String>,
@@ -46,6 +50,8 @@ pub enum Command {
 enum StrictCommand {
     Show {
         id: String,
+        #[serde(default)]
+        attempt: Option<u64>,
         title: String,
         #[serde(default)]
         body: Option<String>,
@@ -61,7 +67,17 @@ enum StrictCommand {
 impl<'de> Deserialize<'de> for Command {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(match StrictCommand::deserialize(deserializer)? {
-            StrictCommand::Show { id, title, body } => Self::Show { id, title, body },
+            StrictCommand::Show {
+                id,
+                attempt,
+                title,
+                body,
+            } => Self::Show {
+                id,
+                attempt,
+                title,
+                body,
+            },
             StrictCommand::Withdraw { id } => Self::Withdraw { id },
             StrictCommand::Permission {} => Self::Permission,
             StrictCommand::RequestPermission {} => Self::RequestPermission,
@@ -75,7 +91,9 @@ impl Command {
     /// are static and contain none of the rejected private input.
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::Show { id, title, body } => {
+            Self::Show {
+                id, title, body, ..
+            } => {
                 validate_id(id)?;
                 if title.trim().is_empty() || title.len() > MAX_TITLE_BYTES || title.contains('\0')
                 {
@@ -132,22 +150,32 @@ pub enum Event {
     },
     Shown {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
     },
     Failed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
         message: String,
     },
     Activated {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<String>,
     },
     Dismissed {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
     },
     Closed {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
     },
 }
 
@@ -164,6 +192,7 @@ mod tests {
             command,
             Command::Show {
                 id: "account:notice".into(),
+                attempt: None,
                 title: "Ready".into(),
                 body: None,
             }
@@ -171,6 +200,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Event::Activated {
                 id: "notice".into(),
+                attempt: None,
                 action: None,
             })
             .unwrap(),
@@ -214,6 +244,7 @@ mod tests {
         }
         let mut command = Command::Show {
             id: "account:notice".into(),
+            attempt: None,
             title: "é".repeat(MAX_TITLE_BYTES / 2),
             body: Some("x".repeat(MAX_BODY_BYTES)),
         };

@@ -197,6 +197,7 @@ impl Backend for Native {
 struct Active<H> {
     handle: H,
     generation: u64,
+    attempt: Option<u64>,
     closing: bool,
 }
 
@@ -216,16 +217,34 @@ struct Broker<B: Backend> {
 
 impl<B: Backend> Broker<B> {
     fn command(&mut self, command: Command) -> std::result::Result<Option<PermissionQuery>, Event> {
+        let attempt = match &command {
+            Command::Show { attempt, .. } => *attempt,
+            _ => None,
+        };
         if let Err(message) = command.validate() {
-            return Err(failure(command.id().map(str::to_owned), message));
+            return Err(with_attempt(
+                failure(command.id().map(str::to_owned), message),
+                attempt,
+            ));
         }
         match command {
-            Command::Show { id, title, body } => {
+            Command::Show {
+                id,
+                attempt,
+                title,
+                body,
+            } => {
                 if !self.active.contains_key(&id) && self.active.len() >= protocol::MAX_ACTIVE {
-                    return Err(failure(Some(id), "Too many active notifications"));
+                    return Err(with_attempt(
+                        failure(Some(id), "Too many active notifications"),
+                        attempt,
+                    ));
                 }
                 let Some(generation) = self.next_generation.checked_add(1) else {
-                    return Err(failure(Some(id), "Notification broker must restart"));
+                    return Err(with_attempt(
+                        failure(Some(id), "Notification broker must restart"),
+                        attempt,
+                    ));
                 };
                 self.next_generation = generation;
                 let event_id = id.clone();
@@ -263,7 +282,9 @@ impl<B: Backend> Broker<B> {
                             }
                         }),
                     )
-                    .map_err(|error| failure(Some(id.clone()), error.to_string()))?;
+                    .map_err(|error| {
+                        with_attempt(failure(Some(id.clone()), error.to_string()), attempt)
+                    })?;
                 // Fastframe releases the old observation and serializes a
                 // same-key replacement. Never close the old handle here.
                 self.active.insert(
@@ -271,6 +292,7 @@ impl<B: Backend> Broker<B> {
                     Active {
                         handle,
                         generation,
+                        attempt,
                         closing: false,
                     },
                 );
@@ -304,6 +326,7 @@ impl<B: Backend> Broker<B> {
         if active.generation != generation {
             return None;
         }
+        let attempt = active.attempt;
         if active.closing {
             match event {
                 NativeEvent::Shown => return None,
@@ -320,15 +343,22 @@ impl<B: Backend> Broker<B> {
             self.active.remove(&id);
         }
         Some(match event {
-            NativeEvent::Shown => Event::Shown { id },
-            NativeEvent::Activated => Event::Activated { id, action: None },
+            NativeEvent::Shown => Event::Shown { id, attempt },
+            NativeEvent::Activated => Event::Activated {
+                id,
+                attempt,
+                action: None,
+            },
             NativeEvent::Action(action) => Event::Activated {
                 id,
+                attempt,
                 action: Some(action),
             },
-            NativeEvent::Dismissed => Event::Dismissed { id },
-            NativeEvent::Closed => Event::Closed { id },
-            NativeEvent::Failed(error) => failure(Some(id), error.to_string()),
+            NativeEvent::Dismissed => Event::Dismissed { id, attempt },
+            NativeEvent::Closed => Event::Closed { id, attempt },
+            NativeEvent::Failed(error) => {
+                with_attempt(failure(Some(id), error.to_string()), attempt)
+            }
         })
     }
 }
@@ -408,8 +438,16 @@ fn permission_state(permission: Permission) -> PermissionState {
 fn failure(id: Option<String>, message: impl Into<String>) -> Event {
     Event::Failed {
         id,
+        attempt: None,
         message: message.into(),
     }
+}
+
+fn with_attempt(mut event: Event, value: Option<u64>) -> Event {
+    if let Event::Failed { attempt, .. } = &mut event {
+        *attempt = value;
+    }
+    event
 }
 
 fn emit(output: &mut impl Write, event: &Event) -> Result<()> {
@@ -509,6 +547,7 @@ mod tests {
     fn show(id: &str) -> Command {
         Command::Show {
             id: id.into(),
+            attempt: None,
             title: "Synthetic notice".into(),
             body: Some("Synthetic body".into()),
         }
@@ -524,7 +563,10 @@ mod tests {
         fake.send(0, NativeEvent::Shown);
         assert_eq!(
             broker.observation(events.try_recv().unwrap()),
-            Some(Event::Shown { id: "a".into() })
+            Some(Event::Shown {
+                id: "a".into(),
+                attempt: None
+            })
         );
         assert_eq!(broker.active.len(), 1);
         fake.send(0, NativeEvent::Failed(Error::PermissionDenied));
@@ -559,13 +601,17 @@ mod tests {
         fake.send(1, NativeEvent::Shown);
         assert_eq!(
             broker.observation(events.try_recv().unwrap()),
-            Some(Event::Shown { id: "a".into() })
+            Some(Event::Shown {
+                id: "a".into(),
+                attempt: None
+            })
         );
         fake.send(1, NativeEvent::Action("open".into()));
         assert_eq!(
             broker.observation(events.try_recv().unwrap()),
             Some(Event::Activated {
                 id: "a".into(),
+                attempt: None,
                 action: Some("open".into())
             })
         );
@@ -590,14 +636,66 @@ mod tests {
             fake.send(0, terminal.clone());
             let event = broker.observation(events.try_recv().unwrap());
             match terminal {
-                NativeEvent::Closed => assert_eq!(event, Some(Event::Closed { id: "a".into() })),
+                NativeEvent::Closed => assert_eq!(
+                    event,
+                    Some(Event::Closed {
+                        id: "a".into(),
+                        attempt: None
+                    })
+                ),
                 NativeEvent::Dismissed => {
-                    assert_eq!(event, Some(Event::Dismissed { id: "a".into() }))
+                    assert_eq!(
+                        event,
+                        Some(Event::Dismissed {
+                            id: "a".into(),
+                            attempt: None
+                        })
+                    )
                 }
                 _ => assert_eq!(event, None),
             }
             assert!(broker.active.is_empty());
         }
+    }
+
+    #[test]
+    fn attempt_is_echoed_on_acceptance_actions_and_rejected_replacements() {
+        let fake = Fake::default();
+        let (mut broker, mut events, _) = broker(fake.clone());
+        let mut first = show("a");
+        if let Command::Show { attempt, .. } = &mut first {
+            *attempt = Some(7);
+        }
+        assert!(broker.command(first).is_ok());
+        fake.send(0, NativeEvent::Shown);
+        assert_eq!(
+            broker.observation(events.try_recv().unwrap()),
+            Some(Event::Shown {
+                id: "a".into(),
+                attempt: Some(7)
+            })
+        );
+        let mut replacement = show("a");
+        if let Command::Show { attempt, .. } = &mut replacement {
+            *attempt = Some(8);
+        }
+        fake.fail_show.store(true, Ordering::Relaxed);
+        assert!(matches!(
+            broker.command(replacement),
+            Err(Event::Failed {
+                attempt: Some(8),
+                ..
+            })
+        ));
+        fake.send(0, NativeEvent::Activated);
+        assert_eq!(
+            broker.observation(events.try_recv().unwrap()),
+            Some(Event::Activated {
+                id: "a".into(),
+                attempt: Some(7),
+                action: None
+            })
+        );
     }
 
     #[test]
@@ -720,9 +818,14 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                Event::Ready { protocol: 1 },
+                Event::Ready {
+                    protocol: protocol::VERSION
+                },
                 failure(None, "Invalid notification command"),
-                Event::Shown { id: "a".into() },
+                Event::Shown {
+                    id: "a".into(),
+                    attempt: None
+                },
                 Event::Permission {
                     state: PermissionState::Granted
                 },
@@ -752,7 +855,10 @@ mod tests {
                 Input::Command(Command::Exit),
             ],
         );
-        assert!(events.contains(&Event::Shown { id: "a".into() }));
+        assert!(events.contains(&Event::Shown {
+            id: "a".into(),
+            attempt: None
+        }));
         assert!(
             events
                 .iter()
@@ -769,6 +875,7 @@ mod tests {
             fake.clone(),
             vec![Input::Command(Command::Show {
                 id: "a".into(),
+                attempt: None,
                 title: "private".repeat(100),
                 body: None,
             })],
