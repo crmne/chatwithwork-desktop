@@ -138,6 +138,8 @@ pub enum ControlRequest {
         /// The model to answer with, by its ID in `models`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        web_search: Option<bool>,
         /// Files from `chat_upload`, by `signed_id`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
@@ -166,6 +168,17 @@ pub enum ControlRequest {
         filename: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content_type: Option<String>,
+        data: String,
+    },
+    /// A signed file path from a transcript, fetched without the token.
+    ChatDownload {
+        path: String,
+    },
+    /// Whether the owner can dictate, and why when they cannot.
+    Dictation,
+    /// Recorded audio, in memory only, transcribed as the device's owner.
+    Dictate {
+        content_type: String,
         data: String,
     },
     /// Answer a question in `chat` again: `message`, or the latest.
@@ -403,7 +416,10 @@ where
             // Only an upload carries a file.
             Ok(request)
                 if line.len() > MAX_REQUEST_BYTES
-                    && !matches!(request, ControlRequest::ChatUpload { .. }) =>
+                    && !matches!(
+                        request,
+                        ControlRequest::ChatUpload { .. } | ControlRequest::Dictate { .. }
+                    ) =>
             {
                 bail!("control request too long");
             }
@@ -904,6 +920,7 @@ mod tests {
                 text: "hi".into(),
                 project: None,
                 model: None,
+                web_search: None,
                 attachments: vec![],
             })
             .unwrap(),
@@ -935,6 +952,7 @@ mod tests {
                     text: "hi".into(),
                     project: None,
                     model: Some("7".into()),
+                    web_search: None,
                     attachments: vec!["abc".into()],
                 },
                 r#"{"cmd":"chat_send","chat":"42","text":"hi","model":"7","attachments":["abc"]}"#,

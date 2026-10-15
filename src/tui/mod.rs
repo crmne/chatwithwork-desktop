@@ -275,6 +275,7 @@ impl ChatRunner {
                         text,
                         project,
                         model,
+                        web_search: None,
                         attachments,
                     };
                     send(ChatMsg::Sent {

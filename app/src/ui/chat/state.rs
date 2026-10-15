@@ -517,6 +517,7 @@ impl ChatState {
             // A chat in a project starts on the project's page on the web.
             project: None,
             model: self.model_for_question(),
+            web_search: None,
             attachments,
         })]
     }

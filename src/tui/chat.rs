@@ -123,6 +123,13 @@ pub struct AssetData {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
+pub struct Dictation {
+    pub cloud: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct ShareLink {
     pub url: String,
     /// RFC 3339.
@@ -556,6 +563,7 @@ pub struct Ask {
     /// A model ID from [`Chats::models`]; `None` keeps the chat's, or the
     /// default for a new chat.
     pub model: Option<String>,
+    pub web_search: Option<bool>,
     /// Files from [`Chats::upload`], by `signed_id`.
     pub attachments: Vec<String>,
 }
@@ -755,6 +763,7 @@ impl Chats {
             text: ask.text.clone(),
             project: ask.project,
             model: ask.model.clone(),
+            web_search: ask.web_search,
             attachments: ask.attachments.clone(),
         })?;
         parse(response["chat"].clone())
@@ -764,6 +773,39 @@ impl Chats {
     /// choice, `daemon_outdated` a daemon that can't relay it.
     pub fn models(&self) -> Result<Models, Failure> {
         parse(self.call(&ControlRequest::Models)?)
+    }
+
+    pub fn dictation(&self) -> Result<Dictation, Failure> {
+        parse(self.call(&ControlRequest::Dictation)?)
+    }
+
+    pub fn dictate(&self, data: &[u8], content_type: &str) -> Result<String, Failure> {
+        use base64::Engine;
+        if data.len() > crate::chats::MAX_AUDIO_BYTES {
+            return Err(Failure::new("too_large", "Record at most five minutes"));
+        }
+        let response = self.call_slow(&ControlRequest::Dictate {
+            data: base64::engine::general_purpose::STANDARD.encode(data),
+            content_type: content_type.into(),
+        })?;
+        response["text"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Failure::new("invalid", "The transcription response was incomplete"))
+    }
+
+    /// Fetch bytes only; the client chooses where to save, outside the daemon.
+    pub fn download(&self, path: &str) -> Result<AssetData, Failure> {
+        use base64::Engine;
+        crate::chats::download_path(path).map_err(|e| Failure::new("invalid", e.to_string()))?;
+        let response = self.call_slow(&ControlRequest::ChatDownload { path: path.into() })?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(response["data"].as_str().unwrap_or_default())
+            .map_err(|_| Failure::new("invalid", "The download was incomplete"))?;
+        Ok(AssetData {
+            bytes,
+            content_type: response["content_type"].as_str().unwrap_or_default().into(),
+        })
     }
 
     /// Approve a change the answer stopped at. Answers with the chat.

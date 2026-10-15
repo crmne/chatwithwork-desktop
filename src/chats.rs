@@ -244,6 +244,44 @@ impl ChatHub {
 
 /// The largest file a question can carry, as Chat with Work allows it.
 pub const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+pub const MAX_AUDIO_BYTES: usize = 10 * 1024 * 1024;
+pub const MAX_DOWNLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+/// Only a signed Active Storage proxy path, never another API or host.
+pub fn download_path(path: &str) -> Result<&str, Refusal> {
+    let valid = || {
+        if path.len() > 4096 || !path.is_ascii() || path.bytes().any(|b| b.is_ascii_control()) {
+            return false;
+        }
+        let Some(rest) = path.strip_prefix("/rails/active_storage/blobs/proxy/") else {
+            return false;
+        };
+        let Some(rest) = rest.strip_suffix("?disposition=attachment") else {
+            return false;
+        };
+        let Some((signed, filename)) = rest.split_once('/') else {
+            return false;
+        };
+        let decoded = percent_encoding::percent_decode_str(filename).decode_utf8();
+        !signed.is_empty()
+            && signed
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'='))
+            && !filename.contains(['?', '#', '\\'])
+            && decoded.is_ok_and(|name| {
+                !name.is_empty()
+                    && name != "."
+                    && name != ".."
+                    && !name.contains(['/', '\\'])
+                    && !name.chars().any(char::is_control)
+            })
+    };
+    if valid() {
+        Ok(path)
+    } else {
+        Err(Refusal::new("invalid", "That isn't a chat file download"))
+    }
+}
 
 /// A question for [`ChatClient::send`]: in `chat`, or in a new chat.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -254,6 +292,8 @@ pub struct Question {
     pub project: Option<u64>,
     /// The model to answer with, from `models`.
     pub model: Option<String>,
+    /// Leave the chat choice alone when absent.
+    pub web_search: Option<bool>,
     /// Files uploaded with [`ChatClient::upload`], by `signed_id`.
     pub attachments: Vec<String>,
 }
@@ -297,6 +337,9 @@ impl ChatClient {
         let mut body = json!({ "content": question.text });
         if let Some(model) = &question.model {
             body["model_id"] = json!(model);
+        }
+        if let Some(on) = question.web_search {
+            body["web_search"] = json!(on);
         }
         if !question.attachments.is_empty() {
             body["attachments"] = json!(question.attachments);
@@ -355,26 +398,55 @@ impl ChatClient {
     /// Upload a file for a question: `{signed_id, filename, byte_size,
     /// content_type}`.
     pub fn upload(&self, upload: &Upload) -> Result<Value> {
-        let boundary = boundary()?;
-        let mut data = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-            upload.filename.replace(['"', '\\'], "_"),
-            upload.content_type
-        )
-        .into_bytes();
-        data.extend_from_slice(&upload.data);
-        data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         newer(
-            self.call(
-                "POST",
-                "local_agent/uploads",
-                Body::Bytes {
-                    content_type: format!("multipart/form-data; boundary={boundary}"),
-                    data,
-                },
-            ),
+            self.call("POST", "local_agent/uploads", multipart("file", upload)?),
             "doesn't take attachments from here yet",
         )
+    }
+
+    pub fn dictation(&self) -> Result<Value> {
+        newer(
+            self.call("GET", "local_agent/dictations/new", Body::Empty),
+            "doesn't support dictation yet",
+        )
+    }
+
+    pub fn dictate(&self, audio: &Upload) -> Result<Value> {
+        if audio.data.is_empty() {
+            return Err(Refusal::new("invalid", "The recording is empty").into());
+        }
+        if audio.data.len() > MAX_AUDIO_BYTES {
+            return Err(Refusal::new("too_large", "Record at most five minutes").into());
+        }
+        newer(
+            self.call("POST", "local_agent/dictations", multipart("audio", audio)?),
+            "doesn't support dictation yet",
+        )
+    }
+
+    /// Signed downloads already authorize the file; never send a device token.
+    pub fn download(&self, path: &str) -> Result<Value> {
+        use base64::Engine;
+        let path = download_path(path)?;
+        let (status, content_type, bytes) = self
+            .tokens
+            .client()
+            .get_file(path, MAX_DOWNLOAD_BYTES, "*/*")
+            .map_err(|_| {
+                Refusal::new(
+                    "unreachable",
+                    "Couldn't download that file. It may exceed 25 MB.",
+                )
+            })?;
+        match status {
+            200 => Ok(
+                json!({ "content_type": content_type, "data": base64::engine::general_purpose::STANDARD.encode(bytes) }),
+            ),
+            404 => Err(Refusal::new("not_found", "That file is no longer available").into()),
+            _ => Err(
+                Refusal::new("unreachable", format!("The file request returned {status}")).into(),
+            ),
+        }
     }
 
     /// Answer `message` again, or the latest question.
@@ -614,6 +686,20 @@ fn boundary() -> Result<String> {
     Ok(format!("cww-{hex}"))
 }
 
+fn multipart(field: &str, upload: &Upload) -> Result<Body<'static>> {
+    let boundary = boundary()?;
+    let mut data = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+        upload.filename.replace(['"', '\\', '\r', '\n'], "_"), upload.content_type
+    ).into_bytes();
+    data.extend_from_slice(&upload.data);
+    data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    Ok(Body::Bytes {
+        content_type: format!("multipart/form-data; boundary={boundary}"),
+        data,
+    })
+}
+
 fn refresh_refusal(e: RefreshError) -> Refusal {
     match e {
         RefreshError::Revoked(reason) => Refusal::new(
@@ -808,5 +894,34 @@ mod tests {
         assert_eq!(heard.try_recv().ok(), Some(note("offline")));
         let mut again = hub.attach();
         assert_eq!(again.try_recv().ok(), Some(Follow::WatchList));
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    #[test]
+    fn permits_only_signed_proxy_files_on_the_paired_server() {
+        let prefix = "/rails/active_storage/blobs/proxy/signed-token/";
+        for name in ["report.csv", "Q3%20plan.pdf", "%C3%BCbersicht.xlsx"] {
+            assert!(download_path(&format!("{prefix}{name}?disposition=attachment")).is_ok());
+        }
+        for path in [
+            "https://evil.example/report.csv",
+            "//evil.example/x",
+            "/local_agent/chats",
+            "/rails/active_storage/blobs/redirect/signed-token/a.txt?disposition=attachment",
+        ] {
+            assert!(download_path(path).is_err(), "{path}");
+        }
+        for name in [
+            "", "..", "%2e%2e", "%2fetc", "%5cetc", "a/b", "a?x", "a#x", "a%00b", "a%0ab",
+        ] {
+            assert!(
+                download_path(&format!("{prefix}{name}?disposition=attachment")).is_err(),
+                "{name}"
+            );
+        }
+        assert!(download_path(&format!("{prefix}a.txt")).is_err());
     }
 }

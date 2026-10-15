@@ -456,18 +456,25 @@ impl AuthClient {
     /// most `limit` bytes (more is an error). Redirects are never
     /// followed, so it can't be sent anywhere else.
     pub fn get_asset(&self, path: &str, limit: usize) -> Result<(u16, String, Vec<u8>)> {
+        self.get_file(path, limit, "image/*")
+    }
+
+    pub fn get_file(
+        &self,
+        path: &str,
+        limit: usize,
+        accept: &str,
+    ) -> Result<(u16, String, Vec<u8>)> {
         let url = self.server.endpoint(path.trim_start_matches('/'));
         let mut response = self
             .agent
             .get(&url)
-            .header("Accept", "image/*")
+            .header("Accept", accept)
             .call()
-            .with_context(|| format!("contacting {url}"))?;
+            .with_context(|| "fetching a file from Chat with Work")?;
         let status = response.status().as_u16();
         if (300..400).contains(&status) {
-            bail!(
-                "the server answered {url} with a redirect ({status}); redirects are never followed"
-            );
+            bail!("the file request was redirected ({status}); redirects are never followed");
         }
         let content_type = response
             .headers()
@@ -481,7 +488,7 @@ impl AuthClient {
                 .with_config()
                 .limit(limit as u64)
                 .read_to_vec()
-                .with_context(|| format!("reading {url} (at most {limit} bytes)"))?
+                .with_context(|| format!("reading a file (at most {limit} bytes)"))?
         } else {
             Vec::new()
         };

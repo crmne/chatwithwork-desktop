@@ -270,7 +270,7 @@ One chat: `chat`, `locked_reason`, `entries`, `approvals` and `questions`. Each 
 {"cmd": "chat_send", "text": "And Q4?", "chat": "42"}
 ```
 
-Asks in chat 42, or in a new chat without `chat` (`project` puts a new chat in a project). `model` picks the model by its ID from `models` (an existing chat switches to it), and `attachments` lists files from `chat_upload` by `signed_id`; with files, `text` may be empty. Answers `{"chat": {...}}`. Follow the chat to see the answer. A model that can't be used fails with `model_unavailable`, and a file the server won't take with `attachment_refused`.
+Asks in chat 42, or in a new chat without `chat` (`project` puts a new chat in a project). `model` picks the model by its ID from `models` (an existing chat switches to it), and `attachments` lists files from `chat_upload` by `signed_id`; with files, `text` may be empty. Answers `{"chat": {...}}`. The optional boolean `web_search` turns web search on or off for the next question and keeps that choice on the chat; omit it to keep the existing choice. Follow the chat to see the answer. A model that can't be used fails with `model_unavailable`, and a file the server won't take with `attachment_refused`.
 
 ```json
 {"cmd": "models"}
@@ -289,7 +289,7 @@ Approves or denies a change the answer stopped at (an entry of `approvals` with 
 {"cmd": "chat_upload", "filename": "notes.pdf", "content_type": "application/pdf", "data": "<base64>"}
 ```
 
-Uploads a file for a question. The daemon can only read shared folders, so the client reads the file and sends its bytes, base64-encoded, in `data`; files can be at most 25 MB, Chat with Work's limit, and only this request may be longer than 16 KiB. The daemon keeps only the file's own name. Answers `{"signed_id", "filename", "byte_size", "content_type"}`; pass `signed_id` in `chat_send`'s `attachments`. The upload may take a while, so wait for the answer without a timeout.
+Uploads a file for a question. The daemon can only read shared folders, so the client reads the file and sends its bytes, base64-encoded, in `data`; files can be at most 25 MB, Chat with Work's limit, and uploads and dictation recordings may be longer than 16 KiB. The daemon keeps only the file's own name. Answers `{"signed_id", "filename", "byte_size", "content_type"}`; pass `signed_id` in `chat_send`'s `attachments`. The upload may take a while, so wait for the answer without a timeout.
 
 ```json
 {"cmd": "chat_answer", "chat": "42", "tool_call": "32", "input": {"environment": "production", "days": 30}}
@@ -490,3 +490,11 @@ From a shell, for debugging:
 ```sh
 printf '{"cmd":"status"}\n' | nc -U "$XDG_RUNTIME_DIR/cww/cww.sock"
 ```
+
+### File downloads and dictation
+
+`{"cmd":"chat_download","path":"/rails/active_storage/blobs/proxy/<signed-id>/report.csv?disposition=attachment"}` fetches a file from a transcript's attachment or step's `downloads`. It returns `{"content_type","data"}`, with bytes in base64, at most 25 MiB. Only the signed Active Storage proxy path is allowed. Requests stay on the paired server, carry no device token, and never follow redirects. The client chooses where to save; the daemon never writes it to disk.
+
+`{"cmd":"dictation"}` returns `{"cloud":true}` when the owner can dictate, or `{"cloud":false,"reason":"..."}`. Older servers return `unsupported`.
+
+`{"cmd":"dictate","content_type":"audio/wav","data":"<base64>"}` sends an in-memory recording to the server as a multipart `audio` part, with the device's DPoP token and chat permission. The recording can be at most 10 MiB and five minutes; the server checks the format and duration. The response is `{"text":"..."}`. Put the text in the composer for editing; never send it as a question automatically. The daemon keeps no recording. Refusals retain the server's code and sentence, including `no_credits`, `rate_limited`, and `transcription_failed`.

@@ -896,6 +896,7 @@ impl ControlHandler for Daemon {
                 text,
                 project,
                 model,
+                web_search,
                 attachments,
             } => {
                 self.send_question(Question {
@@ -903,6 +904,7 @@ impl ControlHandler for Daemon {
                     text,
                     project,
                     model,
+                    web_search,
                     attachments,
                 })
                 .await
@@ -939,6 +941,28 @@ impl ControlHandler for Daemon {
                 content_type,
                 data,
             } => self.upload(filename, content_type, data).await,
+            ControlRequest::ChatDownload { path } => {
+                self.chat(move |client| client.download(&path)).await
+            }
+            ControlRequest::Dictation => self.chat(|client| client.dictation()).await,
+            ControlRequest::Dictate { content_type, data } => {
+                use base64::Engine;
+                if data.len() > crate::chats::MAX_AUDIO_BYTES.div_ceil(3) * 4 {
+                    return Err(Refusal::new("too_large", "Record at most five minutes").into());
+                }
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| Refusal::new("invalid", "The recording isn't valid base64"))?;
+                let content_type = plain_token(&content_type, 200, "content type")?.to_string();
+                self.chat(move |client| {
+                    client.dictate(&Upload {
+                        filename: "recording".into(),
+                        content_type,
+                        data,
+                    })
+                })
+                .await
+            }
             ControlRequest::ChatRetry { chat, message } => {
                 self.chat(move |client| client.retry(&chat, message.as_deref()))
                     .await

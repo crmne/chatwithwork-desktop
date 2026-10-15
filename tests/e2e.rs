@@ -247,7 +247,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         .next()
         .unwrap_or_default()
         .to_string();
-    if path.starts_with("/assets/") {
+    if path.starts_with("/assets/") || path.starts_with("/rails/active_storage/blobs/proxy/") {
         if header(&head, "authorization").is_some() || !dpop.is_empty() {
             state.lock().unwrap().assets_with_credentials += 1;
         }
@@ -257,6 +257,21 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
                 "",
                 "image/svg+xml",
                 b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec(),
+            ),
+            "/rails/active_storage/blobs/proxy/signed-token/report.csv?disposition=attachment" => {
+                (200, "", "text/csv", b"month,total\nApril,42".to_vec())
+            }
+            "/rails/active_storage/blobs/proxy/signed-token/moved.csv?disposition=attachment" => (
+                302,
+                "location: https://evil.example/report.csv\r\n",
+                "text/plain",
+                Vec::new(),
+            ),
+            "/rails/active_storage/blobs/proxy/signed-token/big.csv?disposition=attachment" => (
+                200,
+                "",
+                "text/csv",
+                vec![0; cww::chats::MAX_DOWNLOAD_BYTES + 1],
             ),
             "/assets/big.png" => (200, "", "image/png", vec![0; 2 * 1024 * 1024]),
             "/assets/page.svg" => (
@@ -285,6 +300,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/chat",
         "/local_agent/models",
         "/local_agent/uploads",
+        "/local_agent/dictations",
     ]
     .iter()
     .any(|api| path.starts_with(api))
@@ -392,6 +408,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
         || path.starts_with("/local_agent/uploads")
+        || path.starts_with("/local_agent/dictations")
         || path.ends_with("/retry")
         || path.ends_with("/branches")
         || path.ends_with("/share")
@@ -418,6 +435,14 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 { "id": 4, "name": "Claude Opus", "provider": "anthropic", "description": null, "selectable": false, "reason": "Upgrade to use it" }
             ] }),
         ),
+        ("GET", "/local_agent/dictations/new") => (200, json!({ "cloud": true })),
+        ("POST", "/local_agent/dictations") => {
+            assert!(content_type.starts_with("multipart/form-data; boundary="));
+            assert!(body.contains("name=\"audio\""));
+            assert!(body.contains("Content-Type: audio/wav"));
+            assert!(body.contains("RIFF"));
+            (200, json!({ "text": "Make a plan." }))
+        }
         ("POST", "/local_agent/uploads") => {
             let Some(boundary) = content_type
                 .strip_prefix("multipart/form-data; boundary=")
@@ -535,7 +560,8 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             st.asked_with.push(json!([
                 body["model_id"],
                 body["attachments"],
-                body["project_id"]
+                body["project_id"],
+                body["web_search"]
             ]));
             st.questions
                 .push(body["content"].as_str().unwrap_or_default().to_string());
@@ -546,7 +572,8 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             st.asked_with.push(json!([
                 body["model_id"],
                 body["attachments"],
-                body["project_id"]
+                body["project_id"],
+                body["web_search"]
             ]));
             st.questions
                 .push(body["content"].as_str().unwrap_or_default().to_string());
@@ -2002,6 +2029,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
             text: "Summarize".into(),
             project: Some(5),
             model: Some("3".into()),
+            web_search: Some(false),
             attachments: vec!["signed-1".into()],
         })
     })
@@ -2009,7 +2037,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
     .unwrap();
     assert_eq!(
         server.state.lock().unwrap().asked_with,
-        [json!(["3", ["signed-1"], 5])]
+        [json!(["3", ["signed-1"], 5, false])]
     );
     let c = chats.clone();
     let refused = blocking(move || {
@@ -3230,4 +3258,116 @@ async fn changes_files_on_windows() {
         let _ = std::fs::remove_file(&i);
         let _ = std::fs::remove_file(&r).or_else(|_| std::fs::remove_dir_all(&r));
     }
+}
+
+/// Dictation uses device authentication; signed files never carry it and
+/// never redirect. Clients cannot turn download into a generic HTTP proxy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relays_dictation_and_signed_downloads() {
+    async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        tokio::task::spawn_blocking(f).await.unwrap()
+    }
+    use cww::tui::chat::Chats;
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair(&fx, &server);
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let _ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let chats = Chats::new(&fx.paths.socket_path());
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.dictation()).await.unwrap_err().code,
+        "chat_access_required"
+    );
+    server.state.lock().unwrap().chat_access = true;
+    let c = chats.clone();
+    assert!(blocking(move || c.dictation()).await.unwrap().cloud);
+    let c = chats.clone();
+    let text = blocking(move || {
+        c.dictate(
+            format!("RIFF{}", "a".repeat(20_000)).as_bytes(),
+            "audio/wav",
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(text, "Make a plan.");
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.dictate(&[], "audio/wav"))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid"
+    );
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.dictate(b"RIFF", "audio/wav\r\nInjected: yes"))
+            .await
+            .unwrap_err()
+            .code,
+        "bad_request"
+    );
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.dictate(&vec![0; cww::chats::MAX_AUDIO_BYTES + 1], "audio/wav"))
+            .await
+            .unwrap_err()
+            .code,
+        "too_large"
+    );
+    let c = chats.clone();
+    let file = blocking(move || {
+        c.download(
+            "/rails/active_storage/blobs/proxy/signed-token/report.csv?disposition=attachment",
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(file.bytes, b"month,total\nApril,42");
+    assert_eq!(file.content_type, "text/csv");
+    for (path, code) in [
+        (
+            "/rails/active_storage/blobs/proxy/signed-token/moved.csv?disposition=attachment",
+            "unreachable",
+        ),
+        (
+            "/rails/active_storage/blobs/proxy/signed-token/big.csv?disposition=attachment",
+            "unreachable",
+        ),
+        (
+            "/rails/active_storage/blobs/proxy/signed-token/missing.csv?disposition=attachment",
+            "not_found",
+        ),
+    ] {
+        let c = chats.clone();
+        let error = blocking(move || c.download(path)).await.unwrap_err();
+        assert_eq!(error.code, code);
+        assert!(!error.message.contains("signed-token"));
+    }
+    let refused = control_error(
+        &fx.paths,
+        ControlRequest::ChatDownload {
+            path: "/local_agent/chats".into(),
+        },
+    )
+    .await;
+    assert!(refused.contains("isn't a chat file"));
+    assert_eq!(server.state.lock().unwrap().assets_with_credentials, 0);
+    server.state.lock().unwrap().old_api = true;
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.dictation()).await.unwrap_err().code,
+        "unsupported"
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
