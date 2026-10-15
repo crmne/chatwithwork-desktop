@@ -30,7 +30,11 @@ struct Fixture {
 fn fixture(scenario: Scenario, page: Option<Page>) -> Fixture {
     let server = demo::start(scenario).unwrap();
     if scenario == Scenario::Sample {
-        AppState { onboarded: true }.save(&server.paths);
+        AppState {
+            onboarded: true,
+            ..Default::default()
+        }
+        .save(&server.paths);
     }
     let documents = server
         .paths
@@ -341,7 +345,11 @@ fn pausing_is_a_switch_that_screen_readers_can_read() {
 fn a_stopped_agent_can_be_started_from_the_window() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = crate::paths::Paths::under(tmp.path());
-    AppState { onboarded: true }.save(&paths);
+    AppState {
+        onboarded: true,
+        ..Default::default()
+    }
+    .save(&paths);
     let shared = Shared::new(
         Client::new(paths.socket_path()),
         paths,
@@ -364,6 +372,8 @@ fn welcome_harness(
     dark: bool,
     renderer: Option<egui_kittest::wgpu::WgpuTestRenderer>,
 ) -> (tempfile::TempDir, Harness<'static, SettingsApp>) {
+    // The shell normally enables caption support before opening a window.
+    fastframe_titlebar::set_enabled(true);
     let tmp = tempfile::tempdir().unwrap();
     let paths = crate::paths::Paths::under(tmp.path());
     let shared = Shared::new(
@@ -421,6 +431,8 @@ fn welcome_is_centered_at_each_window_size() {
 fn seamless_window_controls_keep_the_agent_in_the_tray() {
     for platform in [Platform::Windows, Platform::Linux] {
         let (_tmp, mut harness) = welcome_harness([840.0, 620.0], platform, false, None);
+        harness.state_mut().custom_titlebar = true;
+        harness.run_steps(2);
         harness.get_by_label("Minimize window").click();
         harness.step();
         assert!(
@@ -472,6 +484,58 @@ fn macos_keeps_its_native_traffic_lights() {
         harness.query_by_label("Close window").is_none(),
         "macOS uses its native traffic lights"
     );
+}
+
+#[test]
+fn titlebar_defaults_follow_the_platform_and_explicit_choices_persist() {
+    let old: AppState = serde_json::from_str(r#"{"onboarded":true}"#).unwrap();
+    assert!(!old.custom_titlebar(Platform::Linux));
+    assert!(old.custom_titlebar(Platform::Windows));
+    assert!(old.custom_titlebar(Platform::MacOs));
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = crate::paths::Paths::under(tmp.path());
+    for choice in [false, true] {
+        AppState {
+            custom_titlebar: Some(choice),
+            ..old.clone()
+        }
+        .save(&paths);
+        let saved = AppState::load(&paths);
+        assert!(saved.onboarded);
+        for platform in [Platform::Linux, Platform::Windows, Platform::MacOs] {
+            assert_eq!(saved.custom_titlebar(platform), choice);
+        }
+    }
+}
+
+#[test]
+fn linux_uses_desktop_decorations_unless_the_person_chooses_custom() {
+    let (_tmp, mut harness) = welcome_harness([840.0, 620.0], Platform::Linux, false, None);
+    assert!(!harness.state().custom_titlebar);
+    assert!(harness.query_by_label("Close window").is_none());
+    harness.state_mut().set_page(Page::General);
+    harness.run_steps(3);
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Custom title bar")
+        .click();
+    harness.run_steps(2);
+    let app = harness.state();
+    assert!(
+        !app.custom_titlebar,
+        "the open window keeps its original decorations"
+    );
+    let reopened = SettingsApp::new(Arc::clone(&app.shared), app.theme);
+    assert!(
+        reopened.custom_titlebar,
+        "reopening uses the saved preference"
+    );
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Custom title bar")
+        .click();
+    harness.run_steps(2);
+    let app = harness.state();
+    let reopened = SettingsApp::new(Arc::clone(&app.shared), app.theme);
+    assert!(!reopened.custom_titlebar);
 }
 
 #[test]

@@ -104,3 +104,12 @@ cargo test -p cww-app                        # includes UI tests through the acc
 ```
 
 The UI tests drive the window with `egui_kittest` against the stand-in daemon, which records the requests it gets and serves synthetic chats. The Chat page's tests also render it offscreen with wgpu and keep PNG snapshots in `app/tests/snapshots`. A test on Unix runs the real daemon and checks the app reads every answer.
+
+## Title bar
+
+General has a **Custom title bar** preference, saved in `app.json` beside the
+agent configuration. It defaults to off on Linux and on on Windows and macOS,
+including upgrades from an older `app.json`. An explicit choice is remembered.
+When off, window decorations come from the desktop; the app draws no caption
+bar or resize handles. On macOS the custom header still uses native traffic
+lights. Changes apply the next time the window opens.

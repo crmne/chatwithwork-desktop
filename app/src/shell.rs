@@ -69,7 +69,6 @@ struct Shell<'a> {
 
 pub fn run(paths: Paths, options: Options) -> anyhow::Result<()> {
     fastframe_titlebar::init();
-    fastframe_titlebar::set_enabled(true);
     // Finds the color emoji font off the main thread; text shows monochrome
     // emoji until it is ready.
     fastframe_emoji::EmojiSetup::default()
@@ -165,17 +164,21 @@ fn create_window<'a>(
     page: Option<Page>,
     screenshot: Option<std::path::PathBuf>,
 ) -> EframeWinitApplication<'a> {
+    let custom_titlebar =
+        AppState::load(&shared.paths).custom_titlebar(crate::model::Platform::current());
+    fastframe_titlebar::set_enabled(custom_titlebar);
+    let header_height = if custom_titlebar { HEADER_HEIGHT } else { 0.0 };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Chat with Work")
             .with_app_id("cww-app")
             .with_decorations(!fastframe_titlebar::enabled())
-            .with_fullsize_content_view(cfg!(target_os = "macos"))
-            .with_titlebar_shown(false)
-            .with_title_shown(false)
+            .with_fullsize_content_view(custom_titlebar && cfg!(target_os = "macos"))
+            .with_titlebar_shown(!custom_titlebar)
+            .with_title_shown(!custom_titlebar)
             // Preserve the previous content area below the integrated header.
-            .with_inner_size([840.0, 620.0 + HEADER_HEIGHT])
-            .with_min_inner_size([660.0, 460.0 + HEADER_HEIGHT])
+            .with_inner_size([840.0, 620.0 + header_height])
+            .with_min_inner_size([660.0, 460.0 + header_height])
             .with_icon(crate::icons::window()),
         centered: true,
         ..Default::default()

@@ -65,7 +65,11 @@ fn fixture(options: Options) -> Fixture {
         server.enable_web_search();
     }
     if options.scenario == Scenario::Sample {
-        AppState { onboarded: true }.save(&server.paths);
+        AppState {
+            onboarded: true,
+            ..Default::default()
+        }
+        .save(&server.paths);
     }
     let shared = Shared::new(
         Client::new(server.paths.socket_path()),
@@ -629,7 +633,11 @@ fn a_question_sent_is_pinned_near_the_top_with_its_answer_under_it() {
     fx.ready();
     fx.open_waiting(11, "Want me to add it to the Q4 checklist?");
     // The conversation keeps its padding below the integrated window header.
-    let pinned_top = crate::ui::chrome::HEIGHT + 34.0;
+    let pinned_top = if fx.harness.state().custom_titlebar {
+        crate::ui::chrome::HEIGHT
+    } else {
+        0.0
+    } + 34.0;
     let top = fx
         .harness
         .get_by_label("Draft a short reminder for the team.")

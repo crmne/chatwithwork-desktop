@@ -24,6 +24,20 @@ impl SettingsApp {
         widgets::page_header(ui, &theme, "General", "");
 
         group(ui, &theme, |ui| {
+            setting_row(
+                ui,
+                &theme,
+                "Custom title bar",
+                "Draw the title bar inside the app. Applies when you reopen the window.",
+                |ui| {
+                    let mut on = self.app_state.custom_titlebar(theme.platform);
+                    if widgets::switch(ui, &theme, &mut on, "Custom title bar").changed() {
+                        self.app_state.custom_titlebar = Some(on);
+                        self.app_state.save(&self.shared.paths);
+                    }
+                },
+            );
+            row_separator(ui, &theme);
             let description = format!(
                 "Show Chat with Work in the {} when you log in. The agent itself \
                  always runs in the background once it's started.",

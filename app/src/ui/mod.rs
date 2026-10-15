@@ -112,9 +112,15 @@ impl Shared {
 pub struct AppState {
     /// The welcome page was finished or skipped.
     pub onboarded: bool,
+    /// None follows the platform default; an explicit choice survives upgrades.
+    pub custom_titlebar: Option<bool>,
 }
 
 impl AppState {
+    pub fn custom_titlebar(&self, platform: Platform) -> bool {
+        self.custom_titlebar.unwrap_or(platform != Platform::Linux)
+    }
+
     pub fn load(paths: &Paths) -> Self {
         std::fs::read(paths.app_state_file())
             .ok()
@@ -287,6 +293,8 @@ pub struct SettingsApp {
     page: Page,
     jobs: Jobs,
     app_state: AppState,
+    /// Window decorations are chosen when the shell opens this window.
+    custom_titlebar: bool,
     folders: FoldersState,
     deny: Loadable<DenyList>,
     deny_generation: Option<u64>,
@@ -336,6 +344,7 @@ impl SettingsApp {
             theme,
             page,
             jobs: Jobs::new(),
+            custom_titlebar: app_state.custom_titlebar(theme.platform),
             app_state,
             folders: FoldersState::default(),
             deny: Loadable::NotLoaded,
@@ -378,7 +387,6 @@ impl SettingsApp {
         if !self.attached {
             // Fonts take effect from the next pass, so draw nothing now.
             self.attached = true;
-            fastframe_titlebar::set_enabled(true);
             egui_extras::install_image_loaders(ui.ctx());
             fastframe_titlebar::install(ui.ctx());
             if self.system_fonts {
@@ -412,10 +420,14 @@ impl SettingsApp {
                 .send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.shared.close_requested.store(true, Ordering::SeqCst);
         }
-        chrome::show(ui, &self.theme, self.page);
+        if self.custom_titlebar {
+            chrome::show(ui, &self.theme, self.page);
+        }
         if self.page == Page::Chat {
             self.chat_page(ui, status.as_ref());
-            chrome::resize(ui, self.theme.platform);
+            if self.custom_titlebar {
+                chrome::resize(ui, self.theme.platform);
+            }
             self.transition.paint(ui.ctx());
             return;
         }
@@ -468,7 +480,9 @@ impl SettingsApp {
                             });
                     });
             });
-        chrome::resize(ui, self.theme.platform);
+        if self.custom_titlebar {
+            chrome::resize(ui, self.theme.platform);
+        }
         self.transition.paint(ui.ctx());
     }
 
@@ -912,7 +926,9 @@ impl SettingsApp {
 
 impl eframe::App for SettingsApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        fastframe_titlebar::align_traffic_lights(frame, ctx, chrome::HEIGHT);
+        if self.custom_titlebar {
+            fastframe_titlebar::align_traffic_lights(frame, ctx, chrome::HEIGHT);
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
