@@ -1506,6 +1506,77 @@ fn renders_dictation_controls_without_recording_audio() {
 }
 
 #[test]
+fn renders_inline_links_and_citations() {
+    for dark in [false, true] {
+        for (name, size) in [
+            ("chat-inline-links", [1280.0, 820.0]),
+            ("chat-inline-links-narrow", [760.0, 820.0]),
+        ] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.ready();
+            fx.chat().open(11);
+            fx.wait_for_label("When does the Acme contract renew");
+            fx.caught_up();
+            fx.logos();
+            fx.chat().set_still(true);
+            fx.chat().state.transcript.as_mut().unwrap().entries = vec![cww::tui::chat::Entry::Assistant {
+                id: 9001,
+                content: "The rollout is recorded [here](https://example.com/rollout). The alert rule in `acme/project` creates a new issue with the `bug` label ([GitHub issue](https://example.com/issue), [Sentry alert rule](https://example.com/rule)). These links should sit naturally within the surrounding sentence.\n\nA second paragraph has a [longer ordinary link that wraps across lines on a narrow screen](https://example.com/guide) and a final [source](https://example.com/issue).".into(),
+                sources: vec![
+                    cww::tui::chat::Source { title: "GitHub issue".into(), url: Some("https://example.com/issue".into()), ..Default::default() },
+                    cww::tui::chat::Source { title: "Sentry alert rule".into(), url: Some("https://example.com/rule".into()), ..Default::default() },
+                ],
+            }];
+            fx.chat().pin = 3;
+            fx.chat().pinned = None;
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(15);
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            if let Some(directory) = std::env::var_os("CWW_INLINE_LINK_EVIDENCE") {
+                image
+                    .save(std::path::Path::new(&directory).join(format!("{name}-{theme}.png")))
+                    .unwrap();
+            }
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &image,
+                    format!("{name}-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(1000),
+                );
+            }
+            OPENED.with(|opened| opened.borrow_mut().clear());
+            for (label, url) in [
+                ("https://example.com/rollout", "https://example.com/rollout"),
+                ("Source 2: Sentry alert rule", "https://example.com/rule"),
+            ] {
+                fx.harness.get_by_label(label).hover();
+                fx.harness.run_steps(2);
+                assert_eq!(
+                    fx.harness.output().platform_output.cursor_icon,
+                    egui::CursorIcon::PointingHand,
+                    "hovering {label} should identify a clickable link"
+                );
+                fx.harness.get_by_label(label).click();
+                fx.harness.run_steps(2);
+                assert_eq!(
+                    OPENED.with(|opened| opened.borrow().last().cloned()),
+                    Some(url.into())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn renders_web_search_and_schedule_context() {
     for dark in [false, true] {
         for (name, size) in [

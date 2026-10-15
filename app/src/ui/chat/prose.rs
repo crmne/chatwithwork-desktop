@@ -240,7 +240,7 @@ impl Prose<'_> {
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
-        let clicked = self.decorate(ui, rect.min, &galley, &runs);
+        let (clicked, link_hovered) = self.decorate(ui, rect.min, &galley, &runs);
         egui::text_selection::LabelSelectionState::label_text_selection(
             ui,
             &response,
@@ -249,6 +249,11 @@ impl Prose<'_> {
             color,
             Stroke::NONE,
         );
+        // Selection sets a text cursor for the whole paragraph. A link's
+        // more specific hit area takes precedence after that pass.
+        if link_hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if caret {
             self.caret(ui.painter(), rect.min, &galley, ty);
         }
@@ -293,8 +298,9 @@ impl Prose<'_> {
         let p = self.palette;
         let mut job = LayoutJob::default();
         job.wrap.max_width = width;
+        job.first_row_min_height = ty.line_height;
         let mut runs = Vec::new();
-        let code_ty = Type::mono(ty.size * 0.85, ty.line_height)
+        let code_ty = Type::mono(ty.size * 0.85, ty.line_height * 0.85)
             .weight(450.0)
             .tracking(0.0);
         for inline in inlines {
@@ -348,10 +354,8 @@ impl Prose<'_> {
                 Inline::Break => job.append("\n", 0.0, ty.format(color)),
             }
         }
-        // Every run sits on the paragraph's line height.
-        for section in &mut job.sections {
-            section.format.line_height = Some(ty.line_height);
-        }
+        // Preserve each run's own height so small chips and inline code
+        // center within the surrounding prose instead of sitting too high.
         (job, runs)
     }
 
@@ -363,9 +367,10 @@ impl Prose<'_> {
         origin: Pos2,
         galley: &Galley,
         runs: &[Run],
-    ) -> Option<Clicked> {
+    ) -> (Option<Clicked>, bool) {
         let p = self.palette;
         let mut clicked = None;
+        let mut link_hovered = false;
         for (n, run) in runs.iter().enumerate() {
             for (rect, baseline, glyph_height, ascent) in run_rects(galley, &run.range) {
                 let rect = rect.translate(origin.to_vec2());
@@ -432,6 +437,7 @@ impl Prose<'_> {
                                 .icon_at(ui.painter(), icon_center, 12.1, icon, tint);
                         }
                         if response.hovered() {
+                            link_hovered = true;
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if response.clicked() {
@@ -455,6 +461,7 @@ impl Prose<'_> {
                         ui.painter()
                             .hline(rect.x_range(), y, Stroke::new(1.0, color));
                         if response.hovered() {
+                            link_hovered = true;
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if response.clicked() {
@@ -464,7 +471,7 @@ impl Prose<'_> {
                 }
             }
         }
-        clicked
+        (clicked, link_hovered)
     }
 
     fn code(&self, ui: &mut Ui, language: &str, text: &str) -> Option<Clicked> {
@@ -692,7 +699,7 @@ impl Prose<'_> {
                     _ => x + l,
                 };
                 let origin = pos2(gx, rect.top() + top_pad);
-                if let Some(found) = self.decorate(ui, origin, &galley, &runs) {
+                if let (Some(found), _) = self.decorate(ui, origin, &galley, &runs) {
                     clicked = Some(found);
                 }
                 ui.painter().galley(origin, galley, color);
