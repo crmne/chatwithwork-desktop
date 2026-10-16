@@ -245,7 +245,7 @@ mod tests {
         #[cfg(windows)]
         let path = PathBuf::from(format!(
             r"\\.\pipe\cww-presence-{}",
-            super::super::session()
+            dir.path().file_name().unwrap().to_string_lossy()
         ));
         let server_path = path.clone();
         let (ready, wait_ready) = mpsc::channel();
