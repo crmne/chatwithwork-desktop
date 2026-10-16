@@ -21,6 +21,7 @@ pub const REFRESH_TOKEN: &str = "refresh-token";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretStore {
     Keyring,
+    OrganizationKeyring(String),
     File(PathBuf),
 }
 
@@ -55,13 +56,39 @@ impl SecretStore {
 
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Keyring => "keyring",
+            Self::Keyring | Self::OrganizationKeyring(_) => "keyring",
             Self::File(_) => "file",
+        }
+    }
+
+    /// Each organization owns separate keychain entries or a separate file,
+    /// so refreshing one grant cannot overwrite another organization's key.
+    pub fn for_organization(kind: &str, paths: &Paths, id: &str) -> Result<Self> {
+        anyhow::ensure!(
+            id.len() == 43
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')),
+            "Invalid organization sign-in identifier."
+        );
+        match kind {
+            "keyring" => Ok(Self::OrganizationKeyring(id.to_owned())),
+            "file" => Ok(Self::File(
+                paths
+                    .config_dir
+                    .join("organizations")
+                    .join(id)
+                    .join("secrets.json"),
+            )),
+            _ => anyhow::bail!("Unknown organization secret store."),
         }
     }
 
     pub fn get(&self, name: &str) -> Result<Option<String>> {
         match self {
+            Self::OrganizationKeyring(id) => {
+                Self::Keyring.get(&format!("organization:{id}:{name}"))
+            }
             Self::Keyring => match entry(name)?.get_password() {
                 Ok(v) => Ok(Some(v)),
                 Err(keyring::Error::NoEntry) => Ok(None),
@@ -73,6 +100,9 @@ impl SecretStore {
 
     pub fn set(&self, name: &str, value: &str) -> Result<()> {
         match self {
+            Self::OrganizationKeyring(id) => {
+                Self::Keyring.set(&format!("organization:{id}:{name}"), value)
+            }
             Self::Keyring => entry(name)?
                 .set_password(value)
                 .map_err(|e| anyhow!("writing {name} to the keychain: {e}")),
@@ -86,6 +116,9 @@ impl SecretStore {
 
     pub fn delete(&self, name: &str) -> Result<()> {
         match self {
+            Self::OrganizationKeyring(id) => {
+                Self::Keyring.delete(&format!("organization:{id}:{name}"))
+            }
             Self::Keyring => match entry(name)?.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(e) => Err(anyhow!("deleting {name} from the keychain: {e}")),

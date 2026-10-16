@@ -39,6 +39,7 @@ const ACCESS_TOKEN: &str = "access-1";
 /// What the fake server knows and has seen.
 #[derive(Default)]
 struct ServerState {
+    pairing_scope: String,
     notifications: bool,
     /// Device public key (JWK `x`) accepted for proofs.
     public_key: Option<String>,
@@ -680,7 +681,11 @@ fn oauth(
     match (path, form.get("grant_type").map(String::as_str)) {
         ("/local_agent/device_authorizations", _) => {
             let scopes: Vec<&str> = form["scope"].split(' ').collect();
-            assert!(scopes.contains(&"local_agent:serve"), "{scopes:?}");
+            assert!(
+                scopes.contains(&"local_agent:serve") || scopes == ["local_agent:chat"],
+                "{scopes:?}"
+            );
+            st.pairing_scope = form["scope"].clone();
             assert!(!form["name"].is_empty() && !form["platform"].is_empty());
             st.public_key = Some(key);
             (
@@ -706,9 +711,10 @@ fn oauth(
                     "access_token": ACCESS_TOKEN,
                     "token_type": "DPoP",
                     "expires_in": 600,
-                    "scope": "local_agent:serve",
+                    "scope": if st.pairing_scope == "local_agent:chat" { "local_agent:chat" } else { "local_agent:serve" },
                     "refresh_token": "refresh-1",
                     "device_id": "42",
+                    "account": {"id": "123456789", "name": "Demo team", "role": "member"},
                 }),
             )
         }
@@ -726,7 +732,7 @@ fn oauth(
                     "access_token": ACCESS_TOKEN,
                     "token_type": "DPoP",
                     "expires_in": 600,
-                    "scope": "local_agent:serve",
+                    "scope": if st.pairing_scope == "local_agent:chat" { "local_agent:chat" } else { "local_agent:serve" },
                     "refresh_token": next,
                 }),
             )
@@ -1413,6 +1419,10 @@ async fn pairs_with_the_device_flow() {
     let paired = result.unwrap();
     assert_eq!(paired.device_id, "42");
     assert_eq!(paired.url, server.origin);
+    assert_eq!(
+        server.state.lock().unwrap().pairing_scope,
+        "local_agent:serve local_agent:chat"
+    );
     assert!(said.iter().any(|l| l.contains("WDJB-MJHT")), "{said:?}");
 
     let config = Config::load(&fx.paths).unwrap();
@@ -1430,6 +1440,50 @@ async fn pairs_with_the_device_flow() {
     );
     assert_mode(&fx.paths.secrets_file(), 0o600);
     assert_mode(&fx.paths.config_file(), 0o600);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn organization_login_keeps_the_primary_folder_pairing_and_refreshes_with_its_own_key() {
+    use cww::auth::{LoginOptions, client::AuthClient, tokens::Tokens};
+    let fx = fixture();
+    let server = FakeServer::start().await;
+    pair(&fx, &server);
+    let before = std::fs::read(fx.paths.config_file()).unwrap();
+    let primary = std::fs::read(fx.paths.secrets_file()).unwrap();
+    let (paths, origin) = (fx.paths.clone(), server.origin.clone());
+    let saved = tokio::task::spawn_blocking(move || {
+        let options = LoginOptions {
+            store: Some(SecretStore::File(paths.secrets_file())),
+            ..Default::default()
+        };
+        let pending = cww::auth::start_organization_login(&paths, &origin, options).unwrap();
+        let saved = pending
+            .wait_for_organization(&std::sync::atomic::AtomicBool::new(false))
+            .unwrap();
+        let credentials = saved.credentials(&paths).unwrap();
+        let tokens = Tokens::new(
+            Arc::new(AuthClient::new(credentials.server, None).unwrap()),
+            Arc::new(credentials.key),
+            credentials.store,
+        );
+        assert_eq!(tokens.refresh().unwrap(), ACCESS_TOKEN);
+        assert_eq!(tokens.scope().as_deref(), Some("local_agent:chat"));
+        saved
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        server.state.lock().unwrap().pairing_scope,
+        "local_agent:chat"
+    );
+    assert_eq!(saved.account.id, "123456789");
+    assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), before);
+    assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), primary);
+    let store = SecretStore::for_organization("file", &fx.paths, &saved.id).unwrap();
+    let SecretStore::File(path) = store else {
+        panic!("test uses only private files")
+    };
+    assert_mode(&path, 0o600);
 }
 
 /// A CONNECT proxy that wants Basic auth, like a company's.

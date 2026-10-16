@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod key;
+pub mod organizations;
 pub mod secrets;
 pub mod tokens;
 
@@ -59,6 +60,7 @@ pub struct LoginOptions {
 /// A pairing started with [`start_login`], waiting for the user to approve
 /// the code on the server.
 pub struct PendingLogin {
+    chats_only: bool,
     paths: Paths,
     server: ServerUrl,
     client: AuthClient,
@@ -114,7 +116,7 @@ impl PendingLogin {
 
     /// Poll until the user approves or denies, the code expires, or `cancel`
     /// is set. Saves the key, the refresh token and the server on approval.
-    pub fn wait(self, cancel: &AtomicBool) -> Result<ServerConfig> {
+    fn await_token(&self, cancel: &AtomicBool) -> Result<client::TokenResponse> {
         let mut interval = self.auth.interval.max(1);
         let token = loop {
             // Sleep in short steps so a cancel takes effect quickly.
@@ -141,6 +143,15 @@ impl PendingLogin {
                 PollOutcome::Approved(token) => break token,
             }
         };
+        Ok(token)
+    }
+
+    pub fn wait(self, cancel: &AtomicBool) -> Result<ServerConfig> {
+        anyhow::ensure!(
+            !self.chats_only,
+            "Use the organization sign-in to save this grant."
+        );
+        let token = self.await_token(cancel)?;
         let device_id = token.device_id.clone().expect("checked in poll_pairing");
         let refresh = token
             .refresh_token
@@ -168,6 +179,20 @@ impl PendingLogin {
             config.secret_store = Some(store.name().to_string());
             config.save(paths)?;
             Ok(server_config)
+        })
+    }
+
+    pub fn wait_for_organization(
+        self,
+        cancel: &AtomicBool,
+    ) -> Result<organizations::SavedOrganization> {
+        anyhow::ensure!(self.chats_only, "This login also requested folder access.");
+        let token = self.await_token(cancel)?;
+        commit_attempt(&self.paths, self.attempt, cancel, || {
+            let store = self
+                .store
+                .unwrap_or_else(|| SecretStore::choose(&self.paths));
+            organizations::save_grant(&self.paths, &self.server, &self.key, token, store.name())
         })
     }
 }
@@ -242,6 +267,28 @@ fn commit_attempt<T>(
 /// Start pairing this computer with a server: create a key and ask the
 /// server for a code. [`PendingLogin::wait`] finishes it.
 pub fn start_login(paths: &Paths, server: &str, options: LoginOptions) -> Result<PendingLogin> {
+    start_login_for(paths, server, options, false)
+}
+
+/// Add a chat-only organization without replacing the folder pairing.
+pub fn start_organization_login(
+    paths: &Paths,
+    server: &str,
+    options: LoginOptions,
+) -> Result<PendingLogin> {
+    anyhow::ensure!(
+        !options.without_chats,
+        "An organization sign-in needs chat access."
+    );
+    start_login_for(paths, server, options, true)
+}
+
+fn start_login_for(
+    paths: &Paths,
+    server: &str,
+    options: LoginOptions,
+    chats_only: bool,
+) -> Result<PendingLogin> {
     let LoginOptions {
         name,
         store,
@@ -257,11 +304,15 @@ pub fn start_login(paths: &Paths, server: &str, options: LoginOptions) -> Result
     // they started: a logout or a newer attempt made while this request is
     // out supersedes it, however long the server takes to answer.
     let attempt = begin_attempt(paths)?;
-    let auth = client
-        .start_pairing(&key, &info, !without_chats)
-        .context("starting pairing")?;
+    let auth = if chats_only {
+        client.start_chat_pairing(&key, &info)
+    } else {
+        client.start_pairing(&key, &info, !without_chats)
+    }
+    .context("starting pairing")?;
     let deadline = Instant::now() + Duration::from_secs(auth.expires_in.max(1));
     Ok(PendingLogin {
+        chats_only,
         attempt,
         paths: paths.clone(),
         server,
@@ -324,6 +375,7 @@ mod tests {
     fn pending(verification_uri: &str, complete: Option<&str>) -> PendingLogin {
         let server = ServerUrl::parse("https://chatwithwork.com").unwrap();
         PendingLogin {
+            chats_only: false,
             attempt: 0,
             paths: Paths::under(std::path::Path::new("/nonexistent")),
             client: AuthClient::new(server.clone(), None).unwrap(),

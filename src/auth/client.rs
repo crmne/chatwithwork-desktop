@@ -165,6 +165,34 @@ pub struct TokenResponse {
     pub device_id: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default)]
+    pub account: Option<Organization>,
+}
+
+/// Identity of the single organization named by a device grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+}
+
+impl Organization {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.id.len() == 9 && self.id.bytes().all(|c| c.is_ascii_digit()),
+            "The server returned an invalid organization."
+        );
+        anyhow::ensure!(
+            !self.name.trim().is_empty()
+                && self.name.len() <= 1024
+                && !self.name.chars().any(char::is_control)
+                && matches!(self.role.as_str(), "owner" | "admin" | "member" | "guest"),
+            "The server returned invalid organization details."
+        );
+        Ok(())
+    }
 }
 
 fn string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -307,15 +335,33 @@ impl AuthClient {
         info: &DeviceInfo,
         chats: bool,
     ) -> Result<DeviceAuthorization> {
-        let public_key = key.public_key();
         let scope = if chats {
             format!("{SCOPE} {CHAT_SCOPE}")
         } else {
             SCOPE.to_string()
         };
+        self.start_pairing_with_scope(key, info, &scope)
+    }
+
+    /// A separate organization login never asks to share folders.
+    pub fn start_chat_pairing(
+        &self,
+        key: &DeviceKey,
+        info: &DeviceInfo,
+    ) -> Result<DeviceAuthorization> {
+        self.start_pairing_with_scope(key, info, CHAT_SCOPE)
+    }
+
+    fn start_pairing_with_scope(
+        &self,
+        key: &DeviceKey,
+        info: &DeviceInfo,
+        scope: &str,
+    ) -> Result<DeviceAuthorization> {
+        let public_key = key.public_key();
         let form = [
             ("client_id", "cww"),
-            ("scope", scope.as_str()),
+            ("scope", scope),
             ("public_key", public_key.as_str()),
             ("name", info.name.as_str()),
             ("platform", info.platform.as_str()),
