@@ -22,6 +22,19 @@ pub struct SavedOrganization {
 }
 
 impl SavedOrganization {
+    /// Private control and runtime directories for this one grant. The GUI
+    /// keeps folder/preferences controls on the primary installation paths.
+    pub fn runtime_paths(&self, primary: &Paths) -> Result<Paths> {
+        self.validate(primary)?;
+        Ok(Paths {
+            config_dir: primary.config_dir.join("organizations").join(&self.id),
+            data_dir: primary.data_dir.join("organizations").join(&self.id),
+            state_dir: primary.state_dir.join("organizations").join(&self.id),
+            runtime_dir: primary.runtime_dir.join("organizations").join(&self.id),
+            home_trash: None,
+        })
+    }
+
     pub fn credentials(&self, paths: &Paths) -> Result<Credentials> {
         self.validate(paths)?;
         let store = self.store(paths)?;

@@ -1,5 +1,7 @@
 //! `cww daemon run`: the reader, the control socket and the tunnel.
 
+mod organizations;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::{AuditEntry, AuditLog};
 use crate::auth::load_credentials;
+use crate::auth::organizations::SavedOrganization;
+
 use crate::chats::{ChatClient, ChatHub, MAX_UPLOAD_BYTES, Question, Upload, chat_number};
 use crate::config::Config;
 use crate::control::{
@@ -28,7 +32,15 @@ use crate::tools::LocalFiles;
 use crate::tunnel::{Tunnel, TunnelExit, TunnelSettings};
 use crate::writer::Writer;
 
+#[derive(Clone)]
+struct OrganizationContext {
+    primary: Paths,
+    profile: SavedOrganization,
+    proxy: Option<String>,
+}
+
 struct Daemon {
+    organization: Option<OrganizationContext>,
     paths: Paths,
     config: Mutex<Config>,
     reader: Arc<Reader>,
@@ -121,7 +133,7 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         && config.sandbox.enabled
         && cfg!(any(target_os = "linux", target_os = "macos"));
     if sandboxed && !options.worker {
-        return supervise_worker(options);
+        return supervise_worker(&paths, options);
     }
     #[cfg(unix)]
     let notification_pipes = options
@@ -156,7 +168,20 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         #[cfg(not(unix))]
         let notifications =
             crate::notification_delivery::spawn(notification_helper, shutdown.child_token());
-        run_with_notifications(paths, shutdown, true, notifications).await
+        let profiles = (!options.worker).then(|| {
+            organizations::spawn(
+                paths.clone(),
+                crate::notifications::helper::installed_helper(),
+                shutdown.child_token(),
+            )
+        });
+        let result =
+            run_with_notifications(paths, shutdown.clone(), true, notifications, None).await;
+        shutdown.cancel();
+        if let Some(task) = profiles {
+            let _ = task.await;
+        }
+        result
     })?;
     drop(runtime);
     if RESTART_FOR_SANDBOX.load(Ordering::SeqCst) {
@@ -242,7 +267,7 @@ fn writable_roots(config: &Config) -> Vec<PathBuf> {
 
 /// Run the confined worker, starting it again whenever it asks to be (to
 /// apply a new sandbox), and pass signals on to it.
-fn supervise_worker(options: &Foreground) -> Result<()> {
+fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
     let exe = std::env::current_exe().context("finding the cww binary")?;
     let helper = crate::notifications::helper::installed_helper();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -250,6 +275,7 @@ fn supervise_worker(options: &Foreground) -> Result<()> {
         .build()?;
     runtime.block_on(async {
         let parent_shutdown = CancellationToken::new();
+        let profiles = organizations::spawn(paths.clone(), helper.clone(), parent_shutdown.child_token());
         let mut notifications = crate::notification_delivery::spawn(helper, parent_shutdown.child_token());
         loop {
             let mut command = tokio::process::Command::new(&exe);
@@ -299,6 +325,7 @@ fn supervise_worker(options: &Foreground) -> Result<()> {
             if stopping || status.code() != Some(crate::sandbox::RESTART_CODE) {
                 parent_shutdown.cancel();
                 let _ = notifications.task.await;
+                let _ = profiles.await;
                 if stopping || status.success() { return Ok(()); }
                 anyhow::bail!("the daemon stopped ({status})");
             }
@@ -313,7 +340,31 @@ pub async fn run(paths: Paths, shutdown: CancellationToken, handle_signals: bool
     // Embedders and tests opt in explicitly to a native helper. Merely
     // constructing a daemon must not open OS notification connections.
     let notifications = crate::notification_delivery::spawn(None, shutdown.child_token());
-    run_with_notifications(paths, shutdown, handle_signals, notifications).await
+    run_with_notifications(paths, shutdown, handle_signals, notifications, None).await
+}
+
+/// Run an independent chat control socket without any file RPC capability.
+/// Like `run`, embedders opt into native notifications separately.
+pub async fn run_organization(
+    primary: Paths,
+    profile: SavedOrganization,
+    shutdown: CancellationToken,
+) -> Result<()> {
+    let paths = profile.runtime_paths(&primary)?;
+    let proxy = Config::load(&primary)?.proxy;
+    let notifications = crate::notification_delivery::spawn(None, shutdown.child_token());
+    run_with_notifications(
+        paths,
+        shutdown,
+        false,
+        notifications,
+        Some(OrganizationContext {
+            primary,
+            profile,
+            proxy,
+        }),
+    )
+    .await
 }
 
 async fn run_with_notifications(
@@ -321,14 +372,28 @@ async fn run_with_notifications(
     shutdown: CancellationToken,
     handle_signals: bool,
     notifications: crate::notification_delivery::Endpoint,
+    organization: Option<OrganizationContext>,
 ) -> Result<()> {
     #[cfg(unix)]
     {
-        let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
-        crate::writer::remember_umask(previous.bits() as u32);
+        if organization.is_none() {
+            let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
+            crate::writer::remember_umask(previous.bits() as u32);
+        }
     }
     paths.ensure()?;
-    let config = Config::load(&paths)?;
+    let config = match &organization {
+        Some(context) => {
+            let mut config = Config {
+                server: Some(context.profile.server.clone()),
+                ..Config::default()
+            };
+            config.proxy = context.proxy.clone();
+            config.index.enabled = false;
+            config
+        }
+        None => Config::load(&paths)?,
+    };
     let (events, _) = broadcast::channel(256);
     let audit = Arc::new(AuditLog::open(&paths.audit_file())?.with_events(events.clone()));
     // Bind first: a second daemon must fail before it touches the index.
@@ -349,6 +414,7 @@ async fn run_with_notifications(
         crate::trash::Trash::new(paths.home_trash.clone()),
     ));
     let daemon = Arc::new(Daemon {
+        organization,
         limiter,
         writer,
         paused: Arc::new(AtomicBool::new(config.paused)),
@@ -420,8 +486,12 @@ impl Daemon {
         while !shutdown.is_cancelled() {
             let config = self.config.lock().await.clone();
             let paths = self.paths.clone();
-            let credentials =
-                tokio::task::spawn_blocking(move || load_credentials(&config, &paths)).await;
+            let organization = self.organization.clone();
+            let credentials = tokio::task::spawn_blocking(move || match organization {
+                Some(context) => context.profile.credentials(&context.primary).map(Some),
+                None => load_credentials(&config, &paths),
+            })
+            .await;
             let credentials = match credentials {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
@@ -475,7 +545,7 @@ impl Daemon {
                             chats: Some(Arc::clone(&self.chats)),
                             notifications: Some(Arc::clone(&self.notifications)),
                         },
-                        Some(files),
+                        self.organization.is_none().then_some(files),
                         Arc::clone(&self.audit),
                         self.status.clone(),
                     )
@@ -509,6 +579,11 @@ impl Daemon {
     }
 
     async fn reload(&self) -> Result<()> {
+        if self.organization.is_some() {
+            self.tunnel_token.lock().await.cancel();
+            self.reloaded.notify_one();
+            return Ok(());
+        }
         let paths = self.paths.clone();
         let new = Config::load(&paths)?;
         let roots: Vec<std::path::PathBuf> = new.roots.iter().map(|r| r.path.clone()).collect();
@@ -788,6 +863,8 @@ impl Daemon {
             "pid": std::process::id(),
             "connection": self.status.get(),
             "paired": config.server.is_some(),
+            "chat_only": self.organization.is_some(),
+            "account": self.organization.as_ref().map(|context| &context.profile.account),
             "sandbox": crate::sandbox::status(),
             "config_file": self.paths.config_file(),
             "audit_file": self.paths.audit_file(),
@@ -910,6 +987,25 @@ impl ControlHandler for Daemon {
     }
 
     async fn handle(&self, request: ControlRequest) -> Result<Value> {
+        if self.organization.is_some()
+            && matches!(
+                request,
+                ControlRequest::RootsAdd { .. }
+                    | ControlRequest::RootsRemove { .. }
+                    | ControlRequest::RootsWritable { .. }
+                    | ControlRequest::RootsLabel { .. }
+                    | ControlRequest::Pause
+                    | ControlRequest::Resume
+                    | ControlRequest::SuggestedRoots
+                    | ControlRequest::Deny
+            )
+        {
+            return Err(Refusal::new(
+                "chat_only",
+                "Manage shared folders from this computer's folder settings.",
+            )
+            .into());
+        }
         match request {
             ControlRequest::Hello => Ok(json!({
                 "protocol": PROTOCOL_VERSION,

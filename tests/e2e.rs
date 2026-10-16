@@ -167,6 +167,9 @@ async fn websocket(
         assert_eq!(header("Origin"), Some(origin.as_str()));
         let offered = header("Sec-WebSocket-Protocol").unwrap_or_default();
         assert!(offered.contains("actioncable-v1-json"), "{offered}");
+        if st.pairing_scope == "local_agent:chat" {
+            assert!(!offered.split(',').any(|p| p.trim() == "mcp"));
+        }
         resp.headers_mut().insert(
             "Sec-WebSocket-Protocol",
             HeaderValue::from_static("actioncable-v1-json"),
@@ -179,16 +182,20 @@ async fn websocket(
     ws.send(Message::text(json!({ "type": "welcome" }).to_string()))
         .await
         .unwrap();
-    // The daemon subscribes to the channel first.
-    let subscribe = next_text(&mut ws).await.expect("subscribe command");
-    let subscribe: Value = serde_json::from_str(&subscribe).unwrap();
-    assert_eq!(subscribe["command"], "subscribe");
-    assert_eq!(subscribe["identifier"], IDENTIFIER);
-    ws.send(Message::text(
-        json!({ "identifier": IDENTIFIER, "type": "confirm_subscription" }).to_string(),
-    ))
-    .await
-    .unwrap();
+    // Only the folder pairing subscribes to filesystem RPC. Chat-only
+    // grants start at notifications, even with every UI closed.
+    let files = state.lock().unwrap().pairing_scope != "local_agent:chat";
+    if files {
+        let subscribe = next_text(&mut ws).await.expect("subscribe command");
+        let subscribe: Value = serde_json::from_str(&subscribe).unwrap();
+        assert_eq!(subscribe["command"], "subscribe");
+        assert_eq!(subscribe["identifier"], IDENTIFIER);
+        ws.send(Message::text(
+            json!({ "identifier": IDENTIFIER, "type": "confirm_subscription" }).to_string(),
+        ))
+        .await
+        .unwrap();
+    }
     // The daemon follows notifications even with every UI closed. Older
     // servers refuse just this channel without affecting MCP or chat.
     let subscription: Value =
@@ -3922,4 +3929,117 @@ async fn relays_dictation_and_signed_downloads() {
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn organization_control_connections_keep_writes_bound_to_the_original_grant() {
+    let fx = fixture();
+    let primary = FakeServer::start().await;
+    pair(&fx, &primary);
+    let original_config = std::fs::read(fx.paths.config_file()).unwrap();
+    let original_secrets = std::fs::read(fx.paths.secrets_file()).unwrap();
+    let mut servers = [FakeServer::start().await, FakeServer::start().await];
+    let shutdown = CancellationToken::new();
+    let mut tasks = Vec::new();
+    let mut paths = Vec::new();
+    let mut retained = None;
+    let mut sockets = Vec::new();
+    for server in &mut servers {
+        server.state.lock().unwrap().chat_access = true;
+        let (primary_paths, origin) = (fx.paths.clone(), server.origin.clone());
+        let profile = tokio::task::spawn_blocking(move || {
+            let options = cww::auth::LoginOptions {
+                store: Some(SecretStore::File(primary_paths.secrets_file())),
+                ..Default::default()
+            };
+            cww::auth::start_organization_login(&primary_paths, &origin, options)
+                .unwrap()
+                .wait_for_organization(&std::sync::atomic::AtomicBool::new(false))
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let runtime_paths = profile.runtime_paths(&fx.paths).unwrap();
+        tasks.push(tokio::spawn(cww::daemon::run_organization(
+            fx.paths.clone(),
+            profile,
+            shutdown.child_token(),
+        )));
+        sockets.push(
+            tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        let status = control(&runtime_paths, ControlRequest::Status).await;
+        assert_eq!(status["server"], server.origin);
+        assert_eq!(status["roots"], json!([]));
+        assert!(
+            control_error(
+                &runtime_paths,
+                ControlRequest::RootsAdd {
+                    path: fx.base.join("work/docs"),
+                    label: None,
+                    follow_symlinks: false,
+                    i_know: false,
+                    writable: false,
+                }
+            )
+            .await
+            .contains("folder settings")
+        );
+        if retained.is_none() {
+            let socket = runtime_paths.socket_path();
+            retained =
+                tokio::task::spawn_blocking(move || control::Client::connect(&socket).unwrap())
+                    .await
+                    .unwrap();
+        }
+        paths.push(runtime_paths);
+    }
+    // Same chat number on both servers. A client opened before the second
+    // sign-in must keep sending its queued write to the original one.
+    tokio::task::spawn_blocking(move || {
+        retained
+            .unwrap()
+            .call(&ControlRequest::ChatRename {
+                chat: "7".into(),
+                title: "First organization".into(),
+            })
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    control(
+        &paths[1],
+        ControlRequest::ChatRename {
+            chat: "7".into(),
+            title: "Second organization".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        servers[0].state.lock().unwrap().decisions,
+        [r#"rename 7 "First organization""#]
+    );
+    assert_eq!(
+        servers[1].state.lock().unwrap().decisions,
+        [r#"rename 7 "Second organization""#]
+    );
+    assert_eq!(
+        std::fs::read(fx.paths.config_file()).unwrap(),
+        original_config
+    );
+    assert_eq!(
+        std::fs::read(fx.paths.secrets_file()).unwrap(),
+        original_secrets
+    );
+    shutdown.cancel();
+    for task in tasks {
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 }

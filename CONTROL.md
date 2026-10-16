@@ -146,6 +146,33 @@ A program that isn't the `cww` binary, such as the desktop app, runs `cww login 
 
 or `{"event": "error", "error": "..."}` and exit status 1. `browser_url` is `null` unless the page is on the server being paired with. Like `cww login`, the command opens it in the browser unless `--no-browser` is given, and `opened` says whether it did. Killing the process cancels the pairing. On success it starts the daemon the way `cww login` does: a running daemon gets `reload`, and otherwise the per-user service is installed, which starts it now and at every login (not with `--no-daemon`). `daemon` says what happened: `reloaded`, `started`, `not_running` (with `--no-daemon`), or `failed`, with `daemon_error` saying why. The pairing is saved even then, and the exit status is 0. Whatever the service manager prints goes to stderr, so stdout only ever carries these lines. `cww logout` forgets the pairing the same way.
 
+### Independent organization sign-ins
+
+`cww::auth::start_organization_login` and `PendingLogin::wait_for_organization`
+create a fresh, chat-only grant. They never edit the primary folder pairing or
+its key. Saved grants live in `organizations.json`; keys and refresh credentials
+have their own keychain namespaces or private files. Old servers that return a
+folder scope for this flow are refused.
+
+The service parent keeps one chat runtime per saved grant, including while no UI
+is open. Resolve its control endpoint with `SavedOrganization::runtime_paths`
+and `Paths::socket_path`. A connection stays bound to that grant for its whole
+lifetime; switching an app's selection must create a new client, clear foreground
+presence and discard old UI responses. Never redirect queued requests to a new
+organization's socket.
+
+These runtimes have separate tokens, chat subscriptions and native notification
+sessions. They run in the unsandboxed service parent, with no shared roots,
+filesystem RPC service or folder-management requests. The primary confined
+worker continues serving only the original folder pairing. General and folder
+settings still use the primary installation. `status` adds `chat_only` and,
+for these runtimes, an `account` object containing its ID, name and role.
+
+The parent notices saved-grant changes within two seconds. Forgetting a grant
+stops its runtime and native notification session. Changes to the shared proxy
+restart the chat runtimes with the new setting. A missing or invalid grant list
+stops them until a valid list is available again.
+
 ### `roots_add`
 
 ```json
