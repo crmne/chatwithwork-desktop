@@ -26,6 +26,7 @@ use crate::tray::Tray;
 use crate::ui::{AppState, HEADER_HEIGHT, Page, SettingsApp, Shared, theme};
 
 pub struct Options {
+    pub open_chat: Option<cww::notifications::navigation::Target>,
     /// Open the settings window at start (not when started at login).
     pub open_settings: bool,
     /// Started at login: a running app is only pinged, not asked for its
@@ -95,7 +96,12 @@ pub fn run(paths: Paths, options: Options) -> anyhow::Result<()> {
 
     // Held until the app exits: the system lets go of it then.
     let _instance = match &options.instance {
-        Some(slot) => match instance::claim(slot, options.background, events.clone())? {
+        Some(slot) => match instance::claim(
+            slot,
+            options.background,
+            options.open_chat.as_ref(),
+            events.clone(),
+        )? {
             Start::Run(guard) => Some(guard),
             Start::HandedOver => return Ok(()),
         },
@@ -108,6 +114,9 @@ pub fn run(paths: Paths, options: Options) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| Arc::new(crate::pairing::Cli));
     let shared = Shared::new(Client::new(paths.socket_path()), paths, account);
+    if let Some(target) = options.open_chat.clone() {
+        shared.open_chat(target);
+    }
     {
         let events = events.clone();
         shared
@@ -124,7 +133,10 @@ pub fn run(paths: Paths, options: Options) -> anyhow::Result<()> {
         tray_failed: false,
         window: None,
         pending: None,
-        want_window: options.open_settings || !onboarded || options.screenshot.is_some(),
+        want_window: options.open_settings
+            || options.open_chat.is_some()
+            || !onboarded
+            || options.screenshot.is_some(),
         start_page: options.page,
         screenshot: options.screenshot,
         quit: false,
@@ -231,6 +243,15 @@ impl Shell<'_> {
                     self.status = status;
                 }
                 AppEvent::OpenSettings => {
+                    if self.window.is_some() {
+                        self.shared.focus();
+                        crate::platform::activate();
+                    } else {
+                        self.want_window = true;
+                    }
+                }
+                AppEvent::OpenChat(target) => {
+                    self.shared.open_chat(target);
                     if self.window.is_some() {
                         self.shared.focus();
                         crate::platform::activate();

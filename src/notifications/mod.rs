@@ -5,5 +5,6 @@
 //! notification connection itself.
 
 pub mod helper;
+pub mod navigation;
 pub mod protocol;
 pub mod supervisor;

@@ -16,6 +16,7 @@ pub enum AppEvent {
     /// The daemon's status changed; `None` while it isn't running.
     Status(Option<Status>),
     OpenSettings,
+    OpenChat(cww::notifications::navigation::Target),
     TogglePause,
     Quit,
 }

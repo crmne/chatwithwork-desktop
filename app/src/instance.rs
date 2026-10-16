@@ -8,6 +8,7 @@
 //! port guarded by a token in the user's profile). The demo has a slot of
 //! its own, so it runs beside the real app.
 
+use cww::notifications::navigation::Target;
 use fastframe_instance::{Claim, Guard, Slot};
 
 use crate::events::{AppEvent, Events};
@@ -38,8 +39,17 @@ pub enum Start {
 
 /// What a launch asks the running app: `show` opens its window, `ping` (a
 /// start at login) only checks it runs.
-fn request(background: bool) -> &'static str {
-    if background { "ping" } else { "show" }
+fn request(background: bool, target: Option<&Target>) -> String {
+    target.map_or_else(
+        || {
+            if background {
+                "ping".into()
+            } else {
+                "show".into()
+            }
+        },
+        |target| format!("open-chat:{}", target.encode()),
+    )
 }
 
 /// The running app's answer to a later launch, on the listener's thread.
@@ -47,7 +57,10 @@ fn answer(events: &Events, request: &str) -> Option<String> {
     match request {
         "show" => events.send(AppEvent::OpenSettings),
         "ping" => {}
-        _ => return None,
+        _ => {
+            let target = Target::parse(request.strip_prefix("open-chat:")?).ok()?;
+            events.send(AppEvent::OpenChat(target));
+        }
     }
     Some("ok".to_owned())
 }
@@ -58,8 +71,15 @@ fn answer(events: &Events, request: &str) -> Option<String> {
 /// lock goes with the process), so this launch does not start a second
 /// copy, with a second tray item and window on the same settings: it stops
 /// with an error that says what to do.
-pub fn claim(slot: &Slot, background: bool, events: Events) -> anyhow::Result<Start> {
-    match slot.claim(request(background), move |request| answer(&events, request)) {
+pub fn claim(
+    slot: &Slot,
+    background: bool,
+    target: Option<&Target>,
+    events: Events,
+) -> anyhow::Result<Start> {
+    match slot.claim(&request(background, target), move |request| {
+        answer(&events, request)
+    }) {
         Claim::First(guard) => Ok(Start::Run(guard)),
         Claim::Running(_) => {
             log::info!("already running; handed the launch over");
@@ -89,7 +109,7 @@ mod tests {
 
     fn running(slot: &Slot) -> (Guard, Receiver<AppEvent>) {
         let (events, rx) = events();
-        let Start::Run(guard) = claim(slot, false, events).unwrap() else {
+        let Start::Run(guard) = claim(slot, false, None, events).unwrap() else {
             panic!("the first launch runs");
         };
         (guard, rx)
@@ -103,7 +123,7 @@ mod tests {
 
         let (later, later_rx) = events();
         assert!(matches!(
-            claim(&slot, false, later).unwrap(),
+            claim(&slot, false, None, later).unwrap(),
             Start::HandedOver
         ));
         let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -122,10 +142,41 @@ mod tests {
 
         let (later, _) = events();
         assert!(matches!(
-            claim(&slot, true, later).unwrap(),
+            claim(&slot, true, None, later).unwrap(),
             Start::HandedOver
         ));
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn a_notification_routes_its_account_scoped_target_to_the_running_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let slot = Slot::at(tmp.path(), APP_ID);
+        let (_guard, rx) = running(&slot);
+        let target =
+            Target::parse(r#"{"server":"https://example.test","account":"482139075","chat":16}"#)
+                .unwrap();
+        let (later, later_rx) = events();
+        assert!(matches!(
+            claim(&slot, false, Some(&target), later).unwrap(),
+            Start::HandedOver
+        ));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            AppEvent::OpenChat(target)
+        );
+        assert!(later_rx.try_recv().is_err());
+        for invalid in [
+            r#"open-chat:{"server":"https://example.test/path","account":"482139075","chat":16}"#,
+            r#"open-chat:{"server":"https://example.test","account":"../../etc","chat":16}"#,
+            r#"open-chat:{"server":"https://example.test","account":"482139075","chat":16,"command":"quit"}"#,
+        ] {
+            assert!(slot.send(invalid).is_err());
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "invalid destinations never reach the window"
+        );
     }
 
     #[test]
@@ -151,7 +202,7 @@ mod tests {
         held.lock().unwrap();
 
         let (later, later_rx) = events();
-        let error = claim(&slot, false, later).unwrap_err();
+        let error = claim(&slot, false, None, later).unwrap_err();
         assert!(error.to_string().contains("already running"), "{error}");
         assert!(later_rx.try_recv().is_err());
     }

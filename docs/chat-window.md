@@ -16,6 +16,15 @@ Why one window:
 - The web does the same: settings are a page of the app's shell, beside the chats.
 - The chat follows the web's look and the settings follow the platform's, so they don't mix on one screen: each page owns the whole window.
 
+Clicking a native notification opens its chat in this window, including when the
+window was closed. The daemon finds the desktop executable from the same
+installation without searching PATH. A terminal-only installation opens the
+account-scoped chat in the browser instead. The private launch request carries
+only a validated server origin, organization ID, and chat number. The desktop
+waits for the current pairing's account header and opens the number only when
+both its server and organization match. Changing the pairing clears the previous
+chat state. Unsaved instructions keep their normal discard confirmation.
+
 ## Tokens
 
 All colors are the web's `tokens.css` values, light and dark, in `app/src/ui/chat/tokens.rs`. The page follows the system's light or dark mode like the rest of the window.

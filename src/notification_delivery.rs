@@ -138,11 +138,37 @@ pub struct Endpoint {
 }
 
 pub fn spawn(helper: Option<PathBuf>, shutdown: CancellationToken) -> Endpoint {
+    // This runs in the unsandboxed parent. Resolve only the desktop shipped
+    // beside this executable, never an executable named by a notification.
+    let app = crate::notifications::helper::installed_app();
     spawn_with_activation(
         helper,
         shutdown,
-        Arc::new(|activation| {
-            let _ = crate::browser::open(&activation.browser_url());
+        Arc::new(move |activation| {
+            let app = app.clone();
+            // Reap the short IPC launcher without blocking notification delivery.
+            let _ = std::thread::Builder::new()
+                .name("notification-navigation".into())
+                .spawn(move || {
+                    if let Some(app) = app
+                        && let Ok(target) = crate::notifications::navigation::Target::new(
+                            activation.server.clone(),
+                            activation.account.clone(),
+                            activation.chat,
+                        )
+                        && let Ok(mut child) = std::process::Command::new(app)
+                            .arg("--open-chat")
+                            .arg(target.encode())
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                    {
+                        let _ = child.wait();
+                        return;
+                    }
+                    let _ = crate::browser::open(&activation.browser_url());
+                });
         }),
     )
 }

@@ -46,6 +46,8 @@ pub struct Shared {
     /// The window asks the main loop to close it (Cmd+W, Ctrl+W).
     pub close_requested: AtomicBool,
     ctx: Mutex<Option<egui::Context>>,
+    /// Only the most recent explicit notification click needs navigation.
+    open_chat: Mutex<Option<cww::notifications::navigation::Target>>,
 }
 
 impl Shared {
@@ -63,6 +65,7 @@ impl Shared {
             generation: AtomicU64::new(0),
             close_requested: AtomicBool::new(false),
             ctx: Mutex::new(None),
+            open_chat: Mutex::new(None),
         })
     }
 
@@ -104,6 +107,11 @@ impl Shared {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
+    }
+
+    pub fn open_chat(&self, target: cww::notifications::navigation::Target) {
+        *self.open_chat.lock().expect("chat navigation lock") = Some(target);
+        self.repaint();
     }
 }
 
@@ -322,6 +330,8 @@ pub struct SettingsApp {
     scrolling: fastframe_scroll::Scrolling,
     /// The Chat page, made the first time it's shown.
     chat: Option<chat::ChatPage>,
+    chat_scope: Option<(String, String)>,
+    notification: Option<cww::notifications::navigation::Target>,
     /// The style the window has now: the Chat page's (in this theme) or
     /// the platform's.
     styled_for_chat: Option<bool>,
@@ -345,6 +355,8 @@ impl SettingsApp {
             transition: fastframe_theme::Transition::default(),
             scrolling: fastframe_scroll::Scrolling::default(),
             chat: None,
+            chat_scope: None,
+            notification: None,
             styled_for_chat: None,
             reveal: !cfg!(test),
             theme,
@@ -415,6 +427,29 @@ impl SettingsApp {
         let status = self.shared.status();
         if self.page != Page::Notifications {
             self.notifications = None;
+        }
+        if let Some(target) = self
+            .shared
+            .open_chat
+            .lock()
+            .expect("chat navigation lock")
+            .take()
+        {
+            self.notification = Some(target);
+            self.page = Page::Chat;
+        }
+        let scope = status
+            .as_ref()
+            .filter(|s| s.connection.connection != "revoked")
+            .and_then(|s| Some((s.server.clone()?, s.device_id.clone()?)));
+        if scope != self.chat_scope {
+            if let Some(chat) = self.chat.take() {
+                chat.stop();
+            }
+            self.chat_scope = scope;
+        }
+        if self.page != Page::Chat {
+            self.notification = None;
         }
         let p = self.theme.palette;
         self.style_for_page(ui.ctx());
@@ -540,6 +575,29 @@ impl SettingsApp {
             .frame(egui::Frame::new())
             .show(ui, |ui| page.show(ui, &env))
             .inner;
+        if let Some(target) = &self.notification {
+            let matches_server = status
+                .and_then(|s| s.server.as_deref())
+                .and_then(|server| cww::auth::client::ServerUrl::parse(server).ok())
+                .is_some_and(|server| server == *target.server());
+            if self.shared.is_known() && (!matches_server || self.chat_scope.is_none()) {
+                self.notification = None;
+            } else if page.state().ready()
+                && !page
+                    .state()
+                    .instructions
+                    .as_ref()
+                    .is_some_and(|instructions| instructions.busy)
+            {
+                // The list was read for this pairing. An older server without
+                // account IDs cannot safely resolve a notification's number.
+                if page.state().list.account.id == target.account() {
+                    page.open(target.chat());
+                    ui.ctx().request_repaint();
+                }
+                self.notification = None;
+            }
+        }
         match action {
             Some(chat::Action::Settings(page)) => self.page = page,
             Some(chat::Action::StartAgent) => self.start_agent(ui.ctx()),

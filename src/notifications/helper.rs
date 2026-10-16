@@ -17,20 +17,40 @@ enum Platform {
 /// delivery as unavailable. Never launch an arbitrary PATH replacement.
 pub fn installed_helper() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
-    let platform = if cfg!(windows) {
+    find(&executable, platform())
+}
+
+/// The desktop from this installation, if it includes one. A standalone
+/// notification broker is never a desktop navigation destination.
+pub fn installed_app() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    find_app(&executable, platform())
+}
+
+fn platform() -> Platform {
+    if cfg!(windows) {
         Platform::Windows
     } else if cfg!(target_os = "macos") {
         Platform::Macos
     } else {
         Platform::Linux
-    };
-    find(&executable, platform)
+    }
 }
 
 fn find(executable: &Path, platform: Platform) -> Option<PathBuf> {
+    if matches!(platform, Platform::Linux) {
+        let helper = executable.parent()?.join("cww-notify");
+        if helper.is_absolute() && is_executable(&helper) {
+            return Some(helper);
+        }
+    }
+    find_app(executable, platform)
+}
+
+fn find_app(executable: &Path, platform: Platform) -> Option<PathBuf> {
     let parent = executable.parent()?;
     let candidates = match platform {
-        Platform::Linux => vec![parent.join("cww-notify"), parent.join("cww-app")],
+        Platform::Linux => vec![parent.join("cww-app")],
         Platform::Windows => vec![
             parent.join("cww-app.exe"),
             parent.join("Chat with Work.exe"),
@@ -111,6 +131,12 @@ mod tests {
             find(&executable, Platform::Linux),
             Some(dir.path().join("cww-notify"))
         );
+        assert_eq!(
+            find_app(&executable, Platform::Linux),
+            Some(dir.path().join("cww-app"))
+        );
+        std::fs::remove_file(dir.path().join("cww-app")).unwrap();
+        assert_eq!(find_app(&executable, Platform::Linux), None);
     }
 
     #[test]

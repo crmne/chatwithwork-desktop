@@ -44,6 +44,7 @@ Options:
   --page <name>        Open the window on a page: chat, folders, privacy,
                        activity, account, general, welcome
   --screenshot <file>  Save a PNG of the settings window and quit
+  --open-chat <json>   Open an account-scoped chat from a native notification
   --version            Print the version
   --help               Print this help
 
@@ -90,6 +91,7 @@ struct Args {
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut options = shell::Options {
+        open_chat: None,
         open_settings: true,
         background: false,
         page: None,
@@ -100,6 +102,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
     let mut demo = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--open-chat" => {
+                let value = args.next().ok_or("--open-chat needs a destination")?;
+                options.open_chat = Some(
+                    cww::notifications::navigation::Target::parse(&value)
+                        .map_err(|_| "invalid chat destination")?,
+                );
+            }
             "--background" => {
                 options.background = true;
                 options.open_settings = false;
@@ -195,5 +204,18 @@ mod tests {
         assert!(args(&["--frobnicate"]).is_err());
         assert!(args(&["-psn_0_12345"]).unwrap().is_some());
         assert!(args(&["--version"]).unwrap().is_none());
+    }
+
+    #[test]
+    fn notification_launches_require_a_validated_destination() {
+        let options = args(&[
+            "--open-chat",
+            r#"{"server":"https://example.test","account":"482139075","chat":16}"#,
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.shell.open_chat.unwrap().chat(), 16);
+        assert!(args(&["--open-chat", "https://example.test/482139075/chats/16"]).is_err());
+        assert!(args(&["--open-chat"]).is_err());
     }
 }

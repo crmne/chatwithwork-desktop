@@ -415,6 +415,182 @@ fn new_chat_workspace_keeps_unsaved_edits_and_controls_memory() {
     assert!(fx.chat().state.instructions.is_none());
 }
 
+fn notification_target(
+    server: &str,
+    account: &str,
+    chat: u64,
+) -> cww::notifications::navigation::Target {
+    cww::notifications::navigation::Target::new(
+        cww::auth::client::ServerUrl::parse(server).unwrap(),
+        account.into(),
+        chat,
+    )
+    .unwrap()
+}
+
+#[test]
+fn notification_click_opens_only_the_chat_in_the_current_account_and_server() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.harness.state_mut().set_page(Page::Folders);
+    fx.harness.state().shared().open_chat(notification_target(
+        "https://chatwithwork.com",
+        "482139075",
+        11,
+    ));
+    fx.wait_for_request("chat", |r| r["chat"] == "11");
+    fx.wait("notification chat loaded", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.open == Some(11) && !s.loading)
+    });
+    assert_eq!(fx.harness.state().page(), Page::Chat);
+    for (server, account) in [
+        ("https://another.example", "482139075"),
+        ("https://chatwithwork.com", "999999999"),
+    ] {
+        fx.harness
+            .state()
+            .shared()
+            .open_chat(notification_target(server, account, 12));
+        fx.harness.run_steps(5);
+        assert_eq!(fx.chat().state.open, Some(11));
+        assert!(
+            !fx.server
+                .requests()
+                .iter()
+                .any(|r| r["cmd"] == "chat" && r["chat"] == "12")
+        );
+    }
+    // An older server without the account header must not guess.
+    fx.chat().state.list.account.id.clear();
+    fx.harness.state().shared().open_chat(notification_target(
+        "https://chatwithwork.com",
+        "482139075",
+        12,
+    ));
+    fx.harness.run_steps(5);
+    assert_eq!(fx.chat().state.open, Some(11));
+}
+
+#[test]
+fn notification_click_preserves_the_unsaved_instructions_confirmation() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("write your instructions");
+    fx.harness
+        .query_all_by_label("write your instructions")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_label("Use a template");
+    fx.harness.run_steps(8);
+    fx.harness.get_by_label("Use a template").click();
+    fx.harness.run_steps(3);
+    fx.harness.state().shared().open_chat(notification_target(
+        "https://chatwithwork.com",
+        "482139075",
+        11,
+    ));
+    fx.wait_for_label("Discard unsaved instructions?");
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "chat" && r["chat"] == "11")
+    );
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(3);
+    assert!(fx.chat().state.instructions.as_ref().unwrap().dirty());
+    fx.harness.state().shared().open_chat(notification_target(
+        "https://chatwithwork.com",
+        "482139075",
+        11,
+    ));
+    fx.wait_for_label("Discard unsaved instructions?");
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait_for_request("chat", |r| r["chat"] == "11");
+    assert!(fx.chat().state.instructions.is_none());
+}
+
+#[test]
+fn notification_click_waits_for_the_new_pairings_account_header() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.chat().state.list.account.id = "999999999".into();
+    let mut status = fx.harness.state().shared().status().unwrap();
+    status.device_id = Some("new-device".into());
+    fx.harness.state().shared().set_status(Some(status));
+    fx.harness.state().shared().open_chat(notification_target(
+        "https://chatwithwork.com",
+        "999999999",
+        11,
+    ));
+    fx.harness.run_steps(1);
+    fx.wait("fresh account header", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.ready() && s.list.account.id == "482139075")
+    });
+    fx.harness.run_steps(4);
+    assert!(fx.chat().state.open.is_none());
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "chat" && r["chat"] == "11")
+    );
+}
+
+#[test]
+fn notification_navigation_screenshots() {
+    let Ok(directory) = std::env::var("CWW_NOTIFICATION_NAVIGATION_SCREENSHOTS") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    for dark in [false, true] {
+        for (name, size) in [("wide", [1280.0, 820.0]), ("narrow", [760.0, 820.0])] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Default::default()
+            });
+            fx.wait("chat list loaded", |h| {
+                h.state().chat_state().is_some_and(|s| s.ready())
+            });
+            fx.chat().set_still(true);
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(5);
+            let theme = if dark { "dark" } else { "light" };
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("before-{name}-{theme}.png")))
+                .unwrap();
+            fx.harness.state().shared().open_chat(notification_target(
+                "https://chatwithwork.com",
+                "482139075",
+                11,
+            ));
+            fx.wait("notification chat loaded", |h| {
+                h.state()
+                    .chat_state()
+                    .is_some_and(|s| s.open == Some(11) && !s.loading)
+            });
+            fx.caught_up();
+            fx.logos();
+            fx.harness.run_steps(5);
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("after-{name}-{theme}.png")))
+                .unwrap();
+        }
+    }
+}
+
 #[test]
 fn renders_new_chat_workspace() {
     for dark in [false, true] {
