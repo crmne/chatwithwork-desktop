@@ -23,6 +23,155 @@ use crate::audit::{AuditEntry, Decision};
 const NOW: OffsetDateTime = datetime!(2026-09-25 08:20:00 UTC);
 
 #[test]
+fn notification_presence_requires_focus_and_the_loaded_chat_screen() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    app.chat.list.account.id = "482139075".into();
+    assert_eq!(app.notification_view(), None, "initial focus is unknown");
+    app.update(Msg::WindowFocus(true));
+    let shown = crate::notification_presence::View {
+        account: "482139075".into(),
+        chat: 42,
+    };
+    assert_eq!(app.notification_view(), Some(shown.clone()));
+    app.update(Msg::WindowFocus(false));
+    assert_eq!(app.notification_view(), None);
+    app.update(Msg::WindowFocus(true));
+    app.view = View::Settings(Page::Account);
+    assert_eq!(app.notification_view(), None);
+    app.view = View::Chat;
+    app.chat.open = Some(43);
+    assert_eq!(
+        app.notification_view(),
+        None,
+        "old transcript while loading"
+    );
+    app.chat.open = Some(42);
+    app.chat.error = Some("No longer readable".into());
+    assert_eq!(app.notification_view(), None);
+    app.chat.error = None;
+    app.chat.list.account.id.clear();
+    assert_eq!(
+        app.notification_view(),
+        None,
+        "no account inferred from the daemon"
+    );
+    app.chat.list.account.id = shown.account.clone();
+    assert_eq!(app.notification_view(), Some(shown));
+    app.quit = true;
+    assert_eq!(app.notification_view(), None);
+}
+
+#[test]
+fn notification_presence_cannot_restore_a_chat_from_an_old_pairing() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    app.chat.list.account.id = "482139075".into();
+    app.update(Msg::WindowFocus(true));
+    let old_generation = app.chat_generation;
+    let old_list = app.chat.list.clone();
+    let old_transcript = app.chat.transcript.clone().unwrap();
+    let mut next = status("connected", vec![]);
+    next.device_id = Some("99".into());
+    let effects = app.update(Msg::Daemon(DaemonMsg::Status(Box::new(next))));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Follow(None))));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
+    assert_ne!(app.chat_generation, old_generation);
+    assert_eq!(app.chat.open, None);
+    assert_eq!(app.notification_view(), None);
+    for message in [
+        ChatMsg::Listed(Ok(old_list)),
+        ChatMsg::Shown {
+            chat: 42,
+            result: Ok(old_transcript),
+        },
+    ] {
+        assert!(
+            app.update(Msg::ScopedChat {
+                generation: old_generation,
+                message
+            })
+            .is_empty()
+        );
+    }
+    assert!(app.chat.list.account.id.is_empty());
+    assert!(app.chat.transcript.is_none());
+    let mut list = chat_list();
+    list.account.id = "987654321".into();
+    app.update(Msg::ScopedChat {
+        generation: app.chat_generation,
+        message: ChatMsg::Listed(Ok(list)),
+    });
+    assert_eq!(
+        app.notification_view(),
+        None,
+        "new list is not an open chat"
+    );
+    app.chat.open = Some(42);
+    app.update(Msg::ScopedChat {
+        generation: app.chat_generation,
+        message: ChatMsg::Shown {
+            chat: 42,
+            result: Ok(budget_transcript("idle")),
+        },
+    });
+    assert_eq!(
+        app.notification_view(),
+        Some(crate::notification_presence::View {
+            account: "987654321".into(),
+            chat: 42,
+        })
+    );
+}
+
+#[test]
+fn notification_presence_clears_when_daemon_or_chat_permission_goes_away() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    app.chat.list.account.id = "482139075".into();
+    app.update(Msg::WindowFocus(true));
+    assert!(app.notification_view().is_some());
+    app.update(Msg::Daemon(DaemonMsg::Lost));
+    assert_eq!(app.notification_view(), None);
+    running(&mut app, status("connected", vec![]));
+    assert_eq!(app.notification_view(), None, "waiting for fresh access");
+    app.update(Msg::Chat(ChatMsg::Listed(Err(Failure {
+        code: "chat_access_required".into(),
+        message: "Allow chats".into(),
+        ..Failure::default()
+    }))));
+    assert_eq!(app.notification_view(), None);
+}
+
+#[test]
+fn notification_presence_cannot_relabel_an_old_transcript_with_a_new_account() {
+    for live_header in [false, true] {
+        let mut app = app();
+        budget_open(&mut app, every_action());
+        app.chat.list.account.id = "482139075".into();
+        app.update(Msg::WindowFocus(true));
+        let old_generation = app.chat_generation;
+        let mut list = chat_list();
+        list.account.id = "987654321".into();
+        let message = if live_header {
+            ChatMsg::ListLive(ListLive::Account(super::chat::AccountUpdate {
+                account: list.account,
+                ..Default::default()
+            }))
+        } else {
+            ChatMsg::Listed(Ok(list))
+        };
+        app.update(Msg::ScopedChat {
+            generation: old_generation,
+            message,
+        });
+        assert_ne!(app.chat_generation, old_generation);
+        assert!(app.chat.transcript.is_none());
+        assert_eq!(app.notification_view(), None);
+    }
+}
+
+#[test]
 fn dictation_puts_words_at_the_cursor_and_never_sends_them() {
     use super::dictation::{Phase, Update};
     let mut app = app();

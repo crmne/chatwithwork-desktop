@@ -551,6 +551,8 @@ pub enum ChatMsg {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
+    /// A terminal focus report, never inferred from a daemon subscription.
+    WindowFocus(bool),
     Key(KeyEvent),
     /// A click or the wheel, on what the last frame drew there.
     Mouse(MouseEvent),
@@ -558,6 +560,11 @@ pub enum Msg {
     Resize,
     Daemon(DaemonMsg),
     Chat(ChatMsg),
+    /// Production worker replies are tied to the pairing that requested them.
+    ScopedChat {
+        generation: u64,
+        message: ChatMsg,
+    },
 }
 
 /// Whether chats can be used here, and if not, why.
@@ -1243,6 +1250,10 @@ impl ChatPane {
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     pub daemon: Daemon,
+    /// Unknown initial terminal focus is treated as background.
+    pub window_focused: bool,
+    pub chat_generation: u64,
+    chat_scope: Option<(String, String)>,
     /// Oldest first.
     pub audit: Vec<AuditEntry>,
     pub suggestions: Vec<Suggestion>,
@@ -1279,6 +1290,9 @@ impl App {
     pub fn new(utc_offset: UtcOffset) -> Self {
         Self {
             daemon: Daemon::Unknown,
+            window_focused: false,
+            chat_generation: 0,
+            chat_scope: None,
             audit: Vec::new(),
             suggestions: Vec::new(),
             deny: None,
@@ -1323,6 +1337,10 @@ impl App {
 
     fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
+            Msg::WindowFocus(focused) => {
+                self.window_focused = focused;
+                Vec::new()
+            }
             Msg::Key(key) => self.key(key),
             Msg::Mouse(event) => self.mouse(event),
             Msg::Paste(text) => {
@@ -1332,7 +1350,41 @@ impl App {
             Msg::Resize => Vec::new(),
             Msg::Daemon(msg) => self.daemon_msg(msg),
             Msg::Chat(msg) => self.chat_msg(msg),
+            Msg::ScopedChat {
+                generation,
+                message,
+            } => {
+                if generation == self.chat_generation {
+                    self.chat_msg(message)
+                } else {
+                    Vec::new()
+                }
+            }
         }
+    }
+
+    /// Only the loaded transcript currently visible in a focused terminal.
+    /// The account comes from that screen's list, never a daemon status.
+    pub fn notification_view(&self) -> Option<crate::notification_presence::View> {
+        if !self.window_focused
+            || self.quit
+            || self.view != View::Chat
+            || !self.paired()
+            || !self.chat.ready()
+            || self.chat.error.is_some()
+            || self.modal.is_some()
+            || self.pairing.is_some()
+            || self.chat.picker.is_some()
+            || self.chat.list.account.id.is_empty()
+        {
+            return None;
+        }
+        let transcript = self.chat.transcript.as_ref()?;
+        let chat = self.chat.open?;
+        (transcript.chat.number == chat).then(|| crate::notification_presence::View {
+            account: self.chat.list.account.id.clone(),
+            chat,
+        })
     }
 
     /// The first-run offer to share Documents, when it applies: nothing is
@@ -3379,6 +3431,23 @@ impl App {
     fn daemon_msg(&mut self, msg: DaemonMsg) -> Vec<Effect> {
         let mut effects = Vec::new();
         let was_connected = self.daemon.connection() == Some("connected");
+        // A re-pair can keep the same chat number in a different organization.
+        // Clear the old screen and invalidate even replies already queued by
+        // its workers before loading the new organization's list.
+        let scope = match &msg {
+            DaemonMsg::Status(status) => Some((status.paired, &status.server, &status.device_id)),
+            DaemonMsg::NotRunning { offline, .. } => {
+                Some((offline.paired, &offline.server, &offline.device_id))
+            }
+            _ => None,
+        };
+        if let Some((paired, server, device)) = scope {
+            let scope = paired.then(|| server.clone().zip(device.clone())).flatten();
+            if self.chat_scope.is_some() && self.chat_scope != scope {
+                effects.extend(self.reset_chat_scope());
+            }
+            self.chat_scope = scope;
+        }
         use super::theme::Signal;
         if matches!(msg, DaemonMsg::Status(_) | DaemonMsg::NotRunning { .. })
             && self.notice.as_ref().is_some_and(|n| n.text == LOOKING)
@@ -3515,6 +3584,22 @@ impl App {
         effects
     }
 
+    fn reset_chat_scope(&mut self) -> Vec<Effect> {
+        let mut effects = self.cancel_dictation();
+        self.chat = ChatPane {
+            history: self.chat.history.clone(),
+            ..ChatPane::default()
+        };
+        self.chat_generation = self.chat_generation.wrapping_add(1);
+        effects.push(Effect::Chat(ChatCommand::Follow(None)));
+        effects.push(Effect::Chat(ChatCommand::FollowList(false)));
+        effects
+    }
+
+    fn account_changed(&self, account: &str) -> bool {
+        !self.chat.list.account.id.is_empty() && self.chat.list.account.id != account
+    }
+
     /// Chats are asked for once a running daemon says it's paired, and
     /// again when the connection comes back after a failure. They're
     /// forgotten when the daemon goes away or the pairing ends.
@@ -3576,6 +3661,13 @@ impl App {
                 return Vec::new();
             }
             ChatMsg::Listed(Ok(list)) => {
+                // The new account's HTTP response may beat its daemon status
+                // onto the UI queue. Never relabel an old transcript with it.
+                let mut effects = if self.account_changed(&list.account.id) {
+                    self.reset_chat_scope()
+                } else {
+                    Vec::new()
+                };
                 let was_ready = self.chat.ready();
                 self.chat.access = Access::Ready;
                 self.chat.set_list(list);
@@ -3587,7 +3679,7 @@ impl App {
                 // again, unless that's already underway. A list that works
                 // after a refusal leaves it be: the refusal was about the
                 // chat, and following again would only be refused again.
-                let mut effects: Vec<Effect> = follow_list.into_iter().collect();
+                effects.extend(follow_list);
                 if let Some(open) = self.chat.open
                     && !was_ready
                     && self.chat.following != Following::Starting
@@ -3887,7 +3979,14 @@ impl App {
                 }
             }
             ListLive::Projects(projects) => self.chat.set_projects(projects),
-            ListLive::Account(account) => self.chat.list.set_account(account),
+            ListLive::Account(account) => {
+                if self.account_changed(&account.account.id) {
+                    let mut effects = self.reset_chat_scope();
+                    effects.extend(self.load_chats(false));
+                    return effects;
+                }
+                self.chat.list.set_account(account);
+            }
         }
         Vec::new()
     }

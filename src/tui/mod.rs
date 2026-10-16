@@ -34,9 +34,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
+    MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use ratatui::DefaultTerminal;
@@ -47,6 +47,7 @@ use self::chat::Chats;
 use self::theme::Theme;
 use crate::config::Config;
 use crate::control::Closer;
+use crate::notification_presence::Presence;
 use crate::paths::Paths;
 
 /// How often to check whether the owner allowed chats, after asking.
@@ -64,7 +65,7 @@ pub fn run(paths: Paths) -> Result<()> {
 
     let (tx, rx) = mpsc::channel();
     let mut terminal = ratatui::init();
-    let _ = execute!(stdout(), EnableBracketedPaste);
+    let _ = execute!(stdout(), EnableBracketedPaste, EnableFocusChange);
     // Shift-Enter, told apart from Enter where the terminal can.
     let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
         && execute!(
@@ -77,11 +78,13 @@ pub fn run(paths: Paths) -> Result<()> {
     }
     spawn_input(tx.clone());
     let chats = ChatRunner::new(Chats::new(&paths.socket_path()), tx.clone());
+    let presence = Presence::new(paths.socket_path());
     let link = daemon::Link::spawn(paths, tx.clone());
     let out = Outputs {
         link,
         chats,
         history: history_file,
+        presence,
     };
 
     let effects = app.start();
@@ -92,13 +95,14 @@ pub fn run(paths: Paths) -> Result<()> {
     out.chats.follow(None);
     out.chats.follow_list(false);
     out.chats.recording.lock().expect("recording").take();
+    out.presence.set(None);
     if mouse {
         let _ = execute!(stdout(), DisableMouseCapture);
     }
     if enhanced {
         let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(stdout(), DisableBracketedPaste);
+    let _ = execute!(stdout(), DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
     result
 }
@@ -119,6 +123,7 @@ fn event_loop(
         let mut hits = app::Hits::default();
         terminal.draw(|frame| hits = ui::render_hits(frame, app, theme, now))?;
         app.hits = hits;
+        out.presence.set(app.notification_view());
         let first = match app.next_wakeup(now) {
             Some(wait) => match rx.recv_timeout(wait) {
                 Ok(msg) => Some(msg),
@@ -133,6 +138,14 @@ fn event_loop(
         // Apply a burst of messages before drawing again.
         for msg in first.into_iter().chain(rx.try_iter()) {
             let effects = app.update(msg);
+            out.chats
+                .generation
+                .store(app.chat_generation, Ordering::SeqCst);
+            // Blur and navigation clear immediately; a new visible view waits
+            // until the next draw has actually put its transcript on screen.
+            if app.notification_view().is_none() {
+                out.presence.set(None);
+            }
             match out.run(effects) {
                 None => return Ok(()),
                 Some(again) => redraw |= again,
@@ -146,6 +159,7 @@ struct Outputs {
     link: daemon::Link,
     chats: ChatRunner,
     history: PathBuf,
+    presence: Presence,
 }
 
 impl Outputs {
@@ -200,6 +214,8 @@ fn spawn_input(tx: Sender<Msg>) {
                 }
                 Ok(Event::Paste(text)) => Msg::Paste(text),
                 Ok(Event::Resize(..)) => Msg::Resize,
+                Ok(Event::FocusGained) => Msg::WindowFocus(true),
+                Ok(Event::FocusLost) => Msg::WindowFocus(false),
                 Ok(_) => continue,
                 Err(_) => return,
             };
@@ -212,6 +228,7 @@ fn spawn_input(tx: Sender<Msg>) {
 
 /// The chat pane's calls to the daemon. Each blocks, so each gets a thread.
 struct ChatRunner {
+    generation: AtomicU64,
     recording: Mutex<Option<dictation::Recording>>,
     chats: Chats,
     tx: Sender<Msg>,
@@ -241,6 +258,7 @@ impl Follower {
 impl ChatRunner {
     fn new(chats: Chats, tx: Sender<Msg>) -> Self {
         Self {
+            generation: AtomicU64::new(0),
             recording: Mutex::new(None),
             chats,
             tx,
@@ -252,15 +270,22 @@ impl ChatRunner {
 
     fn run(&self, command: ChatCommand) {
         let (chats, tx) = (self.chats.clone(), self.tx.clone());
-        let send = move |msg: ChatMsg| {
-            let _ = tx.send(Msg::Chat(msg));
+        let scope_generation = self.generation.load(Ordering::SeqCst);
+        let send = move |message: ChatMsg| {
+            let _ = tx.send(Msg::ScopedChat {
+                generation: scope_generation,
+                message,
+            });
         };
         match command {
             ChatCommand::Dictate(generation) => {
                 let tx = self.tx.clone();
                 let result = dictation::installed_helper().and_then(|helper| {
                     dictation::Recording::start(chats, helper, move |update| {
-                        let _ = tx.send(Msg::Chat(ChatMsg::Dictation(generation, update)));
+                        let _ = tx.send(Msg::ScopedChat {
+                            generation: scope_generation,
+                            message: ChatMsg::Dictation(generation, update),
+                        });
                     })
                 });
                 match result {
@@ -420,6 +445,7 @@ impl ChatRunner {
 
     /// Keep the chat list current, starting over if it already is, or stop.
     fn follow_list(&self, on: bool) {
+        let generation = self.generation.load(Ordering::SeqCst);
         let mut list = self.list.lock().expect("list");
         if let Some(previous) = list.take() {
             previous.stop();
@@ -449,7 +475,12 @@ impl ChatRunner {
                         return false;
                     }
                     match live {
-                        Some(live) => tx.send(Msg::Chat(ChatMsg::ListLive(live))).is_ok(),
+                        Some(live) => tx
+                            .send(Msg::ScopedChat {
+                                generation,
+                                message: ChatMsg::ListLive(live),
+                            })
+                            .is_ok(),
                         None => true,
                     }
                 },
@@ -457,13 +488,17 @@ impl ChatRunner {
             if let Err(failure) = result
                 && !stop.load(Ordering::SeqCst)
             {
-                let _ = tx.send(Msg::Chat(ChatMsg::ListFollowFailed(failure)));
+                let _ = tx.send(Msg::ScopedChat {
+                    generation,
+                    message: ChatMsg::ListFollowFailed(failure),
+                });
             }
         });
     }
 
     /// Follow `chat` live, instead of whatever was followed before.
     fn follow(&self, chat: Option<u64>) {
+        let generation = self.generation.load(Ordering::SeqCst);
         let mut following = self.following.lock().expect("following");
         if let Some(previous) = following.take() {
             previous.stop();
@@ -493,7 +528,12 @@ impl ChatRunner {
                         return false;
                     }
                     match live {
-                        Some(live) => tx.send(Msg::Chat(ChatMsg::Live { chat, live })).is_ok(),
+                        Some(live) => tx
+                            .send(Msg::ScopedChat {
+                                generation,
+                                message: ChatMsg::Live { chat, live },
+                            })
+                            .is_ok(),
                         None => true,
                     }
                 },
@@ -501,7 +541,10 @@ impl ChatRunner {
             if let Err(failure) = result
                 && !stop.load(Ordering::SeqCst)
             {
-                let _ = tx.send(Msg::Chat(ChatMsg::FollowFailed { chat, failure }));
+                let _ = tx.send(Msg::ScopedChat {
+                    generation,
+                    message: ChatMsg::FollowFailed { chat, failure },
+                });
             }
         });
     }
