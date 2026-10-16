@@ -1242,7 +1242,13 @@ fn answers_offer_what_the_chat_allows() {
 fn a_chat_is_shared_and_stops_being_shared_from_its_dialog() {
     let mut fx = fixture(Options::default());
     fx.ready();
+    fx.chat().set_still(true);
     fx.open_waiting(11, "Want me to add it to the Q4 checklist?");
+    fx.caught_up();
+    // Loaded logos and the initial scroll can move the answer's footer.
+    // Click its final position, including on slower macOS/Nix runners.
+    fx.logos();
+    fx.harness.run_steps(4);
     fx.harness
         .get_by_label("Share a public link to this chat")
         .click();
