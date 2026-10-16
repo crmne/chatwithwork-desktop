@@ -6,6 +6,10 @@
 //! screens, loading, or a pairing change. Merely following a chat is not
 //! presence. Unchanged views renew every 30 seconds on a dedicated thread;
 //! neither the UI thread nor a Tokio runtime is blocked by control requests.
+//! Each control attempt has a five-second deadline for connect, write, and
+//! response together, including Windows named pipes. The worker reuses one
+//! current-thread async runtime; timed-out I/O is dropped, never abandoned on
+//! another thread.
 //!
 //! Requests use one unique session and clear its old view before setting a
 //! new one. Rapid changes coalesce to the latest desired view. Drop requests a
@@ -18,7 +22,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::control::{self, ControlRequest};
+use crate::control::ControlRequest;
+
+mod control;
 
 const RENEW: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_secs(1);
@@ -52,11 +58,8 @@ pub struct Presence {
 
 impl Presence {
     pub fn new(socket: PathBuf) -> Self {
-        Self::with_sender(move |request| match control::request(&socket, request) {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err("The daemon is not running".into()),
-            Err(error) => Err(error.to_string()),
-        })
+        let mut sender = control::Sender::new(socket, Duration::from_secs(5));
+        Self::with_sender(move |request| sender.send(&request).map_err(|error| error.to_string()))
     }
 
     /// Supply a blocking control sender, called only by this handle's worker.
