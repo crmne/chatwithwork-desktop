@@ -11,6 +11,7 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use time::OffsetDateTime;
@@ -1098,6 +1099,7 @@ fn transcript(
                 id,
                 content,
                 sources,
+                answered_with,
             } => {
                 answered.push(*id);
                 let text = if content.trim().is_empty() {
@@ -1107,15 +1109,28 @@ fn transcript(
                 };
                 if !text.trim().is_empty() {
                     answer_lines(&mut lines, text, sources, width, theme);
+                    // `.message__provenance`, under someone else's answer.
+                    if let Some(person) = answered_with {
+                        lines.push(Line::styled(
+                            ellipsize(&format!("Answered with {person}'s sources"), width),
+                            theme.faint(),
+                        ));
+                    }
                 }
             }
-            Entry::Notice { tone, text } => {
+            Entry::Notice { tone, text, action } => {
                 let signal = if tone == "negative" {
                     Signal::Negative
                 } else {
                     Signal::Attention
                 };
                 lines.extend(notice_line(text, signal, width, theme));
+                if let Some(action) = action {
+                    lines.push(Line::styled(
+                        ellipsize(&format!("  {}: {}", action.label, action.url), width),
+                        theme.muted(),
+                    ));
+                }
                 lines.push(Line::raw(""));
             }
             Entry::Unknown => {}
@@ -1137,8 +1152,11 @@ fn transcript(
     }
     if pane.working() && !live_activity {
         // As the web says it: "Writing" once the answer streams in.
-        let word = if pane.stopping {
+        let summary = pane.open_summary();
+        let word = if pane.stopping || summary.is_some_and(|c| c.stopping) {
             "Stopping…"
+        } else if summary.is_some_and(|c| c.waiting_for_turn) {
+            "Free models are busy. Retrying in a moment…"
         } else if writing || pane.streamed.values().any(|t| !t.trim().is_empty()) {
             "Writing"
         } else {
@@ -1588,18 +1606,52 @@ fn activity_lines(
         for step in activity.steps {
             let (glyph, style) = if step.pending {
                 (RING, theme.signal(Signal::Live))
+            } else if step.tone.is_some() {
+                ("!", theme.signal(Signal::Attention))
+            } else if step.troubled() {
+                ("⊘", theme.faint())
             } else {
                 ("·", theme.faint())
             };
-            lines.push(Line::from(vec![
+            let badge = [step.account.as_deref(), step.badge.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(|b| format!(" · {b}"))
+                .reduce(|a, b| a + &b);
+            let room = width.saturating_sub(4 + badge.as_deref().map_or(0, str::len));
+            let mut spans = vec![
                 Span::raw("  "),
                 Span::styled(glyph, style),
                 Span::raw(" "),
-                Span::styled(
-                    ellipsize(&step.summary, width.saturating_sub(4)),
-                    theme.muted(),
-                ),
-            ]));
+                Span::styled(ellipsize(&step.summary, room), theme.muted()),
+            ];
+            if let Some(badge) = badge {
+                spans.push(Span::styled(badge, theme.faint()));
+            }
+            lines.push(Line::from(spans));
+            if let Some(detail) = &step.details {
+                for line in wrap(detail, width.saturating_sub(6)) {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(line, theme.faint()),
+                    ]));
+                }
+            }
+            if let Some(link) = &step.link {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        ellipsize(
+                            &format!("{}: {}", link.label, link.url),
+                            width.saturating_sub(4),
+                        ),
+                        theme.faint(),
+                    ),
+                ]));
+            }
+            if let Some(plan) = &step.plan {
+                plan_lines(lines, plan, width, theme);
+            }
             if let Some(code) = &step.code {
                 answer_lines(lines, &code.markdown(), &[], width, theme);
             }
@@ -1621,6 +1673,47 @@ fn activity_lines(
         ));
     }
     lines.push(Line::raw(""));
+}
+
+/// The assistant's plan, as the web's checklist shows it: a mark per item,
+/// done ones ticked and struck through, removed ones struck through.
+fn plan_lines(
+    lines: &mut Vec<Line<'static>>,
+    plan: &super::chat::Plan,
+    width: usize,
+    theme: &Theme,
+) {
+    if plan.items.is_empty() {
+        return;
+    }
+    for item in &plan.items {
+        let (mark, mark_style, text_style) = if item.done() {
+            (
+                "✓",
+                theme.signal(Signal::Positive),
+                theme.faint().add_modifier(Modifier::CROSSED_OUT),
+            )
+        } else if item.removed() {
+            (
+                "○",
+                theme.signal(Signal::Negative),
+                theme.faint().add_modifier(Modifier::CROSSED_OUT),
+            )
+        } else {
+            ("○", theme.faint(), theme.ink())
+        };
+        for (n, line) in wrap(&item.content, width.saturating_sub(8))
+            .into_iter()
+            .enumerate()
+        {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(if n == 0 { mark } else { " " }, mark_style),
+                Span::raw(" "),
+                Span::styled(line, text_style),
+            ]));
+        }
+    }
 }
 
 /// An answer: Markdown, then its sources and links as footnotes.

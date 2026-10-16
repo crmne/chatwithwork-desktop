@@ -1307,6 +1307,7 @@ fn summary(number: u64, title: &str, updated_at: &str) -> ChatSummary {
         web_search: false,
         schedule: None,
         can: None,
+        ..ChatSummary::default()
     }
 }
 
@@ -1406,6 +1407,7 @@ fn budget_transcript(state: &str) -> Transcript {
                         app: None,
                         waiting: false,
                         logo: None,
+                        ..Step::default()
                     },
                     Step {
                         code: None,
@@ -1417,6 +1419,7 @@ fn budget_transcript(state: &str) -> Transcript {
                         app: None,
                         waiting: false,
                         logo: None,
+                        ..Step::default()
                     },
                 ],
             },
@@ -1431,6 +1434,7 @@ fn budget_transcript(state: &str) -> Transcript {
                     url: Some("https://drive.google.com/file/d/q3".into()),
                     icon: None,
                 }],
+                answered_with: None,
             },
         ],
     }
@@ -1502,6 +1506,7 @@ fn snapshot_chat_streaming() {
             app: None,
             waiting: false,
             logo: None,
+            ..Step::default()
         }],
     });
     app.update(Msg::Chat(ChatMsg::Shown {
@@ -1849,6 +1854,7 @@ fn a_streamed_answer_builds_up_then_the_chat_is_read_back() {
             id: 9,
             content: String::new(),
             sources: vec![],
+            answered_with: None,
         },
     ];
     let effects = app.update(Msg::Chat(ChatMsg::Shown {
@@ -1876,6 +1882,7 @@ fn a_streamed_answer_builds_up_then_the_chat_is_read_back() {
         id: 9,
         content: "It's €40k.".into(),
         sources: vec![],
+        answered_with: None,
     };
     app.update(Msg::Chat(ChatMsg::Shown {
         chat: 43,
@@ -3478,6 +3485,69 @@ fn code_deliverables_stay_visible_and_download_to_the_chosen_path() {
             .iter()
             .any(|e| matches!(e, Effect::Chat(ChatCommand::Download { .. })))
     );
+}
+
+#[test]
+fn step_outcomes_plans_and_whose_sources_show_as_on_the_web() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let entries: Vec<Entry> = serde_json::from_value(serde_json::json!([
+        {"kind":"activity","id":901,"title":"Planned and posted to Slack","steps":[
+            {"summary":"Updated the plan","glyph":"list-checks","plan":{"headline":"Updated the plan","items":[
+                {"content":"Find the Q3 numbers","state":"done"},
+                {"content":"Draft the summary","state":"pending"},
+                {"content":"Ask finance","state":"removed"}]}},
+            {"summary":"Denied: Post to #general","glyph":"prohibit","details":"“Not before Monday”"},
+            {"summary":"Posted to #launch","badge":"already done","link":{"label":"Open in Slack","url":"https://slack.com/archives/C1/p2"}},
+            {"summary":"Didn't upload budget.xlsx","tone":"warning","details":"The channel is archived"}
+        ]},
+        {"kind":"assistant","id":902,"content":"Posted.","answered_with":"Ada"},
+        {"kind":"notice","tone":"negative","text":"Slack stopped working.","action":{"label":"Reconnect Slack","url":"https://chatwithwork.com/482139075/settings/connectors"}}
+    ])).unwrap();
+    app.chat.transcript.as_mut().unwrap().entries = entries;
+    app.chat.show_steps = true;
+    let screen = render_to_string(&app, 120, 60);
+    for text in [
+        "✓ Find the Q3 numbers",
+        "○ Draft the summary",
+        "⊘ Denied: Post to #general",
+        "“Not before Monday”",
+        "Posted to #launch · already done",
+        "Open in Slack: https://slack.com/archives/C1/p2",
+        "! Didn't upload budget.xlsx",
+        "The channel is archived",
+        "Answered with Ada's sources",
+        "Reconnect Slack: https://chatwithwork.com/482139075/settings/connectors",
+    ] {
+        assert!(screen.contains(text), "{text}: {screen}");
+    }
+}
+
+#[test]
+fn a_free_answer_waiting_its_turn_and_a_stop_from_elsewhere_say_so() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let transcript = app.chat.transcript.as_mut().unwrap();
+    transcript.chat.state = "processing".into();
+    transcript.chat.waiting_for_turn = true;
+    let open = transcript.chat.number;
+    if let Some(chat) = app.chat.list.chats.iter_mut().find(|c| c.number == open) {
+        chat.state = "processing".into();
+        chat.waiting_for_turn = true;
+    }
+    let screen = render_to_string(&app, 120, 40);
+    assert!(
+        screen.contains("Free models are busy. Retrying in a moment…"),
+        "{screen}"
+    );
+
+    let transcript = app.chat.transcript.as_mut().unwrap();
+    transcript.chat.stopping = true;
+    if let Some(chat) = app.chat.list.chats.iter_mut().find(|c| c.number == open) {
+        chat.stopping = true;
+    }
+    let screen = render_to_string(&app, 120, 40);
+    assert!(screen.contains("Stopping…"), "{screen}");
 }
 
 #[test]

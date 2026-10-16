@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use egui::{Id, Pos2, Rect, Sense, Ui, UiBuilder, pos2, vec2};
 
-use cww::tui::chat::{Asset, Attachment, Can, Entry, Source, Step};
+use cww::tui::chat::{Asset, Attachment, Can, Entry, Link, Plan, Source, Step};
 
 use super::cards::{Card, CardEvent, CardInputs, Cards};
 use super::composer::file_icon;
@@ -341,6 +341,7 @@ impl Conversation<'_> {
                     id,
                     content,
                     sources,
+                    answered_with,
                 }) => {
                     // The chat's text once it has it, what streamed in until then.
                     let text = if content.trim().is_empty() {
@@ -362,6 +363,9 @@ impl Conversation<'_> {
                             view,
                             &mut events,
                         );
+                        if let Some(person) = answered_with {
+                            self.provenance(&mut child, person);
+                        }
                     }
                 }
                 Item::Streamed(id, text) => {
@@ -414,17 +418,33 @@ impl Conversation<'_> {
                         &mut events,
                     );
                 }
-                Item::Entry(Entry::Notice { tone, text }) => self.notice(&mut child, tone, text),
+                Item::Entry(Entry::Notice { tone, text, action }) => {
+                    if self.notice(
+                        &mut child,
+                        tone,
+                        text,
+                        action.as_ref(),
+                        Id::new(("notice", i)),
+                    ) && let Some(action) = action
+                    {
+                        events.push(Event::OpenUrl(action.url.clone()));
+                    }
+                }
                 Item::Entry(Entry::Unknown) => {}
                 Item::Thinking => {
-                    let label = if state.stopping {
+                    let summary = state.open_summary();
+                    let stopping = state.stopping || summary.is_some_and(|c| c.stopping);
+                    let waiting = !stopping && summary.is_some_and(|c| c.waiting_for_turn);
+                    let label = if stopping {
                         "Stopping..."
+                    } else if waiting {
+                        "Free models are busy. Retrying in a moment..."
                     } else if writing {
                         "Writing"
                     } else {
                         "Thinking"
                     };
-                    self.thinking(&mut child, label, state.stopping);
+                    self.thinking(&mut child, label, stopping, waiting);
                 }
                 Item::Cards(cards) => {
                     for card in cards {
@@ -1325,6 +1345,14 @@ impl Conversation<'_> {
             for (n, step) in steps.iter().enumerate() {
                 let glyph = step_glyph(step, services, logos, steps);
                 self.step(&mut log, step, glyph, pending);
+                if let Some(link) = &step.link
+                    && self.step_link(&mut log, link, egui_id.with(("link", n)))
+                {
+                    events.push(Event::OpenUrl(link.url.clone()));
+                }
+                if let Some(plan) = &step.plan {
+                    self.plan(&mut log, plan);
+                }
                 if let Some(code) = &step.code {
                     let blocks = markdown::parse(&code.markdown(), &[]);
                     let clicked = Prose {
@@ -1461,49 +1489,246 @@ impl Conversation<'_> {
             );
         }
         let logo = Rect::from_center_size(icon_center, vec2(16.0, 16.0));
-        if !self
-            .images
-            .logos
-            .draw(painter, step.logo.as_ref(), logo, 0.0, p, 1.0)
+        // `.step--warning`: the icon in attention, the text in its ink.
+        let warning = step.tone.is_some();
+        let ink = if warning {
+            p.attention_ink
+        } else {
+            p.ink_muted
+        };
+        if warning {
+            self.images
+                .icon_at(painter, icon_center, 16.0, Icon::Warning, p.attention);
+        } else if step.glyph.as_deref() == Some("prohibit")
+            || !self
+                .images
+                .logos
+                .draw(painter, step.logo.as_ref(), logo, 0.0, p, 1.0)
         {
             self.images
                 .icon_at(painter, icon_center, 16.0, glyph, p.ink_faint);
         }
-        // "4 found", in mono after the summary; the names on hover.
+        // In mono after the summary: the account it used, the badge
+        // ("already done"), and "4 found" with the names on hover.
         let found = (!step.files.is_empty()).then(|| format!("{} found", step.files.len()));
-        let found_galley = found.as_deref().map(|f| {
-            paint::layout(
-                painter,
-                paint::job(f, Type::mono(11.0, 15.4), p.ink_faint, f32::INFINITY),
-            )
-        });
-        let found_w = found_galley.as_ref().map_or(0.0, |g| g.size().x + 8.0);
+        let micro: Vec<(Arc<egui::Galley>, bool)> = [
+            (step.account.as_deref(), false),
+            (step.badge.as_deref(), false),
+            (found.as_deref(), true),
+        ]
+        .into_iter()
+        .filter_map(|(text, files)| {
+            text.map(|t| {
+                (
+                    paint::layout(
+                        painter,
+                        paint::job(t, Type::mono(11.0, 15.4), p.ink_faint, f32::INFINITY),
+                    ),
+                    files,
+                )
+            })
+        })
+        .collect();
+        let micro_w: f32 = micro.iter().map(|(g, _)| g.size().x + 8.0).sum();
         let galley = paint::layout(
             painter,
-            paint::line_job(&step.summary, ty, p.ink_muted, width - 24.0 - found_w),
+            paint::line_job(&step.summary, ty, ink, width - 24.0 - micro_w),
         );
         let pos = pos2(row.left() + 24.0, row.center().y - galley.size().y / 2.0);
-        let summary_w = galley.size().x;
+        let mut x = pos.x + galley.size().x + 8.0;
         if pending {
             paint::shimmer(painter, pos, &galley, p.ink_faint, self.time);
         } else {
-            painter.galley(pos, galley, p.ink_muted);
+            painter.galley(pos, galley, ink);
         }
-        if let Some(found_galley) = found_galley {
-            let at = pos2(
-                pos.x + summary_w + 8.0,
-                row.center().y - found_galley.size().y / 2.0,
+        for (micro_galley, files) in micro {
+            let at = pos2(x, row.center().y - micro_galley.size().y / 2.0);
+            let rect = Rect::from_min_size(at, micro_galley.size());
+            x += micro_galley.size().x + 8.0;
+            painter.galley(at, micro_galley, p.ink_faint);
+            if files {
+                let files = step.files.join(", ");
+                let hover =
+                    ui.interact(rect, Id::new(("step-files", &step.summary)), Sense::hover());
+                hover.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &files)
+                });
+                widgets::tooltip(ui, &hover, &files, p, true);
+            }
+        }
+        // `.step__details`: why it was denied or failed, under the summary.
+        if let Some(details) = &step.details {
+            let galley = paint::layout(
+                ui.painter(),
+                paint::job(details, Type::sans(12.0, 16.0), p.ink_faint, width - 24.0),
             );
-            let rect = Rect::from_min_size(at, found_galley.size());
-            painter.galley(at, found_galley, p.ink_faint);
-            let files = step.files.join(", ");
-            let hover = ui.interact(rect, Id::new(("step-files", &step.summary)), Sense::hover());
-            hover.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &files));
-            widgets::tooltip(ui, &hover, &files, p, true);
+            ui.add_space(-4.0);
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(width, galley.size().y), Sense::hover());
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, details));
+            ui.painter()
+                .galley(pos2(rect.left() + 24.0, rect.top()), galley, p.ink_faint);
         }
     }
 
-    fn notice(&self, ui: &mut Ui, tone: &str, text: &str) {
+    /// `.message__provenance`: under an answer someone else got in a
+    /// project chat, whose sources it used.
+    fn provenance(&self, ui: &mut Ui, person: &str) {
+        let p = self.palette;
+        let text = format!("Answered with {person}'s sources");
+        let width = ui.available_width();
+        let galley = paint::layout(
+            ui.painter(),
+            paint::line_job(
+                &text,
+                Type::sans(12.0, 16.0),
+                p.ink_faint,
+                width - 14.0 - 6.0,
+            ),
+        );
+        ui.add_space(-4.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, galley.size().y), Sense::hover());
+        widgets::label(ui, rect, &text);
+        let painter = ui.painter();
+        self.images.icon_at(
+            painter,
+            pos2(rect.left() + 7.0, rect.center().y),
+            14.0,
+            Icon::UserCircle,
+            p.ink_faint,
+        );
+        painter.galley(
+            pos2(rect.left() + 14.0 + 6.0, rect.top()),
+            galley,
+            p.ink_faint,
+        );
+        ui.add_space(12.0);
+    }
+
+    /// What a change made, to open: "Open in Slack", in the step's body.
+    fn step_link(&self, ui: &mut Ui, link: &Link, id: Id) -> bool {
+        let p = self.palette;
+        let width = ui.available_width();
+        let galley = paint::layout(
+            ui.painter(),
+            paint::line_job(&link.label, scale::SMALLER, p.ink, width - 24.0 - 18.0),
+        );
+        ui.add_space(-2.0);
+        let (row, _) = ui.allocate_exact_size(vec2(width, galley.size().y + 2.0), Sense::hover());
+        let rect = Rect::from_min_size(
+            pos2(row.left() + 24.0, row.top()),
+            vec2(galley.size().x + 4.0 + 12.0, row.height()),
+        );
+        let response = ui.interact(rect, id, Sense::click());
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &link.label));
+        let painter = ui.painter();
+        let text_rect = Rect::from_min_size(rect.min, galley.size());
+        painter.galley(rect.min, galley, p.ink);
+        self.images.icon_at(
+            painter,
+            pos2(text_rect.right() + 4.0 + 6.0, text_rect.center().y),
+            12.0,
+            Icon::ArrowUpRight,
+            p.ink_muted,
+        );
+        if response.hovered() {
+            painter.hline(
+                text_rect.x_range(),
+                text_rect.bottom() - 1.0,
+                egui::Stroke::new(1.0, p.ink),
+            );
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.has_focus() {
+            widgets::focus_ring(ui, rect, 3.0, p);
+        }
+        response.clicked()
+    }
+
+    /// `.plan`: the assistant's checklist on a surface with a hairline,
+    /// each item with its mark: ticked on green when done, ringed in
+    /// negative when removed, both struck through.
+    fn plan(&self, ui: &mut Ui, plan: &Plan) {
+        if plan.items.is_empty() {
+            return;
+        }
+        let p = self.palette;
+        let width = ui.available_width();
+        let ty = Type::sans(14.0, 21.0);
+        let inner = width - 2.0 - 24.0 - 16.0 - 10.0;
+        let galleys: Vec<_> = plan
+            .items
+            .iter()
+            .map(|item| {
+                let color = if item.done() || item.removed() {
+                    p.ink_faint
+                } else {
+                    p.ink
+                };
+                let mut job = paint::job(&item.content, ty, color, inner);
+                if item.done() || item.removed() {
+                    for section in &mut job.sections {
+                        section.format.strikethrough = egui::Stroke::new(
+                            1.0,
+                            if item.done() {
+                                p.line_strong
+                            } else {
+                                p.ink_faint
+                            },
+                        );
+                    }
+                }
+                paint::layout(ui.painter(), job)
+            })
+            .collect();
+        let height = 10.0 * 2.0
+            + galleys.iter().map(|g| g.size().y).sum::<f32>()
+            + 4.0 * (galleys.len() - 1) as f32;
+        ui.add_space(2.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let box_rect = Rect::from_min_max(pos2(rect.left() + 2.0, rect.top()), rect.max);
+        let painter = ui.painter();
+        painter.rect_filled(box_rect, tokens::RADIUS_CONTROL, p.surface);
+        painter.rect_stroke(
+            box_rect.shrink(0.5),
+            tokens::RADIUS_CONTROL,
+            egui::Stroke::new(1.0, p.line),
+            egui::StrokeKind::Middle,
+        );
+        let mut y = box_rect.top() + 10.0;
+        for (item, galley) in plan.items.iter().zip(galleys) {
+            let mark = pos2(box_rect.left() + 12.0 + 8.0, y + 3.0 + 8.0);
+            if item.done() {
+                painter.circle_filled(mark, 8.0, p.positive());
+                self.images
+                    .icon_at(painter, mark, 12.0, Icon::Check, p.ink_inverted);
+            } else {
+                let color = if item.removed() {
+                    p.negative()
+                } else {
+                    p.line_strong
+                };
+                painter.circle_stroke(mark, 7.25, egui::Stroke::new(1.5, color));
+            }
+            let h = galley.size().y;
+            painter.galley(pos2(mark.x + 8.0 + 10.0, y), galley, p.ink);
+            y += h + 4.0;
+        }
+        let label = plan
+            .items
+            .iter()
+            .map(|i| format!("{}{}", if i.done() { "Done: " } else { "" }, i.content))
+            .collect::<Vec<_>>()
+            .join("; ");
+        widgets::label(ui, rect, &label);
+        ui.add_space(2.0);
+    }
+
+    /// `.chat-notice`, with its action (`.chat-notice__actions`) as a
+    /// button under the sentence; true when that's clicked.
+    fn notice(&self, ui: &mut Ui, tone: &str, text: &str, action: Option<&Link>, id: Id) -> bool {
         let p = self.palette;
         let width = ui.available_width();
         ui.add_space(12.0);
@@ -1517,7 +1742,20 @@ impl Conversation<'_> {
             ui.painter(),
             paint::job(text, scale::SMALL, p.ink, width - 32.0 - 18.0 - 12.0),
         );
-        let height = 14.0 + galley.size().y.max(18.0) + 14.0;
+        let button = action.map(|a| {
+            let label = paint::layout(
+                ui.painter(),
+                paint::job(
+                    &a.label,
+                    Type::sans(12.0, 16.0).weight(560.0),
+                    p.ink,
+                    f32::INFINITY,
+                ),
+            );
+            vec2(label.size().x + 24.0, 32.0)
+        });
+        let actions_h = button.map_or(0.0, |b| 10.0 + b.y);
+        let height = 14.0 + galley.size().y.max(18.0) + actions_h + 14.0;
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
         let painter = ui.painter();
@@ -1529,15 +1767,27 @@ impl Conversation<'_> {
             Icon::WarningCircle,
             color,
         );
+        let text_bottom = rect.top() + 14.0 + galley.size().y.max(18.0);
         painter.galley(
             pos2(rect.left() + 16.0 + 18.0 + 12.0, rect.top() + 14.0),
             galley,
             p.ink,
         );
+        let clicked = match (action, button) {
+            (Some(action), Some(size)) => {
+                let at = pos2(rect.left() + 16.0 + 18.0 + 12.0, text_bottom + 10.0);
+                widgets::text_button(ui, id, Rect::from_min_size(at, size), &action.label, p)
+                    .clicked()
+            }
+            _ => false,
+        };
         ui.add_space(4.0);
+        clicked
     }
 
-    fn thinking(&self, ui: &mut Ui, label: &str, stopping: bool) {
+    /// `.thinking`; `--waiting` (a free answer waiting for its turn) says
+    /// so without the shimmer.
+    fn thinking(&self, ui: &mut Ui, label: &str, stopping: bool, waiting: bool) {
         let p = self.palette;
         let width = ui.available_width();
         let (row, response) =
@@ -1558,7 +1808,11 @@ impl Conversation<'_> {
             row.left() + 28.0 + 12.0,
             row.center().y - galley.size().y / 2.0,
         );
-        paint::shimmer(painter, pos, &galley, p.ink_faint, self.time);
+        if waiting {
+            painter.galley(pos, galley, p.ink_muted);
+        } else {
+            paint::shimmer(painter, pos, &galley, p.ink_faint, self.time);
+        }
     }
 }
 

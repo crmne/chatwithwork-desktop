@@ -152,6 +152,7 @@ Rendered offscreen with wgpu by the UI tests against the stand-in daemon's synth
 | A new chat, narrow | ![](../app/tests/snapshots/chat-new-narrow-light.png) | ![](../app/tests/snapshots/chat-new-narrow-dark.png) |
 | A change to approve | ![](../app/tests/snapshots/chat-approval-light.png) | ![](../app/tests/snapshots/chat-approval-dark.png) |
 | A question from a connected service | ![](../app/tests/snapshots/chat-question-light.png) | ![](../app/tests/snapshots/chat-question-dark.png) |
+| What each step did | ![](../app/tests/snapshots/chat-outcomes-light.png) | ![](../app/tests/snapshots/chat-outcomes-dark.png) |
 
 `cargo test -p cww-app renders_review_screens` with `CWW_PARITY_DIR` set renders the model picker, attached files, the row menu and rename, and each dialog too, for checking beside the web's own pages.
 
@@ -172,6 +173,39 @@ workbook sheets. A preview that could not be checked displays the computer’s
 warning. Raw tool arguments are replaced by these rows and previews. Deciding
 still uses the same approval endpoint; the server and daemon enforce ownership,
 access level and the file hash checked when preparing the preview.
+
+## What each step did
+
+The web's result rows say what a step did, not only what it set out to do. The
+chat API's steps can carry the same, and the page draws each as the web does:
+
+- **A plan** (`plan`: `headline`, and `items` with `content` and a `state` of
+  `done`, `pending` or `removed`) as `.plan`: a surface with a hairline, each
+  item with its mark, ticked on `positive` when done, ringed in `negative` when
+  removed, both struck through.
+- **A change denied** (`glyph: "prohibit"`, the reason in `details`) with
+  Phosphor's `prohibit` and the reason under it, in `ink-faint` at 12.
+- **A change that failed** (`tone: "warning"`, why in `details`) as
+  `.step--warning`: `warning` in `attention`, the summary in `attention-ink`.
+- **What a change made** (`link`: `label`, `url`) as a link under the step,
+  "Open in Slack" with `arrow-up-right`, opening in the browser as sources do;
+  `badge` ("already done") and `account` (for a connector with several) in mono
+  after the summary.
+- **Someone else's sources** (`answered_with` on an answer in a project chat)
+  as `.message__provenance` under the answer: "Answered with Ada's sources".
+  The web's "Re-run with my sources" isn't here yet.
+- **A failure's way out** (`action` on a notice: `label`, `url`) as a button
+  under its sentence, opening the page in the browser.
+- **A free answer waiting for its turn** (`waiting_for_turn` on the chat) as
+  the web's `.thinking--waiting`, "Free models are busy. Retrying in a
+  moment...", without the shimmer; and **an answer stopped elsewhere**
+  (`stopping`) as "Stopping...".
+
+`cww tui` shows the same as text: the plan's items with `✓` and `○`, `⊘` for a
+denied change and `!` for a failed one, details, links and actions as
+`label: url` lines, and the provenance line under the answer. The server
+doesn't send a step's `account` yet; a server from before these fields sends
+none of them, and its steps read as before.
 
 ## Dictation
 

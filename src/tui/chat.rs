@@ -55,6 +55,11 @@ pub struct ChatSummary {
     pub share: Option<ShareLink>,
     pub web_search: bool,
     pub schedule: Option<Schedule>,
+    /// A free answer waiting for its turn at the free models (the web's
+    /// "Free models are busy. Retrying in a moment...").
+    pub waiting_for_turn: bool,
+    /// Someone stopped the answer and it's winding down ("Stopping...").
+    pub stopping: bool,
     /// What this person may do with it; `None` from an older server, which
     /// offers none of it here.
     pub can: Option<Can>,
@@ -422,6 +427,63 @@ pub struct Step {
     /// Its service's logo; `None` where the web shows a glyph instead.
     #[serde(deserialize_with = "asset")]
     pub logo: Option<Asset>,
+    /// `warning` when it didn't do what it set out to (a change that
+    /// failed); `None` otherwise.
+    pub tone: Option<String>,
+    /// The line under the summary: the reason a change was denied, or why
+    /// it failed.
+    pub details: Option<String>,
+    /// "already done", for a change a retry found made.
+    pub badge: Option<String>,
+    /// Which account it used, for a connector with several ("Work").
+    /// The server doesn't send this yet.
+    pub account: Option<String>,
+    /// What the change made, to open ("Open in Slack").
+    pub link: Option<Link>,
+    /// The plan the assistant keeps, as the web's checklist shows it.
+    pub plan: Option<Plan>,
+}
+
+impl Step {
+    /// The step didn't happen or went wrong: denied, or failed.
+    pub fn troubled(&self) -> bool {
+        self.tone.is_some() || self.glyph.as_deref() == Some("prohibit")
+    }
+}
+
+/// A page to open, with what the button says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Link {
+    pub label: String,
+    pub url: String,
+}
+
+/// The assistant's plan (the todo tool), as the web's `.plan` shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Plan {
+    /// "Updated the plan".
+    pub headline: String,
+    pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PlanItem {
+    pub content: String,
+    /// `done`, `removed` or `pending`.
+    pub state: String,
+}
+
+impl PlanItem {
+    pub fn done(&self) -> bool {
+        self.state == "done"
+    }
+
+    pub fn removed(&self) -> bool {
+        self.state == "removed"
+    }
 }
 
 /// A tool's view (MCP Apps): the service it belongs to and the `ui://`
@@ -454,6 +516,10 @@ pub enum Entry {
         content: String,
         #[serde(default)]
         sources: Vec<Source>,
+        /// Whose sources it used, when someone else in a project chat
+        /// asked ("Answered with Ada's sources").
+        #[serde(default)]
+        answered_with: Option<String>,
     },
     /// The tool work between two things said, folded into one line.
     Activity {
@@ -481,7 +547,14 @@ pub enum Entry {
         steps: Vec<Step>,
     },
     /// A failure or running out of credits. `tone` is `negative` or `attention`.
-    Notice { tone: String, text: String },
+    Notice {
+        tone: String,
+        text: String,
+        /// The way out, on the web: reconnect a service, or the page that
+        /// fixes it.
+        #[serde(default)]
+        action: Option<Link>,
+    },
     #[serde(other)]
     Unknown,
 }

@@ -2152,6 +2152,7 @@ fn renders_inline_links_and_citations() {
                     cww::tui::chat::Source { title: "GitHub issue".into(), url: Some("https://example.com/issue".into()), ..Default::default() },
                     cww::tui::chat::Source { title: "Sentry alert rule".into(), url: Some("https://example.com/rule".into()), ..Default::default() },
                 ],
+                answered_with: None,
             }];
             fx.chat().pin = 3;
             fx.chat().pinned = None;
@@ -2242,7 +2243,7 @@ fn renders_web_search_and_schedule_context() {
             fx.logos();
             // A short scheduled answer keeps its context in the viewport.
             fx.chat().state.transcript.as_mut().unwrap().entries = vec![cww::tui::chat::Entry::Assistant {
-                id: 9001, content: "Your morning briefing is ready. The Acme contract renews on March 1; Dana owns the review.".into(), sources: vec![],
+                id: 9001, content: "Your morning briefing is ready. The Acme contract renews on March 1; Dana owns the review.".into(), sources: vec![], answered_with: None,
             }];
             fx.chat().pin = 3;
             fx.chat().pinned = None;
@@ -2281,6 +2282,123 @@ fn show_code_run(fx: &mut Fixture) {
     fx.chat().pin = 3;
     fx.chat().pinned = None;
     fx.harness.run_steps(10);
+}
+
+/// What happened at each step, as the web's rows say it: a plan, a change
+/// denied with its reason, one a retry found done with its link, one that
+/// failed, an answer with someone else's sources, and a failure with its
+/// way out.
+fn show_outcomes(fx: &mut Fixture) {
+    fx.ready();
+    fx.chat().open(11);
+    fx.wait_for_label("When does the Acme contract renew");
+    fx.caught_up();
+    fx.logos();
+    fx.chat().set_still(true);
+    let entries = serde_json::from_value(serde_json::json!([
+        {"kind":"activity", "id":9811, "title":"Planned and posted to Slack", "services":["Slack"], "logos":[null], "glyphs":["plugs-connected"],
+         "steps":[
+            {"summary":"Updated the plan", "glyph":"list-checks", "plan":{"headline":"Updated the plan", "items":[
+                {"content":"Find the Q3 numbers", "state":"done"},
+                {"content":"Draft the summary for the launch channel", "state":"pending"},
+                {"content":"Ask finance", "state":"removed"}]}},
+            {"summary":"Denied: Post to #general", "glyph":"prohibit", "details":"“Not before Monday”"},
+            {"summary":"Posted to #launch", "glyph":"plugs-connected", "account":"Work", "badge":"already done", "link":{"label":"Open in Slack", "url":"https://slack.com/archives/C1/p2"}},
+            {"summary":"Didn't upload budget.xlsx", "glyph":"plugs-connected", "tone":"warning", "details":"The channel is archived"}
+         ]},
+        {"kind":"assistant", "id":9812, "content":"Posted the summary to #launch.", "answered_with":"Ada Lovelace"},
+        {"kind":"notice", "tone":"negative", "text":"Slack stopped working. Reconnect it to carry on.",
+         "action":{"label":"Reconnect Slack", "url":"https://chatwithwork.com/482139075/settings/connectors"}}
+    ])).unwrap();
+    fx.chat().state.transcript.as_mut().unwrap().entries = entries;
+    fx.chat().pin = 3;
+    fx.chat().pinned = None;
+    fx.harness.run_steps(10);
+}
+
+#[test]
+fn step_outcomes_plans_and_notices_say_what_happened() {
+    OPENED.with(|o| o.borrow_mut().clear());
+    let mut fx = fixture(Options::default());
+    show_outcomes(&mut fx);
+    fx.harness
+        .get_by_label("Answered with Ada Lovelace's sources");
+    fx.harness
+        .get_by_label("Planned and posted to Slack")
+        .click_accesskit();
+    fx.harness.run_steps(4);
+    fx.harness.get_by_label("Denied: Post to #general");
+    fx.harness.get_by_label("“Not before Monday”");
+    fx.harness.get_by_label("Didn't upload budget.xlsx");
+    fx.harness.get_by_label("The channel is archived");
+    fx.harness.get_by_label(
+        "Done: Find the Q3 numbers; Draft the summary for the launch channel; Ask finance",
+    );
+    fx.harness.get_by_label("Open in Slack").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Reconnect Slack").click_accesskit();
+    fx.harness.run_steps(2);
+    let opened = OPENED.with(|o| o.borrow().clone());
+    assert_eq!(
+        opened,
+        [
+            "https://slack.com/archives/C1/p2",
+            "https://chatwithwork.com/482139075/settings/connectors",
+        ]
+    );
+}
+
+#[test]
+fn a_free_answer_waiting_for_its_turn_says_so() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.chat().open(11);
+    fx.wait_for_label("When does the Acme contract renew");
+    fx.caught_up();
+    let transcript = fx.chat().state.transcript.as_mut().unwrap();
+    transcript.chat.state = "processing".into();
+    transcript.chat.waiting_for_turn = true;
+    fx.harness.run_steps(4);
+    fx.harness
+        .get_by_label("Free models are busy. Retrying in a moment...");
+    fx.chat().state.transcript.as_mut().unwrap().chat.stopping = true;
+    fx.harness.run_steps(4);
+    fx.harness.get_by_label("Stopping...");
+}
+
+#[test]
+fn renders_step_outcomes() {
+    for dark in [false, true] {
+        for (suffix, size) in [("", [1280.0, 820.0]), ("-narrow", [760.0, 820.0])] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                return;
+            };
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            show_outcomes(&mut fx);
+            fx.harness
+                .get_by_label("Planned and posted to Slack")
+                .click_accesskit();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &image,
+                    format!("chat-outcomes{suffix}-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(1000),
+                );
+            }
+        }
+    }
 }
 
 fn show_local_preview(fx: &mut Fixture) {

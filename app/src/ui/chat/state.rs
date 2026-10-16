@@ -2696,6 +2696,7 @@ mod tests {
                     id: 9,
                     content: String::new(),
                     sources: vec![],
+                    answered_with: None,
                 }],
                 ..Transcript::default()
             }),

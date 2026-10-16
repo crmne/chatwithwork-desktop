@@ -81,9 +81,10 @@ pub enum Icon {
     UserMinus,
     SignOut,
     EnvelopeSimple,
+    Prohibit,
 }
 
-const COUNT: usize = Icon::EnvelopeSimple as usize + 1;
+const COUNT: usize = Icon::Prohibit as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if
@@ -112,6 +113,9 @@ impl Icon {
             "chat-circle" => Icon::ChatCircle,
             "chats-circle" => Icon::ChatsCircle,
             "list-checks" => Icon::ListChecks,
+            "prohibit" => Icon::Prohibit,
+            "warning" => Icon::Warning,
+            "brain" => Icon::Brain,
             _ => return None,
         })
     }
