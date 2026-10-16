@@ -2579,6 +2579,9 @@ fn organization_switching_keeps_requests_presence_and_settings_in_their_account(
             .chat_state()
             .is_some_and(|s| s.open == Some(11) && !s.loading)
     });
+    // Presence runs on its own worker. Establish the view before switching:
+    // a view that was never sent may correctly coalesce away without a clear.
+    let shown = wait_for_notification_view(&mut fx, 0, true);
     let (_, second) = add_organization(&mut fx);
     let before = fx.server.requests().len();
     fx.harness.get_by_label("Organization: Northwind").click();
@@ -2592,7 +2595,10 @@ fn organization_switching_keeps_requests_presence_and_settings_in_their_account(
             .chat_state()
             .is_some_and(|s| s.open == Some(11) && !s.loading)
     });
-    wait_for_notification_view(&mut fx, before, false);
+    let hidden = wait_for_notification_view(&mut fx, before, false);
+    assert_eq!(hidden["session"], shown["session"]);
+    assert_eq!(hidden["account"], shown["account"]);
+    assert_eq!(hidden["chat"], shown["chat"]);
     fx.wait("second organization receives presence", |_| {
         second.requests().iter().any(|r| {
             r["cmd"] == "notification_view" && r["account"] == "918273645" && r["visible"] == true
