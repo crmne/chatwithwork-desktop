@@ -178,17 +178,23 @@ access level and the file hash checked when preparing the preview.
 The microphone beside the paperclip starts an in-memory recording after the
 paired server confirms that dictation is available and credits allow it.
 Its tooltip explains the credit charge and EU transcription. The composer
-shows Listening or Transcribing; the microphone becomes Stop. Escape stops
-and transcribes; while transcription runs it discards the result. The words
-are appended to the editable draft, never sent automatically. Sending the
+shows Listening with a 24-bar microphone waveform and elapsed time. The
+microphone stays visible with a blue listening state and a spinner while
+transcribing. Escape stops and transcribes; while transcription runs it
+discards the result. A second stop click does not cancel transcription.
+Words replace the selected text or enter at the cursor, with normal Undo,
+and are never sent automatically. Sending the
 draft, changing chats, leaving the chat page or closing the window cancels
 recording and ignores any late transcription.
 
-The app runs its own `--record-audio` helper through pipes, with no window or
+The app runs its own `--record-audio-progress` helper through pipes, with no window or
 tray. CPAL opens the default input device only for that request. It downmixes
 to mono 16 kHz PCM WAV, holds at most five minutes (9.6 MB) in memory, closes
 the microphone before returning audio, and drops silence (less than 300 ms
-above RMS 0.02). The daemon relays transcription to the paired server. Audio
+continuously above RMS 0.02). Bounded JSON frames report the level and timer
+every 70 ms; one length-delimited WAV follows only after recording stops.
+The older `--record-audio` interface remains available for older clients.
+The daemon relays transcription to the paired server. Audio
 is never written to disk or logs. There are no idle audio threads. Cancelling
 a transcription already sent discards its result; it cannot undo the charge.
 The terminal uses the same helper, with `/dictate` or Ctrl-R to start/stop,

@@ -3,10 +3,11 @@
 
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
+use cww::tui::dictation::protocol::{self, Frame};
 
 const RATE: u32 = 16_000;
 const LIMIT: usize = RATE as usize * 300;
@@ -17,18 +18,22 @@ enum End {
     Failed,
 }
 
-pub fn record() -> i32 {
-    match capture() {
+pub fn record(progress: bool) -> i32 {
+    match capture(progress) {
         Ok(()) => 0,
         Err(()) => {
             // The reader never needs device names or native error details.
-            let _ = std::io::stdout().write_all(b"error\n");
+            if progress {
+                let _ = protocol::write(&mut std::io::stdout(), Frame::Error);
+            } else {
+                let _ = std::io::stdout().write_all(b"error\n");
+            }
             1
         }
     }
 }
 
-fn capture() -> Result<(), ()> {
+fn capture(progress: bool) -> Result<(), ()> {
     let device = cpal::default_host().default_input_device().ok_or(())?;
     let config = device.default_input_config().map_err(|_| ())?;
     if config.channels() == 0 || config.sample_rate() == 0 {
@@ -54,8 +59,18 @@ fn capture() -> Result<(), ()> {
     }?;
     stream.play().map_err(|_| ())?;
     let mut out = std::io::stdout().lock();
-    out.write_all(b"ready\n").map_err(|_| ())?;
-    out.flush().map_err(|_| ())?;
+    if progress {
+        protocol::write(
+            &mut out,
+            Frame::Ready {
+                version: protocol::VERSION,
+            },
+        )
+        .map_err(|_| ())?;
+    } else {
+        out.write_all(b"ready\n").map_err(|_| ())?;
+        out.flush().map_err(|_| ())?;
+    }
     std::thread::spawn(move || {
         let mut line = String::new();
         let end = if std::io::stdin().lock().read_line(&mut line).is_ok() && line.trim() == "stop" {
@@ -65,17 +80,49 @@ fn capture() -> Result<(), ()> {
         };
         let _ = tx.send(end);
     });
-    let end = rx
-        .recv_timeout(Duration::from_secs(300))
-        .unwrap_or(End::Stop);
+    let started = Instant::now();
+    let end = loop {
+        let remaining = Duration::from_secs(300).saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break End::Stop;
+        }
+        let step = if progress {
+            Duration::from_millis(protocol::STEP_MS)
+        } else {
+            remaining
+        };
+        match rx.recv_timeout(step.min(remaining)) {
+            Ok(end) => break end,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break End::Cancel,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if progress {
+            let level = pcm.lock().map_err(|_| ())?.level();
+            protocol::write(
+                &mut out,
+                Frame::Level {
+                    elapsed_ms: started
+                        .elapsed()
+                        .as_millis()
+                        .min(u128::from(protocol::MAX_MS)) as u32,
+                    level,
+                },
+            )
+            .map_err(|_| ())?;
+        }
+    };
     // Close the microphone before sending any audio to the parent.
     drop(stream);
     match end {
         End::Failed => Err(()),
         End::Cancel => Ok(()),
-        End::Stop => out
-            .write_all(&pcm.lock().map_err(|_| ())?.wav())
-            .map_err(|_| ()),
+        End::Stop => {
+            let audio = pcm.lock().map_err(|_| ())?.wav();
+            if progress {
+                protocol::write(&mut out, Frame::Audio { bytes: audio.len() }).map_err(|_| ())?;
+            }
+            out.write_all(&audio).map_err(|_| ())
+        }
     }
 }
 
@@ -120,6 +167,7 @@ struct Pcm {
     energy: f32,
     window: u32,
     audible: u32,
+    heard: bool,
 }
 
 impl Pcm {
@@ -136,6 +184,7 @@ impl Pcm {
             energy: 0.0,
             window: 0,
             audible: 0,
+            heard: false,
         }
     }
 
@@ -175,6 +224,9 @@ impl Pcm {
             if self.window == RATE / 50 {
                 if self.energy / self.window as f32 > 0.02 * 0.02 {
                     self.audible += self.window;
+                    self.heard |= self.audible >= RATE * 3 / 10;
+                } else {
+                    self.audible = 0;
                 }
                 self.window = 0;
                 self.energy = 0.0;
@@ -184,7 +236,7 @@ impl Pcm {
 
     fn wav(&self) -> Vec<u8> {
         // Like the web recorder: 300 ms above RMS 0.02, not an isolated click.
-        if self.audible < RATE * 3 / 10 {
+        if !self.heard {
             return Vec::new();
         }
         let bytes = (self.samples.len() * 2) as u32;
@@ -206,11 +258,51 @@ impl Pcm {
         }
         wav
     }
+
+    fn level(&self) -> u16 {
+        let recent = &self.samples[self.samples.len().saturating_sub(RATE as usize / 10)..];
+        if recent.is_empty() {
+            return 0;
+        }
+        let energy = recent
+            .iter()
+            .map(|sample| (f32::from(*sample) / f32::from(i16::MAX)).powi(2))
+            .sum::<f32>();
+        let rms = (energy / recent.len() as f32).sqrt();
+        (((20.0 * rms.log10() + 50.0) / 40.0).clamp(0.0, 1.0) * 1000.0).round() as u16
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separated_clicks_do_not_count_as_speech_and_levels_match_the_web_scale() {
+        let mut pcm = Pcm::new(RATE, 1);
+        for _ in 0..20 {
+            for _ in 0..RATE / 50 {
+                pcm.sample(0.1);
+            }
+            for _ in 0..RATE / 50 {
+                pcm.sample(0.0);
+            }
+        }
+        assert!(pcm.wav().is_empty());
+        for _ in 0..RATE * 3 / 10 {
+            pcm.sample(0.1);
+        }
+        assert!(!pcm.wav().is_empty());
+        assert_eq!(pcm.level(), 750);
+        for _ in 0..RATE {
+            pcm.sample(0.0);
+        }
+        assert_eq!(pcm.level(), 0);
+        assert!(
+            !pcm.wav().is_empty(),
+            "speech remains detected after a quiet ending"
+        );
+    }
 
     #[test]
     fn downmixes_and_resamples_at_common_device_rates() {

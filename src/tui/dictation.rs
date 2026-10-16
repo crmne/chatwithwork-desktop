@@ -2,7 +2,7 @@
 //! The installed app records through pipes, keeping audio libraries out of
 //! the static daemon. Only the daemon sends audio to the paired server.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +10,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use super::chat::{Chats, Failure};
+
+pub mod protocol;
 
 pub const HELP: &str = "Dictate using credits. Audio is transcribed in the EU through your Chat with Work server. Review the words before sending.";
 
@@ -38,6 +40,7 @@ impl Phase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Update {
     Recording,
+    Level { elapsed_ms: u32, level: u16 },
     Transcribing,
     Finished(Result<String, Failure>),
 }
@@ -47,13 +50,22 @@ pub enum Update {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct State {
     pub phase: Phase,
+    pub elapsed_ms: u32,
+    pub levels: [u16; 24],
     generation: u64,
 }
 
 impl State {
+    pub fn elapsed(&self) -> String {
+        let seconds = self.elapsed_ms / 1000;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+
     pub fn start(&mut self) -> u64 {
         self.generation += 1;
         self.phase = Phase::Starting;
+        self.elapsed_ms = 0;
+        self.levels = [0; 24];
         self.generation
     }
 
@@ -69,6 +81,17 @@ impl State {
         match update {
             Update::Recording if self.phase == Phase::Starting => self.phase = Phase::Recording,
             Update::Recording => {}
+            Update::Level { elapsed_ms, level }
+                if self.phase == Phase::Recording
+                    && elapsed_ms >= self.elapsed_ms
+                    && elapsed_ms <= protocol::MAX_MS
+                    && level <= 1000 =>
+            {
+                self.elapsed_ms = elapsed_ms;
+                self.levels.rotate_left(1);
+                self.levels[23] = level;
+            }
+            Update::Level { .. } => {}
             Update::Transcribing => self.phase = Phase::Transcribing,
             Update::Finished(result) => {
                 self.phase = Phase::Idle;
@@ -156,6 +179,11 @@ pub fn installed_helper() -> Result<PathBuf, Failure> {
 
 struct Helper(Child);
 
+enum CaptureEvent {
+    Progress(Update),
+    Finished(Result<Vec<u8>, Failure>),
+}
+
 impl Drop for Helper {
     fn drop(&mut self) {
         // Exact child only; also closes the microphone if the UI exits or cancels.
@@ -172,7 +200,7 @@ fn capture(
 ) -> Result<Vec<u8>, Failure> {
     let mut command = Command::new(helper);
     command
-        .arg("--record-audio")
+        .arg("--record-audio-progress")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -188,14 +216,14 @@ fn capture(
         )
     })?);
     let stdout = helper.0.stdout.take().ok_or_else(microphone_failure)?;
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(4);
     std::thread::Builder::new()
         .name("cww-microphone".into())
         .spawn(move || {
-            let result = read_audio(stdout, || {
-                let _ = tx.send(None);
+            let result = protocol::read(stdout, |update| {
+                let _ = tx.send(CaptureEvent::Progress(update));
             });
-            let _ = tx.send(Some(result));
+            let _ = tx.send(CaptureEvent::Finished(result));
         })
         .map_err(|_| microphone_failure())?;
     let started = Instant::now();
@@ -214,11 +242,11 @@ fn capture(
             stopped = true;
         }
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(None) => {
-                ready = true;
-                emit(Update::Recording);
+            Ok(CaptureEvent::Progress(update)) => {
+                ready |= update == Update::Recording;
+                emit(update);
             }
-            Ok(Some(result)) => {
+            Ok(CaptureEvent::Finished(result)) => {
                 let audio = result?;
                 // EOF means the helper closed its stream. Reap it with a bound.
                 let exit = Instant::now();
@@ -248,23 +276,7 @@ fn capture(
     }
 }
 
-fn read_audio(reader: impl Read, ready: impl FnOnce()) -> Result<Vec<u8>, Failure> {
-    let mut reader = BufReader::new(reader);
-    let mut header = Vec::new();
-    reader
-        .by_ref()
-        .take(64)
-        .read_until(b'\n', &mut header)
-        .map_err(|_| microphone_failure())?;
-    if header != b"ready\n" {
-        return Err(microphone_failure());
-    }
-    ready();
-    let mut bytes = Vec::new();
-    reader
-        .take(crate::chats::MAX_AUDIO_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| microphone_failure())?;
+fn validate_audio(bytes: Vec<u8>) -> Result<Vec<u8>, Failure> {
     if !bytes.is_empty()
         && (bytes.len() > crate::chats::MAX_AUDIO_BYTES
             || bytes.len() < 44
@@ -310,17 +322,49 @@ mod tests {
     }
 
     #[test]
-    fn pipe_protocol_accepts_silence_and_refuses_malformed_or_oversized_audio() {
-        assert!(read_audio(&b"ready\n"[..], || {}).unwrap().is_empty());
-        for bytes in [b"error\n".as_slice(), b"ready\nerror\n", b"not-ready\n"] {
-            assert!(read_audio(bytes, || {}).is_err());
+    fn waveform_keeps_recent_levels_and_ignores_old_or_late_updates() {
+        let mut state = State::default();
+        let generation = state.start();
+        state.update(generation, Update::Recording);
+        for n in 1..=30 {
+            state.update(
+                generation,
+                Update::Level {
+                    elapsed_ms: n * 70,
+                    level: n as u16,
+                },
+            );
         }
-        let mut audio = b"ready\nRIFF".to_vec();
-        audio.extend_from_slice(&[0; 4]);
-        audio.extend_from_slice(b"WAVE");
-        audio.resize(6 + 44, 0);
-        assert_eq!(read_audio(audio.as_slice(), || {}).unwrap().len(), 44);
-        audio.resize(6 + crate::chats::MAX_AUDIO_BYTES + 1, 0);
-        assert!(read_audio(audio.as_slice(), || {}).is_err());
+        assert_eq!(state.levels, std::array::from_fn(|index| index as u16 + 7));
+        assert_eq!(state.elapsed(), "0:02");
+        let current = state.clone();
+        state.update(
+            generation,
+            Update::Level {
+                elapsed_ms: 70,
+                level: 100,
+            },
+        );
+        assert_eq!(state, current);
+        state.update(generation, Update::Transcribing);
+        state.update(
+            generation,
+            Update::Level {
+                elapsed_ms: 3000,
+                level: 100,
+            },
+        );
+        assert_eq!(state.levels, current.levels);
+        state.cancel();
+        state.start();
+        state.update(
+            generation,
+            Update::Level {
+                elapsed_ms: 4000,
+                level: 200,
+            },
+        );
+        assert_eq!(state.levels, [0; 24]);
+        assert_eq!(state.elapsed_ms, 0);
     }
 }

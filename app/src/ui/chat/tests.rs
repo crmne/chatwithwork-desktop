@@ -2022,13 +2022,22 @@ fn renders_dictation_controls_without_recording_audio() {
                     generation,
                     cww::tui::dictation::Update::Recording,
                 ));
+                for index in 0..24 {
+                    state.update(super::state::Msg::Dictation(
+                        generation,
+                        cww::tui::dictation::Update::Level {
+                            elapsed_ms: 12000 + index * 70,
+                            level: ((index * 157 + 71) % 1000) as u16,
+                        },
+                    ));
+                }
                 state.input = "Summarize the meeting".into();
             }
             fx.logos();
             fx.harness.event(egui::Event::PointerGone);
             fx.harness.run_steps(12);
-            fx.harness.get_by_label_contains("Listening.");
-            fx.harness.get_by_label("Stop dictation");
+            fx.harness.get_by_label_contains("Listening 0:13");
+            fx.harness.get_by_label("Stop dictating");
             let image = fx.harness.render().expect("GPU rendering");
             let theme = if dark { "dark" } else { "light" };
             if cfg!(target_os = "linux") {
@@ -2042,6 +2051,85 @@ fn renders_dictation_controls_without_recording_audio() {
             }
         }
     }
+}
+
+#[test]
+fn dictation_replaces_the_selection_and_remains_undoable() {
+    use cww::tui::dictation::Update;
+    use egui::text::{CCursor, CCursorRange};
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.chat().state.input = "Hello 🌍 friend".into();
+    fx.harness.run_steps(2);
+    let id = egui::Id::new(super::composer::ID);
+    let ctx = fx.harness.ctx.clone();
+    let mut editor = egui::text_edit::TextEditState::load(&ctx, id).unwrap();
+    editor
+        .cursor
+        .set_char_range(Some(CCursorRange::two(CCursor::new(6), CCursor::new(7))));
+    editor.store(&ctx, id);
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    let generation = fx.chat().state.dictation.start();
+    fx.chat().update_state(
+        &ctx,
+        super::state::Msg::Dictation(generation, Update::Recording),
+    );
+    fx.chat().update_state(
+        &ctx,
+        super::state::Msg::Dictation(generation, Update::Finished(Ok("world".into()))),
+    );
+    fx.harness.run_steps(2);
+    assert_eq!(fx.chat().state.input, "Hello world friend");
+    let editor = egui::text_edit::TextEditState::load(&ctx, id).unwrap();
+    assert_eq!(editor.cursor.char_range().unwrap().primary.index.0, 11);
+    fx.harness.event(egui::Event::Key {
+        key: egui::Key::Z,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            ctrl: !cfg!(target_os = "macos"),
+            mac_cmd: cfg!(target_os = "macos"),
+            command: true,
+            ..Default::default()
+        },
+    });
+    fx.harness.run_steps(2);
+    assert_eq!(fx.chat().state.input, "Hello 🌍 friend");
+}
+
+#[test]
+fn dictation_second_stop_click_keeps_the_transcription_and_escape_discards_it() {
+    use cww::tui::dictation::{Phase, Update};
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.chat().state.input = "Keep this draft".into();
+    let generation = fx.chat().state.dictation.start();
+    fx.chat()
+        .state
+        .update(super::state::Msg::Dictation(generation, Update::Recording));
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Stop dictating").click();
+    fx.harness.run_steps(2);
+    assert_eq!(fx.chat().state.dictation.phase, Phase::Transcribing);
+    fx.harness.get_by_label("Transcribing").click();
+    fx.harness.run_steps(2);
+    assert_eq!(fx.chat().state.dictation.phase, Phase::Transcribing);
+    fx.harness.event(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(2);
+    assert_eq!(fx.chat().state.dictation.phase, Phase::Idle);
+    let ctx = fx.harness.ctx.clone();
+    fx.chat().update_state(
+        &ctx,
+        super::state::Msg::Dictation(generation, Update::Finished(Ok("too late".into()))),
+    );
+    assert_eq!(fx.chat().state.input, "Keep this draft");
 }
 
 #[test]

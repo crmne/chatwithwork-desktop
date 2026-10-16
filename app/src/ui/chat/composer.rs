@@ -32,7 +32,7 @@ pub struct WebControl {
 }
 
 pub struct Composer<'a> {
-    pub dictation: cww::tui::dictation::Phase,
+    pub dictation: cww::tui::dictation::State,
     pub web_search: Option<WebControl>,
     pub placeholder: &'a str,
     /// Why nothing can be asked, and the way out.
@@ -120,6 +120,64 @@ pub fn file_icon(content_type: &str, p: &Palette) -> (Icon, Color32) {
 }
 
 impl Composer<'_> {
+    fn recording_status(&self, ui: &mut Ui, pos: egui::Pos2, width: f32, p: &Palette) {
+        let center = pos.y + 10.0;
+        let elapsed = self.dictation.elapsed();
+        widgets::label(
+            ui,
+            Rect::from_min_size(pos, vec2(width, 20.0)),
+            &format!("Listening {elapsed}. Escape to stop."),
+        );
+        ui.painter()
+            .circle_filled(pos2(pos.x + 3.0, center), 3.0, p.live());
+        let label = paint::layout(
+            ui.painter(),
+            paint::job("Listening", scale::SMALLER, p.live(), f32::INFINITY),
+        );
+        let bars_x = pos.x + 12.0 + label.size().x + 12.0;
+        ui.painter().galley(
+            pos2(pos.x + 12.0, center - label.size().y / 2.0),
+            label,
+            p.live(),
+        );
+        let still = ui.style().animation_time == 0.0;
+        let lit = usize::from(self.dictation.levels[23]) * 24 / 1000;
+        for (index, level) in self.dictation.levels.iter().enumerate() {
+            let height = if still {
+                8.0
+            } else {
+                16.0 * (0.12 + 0.88 * f32::from(*level) / 1000.0)
+            };
+            let color = if still && index >= lit {
+                tokens::alpha(p.ink_muted, 0.25)
+            } else {
+                p.ink_muted
+            };
+            ui.painter().rect_filled(
+                Rect::from_center_size(
+                    pos2(bars_x + index as f32 * 4.0, center),
+                    vec2(2.0, height),
+                ),
+                1.0,
+                color,
+            );
+        }
+        let timer = paint::layout(
+            ui.painter(),
+            paint::job(&elapsed, scale::SMALLER, p.ink_muted, f32::INFINITY),
+        );
+        let timer_x = bars_x + 24.0 * 4.0 + 10.0;
+        let hint_x = timer_x + timer.size().x + 10.0;
+        ui.painter().galley(
+            pos2(timer_x, center - timer.size().y / 2.0),
+            timer,
+            p.ink_muted,
+        );
+        if pos.x + width - hint_x > 36.0 {
+            paint::kbd_hint(ui.painter(), pos2(hint_x + 32.0, center), &["Esc"], p, 1.0);
+        }
+    }
+
     /// The height of the chips above the text, with their spacing.
     fn chips_height(&self) -> f32 {
         let n = self.attachments.len() as f32;
@@ -154,14 +212,18 @@ impl Composer<'_> {
             .and_then(|w| w.note.as_deref())
             .into_iter()
             .chain(
-                (self.dictation != cww::tui::dictation::Phase::Idle)
-                    .then(|| self.dictation.label()),
+                matches!(
+                    self.dictation.phase,
+                    cww::tui::dictation::Phase::Starting | cww::tui::dictation::Phase::Transcribing
+                )
+                .then(|| self.dictation.phase.label()),
             )
             .collect()
     }
 
     fn notes_height(&self, ui: &Ui, width: f32) -> f32 {
-        self.notes()
+        let notes: f32 = self
+            .notes()
             .iter()
             .map(|note| {
                 8.0 + paint::layout(
@@ -171,7 +233,13 @@ impl Composer<'_> {
                 .size()
                 .y
             })
-            .sum()
+            .sum();
+        notes
+            + if self.dictation.phase == cww::tui::dictation::Phase::Recording {
+                28.0
+            } else {
+                0.0
+            }
     }
 
     fn lock_height(&self, ui: &Ui, reason: &str, width: f32) -> f32 {
@@ -400,6 +468,16 @@ impl Composer<'_> {
             ui.painter().galley(pos, galley, p.ink_muted);
         }
 
+        if self.dictation.phase == cww::tui::dictation::Phase::Recording {
+            self.recording_status(
+                ui,
+                pos2(rect.left() + 16.0, bar_top + 4.0),
+                rect.width() - 32.0,
+                p,
+            );
+            bar_top += 28.0;
+        }
+
         // The bar: paperclip on the left, send or stop on the right, their
         // corners concentric with the box's.
         let control = 32.0;
@@ -420,39 +498,58 @@ impl Composer<'_> {
             event = Some(e);
         }
 
-        let dictating = self.dictation != cww::tui::dictation::Phase::Idle;
+        let dictating = self.dictation.phase != cww::tui::dictation::Phase::Idle;
+        let listening = self.dictation.phase == cww::tui::dictation::Phase::Recording;
+        let mic_rect = attach_rect.translate(vec2(38.0, 0.0));
+        if listening {
+            ui.painter()
+                .rect_filled(mic_rect, control_radius, tokens::alpha(p.live(), 0.12));
+            ui.painter().rect_stroke(
+                mic_rect.shrink(0.5),
+                control_radius,
+                egui::Stroke::new(1.0, tokens::alpha(p.live(), 0.4)),
+                egui::StrokeKind::Middle,
+            );
+        }
         let mic = widgets::IconButton {
-            icon: if dictating {
-                Icon::Stop
-            } else {
-                Icon::Microphone
-            },
+            icon: Icon::Microphone,
             icon_size: 18.0,
-            label: if dictating {
-                "Stop dictation"
-            } else {
-                "Dictate"
+            label: match self.dictation.phase {
+                cww::tui::dictation::Phase::Recording => "Stop dictating",
+                cww::tui::dictation::Phase::Transcribing => "Transcribing",
+                _ => "Dictate",
             },
-            tooltip: Some(if dictating {
-                self.dictation.label()
-            } else {
-                cww::tui::dictation::HELP
-            }),
-            color: if dictating { p.orange_ink } else { p.ink_muted },
+            tooltip: (!dictating).then_some(cww::tui::dictation::HELP),
+            color: if listening { p.live() } else { p.ink },
             hover_color: p.ink,
             wash: 7.0,
             radius: control_radius,
             enabled: !locked || dictating,
         }
-        .show(
-            ui,
-            id.with("dictate"),
-            attach_rect.translate(vec2(38.0, 0.0)),
-            images,
-            p,
-        );
-        if mic.clicked() {
+        .show(ui, id.with("dictate"), mic_rect, images, p);
+        if mic.clicked() && self.dictation.phase != cww::tui::dictation::Phase::Transcribing {
             event = Some(Event::Dictate);
+        }
+        if self.dictation.phase == cww::tui::dictation::Phase::Transcribing {
+            let still = ui.style().animation_time == 0.0;
+            let angle = if still {
+                0.0
+            } else {
+                self.time as f32 * std::f32::consts::TAU / 0.8
+            };
+            paint::ring(ui.painter(), mic_rect.shrink(2.0), 14.0, 1.5, |point| {
+                if ((point - mic_rect.center()).angle() - angle).rem_euclid(std::f32::consts::TAU)
+                    < std::f32::consts::FRAC_PI_2
+                {
+                    p.live()
+                } else {
+                    p.line
+                }
+            });
+            if !still {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
         }
 
         if let Some(web) = &self.web_search {

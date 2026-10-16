@@ -308,6 +308,8 @@ pub struct ChatState {
     pub pending_question: Option<String>,
     pub input: String,
     pub dictation: dictation::State,
+    /// Current native editor selection, in characters, for dictation insertion.
+    pub dictation_cursor: Option<(usize, usize)>,
     pub sending: bool,
     pub stopping: bool,
     /// About the open chat: it's gone, or couldn't be read.
@@ -362,6 +364,7 @@ impl Default for ChatState {
             pending_question: None,
             input: String::new(),
             dictation: dictation::State::default(),
+            dictation_cursor: None,
             sending: false,
             stopping: false,
             error: None,
@@ -614,6 +617,7 @@ impl ChatState {
     pub fn dictate(&mut self) -> Vec<Command> {
         match self.dictation.phase {
             Phase::Idle if self.ready() && self.locked_reason().is_none() => {
+                self.dictation_cursor = None;
                 let generation = self.dictation.start();
                 self.notice = None;
                 vec![Command::Dictate(generation)]
@@ -629,12 +633,43 @@ impl ChatState {
     }
 
     pub fn cancel_dictation(&mut self) -> Vec<Command> {
+        self.dictation_cursor = None;
         if self.dictation.phase == Phase::Idle {
             return Vec::new();
         }
         self.dictation.cancel();
         self.notice = None;
         vec![Command::CancelDictation]
+    }
+
+    fn insert_dictation(&mut self, text: &str) {
+        let length = self.input.chars().count();
+        let (a, b) = self.dictation_cursor.unwrap_or((length, length));
+        let start = a.min(b).min(length);
+        let end = a.max(b).min(length);
+        let byte_at = |index| {
+            self.input
+                .char_indices()
+                .nth(index)
+                .map_or(self.input.len(), |(byte, _)| byte)
+        };
+        let bytes = byte_at(start)..byte_at(end);
+        let mut words = String::new();
+        if !self.input[..bytes.start].is_empty()
+            && !self.input[..bytes.start].ends_with(char::is_whitespace)
+            && !text.starts_with(char::is_whitespace)
+        {
+            words.push(' ');
+        }
+        words.push_str(text);
+        if self.input[bytes.end..].starts_with(char::is_alphanumeric)
+            && !words.ends_with(char::is_whitespace)
+        {
+            words.push(' ');
+        }
+        let cursor = start + words.chars().count();
+        self.input.replace_range(bytes, &words);
+        self.dictation_cursor = Some((cursor, cursor));
     }
 
     /// Files are still on their way up.
@@ -890,11 +925,7 @@ impl ChatState {
                 if let Some(result) = self.dictation.update(generation, update) {
                     match result {
                         Ok(text) if !text.is_empty() => {
-                            if !self.input.is_empty() && !self.input.ends_with(char::is_whitespace)
-                            {
-                                self.input.push(' ');
-                            }
-                            self.input.push_str(&text);
+                            self.insert_dictation(&text);
                             self.notice = None;
                         }
                         Ok(_) => self.notice = Some("No speech detected. Try again.".into()),

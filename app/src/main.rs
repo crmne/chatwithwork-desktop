@@ -63,7 +63,10 @@ fn main() {
     // A pipe-only helper for the desktop and terminal composers. No tray,
     // window, single-instance handling, or log may write to its protocol.
     if std::env::args().skip(1).eq(["--record-audio"]) {
-        std::process::exit(audio::record());
+        std::process::exit(audio::record(false));
+    }
+    if std::env::args().skip(1).eq(["--record-audio-progress"]) {
+        std::process::exit(audio::record(true));
     }
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("CWW_APP_LOG", "warn")).init();
     match parse(std::env::args().skip(1)) {

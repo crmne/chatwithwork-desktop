@@ -283,7 +283,7 @@ impl ChatPage {
             {
                 self.open_on_server(env, &format!("{}{path}", server.trim_end_matches('/')));
             }
-            let commands = self.state.update(msg);
+            let commands = self.update_state(&ctx, msg);
             account_changed |= commands.contains(&Command::ResetAccount);
             self.run(commands);
         }
@@ -368,6 +368,47 @@ impl ChatPage {
         let action = self.page(ui, env, &images);
         self.images = Some(images);
         action
+    }
+
+    fn update_state(&mut self, ctx: &egui::Context, msg: state::Msg) -> Vec<Command> {
+        use egui::text::{CCursor, CCursorRange};
+        let insertion = matches!(&msg, state::Msg::Dictation(_, cww::tui::dictation::Update::Finished(Ok(text))) if !text.is_empty());
+        let id = Id::new(composer::ID);
+        let mut editor =
+            insertion.then(|| egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default());
+        let before = insertion.then(|| self.state.input.clone());
+        let previous = editor
+            .as_ref()
+            .and_then(|editor| editor.cursor.char_range());
+        if insertion {
+            self.state.dictation_cursor =
+                previous.map(|range| (range.primary.index.0, range.secondary.index.0));
+        }
+        let commands = self.state.update(msg);
+        if let (Some(editor), Some(before), Some((cursor, _))) =
+            (editor.as_mut(), before, self.state.dictation_cursor)
+            && before != self.state.input
+        {
+            let previous =
+                previous.unwrap_or_else(|| CCursorRange::one(CCursor::new(before.chars().count())));
+            let next = CCursorRange::one(CCursor::new(cursor));
+            let mut undo = editor.undoer();
+            undo.add_undo(&(previous, before));
+            undo.add_undo(&(next, self.state.input.clone()));
+            editor.set_undoer(undo);
+            editor.cursor.set_char_range(Some(next));
+            editor.clone().store(ctx, id);
+            ctx.memory_mut(|memory| {
+                if memory
+                    .focused()
+                    .is_none_or(|focused| focused == id || focused == id.with("dictate"))
+                {
+                    memory.request_focus(id);
+                }
+            });
+            self.focus_composer = false;
+        }
+        commands
     }
 
     fn page(&mut self, ui: &mut Ui, env: &Env, images: &Images) -> Option<Action> {
@@ -892,7 +933,7 @@ impl ChatPage {
             .as_ref()
             .map(|(reason, action)| (reason.as_str(), *action));
         Composer {
-            dictation: self.state.dictation.phase,
+            dictation: self.state.dictation.clone(),
             web_search: self.state.web_search_control(),
             placeholder: if self.state.open.is_some() {
                 "Reply to Chat with Work"

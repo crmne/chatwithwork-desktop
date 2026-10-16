@@ -545,7 +545,20 @@ fn main_pane(
 /// key.
 pub(super) fn notice_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     if app.chat.dictation.phase != super::dictation::Phase::Idle {
-        return notice_line(app.chat.dictation.phase.label(), Signal::Idle, width, theme);
+        let state = &app.chat.dictation;
+        let label = if state.phase == super::dictation::Phase::Recording {
+            let bars: String = state
+                .levels
+                .iter()
+                .map(|level| {
+                    ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'][usize::from(*level) * 7 / 1000]
+                })
+                .collect();
+            format!("Listening  {bars}  {}  Esc to stop", state.elapsed())
+        } else {
+            state.phase.label().to_owned()
+        };
+        return notice_line(&label, Signal::Idle, width, theme);
     }
     match &app.notice {
         Some(notice) => {
