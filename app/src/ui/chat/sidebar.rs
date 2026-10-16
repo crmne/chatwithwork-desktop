@@ -1,5 +1,5 @@
 //! The sidebar (`sidebar.css`, `account_switcher.css`, `sidebar_pins.css`):
-//! the logotype and its toggle, New chat and Chats, the search field, the
+//! the logotype and its toggle, New chat, Chats and Instructions, the search field, the
 //! Recent chats, what's pinned, and your name at the foot, with the credits
 //! when they run low, opening the web's Settings. One link the web doesn't
 //! have, This computer, opens this computer's own settings pages.
@@ -27,6 +27,7 @@ pub enum Event {
     Projects(cww::projects::Request),
     ProjectChat(cww::projects::Project),
     ProjectInstructions(u64),
+    Instructions(cww::workspace::Layer),
     Organization(Option<String>),
     Notification(cww::notifications::navigation::Target),
     Open(u64),
@@ -185,6 +186,25 @@ impl Sidebar<'_> {
             }
             y += LINK;
         }
+        y += 2.0;
+        let row = Rect::from_min_max(
+            pos2(rect.left() + 8.0, y),
+            pos2(inner_right - 8.0, y + LINK),
+        );
+        if self.link(
+            ui,
+            row,
+            Icon::Notebook,
+            "Instructions",
+            state
+                .instructions
+                .as_ref()
+                .is_some_and(|p| p.project.is_none()),
+            Id::new("chat-instructions"),
+        ) {
+            event = Some(Event::Instructions(cww::workspace::Layer::Personal));
+        }
+        y += LINK;
         // This computer's own settings: the one link the web doesn't have,
         // in the style of the web's links beside it.
         y += 2.0;

@@ -156,7 +156,11 @@ impl ChatPage {
                 .model_preferences
                 .as_ref()
                 .is_some_and(|p| p.busy)
-            || self.state.instructions.as_ref().is_some_and(|p| p.busy)
+            || self
+                .state
+                .instructions
+                .as_ref()
+                .is_some_and(|p| p.working())
             || self.state.projects.as_ref().is_some_and(|p| p.busy)
     }
 
@@ -179,7 +183,7 @@ impl ChatPage {
             }
         }
         if let Some(page) = &mut self.state.instructions {
-            if page.busy {
+            if page.working() {
                 return false;
             }
             if page.dirty() {
@@ -637,7 +641,8 @@ impl ChatPage {
             }
             self.sidebar_event(outcome.event, env, &mut action);
         } else if let Some(page) = &mut self.state.instructions {
-            let outcome = instructions::show(ui, main, page, &p, images);
+            let outcome =
+                instructions::show(ui, main, page, &self.state.list.links.settings, &p, images);
             if !page.confirm_close && !outcome.close {
                 self.pending_navigation = None;
             }
@@ -647,6 +652,14 @@ impl ChatPage {
                 self.sidebar_event(pending, env, &mut action);
             }
             self.run(outcome.commands);
+            if let Some(file) = outcome.download {
+                self.save_file(cww::tui::chat::Attachment {
+                    filename: file.name,
+                    path: Some(file.download_path),
+                    ..Default::default()
+                });
+            }
+            self.sidebar_event(outcome.event, env, &mut action);
             if let Some(chat) = outcome.open_chat {
                 self.sidebar_event(Some(sidebar::Event::Open(chat)), env, &mut action);
             }
@@ -858,6 +871,7 @@ impl ChatPage {
                                 | sidebar::Event::Projects(_)
                                 | sidebar::Event::ProjectChat(_)
                                 | sidebar::Event::ProjectInstructions(_)
+                                | sidebar::Event::Instructions(_)
                                 | sidebar::Event::ModelPreferences
                                 | sidebar::Event::Templates(_)
                                 | sidebar::Event::Toggle
@@ -905,6 +919,7 @@ impl ChatPage {
                     | sidebar::Event::Projects(_)
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::Instructions(_)
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
                     | sidebar::Event::OpenUrl(_)
@@ -940,12 +955,13 @@ impl ChatPage {
                     | sidebar::Event::Projects(_)
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::Instructions(_)
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
             )
         ) && let Some(page) = &mut self.state.instructions
         {
-            if page.busy {
+            if page.working() {
                 return;
             }
             if page.dirty() {
@@ -967,6 +983,7 @@ impl ChatPage {
                     | sidebar::Event::History
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::Instructions(_)
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
             )
@@ -1006,8 +1023,17 @@ impl ChatPage {
                 self.run(commands);
                 self.focus_composer = true;
             }
+            Some(sidebar::Event::Instructions(layer)) => {
+                let mut page = workspace::Instructions::new(layer);
+                page.account = Some(self.state.list.account.id.clone());
+                let generation = page.generation;
+                self.state.instructions = Some(page);
+                self.drawer = false;
+                self.run(vec![Command::Instructions(generation, None)]);
+            }
             Some(sidebar::Event::ProjectInstructions(project)) => {
                 let mut page = workspace::Instructions::new(cww::workspace::Layer::Project);
+                page.account = Some(self.state.list.account.id.clone());
                 page.project = Some(project);
                 page.back_to_project = true;
                 let generation = page.generation;
@@ -1817,13 +1843,16 @@ impl ChatPage {
                 }
                 Some(workspace::Event::Instructions(layer)) => {
                     let mut page = workspace::Instructions::new(layer);
-                    page.project = self.state.new_project.as_ref().map(|p| p.id);
+                    page.account = Some(self.state.list.account.id.clone());
+                    page.project = if layer == cww::workspace::Layer::Project {
+                        self.state.new_project.as_ref().map(|p| p.id)
+                    } else {
+                        None
+                    };
                     let generation = page.generation;
+                    let project = page.project;
                     self.state.instructions = Some(page);
-                    self.run(vec![Command::Instructions(
-                        generation,
-                        self.state.new_project.as_ref().map(|p| p.id),
-                    )]);
+                    self.run(vec![Command::Instructions(generation, project)]);
                 }
                 Some(workspace::Event::Connect) => {
                     self.state.connectors = Some(connectors::ConnectDialog::default())

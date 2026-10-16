@@ -389,7 +389,10 @@ fn new_chat_workspace_keeps_unsaved_edits_and_controls_memory() {
     });
     fx.harness.run_steps(15);
     fx.harness
-        .get_by_label("Let the assistant remember things")
+        .get_by_role_and_label(
+            egui::accesskit::Role::CheckBox,
+            "Let the assistant remember things",
+        )
         .click();
     fx.wait_for_request("memory_preference", |r| r["enabled"] == false);
     fx.wait("memory is disabled", |h| {
@@ -3332,7 +3335,7 @@ fn native_project_instructions_and_connector_changes_keep_the_project_scope() {
     fx.ready();
     fx.harness.get_by_label("Falcon").click();
     fx.wait_for_label("New chat here");
-    fx.harness.get_by_label("Instructions").click();
+    fx.harness.get_by_label("Project instructions").click();
     fx.wait_for_label("Back to project");
     fx.wait_for_request("instructions", |r| r["project"] == 7);
     fx.wait_for_label("Use a template");
@@ -3393,6 +3396,124 @@ fn native_project_instructions_and_connector_changes_keep_the_project_scope() {
             .iter()
             .any(|i| i.layer == cww::workspace::Layer::Project)
     );
+}
+
+#[test]
+fn project_instructions_upload_templates_and_guard_navigation_to_personal_settings() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("Falcon").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("Project instructions").click();
+    fx.wait_for_label("Upload project document template");
+    fx.wait_for_request("templates", |r| r["request"]["project"] == 7);
+    let path = fx
+        .server
+        .paths
+        .daemon
+        .data_dir
+        .join("Project letterhead.docx");
+    std::fs::write(&path, b"synthetic project template").unwrap();
+    PICKED.with(|p| *p.borrow_mut() = Some(vec![path]));
+    fx.harness
+        .get_by_label("Upload project document template")
+        .click_accesskit();
+    fx.wait_for_request("template_upload", |r| {
+        r["target"]["project"] == 7
+            && r["target"]["account"] == "482139075"
+            && r["target"]["layer"] == "project"
+    });
+    fx.wait_for_label("Replace project document template");
+    fx.chat()
+        .state
+        .instructions
+        .as_mut()
+        .unwrap()
+        .editors
+        .iter_mut()
+        .find(|e| e.instruction.layer == cww::workspace::Layer::Project)
+        .unwrap()
+        .body = "Unsaved project notes".into();
+    fx.harness
+        .get_by_label("Open Your instructions")
+        .click_accesskit();
+    fx.wait_for_label("Discard unsaved instructions?");
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(3);
+    assert_eq!(
+        fx.chat().state.instructions.as_ref().unwrap().project,
+        Some(7)
+    );
+    fx.harness
+        .get_by_label("Open Your instructions")
+        .click_accesskit();
+    fx.wait_for_label("Discard changes");
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait_for_request("instructions", |r| r["project"].is_null());
+    fx.wait_for_label("Let the assistant remember things");
+    let page = fx.chat().state.instructions.as_ref().unwrap();
+    assert!(page.project.is_none() && page.templates.is_none());
+    assert_eq!(page.context.as_ref().unwrap().account.id, "482139075");
+    fx.harness.get_by_label("Templates").click_accesskit();
+    fx.wait_for_label("Upload personal document template");
+}
+
+#[test]
+fn instruction_context_binds_project_ids_and_template_numbers_and_discards_late_replies() {
+    use super::{
+        state::{ChatState, Command, Msg},
+        workspace::Instructions,
+    };
+    use cww::workspace::{InstructionPage, Layer};
+    let response = |account: &str, id, number| -> InstructionPage {
+        serde_json::from_value(serde_json::json!({
+            "context":{"account":{"id":account,"name":"Northwind"},"email":"alex@example.com","project":{"id":id,"number":number,"name":"Launch","archived":false}},
+            "instructions":[],"memory":{"enabled":true,"entries":[]}
+        })).unwrap()
+    };
+    let mut page = Instructions::new(Layer::Project);
+    page.account = Some("482139075".into());
+    page.project = Some(700);
+    let commands = page.loaded(Ok(response("482139075", 700, 9)));
+    assert!(matches!(
+        commands.as_slice(),
+        [Command::Templates(
+            _,
+            cww::templates::Request::List { project: Some(9) }
+        )]
+    ));
+    let old = page.templates.as_ref().unwrap().generation;
+    let mut state = ChatState::default();
+    state.instructions = Some(page);
+    let failure = cww::tui::chat::Failure {
+        code: "forbidden".into(),
+        message: "Access removed".into(),
+        ..Default::default()
+    };
+    state.update(Msg::Templates(old, Err(failure.clone())));
+    assert_eq!(
+        state
+            .instructions
+            .as_ref()
+            .unwrap()
+            .templates
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("Access removed")
+    );
+    for result in [response("918273645", 700, 9), response("482139075", 701, 9)] {
+        let page = state.instructions.as_mut().unwrap();
+        assert!(page.loaded(Ok(result)).is_empty());
+        assert!(page.context.is_none() && page.templates.is_none() && page.memory.is_none());
+    }
+    let page = state.instructions.as_mut().unwrap();
+    page.loaded(Ok(response("482139075", 700, 9)));
+    assert!(state.update(Msg::Templates(old, Err(failure))).is_empty());
+    let page = state.instructions.as_ref().unwrap();
+    assert!(page.templates.as_ref().unwrap().busy);
+    assert!(page.templates.as_ref().unwrap().error.is_none());
 }
 
 #[test]
@@ -3700,6 +3821,133 @@ fn template_settings_review_screens() {
                     .expect("GPU rendering")
                     .save(path.join(format!(
                         "{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn instruction_settings_review_screens() {
+    let Ok(directory) = std::env::var("CWW_INSTRUCTIONS_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Options::default()
+            });
+            fx.wait_for_label("write your instructions");
+            fx.harness
+                .query_all_by_label("write your instructions")
+                .next()
+                .unwrap()
+                .click_accesskit();
+            fx.wait_for_label("Use a template");
+            fx.chat().set_still(true);
+            fx.chat().state.instructions.as_mut().unwrap().scroll_to =
+                Some(cww::workspace::Layer::Organization);
+            fx.harness.run_steps(5);
+            fx.harness
+                .event(egui::Event::PointerMoved(egui::pos2(width - 60.0, 300.0)));
+            fx.harness.run_steps(2);
+            fx.harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, 10000.0),
+                modifiers: egui::Modifiers::NONE,
+            });
+            fx.harness.run_steps(12);
+            for (name, scroll) in [("top", false), ("memory", true), ("memory-off", false)] {
+                if name == "memory-off" {
+                    fx.chat()
+                        .state
+                        .instructions
+                        .as_mut()
+                        .unwrap()
+                        .memory
+                        .as_mut()
+                        .unwrap()
+                        .enabled = false;
+                }
+                if scroll {
+                    fx.harness.event(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        delta: egui::vec2(0.0, -10000.0),
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    fx.harness.run_steps(12);
+                }
+                fx.logos();
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(8);
+                let path = std::path::Path::new(&directory);
+                std::fs::create_dir_all(path).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(path.join(format!(
+                        "{name}-{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+                fx.harness
+                    .event(egui::Event::PointerMoved(egui::pos2(width - 60.0, 300.0)));
+            }
+        }
+    }
+}
+
+#[test]
+fn project_instruction_review_screens() {
+    let Ok(directory) = std::env::var("CWW_INSTRUCTIONS_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Options::default()
+            });
+            fx.wait_for_label("write your instructions");
+            let mut page = super::workspace::Instructions::new(cww::workspace::Layer::Project);
+            page.account = Some("482139075".into());
+            page.project = Some(7);
+            page.back_to_project = true;
+            page.scroll_to = None;
+            let generation = page.generation;
+            fx.chat().state.instructions = Some(page);
+            fx.chat().run(vec![super::state::Command::Instructions(
+                generation,
+                Some(7),
+            )]);
+            fx.wait_for_label("Upload project document template");
+            fx.chat().set_still(true);
+            fx.logos();
+            for name in ["project-top", "project-templates"] {
+                if name == "project-templates" {
+                    fx.harness
+                        .get_by_label("Upload project presentation template")
+                        .scroll_to_me();
+                    fx.harness.run_steps(12);
+                }
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(8);
+                let path = std::path::Path::new(&directory);
+                std::fs::create_dir_all(path).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(path.join(format!(
+                        "{name}-{}-{width}.png",
                         if dark { "dark" } else { "light" }
                     )))
                     .unwrap();

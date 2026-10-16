@@ -161,10 +161,23 @@ pub fn show(
         palette: p,
         images,
     }
-    .show(ui, |ui| content(ui, screen, p, images, &mut outcome));
+    .show(ui, |ui| content(ui, screen, false, p, images, &mut outcome));
     if event.is_some() {
         outcome.event = event;
     }
+    removal(ui, screen, p, images, &mut outcome);
+    outcome
+}
+
+/// Reuses the same file actions inside project Instructions.
+pub fn inline(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images) -> Outcome {
+    let mut outcome = Outcome::default();
+    content(ui, screen, true, p, images, &mut outcome);
+    removal(ui, screen, p, images, &mut outcome);
+    outcome
+}
+
+fn removal(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, outcome: &mut Outcome) {
     if let Some((id, label)) = screen.removing.clone() {
         let mut cancel = false;
         let mut remove = false;
@@ -210,9 +223,15 @@ pub fn show(
             }));
         }
     }
-    outcome
 }
-fn content(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, out: &mut Outcome) {
+fn content(
+    ui: &mut Ui,
+    screen: &mut Screen,
+    inline: bool,
+    p: &Palette,
+    images: &Images,
+    out: &mut Outcome,
+) {
     ui.set_width(ui.available_width());
     let Some(page) = screen.page.clone() else {
         text(ui, "Templates", Type::sans(15.0, 22.5).weight(600.0), p.ink);
@@ -242,7 +261,7 @@ fn content(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, out: 
         }
         return;
     };
-    if let Some(project) = &page.project {
+    if !inline && let Some(project) = &page.project {
         if button(
             ui,
             &project.name,
@@ -286,15 +305,17 @@ fn content(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, out: 
         text(ui, "Updating templates…", scale::SMALL, p.ink_muted);
     }
     for group in &page.groups {
-        ui.add_space(48.0);
-        text(ui, &group.name, Type::sans(15.0, 22.5).weight(600.0), p.ink);
-        ui.add_space(4.0);
-        let help = match group.layer {
+        if !inline {
+            ui.add_space(48.0);
+            text(ui, &group.name, Type::sans(15.0, 22.5).weight(600.0), p.ink);
+            ui.add_space(4.0);
+            let help = match group.layer {
             cww::workspace::Layer::Personal => "Used in every chat you start or reply to here, unless the chat's project has its own.".into(),
             cww::workspace::Layer::Organization => format!("Used across {} where neither the project nor the person has one. {}", page.account.name, if group.editable { "Owners and admins change them." } else { "Owners and admins change them; you can download them." }),
             cww::workspace::Layer::Project => if group.editable { "Everyone on the project but guests can change these templates." } else { "This project's templates are read-only." }.into(),
         };
-        text(ui, &help, scale::SMALL, p.ink_muted);
+            text(ui, &help, scale::SMALL, p.ink_muted);
+        }
         ui.add_space(16.0);
         egui::Frame::new()
             .fill(p.surface)

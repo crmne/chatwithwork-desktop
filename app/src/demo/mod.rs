@@ -798,7 +798,13 @@ impl Demo {
                     };
                     instructions.push(instruction.clone());
                 }
-                json!({ "ok": true, "instructions": instructions, "memory": state.memory })
+                let project = request["project"].as_u64().and_then(|id| state.project_catalog.iter().find(|p| p["id"] == id)).map(|p| json!({"id":p["id"], "number":p["id"], "name":p["name"], "archived":p["archived"]}));
+                instructions.sort_by_key(|i| match i["layer"].as_str() {
+                    Some("organization") => 0,
+                    Some("project") => 1,
+                    _ => 2,
+                });
+                json!({ "ok": true, "context":{"account":state.notification_preferences["account"],"email":"alex@example.com","project":project}, "instructions": instructions, "memory": state.memory })
             }
             "memory_preference" | "memory_forget" => {
                 let mut state = self.state.lock().expect("demo lock");

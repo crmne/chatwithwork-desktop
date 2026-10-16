@@ -75,9 +75,12 @@ pub enum Icon {
     Eye,
     EyeSlash,
     Swatches,
+    ArrowRight,
+    User,
+    Brain,
 }
 
-const COUNT: usize = Icon::Swatches as usize + 1;
+const COUNT: usize = Icon::Brain as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if

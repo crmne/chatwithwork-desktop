@@ -156,8 +156,24 @@ pub enum InstructionChange {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InstructionPage {
+    #[serde(default)]
+    pub context: Option<InstructionContext>,
     pub instructions: Vec<Instruction>,
     pub memory: Memory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InstructionContext {
+    pub account: crate::tui::chat::Named,
+    pub email: String,
+    pub project: Option<InstructionProject>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InstructionProject {
+    pub id: u64,
+    pub number: u64,
+    pub name: String,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

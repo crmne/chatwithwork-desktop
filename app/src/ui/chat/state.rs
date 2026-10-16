@@ -641,6 +641,12 @@ impl ChatState {
         )]
     }
 
+    fn template_screen_mut(&mut self) -> Option<&mut super::templates::Screen> {
+        self.templates
+            .as_mut()
+            .or_else(|| self.instructions.as_mut()?.templates.as_mut())
+    }
+
     pub fn show_templates(&mut self, project: Option<u64>) -> Vec<Command> {
         let mut commands = self.cancel_dictation();
         self.projects = None;
@@ -1110,7 +1116,7 @@ impl ChatState {
                 if let Some(page) = &mut self.instructions
                     && page.generation == generation
                 {
-                    page.loaded(result);
+                    return page.loaded(result);
                 }
             }
             Msg::Memory(generation, result) => {
@@ -1213,14 +1219,14 @@ impl ChatState {
                 }
             }
             Msg::Templates(generation, result) => {
-                if let Some(screen) = &mut self.templates
+                if let Some(screen) = self.template_screen_mut()
                     && screen.generation == generation
                 {
                     return screen.loaded(result);
                 }
             }
             Msg::TemplatePicked(generation, result) => {
-                if let Some(screen) = &mut self.templates
+                if let Some(screen) = self.template_screen_mut()
                     && screen.generation == generation
                 {
                     return screen.picked(result);
@@ -1531,8 +1537,7 @@ impl ChatState {
             self.instructions = None;
         }
         let mut commands = self
-            .templates
-            .as_mut()
+            .template_screen_mut()
             .filter(|s| s.project.is_some())
             .map_or_else(Vec::new, |s| s.invalidate());
         commands.extend(self.projects.as_mut().map_or_else(Vec::new, |screen| {
@@ -1556,7 +1561,7 @@ impl ChatState {
                     if let Some(screen) = &mut self.projects {
                         commands.extend(screen.invalidate());
                     }
-                    if let Some(screen) = &mut self.templates {
+                    if let Some(screen) = self.template_screen_mut() {
                         commands.extend(screen.invalidate());
                     }
                     return commands;
@@ -1568,7 +1573,7 @@ impl ChatState {
                     if let Some(screen) = &mut self.projects {
                         commands.extend(screen.invalidate());
                     }
-                    if let Some(screen) = &mut self.templates {
+                    if let Some(screen) = self.template_screen_mut() {
                         commands.extend(screen.invalidate());
                     }
                     return commands;
@@ -2327,6 +2332,7 @@ mod tests {
         state.instructions = Some(Instructions::new(Layer::Personal));
         let current = state.instructions.as_ref().unwrap().generation;
         let result = InstructionPage {
+            context: None,
             instructions: vec![],
             memory: Memory {
                 enabled: true,

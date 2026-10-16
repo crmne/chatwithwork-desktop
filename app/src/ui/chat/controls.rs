@@ -11,6 +11,54 @@ use super::paint;
 use super::tokens::{self, Palette, Type};
 use super::widgets;
 
+/// The website's small switch, with a visible off state and keyboard focus.
+pub fn switch(ui: &mut Ui, on: &mut bool, label: &str, enabled: bool, p: &Palette) -> Response {
+    let (rect, mut response) = ui.allocate_exact_size(
+        vec2(36.0, 20.0),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, enabled, *on, label));
+    let opacity = if enabled { 1.0 } else { 0.5 };
+    ui.painter().rect_filled(
+        rect,
+        10.0,
+        (if *on { p.ink } else { p.canvas }).gamma_multiply(opacity),
+    );
+    ui.painter().rect_stroke(
+        rect,
+        10.0,
+        egui::Stroke::new(1.0, p.ink_faint.gamma_multiply(opacity)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().circle_filled(
+        pos2(
+            if *on {
+                rect.right() - 10.0
+            } else {
+                rect.left() + 10.0
+            },
+            rect.center().y,
+        ),
+        6.0,
+        (if *on { p.canvas } else { p.ink_muted }).gamma_multiply(opacity),
+    );
+    if response.has_focus() {
+        widgets::focus_ring(ui, rect, 10.0, p);
+    }
+    if enabled {
+        response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 /// `.btn`'s kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

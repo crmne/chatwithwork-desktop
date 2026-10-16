@@ -59,6 +59,9 @@ impl Editor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instructions {
+    pub account: Option<String>,
+    pub context: Option<cww::workspace::InstructionContext>,
+    pub templates: Option<super::templates::Screen>,
     pub project: Option<u64>,
     pub back_to_project: bool,
     pub generation: u64,
@@ -76,6 +79,9 @@ impl Instructions {
     pub fn new(focus: Layer) -> Self {
         Self {
             generation: request_id(),
+            account: None,
+            context: None,
+            templates: None,
             project: None,
             back_to_project: false,
             memory: None,
@@ -89,15 +95,68 @@ impl Instructions {
         }
     }
 
-    pub fn loaded(&mut self, result: Result<cww::workspace::InstructionPage, Failure>) {
+    pub fn loaded(
+        &mut self,
+        result: Result<cww::workspace::InstructionPage, Failure>,
+    ) -> Vec<super::state::Command> {
         self.busy = false;
         match result {
             Ok(page) => {
+                if page.context.as_ref().is_some_and(|context| {
+                    self.account
+                        .as_ref()
+                        .is_some_and(|account| context.account.id != *account)
+                        || context.project.as_ref().map(|p| p.id) != self.project
+                }) {
+                    self.editors.clear();
+                    self.memory = None;
+                    self.templates = None;
+                    self.context = None;
+                    self.error = Some(
+                        "Your organization or project changed. Open instructions again.".into(),
+                    );
+                    return vec![];
+                }
                 self.editors = page.instructions.into_iter().map(Editor::new).collect();
                 self.memory = Some(page.memory);
+                self.context = page.context;
+                self.templates = None;
+                self.error = None;
+                if let Some(context) = &self.context
+                    && let Some(project) = &context.project
+                {
+                    let mut screen = super::templates::Screen::new(
+                        context.account.id.clone(),
+                        Some(project.number),
+                    );
+                    let commands = screen.load();
+                    self.templates = Some(screen);
+                    return commands;
+                }
             }
-            Err(error) => self.error = Some(error.message),
+            Err(error) => {
+                if matches!(
+                    error.code.as_str(),
+                    "forbidden"
+                        | "not_found"
+                        | "invalid_token"
+                        | "revoked"
+                        | "chat_access_required"
+                        | "not_paired"
+                ) {
+                    self.editors.clear();
+                    self.memory = None;
+                    self.templates = None;
+                    self.context = None;
+                }
+                self.error = Some(error.message);
+            }
         }
+        vec![]
+    }
+
+    pub fn working(&self) -> bool {
+        self.busy || self.templates.as_ref().is_some_and(|p| p.busy)
     }
 
     pub fn saved(&mut self, result: Result<SavedInstruction, Failure>) {

@@ -15,12 +15,15 @@ pub struct Outcome {
     pub close: bool,
     pub open_chat: Option<u64>,
     pub commands: Vec<Command>,
+    pub event: Option<super::sidebar::Event>,
+    pub download: Option<cww::templates::File>,
 }
 
 pub fn show(
     ui: &mut Ui,
     rect: Rect,
     page: &mut Instructions,
+    tabs: &[cww::tui::chat::SettingsLink],
     p: &Palette,
     images: &Images,
 ) -> Outcome {
@@ -28,120 +31,45 @@ pub fn show(
         close: false,
         open_chat: None,
         commands: vec![],
+        event: None,
+        download: None,
     };
-    let column = rect.shrink2(vec2(24.0, 0.0));
-    let width = column.width().min(768.0);
-    let bounds = Rect::from_min_max(
-        pos2(column.center().x - width / 2.0, rect.top() + 52.0),
-        pos2(column.center().x + width / 2.0, rect.bottom()),
-    );
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-    child.set_clip_rect(bounds);
-    egui::ScrollArea::vertical().id_salt("instruction-page").auto_shrink([false, false]).show(&mut child, |ui| {
-        ui.set_width(width);
-        if button(ui, "instructions-back", if page.back_to_project { "Back to project" } else { "Back to chat" }, Kind::Subtle, !page.busy, p, images) {
-            if page.dirty() { page.confirm_close = true; } else { outcome.close = true; }
+    if page.project.is_some() {
+        let width = (rect.width() - 48.0).clamp(1.0, 768.0);
+        let bounds = Rect::from_min_max(
+            pos2(rect.center().x - width / 2.0, rect.top() + 48.0),
+            pos2(rect.center().x + width / 2.0, rect.bottom()),
+        );
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
+        child.set_clip_rect(bounds);
+        egui::ScrollArea::vertical()
+            .id_salt(("project-instructions", page.generation))
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                ui.set_width(ui.available_width());
+                content(ui, page, p, images, &mut outcome);
+                ui.add_space(48.0);
+            });
+    } else {
+        let header = page
+            .context
+            .as_ref()
+            .map(|c| format!("{} · {}", c.email, c.account.name));
+        let event = super::settings::Shell {
+            rect,
+            generation: page.generation,
+            header: header.as_deref(),
+            active: "instructions",
+            tabs,
+            busy: page.working(),
+            palette: p,
+            images,
         }
-        ui.add_space(24.0);
-        text(ui, "Instructions", Type::sans(24.0, 32.0).weight(620.0), p.ink);
-        ui.add_space(8.0);
-        text(ui, "Notes the assistant reads at the start of every chat, so you don't repeat yourself: who you are, who's who, where things live, and how you like answers. Like a README for your work. The assistant can suggest additions too, and changes nothing until you approve.", scale::SMALL, p.ink_muted);
-        ui.add_space(24.0);
-        if page.editors.is_empty() && page.busy { text(ui, "Loading instructions…", scale::SMALL, p.ink_muted); }
-        if let Some(error) = &page.error { text(ui, error, scale::SMALL, p.negative_ink()); ui.add_space(12.0); }
-        if let Some(notice) = &page.notice { text(ui, notice, scale::SMALL, p.ink_muted); ui.add_space(12.0); }
-        for editor in &page.editors {
-            let instruction = &editor.instruction;
-            let (row, _) = ui.allocate_exact_size(vec2(width, 82.0), Sense::hover());
-            ui.painter().rect_filled(row, 0.0, p.surface);
-            ui.painter().line_segment([row.left_bottom(), row.right_bottom()], Stroke::new(1.0, p.line));
-            let node = Rect::from_center_size(row.min + vec2(34.0, 40.0), vec2(36.0, 36.0));
-            ui.painter().rect_filled(node, 8.0, p.canvas);
-            ui.painter().rect_stroke(node, 8.0, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-            images.icon_at(ui.painter(), node.center(), 16.0, Icon::Notebook, p.ink_muted);
-            let name = heading(editor);
-            let label = paint::layout(ui.painter(), paint::job(&name, scale::SMALL.weight(560.0), p.ink, width - 150.0));
-            ui.painter().galley(row.min + vec2(66.0, 12.0), label, p.ink);
-            let note = match instruction.layer { Layer::Organization => "Every chat in the organization", Layer::Project => "This project's chats", Layer::Personal => "Every chat you start or reply to" };
-            let label = paint::layout(ui.painter(), paint::job(note, scale::SMALLER, p.ink_muted, width - 150.0));
-            ui.painter().galley(row.min + vec2(66.0, 35.0), label, p.ink_muted);
-            let label = if instruction.body.is_empty() { "empty".into() } else { format!("{} tokens", instruction.tokens) };
-            let label = paint::layout(ui.painter(), paint::job(&label, scale::MICRO, p.ink_faint, width - 150.0));
-            ui.painter().galley(row.min + vec2(66.0, 57.0), label, p.ink_faint);
-            let action = Button::new(Kind::Subtle, Size::Small, if instruction.editable { "Edit" } else { "Read" });
-            let pos = pos2(row.right() - action.width(ui) - 12.0, row.center().y - 16.0);
-            if action.name(&format!("Open {name}")).show_at(ui, Id::new(("instruction-jump", instruction.layer.path())), pos, p, images).clicked() { page.scroll_to = Some(instruction.layer); }
+        .show(ui, |ui| content(ui, page, p, images, &mut outcome));
+        if event.is_some() {
+            outcome.event = event;
         }
-        ui.add_space(12.0);
-        text(ui, "Read top to bottom. Where two disagree, the more specific wins: a project's over the organization's, and yours over both on how to answer you.", scale::SMALLER, p.ink_muted);
-        for editor in &mut page.editors {
-            ui.add_space(40.0);
-            let section_top = ui.cursor().min;
-            let layer = editor.instruction.layer;
-            text(ui, &heading(editor), Type::sans(18.0, 27.0).weight(600.0), p.ink);
-            ui.add_space(8.0);
-            let description = match layer {
-                Layer::Personal => "Read last, in every chat you start or reply to here, so they win on how to answer you. Only you and the assistant, with your approval, change them; teammates' chats never read them.".to_string(),
-                Layer::Organization => format!("Read first, in every chat in {}, for everyone but guests. Keep it to what's true for the whole organization; projects and people add their own.", editor.instruction.owner),
-                Layer::Project => "Read after the organization's instructions in this project's chats, for everyone on it but guests.".into(),
-            };
-            text(ui, &description, scale::SMALL, p.ink_muted);
-            ui.add_space(16.0);
-            if let Some(change) = editor_ui(ui, editor, page.busy, p, images) {
-                page.busy = true;
-                page.error = None;
-                page.notice = None;
-                outcome.commands.push(Command::SaveInstruction(page.generation, layer, change, page.project));
-            }
-            let now = ui.input(|i| i.time);
-            if editor.counting.is_none() && editor.changed_at.is_some_and(|at| now - at >= 0.5) {
-                editor.changed_at = None;
-                editor.counting = Some(editor.body.clone());
-                outcome.commands.push(Command::CountInstruction(page.generation, layer, editor.body.clone()));
-            }
-            if editor.changed_at.is_some() { ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)); }
-            if page.scroll_to == Some(layer) {
-                ui.scroll_to_rect_animation(Rect::from_min_size(section_top, vec2(width, 1.0)), Some(egui::Align::Min), egui::style::ScrollAnimation::none());
-                page.scroll_to = None;
-            }
-        }
-        if let Some(memory) = &page.memory {
-            ui.add_space(40.0);
-            text(ui, "Memory", Type::sans(18.0, 27.0).weight(600.0), p.ink);
-            ui.add_space(8.0);
-            text(ui, "Small facts the assistant noticed about you and keeps for your later chats here, like your role or how you like answers. Each save shows in its chat with Undo. Only you see them, and only your chats read them.", scale::SMALL, p.ink_muted);
-            ui.add_space(16.0);
-            let mut enabled = memory.enabled;
-            if ui.add_enabled(!page.busy, egui::Checkbox::new(&mut enabled, "Let the assistant remember things")).changed() {
-                page.busy = true;
-                outcome.commands.push(Command::MemoryPreference(page.generation, enabled));
-            }
-            text(ui, "Off, it saves nothing new and your chats leave out what it kept, until you turn it back on or forget them.", scale::SMALLER, p.ink_muted);
-            ui.add_space(16.0);
-            for entry in &memory.entries {
-                rule(ui, p);
-                ui.add_space(12.0);
-                text(ui, &entry.body, scale::SMALL, p.ink);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    text(ui, &entry.date, scale::MICRO, p.ink_faint);
-                    if let Some(chat) = entry.chat && button(ui, ("memory-chat", entry.id), "From a chat", Kind::Subtle, !page.busy, p, images) {
-                        outcome.open_chat = Some(chat);
-                    }
-                    if button(ui, ("memory-forget", entry.id), "Forget", Kind::Subtle, !page.busy, p, images) {
-                        page.busy = true;
-                        outcome.commands.push(Command::MemoryForget(page.generation, entry.id));
-                    }
-                });
-                ui.add_space(12.0);
-            }
-            if memory.entries.is_empty() {
-                text(ui, "Nothing remembered yet", scale::SMALL.weight(560.0), p.ink);
-                text(ui, "Tell the assistant about your work as you chat, and it keeps what will help later.", scale::SMALLER, p.ink_muted);
-            }
-        }
-        ui.add_space(48.0);
-    });
+    }
     if page.confirm_close {
         let closed = super::controls::modal(
             ui.ctx(),
@@ -196,6 +124,382 @@ pub fn show(
         }
     }
     outcome
+}
+
+fn content(ui: &mut Ui, page: &mut Instructions, p: &Palette, images: &Images, out: &mut Outcome) {
+    ui.set_width(ui.available_width());
+    let project = page.context.as_ref().and_then(|c| c.project.clone());
+    if page.project.is_some() {
+        let back = Button::new(
+            Kind::Subtle,
+            Size::Small,
+            project.as_ref().map_or("Back to project", |p| &p.name),
+        )
+        .name("Back to project")
+        .enabled(!page.working());
+        let (rect, _) = ui.allocate_exact_size(vec2(back.width(ui), back.height()), Sense::hover());
+        if back
+            .show(ui, Id::new("instructions-back"), rect, p, images)
+            .clicked()
+        {
+            if page.dirty() {
+                page.confirm_close = true;
+            } else {
+                out.close = true;
+            }
+        }
+        ui.add_space(16.0);
+    }
+    text(
+        ui,
+        "Instructions",
+        Type::sans(if page.project.is_some() { 24.0 } else { 15.0 }, 24.0).weight(600.0),
+        p.ink,
+    );
+    ui.add_space(8.0);
+    let intro = project.as_ref().map_or_else(
+ || "Notes the assistant reads at the start of every chat, so you don't repeat yourself: who you are, who's who, where things live, and how you like answers. Like a README for your work. The assistant can suggest additions too, and changes nothing until you approve.".into(),
+ |project| format!("Notes the assistant reads at the start of every chat in {}: what it is, who does what, where things live, and what's been decided. Everyone on the project but guests reads them{}.", project.name, if project.archived {""} else {", and can edit them"}));
+    text(ui, &intro, scale::SMALL, p.ink_muted);
+    ui.add_space(24.0);
+    if page.editors.is_empty() && page.busy {
+        text(ui, "Loading instructions…", scale::SMALL, p.ink_muted);
+    }
+    if let Some(error) = &page.error {
+        text(ui, error, scale::SMALL, p.negative_ink());
+        ui.add_space(12.0);
+    }
+    if let Some(notice) = &page.notice {
+        text(ui, notice, scale::SMALL, p.ink_muted);
+        ui.add_space(12.0);
+    }
+    if page.project.is_none() && !page.editors.is_empty() {
+        stack(ui, page, p, images, out);
+    }
+    let working = page.working();
+    for editor in &mut page.editors {
+        let layer = editor.instruction.layer;
+        if page.project.is_some() && layer != Layer::Project {
+            continue;
+        }
+        let section_top = ui.cursor().min;
+        if page.project.is_none() {
+            ui.add_space(48.0);
+            text(
+                ui,
+                &heading(editor),
+                Type::sans(15.0, 22.5).weight(600.0),
+                p.ink,
+            );
+            ui.add_space(4.0);
+            let description = if layer == Layer::Personal {
+                "Read last, in every chat you start or reply to here, so they win on how to answer you. Only you and the assistant, with your approval, change them; teammates' chats never read them.".into()
+            } else {
+                format!(
+                    "Read first, in every chat in {}, for everyone but guests. Keep it to what's true for the whole organization; projects and people add their own.",
+                    editor.instruction.owner
+                )
+            };
+            text(ui, &description, scale::SMALL, p.ink_muted);
+            ui.add_space(16.0);
+        }
+        if let Some(change) = editor_ui(ui, editor, working, p, images) {
+            page.busy = true;
+            page.error = None;
+            page.notice = None;
+            out.commands.push(Command::SaveInstruction(
+                page.generation,
+                layer,
+                change,
+                page.project,
+            ));
+        }
+        let now = ui.input(|i| i.time);
+        if editor.counting.is_none() && editor.changed_at.is_some_and(|at| now - at >= 0.5) {
+            editor.changed_at = None;
+            editor.counting = Some(editor.body.clone());
+            out.commands.push(Command::CountInstruction(
+                page.generation,
+                layer,
+                editor.body.clone(),
+            ));
+        }
+        if editor.changed_at.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if page.scroll_to == Some(layer) {
+            ui.scroll_to_rect_animation(
+                Rect::from_min_size(section_top, vec2(ui.available_width(), 1.0)),
+                Some(egui::Align::Min),
+                egui::style::ScrollAnimation::none(),
+            );
+            page.scroll_to = None;
+        }
+    }
+    if page.project.is_some() {
+        if let Some(templates) = &mut page.templates {
+            ui.add_space(48.0);
+            let result = ui
+                .add_enabled_ui(!page.busy, |ui| {
+                    super::templates::inline(ui, templates, p, images)
+                })
+                .inner;
+            out.commands.extend(result.commands);
+            out.download = result.download;
+        }
+        if !page.editors.is_empty() {
+            ui.add_space(48.0);
+            text(
+                ui,
+                "What this project's chats read",
+                Type::sans(15.0, 22.5).weight(600.0),
+                p.ink,
+            );
+            ui.add_space(16.0);
+            stack(ui, page, p, images, out);
+        }
+    } else {
+        memory(ui, page, p, images, out);
+    }
+}
+
+fn stack(ui: &mut Ui, page: &mut Instructions, p: &Palette, images: &Images, out: &mut Outcome) {
+    let mut rows: Vec<Option<usize>> = (0..page.editors.len()).map(Some).collect();
+    if page.project.is_none()
+        && page
+            .editors
+            .iter()
+            .any(|e| e.instruction.layer == Layer::Organization)
+    {
+        let at = page
+            .editors
+            .iter()
+            .position(|e| e.instruction.layer == Layer::Personal)
+            .unwrap_or(rows.len());
+        rows.insert(at, None);
+    }
+    egui::Frame::new()
+        .fill(p.surface)
+        .stroke(Stroke::new(1.0, p.line))
+        .corner_radius(12.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for (index, row) in rows.into_iter().enumerate() {
+                if index > 0 {
+                    rule(ui, p);
+                }
+                stack_row(ui, page, row, p, images, out);
+            }
+        });
+    ui.add_space(12.0);
+    ui.horizontal_top(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::hover());
+        images.icon_at(ui.painter(),r.center(),14.0,Icon::ArrowDown,p.ink_faint);
+        ui.add_space(8.0);
+        text(ui, "Read top to bottom. Where two disagree, the more specific wins: a project's over the organization's, and yours over both on how to answer you.", scale::SMALLER, p.ink_muted);
+    });
+}
+
+fn stack_row(
+    ui: &mut Ui,
+    page: &mut Instructions,
+    row: Option<usize>,
+    p: &Palette,
+    images: &Images,
+    out: &mut Outcome,
+) {
+    let editor = row.map(|i| &page.editors[i]);
+    let here =
+        page.project.is_some() && editor.is_some_and(|e| e.instruction.layer == Layer::Project);
+    let name = editor.map_or_else(|| "Each project's instructions".into(), heading);
+    let label = if here {
+        "This page"
+    } else {
+        editor.map_or("Projects", |e| {
+            if e.instruction.editable {
+                "Edit"
+            } else {
+                "Read"
+            }
+        })
+    };
+    let action = Button::new(Kind::Subtle, Size::Small, label)
+        .paper(egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT)
+        .enabled(!page.working());
+    egui::Frame::new().inner_margin(16).show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            let (node, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+            ui.painter().rect_filled(node, 8.0, p.canvas);
+            ui.painter().rect_stroke(node, 8.0, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+            let icon = editor.map_or(Icon::Folders, |e| match e.instruction.layer {
+                Layer::Organization => Icon::Buildings,
+                Layer::Project => Icon::FolderSimple,
+                Layer::Personal => Icon::User,
+            });
+            images.icon_at(ui.painter(), node.center(), 16.0, icon, p.ink_muted);
+            ui.add_space(12.0);
+            let width = (ui.available_width() - action.width(ui) - 28.0).max(1.0);
+            ui.allocate_ui_with_layout(vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_min_width(width);
+                text(ui, &name, scale::SMALL.weight(550.0), p.ink);
+                let note = editor.map_or("That project's chats. Open a project and choose Instructions to write them.", |e| match e.instruction.layer {
+                    Layer::Organization => "Every chat in the organization, for everyone but guests",
+                    Layer::Project => "This project's chats, for everyone on it but guests",
+                    Layer::Personal => "Every chat you start or reply to",
+                });
+                text(ui, note, scale::SMALLER, p.ink_muted);
+                if let Some(editor) = editor {
+                    let count = if editor.instruction.body.is_empty() { "empty".into() } else { format!("{} tokens", number(editor.instruction.tokens)) };
+                    text(ui, &count, scale::MICRO, p.ink_faint);
+                }
+            });
+            ui.add_space(12.0);
+            if here {
+                text(ui, label, scale::MICRO, p.ink_faint);
+            } else {
+                let (r, _) = ui.allocate_exact_size(vec2(action.width(ui) + 16.0, action.height()), Sense::hover());
+                let clicked = action.name(&format!("Open {name}")).show(ui, Id::new(("instruction-jump",row)),r,p,images).clicked();
+                images.icon_at(ui.painter(),pos2(r.right()-8.0,r.center().y),14.0,Icon::ArrowRight,p.ink);
+                if clicked {
+                    if let Some(editor) = editor {
+                        if page.project.is_some() {
+                            out.event = Some(super::sidebar::Event::Instructions(editor.instruction.layer));
+                        } else { page.scroll_to = Some(editor.instruction.layer); }
+                    } else { out.event = Some(super::sidebar::Event::Projects(cww::projects::Request::List)); }
+                }
+            }
+        });
+    });
+}
+
+fn memory(ui: &mut Ui, page: &mut Instructions, p: &Palette, images: &Images, out: &mut Outcome) {
+    let Some(memory) = &page.memory else {
+        return;
+    };
+    ui.add_space(48.0);
+    text(ui, "Memory", Type::sans(15.0, 22.5).weight(600.0), p.ink);
+    ui.add_space(4.0);
+    text(
+        ui,
+        "Small facts the assistant noticed about you and keeps for your later chats here, like your role or how you like answers. Each save shows in its chat with Undo. Only you see them, and only your chats read them.",
+        scale::SMALL,
+        p.ink_muted,
+    );
+    ui.add_space(16.0);
+    egui::Frame::new()
+        .fill(p.surface)
+        .stroke(Stroke::new(1.0, p.line))
+        .corner_radius(12.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let mut enabled = memory.enabled;
+            if memory_choice(ui, &mut enabled, !page.busy, p) {
+                page.busy = true;
+                out.commands
+                    .push(Command::MemoryPreference(page.generation, enabled));
+            }
+            for entry in &memory.entries {
+                rule(ui, p);
+                let (open, forget) = memory_entry(ui, entry, !page.busy, p, images);
+                if open {
+                    out.open_chat = entry.chat;
+                }
+                if forget {
+                    page.busy = true;
+                    out.commands
+                        .push(Command::MemoryForget(page.generation, entry.id));
+                }
+            }
+        });
+    if memory.entries.is_empty() {
+        ui.add_space(16.0);
+        egui::Frame::new()
+            .stroke(Stroke::new(1.0, p.line))
+            .corner_radius(12.0)
+            .inner_margin(24)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let (icon, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+                images.icon_at(ui.painter(), icon.center(), 24.0, Icon::Brain, p.ink_muted);
+                ui.add_space(8.0);
+                text(ui, "Nothing remembered yet", scale::SMALL.weight(550.0), p.ink);
+                text(ui, "Tell the assistant about your work as you chat, and it keeps what will help later.", scale::SMALLER, p.ink_muted);
+            });
+    }
+}
+
+fn memory_choice(ui: &mut Ui, value: &mut bool, enabled: bool, p: &Palette) -> bool {
+    let mut changed = false;
+    egui::Frame::new().inner_margin(16).show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            let width = (ui.available_width() - 52.0).max(1.0);
+            ui.allocate_ui_with_layout(vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_min_width(width);
+                text(ui, "Let the assistant remember things", scale::SMALL.weight(550.0), p.ink);
+                text(ui, "Off, it saves nothing new and your chats leave out what it kept, until you turn it back on or forget them.", scale::SMALLER, p.ink_muted);
+            });
+            ui.add_space(16.0);
+            changed = super::controls::switch(ui, value, "Let the assistant remember things", enabled, p).changed();
+        });
+    });
+    changed
+}
+
+fn memory_entry(
+    ui: &mut Ui,
+    entry: &cww::workspace::Remembered,
+    enabled: bool,
+    p: &Palette,
+    images: &Images,
+) -> (bool, bool) {
+    let mut open = false;
+    let mut forget = false;
+    egui::Frame::new().inner_margin(16).show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            let width = (ui.available_width() - 48.0).max(1.0);
+            ui.allocate_ui_with_layout(
+                vec2(width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(width);
+                    text(ui, &entry.body, scale::SMALL, p.ink);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        text(ui, &entry.date, scale::MICRO, p.ink_faint);
+                        if entry.chat.is_some() {
+                            open = ui
+                                .add_enabled(
+                                    enabled,
+                                    egui::Link::new(
+                                        egui::RichText::new("From a chat")
+                                            .size(11.0)
+                                            .color(p.ink_faint),
+                                    ),
+                                )
+                                .clicked();
+                        }
+                    });
+                },
+            );
+            ui.add_space(16.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+            forget = widgets::IconButton {
+                icon: Icon::Trash,
+                icon_size: 16.0,
+                label: "Forget",
+                tooltip: Some("Forget this memory"),
+                color: p.ink_muted,
+                hover_color: p.ink,
+                wash: 7.0,
+                radius: 8.0,
+                enabled,
+            }
+            .show(ui, Id::new(("forget-memory", entry.id)), rect, images, p)
+            .clicked();
+        });
+    });
+    (open, forget)
 }
 
 fn heading(editor: &Editor) -> String {

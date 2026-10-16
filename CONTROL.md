@@ -379,8 +379,8 @@ enforces organization membership, ownership, project access and edit roles.
 
 | Command | Fields | Response |
 | --- | --- | --- |
-| `workspace` | Optional `project` number | Connected services, suggested questions and instruction layers. |
-| `instructions` | Optional `project` number | `instructions` array with bodies, templates, revisions and limits, plus `memory`. |
+| `workspace` | Optional internal `project` ID | Connected services, suggested questions and instruction layers. |
+| `instructions` | Optional internal `project` ID | `instructions` array with bodies, templates, revisions and limits, plus `memory` and optional current account/email/project `context`. |
 | `instruction_count` | `text` | `tokens`: server tokenizer's count. |
 | `instruction_update` | `layer`, optional `project`, `change` | Saved instruction and notice. `change` is `{"kind":"edit","body":"…"}` or `{"kind":"restore","revision_id":123}`. |
 | `memory_preference` | `enabled` | Memory preference and entries. |
@@ -389,6 +389,12 @@ enforces organization membership, ownership, project access and edit roles.
 | `computer_remove` | `id` | Updated workspace after revocation. |
 | `connectors` | `query`, optional `category` | Connector states, connection labels, categories and allowed access choices. |
 | `connector_handoff` | `key`, `access` (`read` or `change`), optional `connection` (ID or `new`) | `path`: short-lived account-scoped browser handoff. |
+
+Instruction `context` contains `account: {id, name}`, `email`, and an optional
+`project: {id, number, name, archived}`. The account ID is its external nine-digit
+number. Instruction writes keep the internal project ID; Office template requests
+use its organization-local number. Older servers can omit this context. Clients
+bind the response and any nested template request to the original organization.
 
 Open a connector handoff only on the currently paired server. The browser must
 sign in as the same identity in that organization and uses the existing vendor

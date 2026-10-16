@@ -732,7 +732,7 @@ impl SettingsApp {
                     .state()
                     .instructions
                     .as_ref()
-                    .is_some_and(|instructions| instructions.busy)
+                    .is_some_and(|instructions| instructions.working())
             {
                 // The list was read for this pairing. An older server without
                 // account IDs cannot safely resolve a notification's number.
