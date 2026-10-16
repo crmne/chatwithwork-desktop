@@ -147,7 +147,13 @@ impl Fixture {
     }
 
     fn open(&mut self, number: u64) {
-        self.harness.get_by_label(&self.title(number)).click();
+        let title = self.title(number);
+        // The first daemon status can arrive before the chat list. Wait for
+        // the actual sidebar row, just as a person must before clicking it.
+        self.wait(&format!("the chat row {title}"), |h| {
+            h.query_by_label(&title).is_some()
+        });
+        self.harness.get_by_label(&title).click();
         self.harness.run_steps(2);
     }
 
