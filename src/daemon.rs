@@ -54,6 +54,7 @@ struct Daemon {
     chats: Arc<ChatHub>,
     /// The chat API as this device, while it's paired.
     chat_client: Mutex<Option<Arc<ChatClient>>>,
+    notifications: Arc<crate::notification_delivery::Client>,
 }
 
 /// The longest question the terminal may send, as the server allows.
@@ -122,6 +123,14 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     if sandboxed && !options.worker {
         return supervise_worker(options);
     }
+    #[cfg(unix)]
+    let notification_pipes = options
+        .worker
+        .then(crate::notification_delivery::Inherited::take)
+        .transpose()?;
+    let notification_helper = (!options.worker)
+        .then(crate::notifications::helper::installed_helper)
+        .flatten();
     // Trash records use local times; `time` only finds the offset while
     // the process has one thread.
     crate::trash::remember_local_offset();
@@ -135,7 +144,20 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         });
     }
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(run(paths, CancellationToken::new(), true))?;
+    runtime.block_on(async {
+        let shutdown = CancellationToken::new();
+        #[cfg(unix)]
+        let notifications = match notification_pipes {
+            Some(pipes) => pipes.connect(shutdown.child_token())?,
+            None => {
+                crate::notification_delivery::spawn(notification_helper, shutdown.child_token())
+            }
+        };
+        #[cfg(not(unix))]
+        let notifications =
+            crate::notification_delivery::spawn(notification_helper, shutdown.child_token());
+        run_with_notifications(paths, shutdown, true, notifications).await
+    })?;
     drop(runtime);
     if RESTART_FOR_SANDBOX.load(Ordering::SeqCst) {
         std::process::exit(crate::sandbox::RESTART_CODE);
@@ -222,36 +244,65 @@ fn writable_roots(config: &Config) -> Vec<PathBuf> {
 /// apply a new sandbox), and pass signals on to it.
 fn supervise_worker(options: &Foreground) -> Result<()> {
     let exe = std::env::current_exe().context("finding the cww binary")?;
+    let helper = crate::notifications::helper::installed_helper();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async {
+        let parent_shutdown = CancellationToken::new();
+        let mut notifications = crate::notification_delivery::spawn(helper, parent_shutdown.child_token());
         loop {
             let mut command = tokio::process::Command::new(&exe);
             command.args(["daemon", "run", "--worker"]);
+            command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
             if let Some(log) = &options.log_file {
                 command.arg("--log-file").arg(log);
             }
             let mut child = command.spawn().context("starting the daemon")?;
-            let status = tokio::select! {
-                status = child.wait() => status?,
-                () = wait_for_signal() => {
-                    #[cfg(unix)]
-                    if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
-                        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            let child_input = child.stdin.take().context("opening private notification input")?;
+            let child_output = child.stdout.take().context("opening private notification output")?;
+            let worker_shutdown = CancellationToken::new();
+            let (status, stopping) = {
+                let relay = crate::notification_delivery::serve_worker(child_output, child_input, &mut notifications, worker_shutdown.clone());
+                tokio::pin!(relay);
+                let mut relay_finished = false;
+                let result = tokio::select! {
+                    status = child.wait() => (status?, false),
+                    result = &mut relay => {
+                        relay_finished = true;
+                        if result.is_err() { tracing::warn!("private notification channel stopped"); }
+                        let status = match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
+                            Ok(status) => status?,
+                            Err(_) => { child.kill().await?; child.wait().await? },
+                        };
+                        (status, false)
                     }
-                    let _ = child.wait().await;
-                    return Ok(());
-                }
+                    () = wait_for_signal() => {
+                        parent_shutdown.cancel();
+                        #[cfg(unix)]
+                        if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
+                            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+                        }
+                        let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                            Ok(status) => status?,
+                            Err(_) => { child.kill().await?; child.wait().await? },
+                        };
+                        (status, true)
+                    }
+                };
+                worker_shutdown.cancel();
+                // The relay's cleanup withdraws observations before a worker
+                // can restart and reuse its local connection generations.
+                if !relay_finished { let _ = (&mut relay).await; }
+                result
             };
-            match status.code() {
-                Some(code) if code == crate::sandbox::RESTART_CODE => {
-                    tracing::info!("restarting the daemon with a sandbox for the new folders");
-                }
-                Some(0) => return Ok(()),
-                Some(code) => std::process::exit(code),
-                None => anyhow::bail!("the daemon was killed ({status})"),
+            if stopping || status.code() != Some(crate::sandbox::RESTART_CODE) {
+                parent_shutdown.cancel();
+                let _ = notifications.task.await;
+                if stopping || status.success() { return Ok(()); }
+                anyhow::bail!("the daemon stopped ({status})");
             }
+            tracing::info!("restarting the daemon with a sandbox for the new folders");
         }
     })
 }
@@ -259,6 +310,18 @@ fn supervise_worker(options: &Foreground) -> Result<()> {
 /// Run the daemon until `shutdown` is cancelled (or SIGINT/SIGTERM when
 /// `handle_signals` is set).
 pub async fn run(paths: Paths, shutdown: CancellationToken, handle_signals: bool) -> Result<()> {
+    // Embedders and tests opt in explicitly to a native helper. Merely
+    // constructing a daemon must not open OS notification connections.
+    let notifications = crate::notification_delivery::spawn(None, shutdown.child_token());
+    run_with_notifications(paths, shutdown, handle_signals, notifications).await
+}
+
+async fn run_with_notifications(
+    paths: Paths,
+    shutdown: CancellationToken,
+    handle_signals: bool,
+    notifications: crate::notification_delivery::Endpoint,
+) -> Result<()> {
     #[cfg(unix)]
     {
         let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
@@ -297,6 +360,10 @@ pub async fn run(paths: Paths, shutdown: CancellationToken, handle_signals: bool
         reloaded: Notify::new(),
         chats: Arc::new(ChatHub::new(events.clone())),
         chat_client: Mutex::new(None),
+        notifications: crate::notification_delivery::Client::new(
+            notifications,
+            shutdown.child_token(),
+        ),
         config_edits: Mutex::new(()),
         events,
         changes,
@@ -406,6 +473,7 @@ impl Daemon {
                             max_message_bytes,
                             proxy,
                             chats: Some(Arc::clone(&self.chats)),
+                            notifications: Some(Arc::clone(&self.notifications)),
                         },
                         files,
                         Arc::clone(&self.audit),
@@ -850,6 +918,22 @@ impl ControlHandler for Daemon {
                 "pid": std::process::id(),
             })),
             ControlRequest::Status => Ok(self.status_json().await),
+            ControlRequest::NotificationStatus => {
+                Ok(serde_json::to_value(self.notifications.status())?)
+            }
+            ControlRequest::NotificationPermission { request } => {
+                self.notifications.permission(request)?;
+                Ok(serde_json::to_value(self.notifications.status())?)
+            }
+            ControlRequest::NotificationView {
+                session,
+                account,
+                chat,
+                visible,
+            } => {
+                self.notifications.view(session, account, chat, visible)?;
+                Ok(json!({}))
+            }
             ControlRequest::Pause => {
                 self.set_paused(true).await?;
                 Ok(json!({ "paused": true }))

@@ -35,6 +35,7 @@ const ACCESS_TOKEN: &str = "access-1";
 /// What the fake server knows and has seen.
 #[derive(Default)]
 struct ServerState {
+    notifications: bool,
     /// Device public key (JWK `x`) accepted for proofs.
     public_key: Option<String>,
     refresh_tokens: Vec<String>,
@@ -183,6 +184,19 @@ async fn websocket(
     ))
     .await
     .unwrap();
+    // The daemon follows notifications even with every UI closed. Older
+    // servers refuse just this channel without affecting MCP or chat.
+    let subscription: Value =
+        serde_json::from_str(&next_text(&mut ws).await.expect("notification subscription"))
+            .unwrap();
+    let identifier = cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER;
+    assert_eq!(subscription["command"], "subscribe");
+    assert_eq!(subscription["identifier"], identifier);
+    let supported = state.lock().unwrap().notifications;
+    ws.send(Message::text(json!({"identifier":identifier, "type": if supported { "confirm_subscription" } else { "reject_subscription" }}).to_string())).await.unwrap();
+    if supported {
+        ws.send(Message::text(json!({"identifier":identifier, "message":{"type":"ready", "account":"1000001", "device_id":42, "heartbeat_after":30, "visibility_ttl":75}}).to_string())).await.unwrap();
+    }
     let _ = sockets.send(ws).await;
 }
 
@@ -849,6 +863,198 @@ async fn control(paths: &Paths, request: ControlRequest) -> Value {
         .unwrap()
         .unwrap()
         .expect("daemon running")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn notification_delivery_stays_online_without_a_ui_and_reports_unavailability_honestly() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    server.state.lock().unwrap().notifications = true;
+    pair(&fx, &server);
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    async fn action(ws: &mut WebSocketStream<TcpStream>) -> Value {
+        let frame = tokio::time::timeout(Duration::from_secs(5), next_text(ws))
+            .await
+            .unwrap()
+            .unwrap();
+        let frame: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(
+            frame["identifier"],
+            cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER
+        );
+        serde_json::from_str(frame["data"].as_str().unwrap()).unwrap()
+    }
+    assert_eq!(
+        action(&mut ws).await,
+        json!({"action":"heartbeat", "available":false})
+    );
+    let status = control(&fx.paths, ControlRequest::NotificationStatus).await;
+    assert_eq!(status["account"], "1000001");
+    assert_eq!(status["connected"], true);
+    assert_eq!(status["permission"], "unavailable");
+    assert_eq!(status["available"], false);
+    // Only explicit foreground reports suppress this computer, never merely
+    // subscribing to chat updates or keeping the chat list open.
+    let request = ControlRequest::NotificationView {
+        session: "test-window".into(),
+        account: "1000001".into(),
+        chat: 16,
+        visible: true,
+    };
+    assert_eq!(control(&fx.paths, request).await["ok"], true);
+    assert_eq!(
+        action(&mut ws).await,
+        json!({"action":"view", "chat":16, "visible":true})
+    );
+    let expiry = (time::OffsetDateTime::now_utc() + time::Duration::seconds(14))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let notification = json!({"type":"show", "account":"1000001", "chat":17, "notification_id":"00000000-0000-4000-8000-000000000001", "delivery_token":"1".repeat(48), "kind":"answered", "title":"Example organization", "body":"An answer is ready.", "thread":"chat-1000001-17", "expires_at":expiry});
+    ws.send(Message::text(json!({"identifier":cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER, "message":notification}).to_string())).await.unwrap();
+    let receipt = action(&mut ws).await;
+    assert_eq!(receipt["action"], "receipt");
+    assert_eq!(receipt["status"], "failed");
+    assert_eq!(receipt["delivery_token"], "1".repeat(48));
+    ws.send(Message::text(json!({"identifier":cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER, "message":{"type":"unavailable"}}).to_string())).await.unwrap();
+    for _ in 0..100 {
+        if control(&fx.paths, ControlRequest::NotificationStatus).await["connected"] == false {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        control(&fx.paths, ControlRequest::NotificationStatus).await["connected"],
+        false
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), daemon)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn confined_worker_uses_inherited_notification_pipes_and_exits_cleanly() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    server.state.lock().unwrap().notifications = true;
+    pair(&fx, &server);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+        .args(["daemon", "run", "--worker"])
+        .env("CWW_HOME", fx.base.join("cww"))
+        .env("CWW_SECRET_STORE", "file")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let shutdown = CancellationToken::new();
+    let mut parent = cww::notification_delivery::spawn(None, shutdown.child_token());
+    let input = child.stdout.take().unwrap();
+    let output = child.stdin.take().unwrap();
+    let stop = shutdown.child_token();
+    let relay = tokio::spawn(async move {
+        let result =
+            cww::notification_delivery::serve_worker(input, output, &mut parent, stop).await;
+        (result, parent)
+    });
+    let mut ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let heartbeat: Value = serde_json::from_str(
+        &tokio::time::timeout(Duration::from_secs(5), next_text(&mut ws))
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        heartbeat["identifier"],
+        cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER
+    );
+    let heartbeat: Value = serde_json::from_str(heartbeat["data"].as_str().unwrap()).unwrap();
+    assert_eq!(heartbeat, json!({"action":"heartbeat", "available":false}));
+    let status = control(&fx.paths, ControlRequest::NotificationStatus).await;
+    assert_eq!(status["account"], "1000001");
+    assert_eq!(status["connected"], true);
+    let expires_at = (time::OffsetDateTime::now_utc() + time::Duration::seconds(14))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let valid = json!({"type":"show", "account":"1000001", "chat":17, "notification_id":"00000000-0000-4000-8000-000000000001", "delivery_token":"1".repeat(48), "kind":"answered", "title":"\u{1}".repeat(512), "body":"\u{1}".repeat(4096), "thread":"chat-1000001-17", "expires_at":expires_at});
+    let mut oversized = valid.clone();
+    oversized["body"] = json!("x".repeat(100_000));
+    // Invalid data is discarded before it can fill or close the worker's
+    // private pipes. A valid heavily escaped body still fits the 32 KiB wire.
+    for event in [
+        json!({"type":"future_event", "data":"x".repeat(100_000)}),
+        oversized,
+        valid,
+    ] {
+        ws.send(Message::text(
+            json!({"identifier":cww::tunnel::framing::NOTIFICATIONS_IDENTIFIER, "message":event})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+    let receipt: Value = serde_json::from_str(
+        &tokio::time::timeout(Duration::from_secs(5), next_text(&mut ws))
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let receipt: Value = serde_json::from_str(receipt["data"].as_str().unwrap()).unwrap();
+    assert_eq!(receipt["status"], "failed");
+    assert_eq!(
+        receipt["notification_id"],
+        "00000000-0000-4000-8000-000000000001"
+    );
+    let mut mcp = Session {
+        ws,
+        next_id: 0,
+        legacy: false,
+    };
+    assert!(mcp.request("tools/list", json!({})).await["result"]["tools"].is_array());
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "invalid notifications must not kill the daemon"
+    );
+    assert_eq!(
+        control(&fx.paths, ControlRequest::NotificationStatus).await["connected"],
+        true
+    );
+    assert_eq!(
+        control(&fx.paths, ControlRequest::Shutdown).await["ok"],
+        true
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    let (result, parent) = tokio::time::timeout(Duration::from_secs(5), relay)
+        .await
+        .unwrap()
+        .unwrap();
+    // Default logging is stderr: the parent parsed only valid JSON frames.
+    result.unwrap();
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), parent.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

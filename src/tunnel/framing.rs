@@ -29,6 +29,7 @@ pub const CHAT_CHANNEL: &str = "LocalAgent::ChatChannel";
 /// The channel that keeps the chat list current. It takes no parameters.
 pub const CHATS_CHANNEL: &str = "LocalAgent::ChatsChannel";
 pub const CHATS_IDENTIFIER: &str = r#"{"channel":"LocalAgent::ChatsChannel"}"#;
+pub const NOTIFICATIONS_IDENTIFIER: &str = r#"{"channel":"LocalAgent::NotificationsChannel"}"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framing {
@@ -56,6 +57,9 @@ pub enum Inbound {
     ChatList(Value),
     ChatListConfirmed,
     ChatListRejected,
+    Notification(Value),
+    NotificationsConfirmed,
+    NotificationsRejected,
     Disconnect {
         reason: String,
         reconnect: bool,
@@ -101,6 +105,16 @@ impl Framing {
 
     pub fn unfollow_chats(self) -> Option<String> {
         self.chats_command("unsubscribe")
+    }
+
+    pub fn follow_notifications(self) -> Option<String> {
+        (self == Self::ActionCable).then(|| {
+            json!({"command":"subscribe", "identifier":NOTIFICATIONS_IDENTIFIER}).to_string()
+        })
+    }
+
+    pub fn notification_action(self, action: &Value) -> Option<String> {
+        (self == Self::ActionCable).then(|| json!({"command":"message", "identifier":NOTIFICATIONS_IDENTIFIER, "data":action.to_string()}).to_string())
     }
 
     fn chats_command(self, command: &str) -> Option<String> {
@@ -171,9 +185,16 @@ fn decode_action_cable(mut value: Value) -> Inbound {
     let identifier = value.get("identifier").and_then(Value::as_str);
     let chat = chat_of(identifier);
     let list = is_chat_list(identifier);
+    let notifications = identifier
+        .and_then(|identifier| serde_json::from_str::<Value>(identifier).ok())
+        .is_some_and(|identifier| {
+            identifier == json!({"channel":"LocalAgent::NotificationsChannel"})
+        });
     match value.get("type").and_then(Value::as_str) {
         Some("welcome") => return Inbound::Welcome,
         Some("ping") => return Inbound::Ping,
+        Some("confirm_subscription") if notifications => return Inbound::NotificationsConfirmed,
+        Some("reject_subscription") if notifications => return Inbound::NotificationsRejected,
         Some("confirm_subscription") if list => return Inbound::ChatListConfirmed,
         Some("confirm_subscription") => {
             return chat.map_or(Inbound::Confirmed, Inbound::ChatConfirmed);
@@ -195,6 +216,12 @@ fn decode_action_cable(mut value: Value) -> Inbound {
         }
         Some(_) => return Inbound::Ignored,
         None => {}
+    }
+    if notifications {
+        return match value.get_mut("message").map(Value::take) {
+            Some(update @ Value::Object(_)) => Inbound::Notification(update),
+            _ => Inbound::Ignored,
+        };
     }
     if let Some(chat) = chat {
         return match value.get_mut("message").map(Value::take) {
@@ -222,6 +249,33 @@ fn decode_action_cable(mut value: Value) -> Inbound {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notifications_have_an_independent_parameterless_channel() {
+        let framing = Framing::ActionCable;
+        let subscription: Value =
+            serde_json::from_str(&framing.follow_notifications().unwrap()).unwrap();
+        assert_eq!(subscription["identifier"], NOTIFICATIONS_IDENTIFIER);
+        let action = json!({"action":"heartbeat", "available":false});
+        let envelope: Value =
+            serde_json::from_str(&framing.notification_action(&action).unwrap()).unwrap();
+        assert_eq!(envelope["data"], action.to_string());
+        assert_eq!(envelope["identifier"], NOTIFICATIONS_IDENTIFIER);
+        assert!(Framing::Mcp.follow_notifications().is_none());
+        assert!(Framing::Mcp.notification_action(&action).is_none());
+        let update = json!({"identifier": NOTIFICATIONS_IDENTIFIER, "message": {"type":"ready", "jsonrpc":"2.0", "method":"tools/call"}});
+        assert!(matches!(
+            framing.decode(&update.to_string()),
+            Inbound::Notification(_)
+        ));
+        let refused = json!({"identifier": NOTIFICATIONS_IDENTIFIER, "type":"reject_subscription"});
+        assert_eq!(
+            framing.decode(&refused.to_string()),
+            Inbound::NotificationsRejected
+        );
+        let parameterized = json!({"identifier": r#"{"channel":"LocalAgent::NotificationsChannel","account":"other"}"#, "message": {"type":"ready"}});
+        assert_eq!(framing.decode(&parameterized.to_string()), Inbound::Ignored);
+    }
 
     #[test]
     fn action_cable_round_trip() {

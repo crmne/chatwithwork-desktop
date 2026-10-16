@@ -58,6 +58,21 @@ pub enum ControlRequest {
     Hello,
     /// Connection, pairing, pause state, and roots with their index state.
     Status,
+    /// Native helper readiness/permission, without prompting.
+    NotificationStatus,
+    /// Only `request: true` may display the OS permission prompt.
+    NotificationPermission {
+        #[serde(default)]
+        request: bool,
+    },
+    /// Renew an actually foreground view every 30 seconds, clear on blur.
+    /// Session IDs are local opaque tokens; stale views expire after 75s.
+    NotificationView {
+        session: String,
+        account: String,
+        chat: u64,
+        visible: bool,
+    },
     Pause,
     Resume,
     /// Re-read the config file (after `cww roots add`, `cww login`, ...).

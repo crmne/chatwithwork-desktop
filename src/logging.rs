@@ -13,7 +13,7 @@ pub fn init(file: Option<&Path>) -> Result<()> {
         .with_env_filter(filter)
         .with_target(false);
     match file {
-        None => builder.init(),
+        None => builder.with_writer(std::io::stderr).init(),
         Some(path) => {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;

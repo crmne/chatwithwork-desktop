@@ -56,6 +56,8 @@ pub struct TunnelSettings {
     pub proxy: Option<Proxy>,
     /// Where the chats the terminal UI follows come and go, if anywhere.
     pub chats: Option<Arc<ChatHub>>,
+    /// Always-on notifications, independent of GUI/TUI subscriptions.
+    pub notifications: Option<Arc<crate::notification_delivery::Client>>,
 }
 
 pub struct Tunnel {
@@ -142,6 +144,15 @@ impl Tunnel {
                             framing,
                             max_message_bytes: self.settings.max_message_bytes,
                             chats: self.settings.chats.clone(),
+                            notifications: (framing == Framing::ActionCable)
+                                .then(|| {
+                                    self.settings.notifications.as_ref().and_then(|client| {
+                                        client
+                                            .attach(&self.settings.server, &self.settings.device_id)
+                                            .ok()
+                                    })
+                                })
+                                .flatten(),
                         },
                         shutdown.child_token(),
                     )

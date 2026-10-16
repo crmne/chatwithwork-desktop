@@ -15,6 +15,7 @@ pub mod daemon;
 pub mod error;
 pub mod limits;
 pub mod logging;
+pub mod notification_delivery;
 pub mod notifications;
 pub mod paths;
 pub mod policy;

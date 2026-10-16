@@ -81,6 +81,7 @@ pub struct SessionOptions {
     pub max_message_bytes: usize,
     /// The chats the terminal UI follows, if any.
     pub chats: Option<Arc<ChatHub>>,
+    pub notifications: Option<crate::notification_delivery::Session>,
 }
 
 pub async fn run_session<S>(
@@ -124,7 +125,14 @@ where
     };
 
     let framing = options.framing;
-    for frame in framing.opening_frames() {
+    let mut notifications = options.notifications;
+    let mut opening = framing.opening_frames();
+    if notifications.is_some()
+        && let Some(frame) = framing.follow_notifications()
+    {
+        opening.push(frame);
+    }
+    for frame in opening {
         if let Err(e) = sink.send(Message::text(frame)).await {
             mcp_task.abort();
             return SessionEnd::Error(e.to_string());
@@ -198,6 +206,14 @@ where
                                     hub.list_confirmed(false);
                                 }
                             }
+                            Inbound::Notification(event) => {
+                                if let Some(notifications) = &notifications
+                                    && notifications.receive(event).is_err() {
+                                    break SessionEnd::Error("notification delivery stopped".into());
+                                }
+                            }
+                            Inbound::NotificationsRejected => { notifications = None; }
+                            Inbound::NotificationsConfirmed => {}
                             Inbound::Disconnect { reason, reconnect } => {
                                 if !reconnect || reason == "unauthorized" {
                                     break SessionEnd::Unauthorized(reason);
@@ -220,6 +236,15 @@ where
                 };
                 if let Err(e) = sink.send(Message::text(framing.encode(&text))).await {
                     break SessionEnd::Error(e.to_string());
+                }
+            }
+            action = next_notification(&mut notifications) => {
+                let Some(action) = action else {
+                    break SessionEnd::Error("notification delivery needs to reconnect".into());
+                };
+                if let Some(frame) = framing.notification_action(&action)
+                    && let Err(error) = sink.send(Message::text(frame)).await {
+                    break SessionEnd::Error(error.to_string());
                 }
             }
             follow = next_follow(&mut follows) => {
@@ -262,6 +287,15 @@ where
         hub.detach();
     }
     end
+}
+
+async fn next_notification(
+    notifications: &mut Option<crate::notification_delivery::Session>,
+) -> Option<Value> {
+    match notifications {
+        Some(notifications) => notifications.actions.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// What to follow next, or never without a hub.
