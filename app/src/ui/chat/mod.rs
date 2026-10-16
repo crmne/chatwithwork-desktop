@@ -26,8 +26,10 @@ mod project_move;
 mod projects;
 pub mod prose;
 pub mod runner;
+mod settings;
 pub mod sidebar;
 pub mod state;
+mod templates;
 pub mod tokens;
 pub mod widgets;
 pub mod workspace;
@@ -135,6 +137,11 @@ impl ChatPage {
         self.organizations = choices;
     }
 
+    pub(super) fn open_templates(&mut self, project: Option<u64>) {
+        let commands = self.state.show_templates(project);
+        self.run(commands);
+    }
+
     pub(super) fn open_model_preferences(&mut self) {
         if self.state.model_preferences.is_none() {
             let commands = self.state.show_model_preferences();
@@ -142,11 +149,25 @@ impl ChatPage {
         }
     }
 
+    pub(super) fn navigation_busy(&self) -> bool {
+        self.state.templates.as_ref().is_some_and(|p| p.busy)
+            || self
+                .state
+                .model_preferences
+                .as_ref()
+                .is_some_and(|p| p.busy)
+            || self.state.instructions.as_ref().is_some_and(|p| p.busy)
+            || self.state.projects.as_ref().is_some_and(|p| p.busy)
+    }
+
     /// The same unsaved-instructions guard applies to notification navigation.
     pub(super) fn may_open_notification(
         &mut self,
         target: &cww::notifications::navigation::Target,
     ) -> bool {
+        if self.state.templates.as_ref().is_some_and(|p| p.busy) {
+            return false;
+        }
         if let Some(page) = &mut self.state.model_preferences {
             if page.busy {
                 return false;
@@ -257,6 +278,9 @@ impl ChatPage {
     /// Open a chat, as choosing it in the sidebar does.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn open(&mut self, number: u64) {
+        if self.state.templates.as_ref().is_some_and(|p| p.busy) {
+            return;
+        }
         if let Some(screen) = &mut self.state.model_preferences {
             if screen.busy {
                 return;
@@ -594,6 +618,24 @@ impl ChatPage {
             }
             self.run(outcome.commands);
             self.sidebar_event(outcome.event, env, &mut action);
+        } else if let Some(screen) = &mut self.state.templates {
+            let outcome = templates::show(
+                ui,
+                main,
+                screen,
+                &self.state.list.links.settings,
+                &p,
+                images,
+            );
+            self.run(outcome.commands);
+            if let Some(file) = outcome.download {
+                self.save_file(cww::tui::chat::Attachment {
+                    filename: file.name,
+                    path: Some(file.download_path),
+                    ..Default::default()
+                });
+            }
+            self.sidebar_event(outcome.event, env, &mut action);
         } else if let Some(page) = &mut self.state.instructions {
             let outcome = instructions::show(ui, main, page, &p, images);
             if !page.confirm_close && !outcome.close {
@@ -816,6 +858,8 @@ impl ChatPage {
                                 | sidebar::Event::Projects(_)
                                 | sidebar::Event::ProjectChat(_)
                                 | sidebar::Event::ProjectInstructions(_)
+                                | sidebar::Event::ModelPreferences
+                                | sidebar::Event::Templates(_)
                                 | sidebar::Event::Toggle
                         )
                     ) {
@@ -861,9 +905,17 @@ impl ChatPage {
                     | sidebar::Event::Projects(_)
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::ModelPreferences
+                    | sidebar::Event::Templates(_)
                     | sidebar::Event::OpenUrl(_)
             )
         );
+        if leaving_models && let Some(screen) = &self.state.templates {
+            if screen.busy {
+                return;
+            }
+            self.state.templates = None;
+        }
         if leaving_models && let Some(screen) = &mut self.state.model_preferences {
             if screen.busy {
                 return;
@@ -888,6 +940,8 @@ impl ChatPage {
                     | sidebar::Event::Projects(_)
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::ModelPreferences
+                    | sidebar::Event::Templates(_)
             )
         ) && let Some(page) = &mut self.state.instructions
         {
@@ -913,6 +967,8 @@ impl ChatPage {
                     | sidebar::Event::History
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::ModelPreferences
+                    | sidebar::Event::Templates(_)
             )
         ) || matches!(
             &event,
@@ -934,6 +990,11 @@ impl ChatPage {
             }
         }
         match event {
+            Some(sidebar::Event::ModelPreferences) => {
+                let commands = self.state.show_model_preferences();
+                self.run(commands);
+            }
+            Some(sidebar::Event::Templates(project)) => self.open_templates(project),
             Some(sidebar::Event::Projects(request)) => {
                 let commands = self.state.project_request(request);
                 self.run(commands);

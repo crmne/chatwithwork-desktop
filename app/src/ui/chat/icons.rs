@@ -74,9 +74,10 @@ pub enum Icon {
     FolderSimplePlus,
     Eye,
     EyeSlash,
+    Swatches,
 }
 
-const COUNT: usize = Icon::EyeSlash as usize + 1;
+const COUNT: usize = Icon::Swatches as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if
@@ -87,6 +88,7 @@ impl Icon {
             "globe" | "globe-simple" => Icon::GlobeSimple,
             "clock" => Icon::Clock,
             "notebook" => Icon::Notebook,
+            "swatches" => Icon::Swatches,
             "buildings" => Icon::Buildings,
             "users-three" => Icon::UsersThree,
             "folder-simple" => Icon::FolderSimple,

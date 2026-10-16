@@ -28,6 +28,7 @@ pub mod roots;
 pub mod sandbox;
 pub mod service;
 pub mod status;
+pub mod templates;
 pub mod tls;
 pub mod tools;
 pub mod trash;

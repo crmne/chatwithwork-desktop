@@ -457,6 +457,52 @@ impl ChatClient {
         )
     }
 
+    pub fn templates(&self, request: &crate::templates::Request) -> Result<Value> {
+        use crate::templates::Request;
+        let (method, project, account, suffix) = match request {
+            Request::List { project } => ("GET", *project, None, String::new()),
+            Request::Remove {
+                account,
+                project,
+                template,
+            } => (
+                "DELETE",
+                *project,
+                Some(account.as_str()),
+                format!("/{template}"),
+            ),
+        };
+        let query = template_query(account, project);
+        newer(
+            self.call(
+                method,
+                &format!("local_agent/templates{suffix}?{query}"),
+                Body::Empty,
+            ),
+            "can't manage templates from here yet",
+        )
+    }
+
+    pub fn upload_template(
+        &self,
+        target: &crate::templates::Target,
+        upload: &Upload,
+    ) -> Result<Value> {
+        let query = template_query(Some(&target.account), target.project);
+        let mut query = url::form_urlencoded::Serializer::new(query);
+        query
+            .append_pair("layer", target.layer.path())
+            .append_pair("kind", &target.kind);
+        newer(
+            self.call(
+                "POST",
+                &format!("local_agent/templates?{}", query.finish()),
+                multipart("file", upload)?,
+            ),
+            "can't upload templates from here yet",
+        )
+    }
+
     pub fn model_preferences(&self) -> Result<Value> {
         newer(
             self.call("GET", "local_agent/model_preferences", Body::Empty),
@@ -911,6 +957,17 @@ fn digits<'a>(id: &'a str, what: &str) -> Result<&'a str, Refusal> {
             format!("bad request: {id:?} is not a {what} ID"),
         ))
     }
+}
+
+fn template_query(account: Option<&str>, project: Option<u64>) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(account) = account {
+        query.append_pair("account", account);
+    }
+    if let Some(project) = project {
+        query.append_pair("project", &project.to_string());
+    }
+    query.finish()
 }
 
 /// A multipart boundary no file is likely to contain.

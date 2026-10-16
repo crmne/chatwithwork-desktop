@@ -292,5 +292,22 @@ selected for a conversation. An unsaved choice guards chat and notification
 navigation; requests stay bound to the organization where the page opened.
 
 The Models settings layout has a side navigation at desktop widths and a
-scrolling tab strip on narrow windows. The other tabs still use their existing
+scrolling tab strip on narrow windows. Models and Templates switch natively. Other tabs retain their existing
 browser destinations; unifying the remaining native settings pages is pending.
+
+### Office templates
+
+This computer > Templates opens the website's personal and organization rows.
+PowerPoint, Word and Excel templates can be uploaded, replaced, downloaded or
+removed after confirmation, subject to the same role and file checks. Projects
+also have a Templates action, using their organization-local number; archived
+projects and organization rows for members are read-only. Integrating those
+project rows inline with Instructions remains a layout parity task.
+
+Only a file explicitly chosen in the OS picker is read. The client sends at
+most 25 MB through its existing organization-bound control connection, and
+Rails validates the Office format and rejects macros. A cancelled picker sends
+nothing; results from an old account/page cannot start an upload. Existing
+files remain visible after validation failures. Losing access clears cached
+rows. Downloads use the existing signed same-server proxy path and OS Save
+dialog. The terminal exposes the typed API but does not yet have this screen.

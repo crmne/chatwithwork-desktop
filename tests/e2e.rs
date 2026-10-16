@@ -327,6 +327,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/chat",
         "/local_agent/models",
         "/local_agent/model_preferences",
+        "/local_agent/templates",
         "/local_agent/uploads",
         "/local_agent/dictations",
         "/local_agent/new_chat",
@@ -447,6 +448,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
         || path.starts_with("/local_agent/model_preferences")
+        || path.starts_with("/local_agent/templates")
         || path.starts_with("/local_agent/projects")
         || path.starts_with("/local_agent/chat_history")
         || path.starts_with("/local_agent/uploads")
@@ -460,6 +462,39 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
         return (404, Value::Null);
+    }
+    if let Some(suffix) = path.strip_prefix("/local_agent/templates") {
+        let params: HashMap<_, _> =
+            url::form_urlencoded::parse(suffix.split_once('?').map_or("", |(_, q)| q).as_bytes())
+                .into_owned()
+                .collect();
+        let project = params.get("project").map(|p| p.parse::<u64>().unwrap());
+        if method != "GET" && params.get("account").map(String::as_str) != Some("482139075") {
+            return (
+                409,
+                json!({"error":"stale_account","error_description":"Your organization changed."}),
+            );
+        }
+        let mut file = Value::Null;
+        let mut notice = Value::Null;
+        if method == "POST" {
+            assert!(content_type.starts_with("multipart/form-data; boundary="));
+            assert_eq!(params.get("layer").map(String::as_str), Some("project"));
+            assert_eq!(params.get("kind").map(String::as_str), Some("document"));
+            assert_eq!(project, Some(17));
+            assert!(body.contains("name=\"file\"; filename=\"letterhead.dotx\""));
+            assert!(body.contains("synthetic office template"));
+            file = json!({"id":91,"name":"letterhead.dotx","byte_size":25,"detail":"25 B","download_path":"/rails/active_storage/blobs/proxy/signed/letterhead.dotx"});
+            notice = json!("Document template saved.");
+        }
+        if method == "DELETE" {
+            assert!(suffix.starts_with("/91?"));
+            notice = json!("Document template removed.");
+        }
+        return (
+            200,
+            json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","project":project.map(|number|json!({"id":81,"number":number,"name":"Launch"})),"notice":notice,"groups":[{"layer":if project.is_some(){"project"}else{"personal"},"name":"Templates","editable":true,"templates":[{"kind":"document","label":"Document","app":"Word","extensions":["docx","dotx"],"file":file}]}]}),
+        );
     }
     if let Some(suffix) = path.strip_prefix("/local_agent/projects") {
         let mut project = json!({"id": 81, "number": 17, "name": "Launch", "description": "Team plan", "icon": "folder-simple", "hq": false, "all_access": false, "archived": false, "member": true, "pinned": false, "audience": "2 people", "summary": "Invite-only · 2 people", "chat_count": 1, "can": {"edit": true, "chat": true}});
@@ -2751,6 +2786,27 @@ async fn relays_native_workspace_controls_with_device_authentication() {
     let path = fx.paths.socket_path();
     tokio::task::spawn_blocking(move || {
         let chats = cww::tui::chat::Chats::new(&path);
+        let page=chats.templates(cww::templates::Request::List {project:Some(17)}).unwrap();
+        assert_eq!(page.project.unwrap().number,17);
+        assert!(page.groups[0].templates[0].file.is_none());
+        let directory=tempfile::tempdir().unwrap();
+        let file=directory.path().join("letterhead.dotx");
+        std::fs::write(&file,"synthetic office template").unwrap();
+        let target=cww::templates::Target {account:"482139075".into(),project:Some(17),layer:Layer::Project,kind:"document".into()};
+        let saved=chats.upload_template(target.clone(),&file).unwrap();
+        assert_eq!(saved.groups[0].templates[0].file.as_ref().unwrap().name,"letterhead.dotx");
+        assert_eq!(saved.notice.as_deref(),Some("Document template saved."));
+        let mut stale=target.clone(); stale.account="918273645".into();
+        assert_eq!(chats.upload_template(stale,&file).unwrap_err().code,"stale_account");
+        // Neither an empty file nor a file exceeding the limit reaches multipart upload.
+        std::fs::write(&file,[]).unwrap();
+        assert_eq!(chats.upload_template(target.clone(),&file).unwrap_err().code,"attachment_refused");
+        std::fs::File::create(&file).unwrap().set_len(cww::tui::chat::MAX_UPLOAD_BYTES+1).unwrap();
+        assert_eq!(chats.upload_template(target.clone(),&file).unwrap_err().code,"attachment_refused");
+        assert_eq!(chats.upload_template(target,directory.path()).unwrap_err().code,"attachment_refused");
+        let removed=chats.templates(cww::templates::Request::Remove {account:"482139075".into(),project:Some(17),template:91}).unwrap();
+        assert_eq!(removed.notice.as_deref(),Some("Document template removed."));
+        assert!(removed.groups[0].templates[0].file.is_none());
         assert!(chats.workspace(Some(42)).unwrap().services.is_empty());
         assert!(chats.instructions(Some(42)).unwrap().memory.enabled);
         assert_eq!(

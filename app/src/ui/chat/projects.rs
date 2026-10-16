@@ -387,7 +387,7 @@ pub fn show(
                 let project = &page.project;
                 let mut actions = vec![];
                 if project.can.pin { actions.push((make_button(if project.pinned { "Unpin from sidebar" } else { "Pin to sidebar" }, Kind::Subtle, !busy), Event::Projects(Request::Pin { project: project.number, pinned: !project.pinned }))); }
-                if project.can.instructions { actions.push((make_button("Instructions", Kind::Subtle, !busy), Event::ProjectInstructions(project.id))); }
+                if project.can.instructions { actions.push((make_button("Instructions", Kind::Subtle, !busy), Event::ProjectInstructions(project.id))); actions.push((make_button("Templates", Kind::Subtle, !busy), Event::Templates(Some(project.number)))); }
                 if project.can.edit { actions.push((make_button("Settings", Kind::Subtle, !busy), Event::Projects(Request::Edit { project: project.number }))); }
                 if project.can.chat { actions.push((make_button("New chat here", Kind::Primary, !busy), Event::ProjectChat(project.clone()))); }
                 if project.can.join { actions.push((make_button(if project.all_access { "Join" } else { "Add me" }, Kind::Primary, !busy), Event::Projects(Request::Membership { project: project.number, join: true }))); }

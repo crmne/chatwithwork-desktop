@@ -291,6 +291,59 @@ impl Runner {
                     wake.send(Msg::ModelPreferences(generation, result));
                 }),
             ),
+            Command::Templates(generation, request) => spawn(
+                "cww-templates",
+                Box::new(move || {
+                    wake.send(Msg::Templates(generation, chats.templates(request)));
+                }),
+            ),
+            Command::UploadTemplate(generation, target, path) => spawn(
+                "cww-template-upload",
+                Box::new(move || {
+                    wake.send(Msg::Templates(
+                        generation,
+                        chats.upload_template(target, &path),
+                    ));
+                }),
+            ),
+            Command::PickTemplate(generation, extensions) => {
+                #[cfg(test)]
+                {
+                    let _ = extensions;
+                    let path = super::tests::PICKED
+                        .with(|p| p.borrow_mut().take())
+                        .and_then(|p| p.into_iter().next());
+                    wake.send(Msg::TemplatePicked(generation, Ok(path)));
+                }
+                #[cfg(not(test))]
+                {
+                    // AppKit requires construction on the UI thread. Only the result is
+                    // awaited elsewhere; it must return through account/generation guards
+                    // before any upload starts.
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title("Choose a template")
+                        .add_filter("Office template", &extensions)
+                        .pick_file();
+                    let failed = wake.clone();
+                    if let Err(error) = thread::Builder::new()
+                        .name("cww-template-picker".into())
+                        .spawn(move || {
+                            wake.send(Msg::TemplatePicked(
+                                generation,
+                                Ok(pollster::block_on(dialog).map(|f| f.path().to_path_buf())),
+                            ));
+                        })
+                    {
+                        failed.send(Msg::TemplatePicked(
+                            generation,
+                            Err(cww::tui::chat::Failure::new(
+                                "unavailable",
+                                format!("Could not open the file picker: {error}"),
+                            )),
+                        ));
+                    }
+                }
+            }
             Command::Models => spawn(
                 "cww-chat-models",
                 Box::new(move || {

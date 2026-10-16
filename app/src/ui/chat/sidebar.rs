@@ -22,6 +22,8 @@ pub const SEARCH_ID: &str = "chat-search";
 pub enum Event {
     NewChat,
     History,
+    ModelPreferences,
+    Templates(Option<u64>),
     Projects(cww::projects::Request),
     ProjectChat(cww::projects::Project),
     ProjectInstructions(u64),

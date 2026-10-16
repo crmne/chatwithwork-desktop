@@ -1113,6 +1113,62 @@ impl Chats {
         parse(self.call(&ControlRequest::Models)?)
     }
 
+    pub fn templates(
+        &self,
+        request: crate::templates::Request,
+    ) -> Result<crate::templates::Page, Failure> {
+        parse(self.call(&ControlRequest::Templates { request })?)
+    }
+
+    pub fn upload_template(
+        &self,
+        target: crate::templates::Target,
+        path: &Path,
+    ) -> Result<crate::templates::Page, Failure> {
+        use base64::Engine;
+        use std::io::Read;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let file = std::fs::File::open(path).map_err(|_| {
+            Failure::new(
+                "attachment_refused",
+                "That template file could not be opened.",
+            )
+        })?;
+        if !file
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.len() <= MAX_UPLOAD_BYTES)
+        {
+            return Err(Failure::new(
+                "attachment_refused",
+                "Choose a template file of at most 25 MB.",
+            ));
+        }
+        let mut data = Vec::new();
+        file.take(MAX_UPLOAD_BYTES + 1)
+            .read_to_end(&mut data)
+            .map_err(|_| {
+                Failure::new(
+                    "attachment_refused",
+                    "That template file could not be read.",
+                )
+            })?;
+        if data.len() as u64 > MAX_UPLOAD_BYTES {
+            return Err(Failure::new(
+                "attachment_refused",
+                "Templates can be at most 25 MB.",
+            ));
+        }
+        parse(self.call_slow(&ControlRequest::TemplateUpload {
+            target,
+            filename: name.clone(),
+            content_type: Some(content_type(&name).into()),
+            data: base64::engine::general_purpose::STANDARD.encode(data),
+        })?)
+    }
+
     pub fn model_preferences(&self) -> Result<ModelPreferences, Failure> {
         parse(self.call(&ControlRequest::ModelPreferences)?)
     }

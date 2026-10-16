@@ -607,3 +607,22 @@ contain at most 50 matches; queries are limited to 200 characters. The desktop
 serializes requests and discards responses for earlier queries, views or
 organizations. An older server reports `unsupported`, without opening a
 browser or claiming the sidebar's limited list is complete.
+
+### Office templates
+
+```json
+{"cmd":"templates","request":{"action":"list","project":null}}
+{"cmd":"template_upload","target":{"account":"482139075","project":null,"layer":"personal","kind":"document"},"filename":"letterhead.dotx","content_type":"application/octet-stream","data":"BASE64"}
+{"cmd":"templates","request":{"action":"remove","account":"482139075","project":null,"template":91}}
+```
+
+`project` is a number within the paired organization. Replies have `account`,
+`email`, optional `project`, `groups` and optional `notice`. Each group has its
+`layer`, name, current `editable` permission, and rows with `kind`, `label`,
+`app`, accepted `extensions` and optional `file`. A file has ID, name, byte
+size, display details and a signed same-server `download_path`. Use
+`chat_download` for those paths. Upload bytes are bounded to 25 MB, and the
+daemon never receives or reads the original local path. Mutations carry the
+organization's nine-digit `account` to reject stale UI state. The device must
+have current chat access; server roles, membership, file validation and audit
+are the same as website template settings.

@@ -236,10 +236,11 @@ pub enum Page {
     General,
     Notifications,
     Models,
+    Templates,
 }
 
 impl Page {
-    const NAV: [Page; 8] = [
+    const NAV: [Page; 9] = [
         Page::Chat,
         Page::Folders,
         Page::Privacy,
@@ -247,6 +248,7 @@ impl Page {
         Page::Account,
         Page::Notifications,
         Page::Models,
+        Page::Templates,
         Page::General,
     ];
 
@@ -261,6 +263,7 @@ impl Page {
             Page::General => "General",
             Page::Notifications => "Notifications",
             Page::Models => "Models",
+            Page::Templates => "Templates",
         }
     }
 
@@ -271,7 +274,7 @@ impl Page {
             Page::Privacy => widgets::Icon::Lock,
             Page::Activity => widgets::Icon::Clock,
             Page::Account => widgets::Icon::Person,
-            Page::General | Page::Models => widgets::Icon::Gear,
+            Page::General | Page::Models | Page::Templates => widgets::Icon::Gear,
             Page::Notifications => widgets::Icon::Bell,
         }
     }
@@ -530,6 +533,19 @@ impl SettingsApp {
             self.page = Page::Chat;
             if self
                 .chat
+                .as_ref()
+                .is_some_and(|chat| chat.navigation_busy())
+            {
+                // Keep the click while an account-bound settings request finishes.
+                // A newer click can replace it; neither queue admission nor a busy
+                // page means the requested chat has actually opened.
+                self.shared
+                    .open_chat
+                    .lock()
+                    .expect("chat navigation lock")
+                    .get_or_insert(target);
+            } else if self
+                .chat
                 .as_mut()
                 .is_none_or(|chat| chat.may_open_notification(&target))
             {
@@ -571,7 +587,7 @@ impl SettingsApp {
         if self.custom_titlebar {
             chrome::show(ui, &self.theme, self.page);
         }
-        if matches!(self.page, Page::Chat | Page::Models) {
+        if matches!(self.page, Page::Chat | Page::Models | Page::Templates) {
             self.chat_page(ui, chat_status.as_ref());
             self.update_presence(ui);
             if self.custom_titlebar {
@@ -639,7 +655,7 @@ impl SettingsApp {
     /// The Chat page has the web's look and fills the window; the others
     /// follow the platform.
     fn style_for_page(&mut self, ctx: &egui::Context) {
-        let chat = matches!(self.page, Page::Chat | Page::Models);
+        let chat = matches!(self.page, Page::Chat | Page::Models | Page::Templates);
         let wanted = chat.then_some(self.theme.dark);
         let current = self
             .styled_for_chat
@@ -677,6 +693,11 @@ impl SettingsApp {
             self.restore_chat = None;
             self.page = Page::Chat;
         }
+        if self.page == Page::Templates && page.state().ready() {
+            page.open_templates(None);
+            self.restore_chat = None;
+            self.page = Page::Chat;
+        }
         page.set_dictation_mode(self.dictation.preferences.mode);
         page.set_organizations(choices);
         let env = chat::Env {
@@ -701,6 +722,12 @@ impl SettingsApp {
                 self.notification = None;
             } else if page.state().ready()
                 && !page.state().projects.as_ref().is_some_and(|p| p.busy)
+                && !page.state().templates.as_ref().is_some_and(|p| p.busy)
+                && !page
+                    .state()
+                    .model_preferences
+                    .as_ref()
+                    .is_some_and(|p| p.busy)
                 && !page
                     .state()
                     .instructions
@@ -838,7 +865,7 @@ impl SettingsApp {
     fn page_contents(&mut self, ui: &mut Ui, status: Option<&Status>) {
         match self.page {
             Page::Welcome => self.welcome_page(ui, status),
-            Page::Chat | Page::Models => {}
+            Page::Chat | Page::Models | Page::Templates => {}
             Page::Folders => self.folders_page(ui, status),
             Page::Privacy => self.privacy_page(ui, status),
             Page::Activity => self.activity_page(ui, status),
@@ -1282,6 +1309,7 @@ fn visible_notification_chat(
         || state.history.is_some()
         || state.projects.is_some()
         || state.model_preferences.is_some()
+        || state.templates.is_some()
         || state.error.is_some()
     {
         return None;

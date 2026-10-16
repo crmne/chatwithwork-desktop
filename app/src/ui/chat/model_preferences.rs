@@ -24,7 +24,6 @@ pub struct Screen {
     pub notice: Option<String>,
     pub confirm_close: bool,
     saving: bool,
-    reveal_nav: bool,
 }
 
 impl Screen {
@@ -39,7 +38,6 @@ impl Screen {
             notice: None,
             confirm_close: false,
             saving: false,
-            reveal_nav: true,
         }
     }
 
@@ -127,86 +125,23 @@ pub fn show(
     images: &Images,
 ) -> Outcome {
     let mut outcome = Outcome::default();
-    // Website .settings: max-w-5xl, 11rem navigation and a 3rem column gap.
-    let wide = rect.width() >= 768.0;
-    let width = (rect.width() - if wide { 64.0 } else { 32.0 }).clamp(1.0, 992.0);
-    let bounds = Rect::from_min_max(
-        pos2(rect.center().x - width / 2.0, rect.top()),
-        pos2(rect.center().x + width / 2.0, rect.bottom()),
-    );
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-    child.set_clip_rect(bounds);
-    child.style_mut().spacing.scroll.floating = false;
-    child.style_mut().spacing.scroll.foreground_color = false;
-    child.visuals_mut().widgets.inactive.bg_fill = p.line_strong;
-    child.visuals_mut().widgets.hovered.bg_fill = p.ink_faint;
-    child.visuals_mut().widgets.active.bg_fill = p.ink_muted;
-    egui::ScrollArea::vertical()
-        .id_salt(("model-preferences", screen.generation))
-        .auto_shrink([false, false])
-        .show(&mut child, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            ui.add_space(if wide { 48.0 } else { 0.0 });
-            ui.horizontal(|ui| {
-                if !wide {
-                    ui.add_space(32.0);
-                }
-                ui.vertical(|ui| {
-                    text(
-                        ui,
-                        "Settings",
-                        Type::sans(
-                            if wide { 24.0 } else { 18.0 },
-                            if wide { 32.0 } else { 27.0 },
-                        )
-                        .weight(600.0),
-                        p.ink,
-                    );
-                    if let Some(preferences) = &screen.preferences {
-                        let label = format!("{} · {}", preferences.email, preferences.account.name);
-                        text(ui, &label, scale::MICRO, p.ink_faint);
-                    }
-                });
-            });
-            ui.add_space(24.0);
-            if wide {
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        vec2(176.0, 0.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            navigation(ui, tabs, true, false, screen.busy, p, images, &mut outcome);
-                        },
-                    );
-                    ui.add_space(48.0);
-                    ui.vertical(|ui| content(ui, screen, p, images, &mut outcome));
-                });
-            } else {
-                egui::ScrollArea::horizontal()
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .id_salt("model-settings-tabs")
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            navigation(
-                                ui,
-                                tabs,
-                                false,
-                                screen.reveal_nav,
-                                screen.busy,
-                                p,
-                                images,
-                                &mut outcome,
-                            )
-                        });
-                    });
-                ui.add_space(24.0);
-                content(ui, screen, p, images, &mut outcome);
-            }
-            ui.add_space(64.0);
-        });
-    if !tabs.is_empty() {
-        screen.reveal_nav = false;
+    let header = screen
+        .preferences
+        .as_ref()
+        .map(|preferences| format!("{} · {}", preferences.email, preferences.account.name));
+    let event = super::settings::Shell {
+        rect,
+        generation: screen.generation,
+        header: header.as_deref(),
+        active: "models",
+        tabs,
+        busy: screen.busy,
+        palette: p,
+        images,
+    }
+    .show(ui, |ui| content(ui, screen, p, images, &mut outcome));
+    if event.is_some() {
+        outcome.event = event;
     }
     if screen.confirm_close {
         let mut keep = false;
@@ -246,88 +181,6 @@ pub fn show(
         }
     }
     outcome
-}
-
-#[allow(clippy::too_many_arguments)]
-fn navigation(
-    ui: &mut Ui,
-    tabs: &[SettingsLink],
-    wide: bool,
-    reveal: bool,
-    busy: bool,
-    p: &Palette,
-    images: &Images,
-    outcome: &mut Outcome,
-) {
-    for tab in tabs {
-        let selected = tab.tab == "models";
-        let galley = paint::layout(
-            ui.painter(),
-            paint::line_job(
-                &tab.label,
-                scale::SMALL.weight(if selected { 550.0 } else { 400.0 }),
-                if selected { p.ink } else { p.ink_muted },
-                150.0,
-            ),
-        );
-        let width = if wide { 176.0 } else { galley.size().x + 24.0 };
-        let (row, _) = ui.allocate_exact_size(vec2(width, 33.0), Sense::hover());
-        let response = ui.interact(
-            row,
-            Id::new(("model-settings-tab", &tab.tab)),
-            if busy { Sense::hover() } else { Sense::click() },
-        );
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::SelectableLabel,
-                !busy,
-                selected,
-                &tab.label,
-            )
-        });
-        if selected || response.hovered() {
-            ui.painter()
-                .rect_filled(row, 8.0, if selected { p.surface } else { p.ink_wash(5.0) });
-        }
-        if selected {
-            ui.painter()
-                .rect_stroke(row, 8.0, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
-        }
-        if wide {
-            images.icon_at(
-                ui.painter(),
-                pos2(row.left() + 20.0, row.center().y),
-                16.0,
-                tab.icon
-                    .as_deref()
-                    .and_then(Icon::named)
-                    .unwrap_or(Icon::GearSix),
-                p.ink_muted,
-            );
-        }
-        ui.painter().galley(
-            pos2(
-                row.left() + if wide { 38.0 } else { 12.0 },
-                row.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            p.ink,
-        );
-        if !busy {
-            response
-                .clone()
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-        }
-        if selected && reveal {
-            response.scroll_to_me(Some(egui::Align::Center));
-        }
-        if response.clicked() && !selected {
-            outcome.event = Some(Event::OpenUrl(tab.url.clone()));
-        }
-        if wide {
-            ui.add_space(4.0);
-        }
-    }
 }
 
 fn content(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, outcome: &mut Outcome) {

@@ -3563,3 +3563,179 @@ fn model_preferences_review_screens() {
         }
     }
 }
+
+#[test]
+fn template_upload_replace_download_and_confirmed_removal_stay_in_the_current_organization() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.harness.state_mut().set_page(Page::Templates);
+    fx.wait_for_label("Upload personal document template");
+    assert!(
+        super::super::visible_notification_chat(Page::Chat, true, Some(&fx.chat().state)).is_none()
+    );
+    let file = fx.server.paths.daemon.data_dir.join("letterhead.docx");
+    std::fs::write(&file, b"synthetic office bytes").unwrap();
+    PICKED.with(|p| *p.borrow_mut() = Some(vec![file.clone()]));
+    fx.harness
+        .get_by_label("Upload personal document template")
+        .click_accesskit();
+    fx.wait_for_label("Replace personal document template");
+    let request = fx.wait_for_request("template_upload", |r| r["filename"] == "letterhead.docx");
+    assert_eq!(request["target"]["account"], "482139075");
+    assert_eq!(request["target"]["layer"], "personal");
+    assert_eq!(request["target"]["kind"], "document");
+    assert!(request["target"]["project"].is_null());
+    let destination = fx.server.paths.daemon.data_dir.join("saved.docx");
+    SAVED.with(|p| *p.borrow_mut() = Some(destination.clone()));
+    fx.harness
+        .get_by_label("Download personal document template")
+        .click_accesskit();
+    fx.wait("download saved", |_| destination.exists());
+    assert!(!std::fs::read(&destination).unwrap().is_empty());
+    let replaced = fx.server.paths.daemon.data_dir.join("replacement.dotx");
+    std::fs::write(&replaced, b"replacement synthetic bytes").unwrap();
+    PICKED.with(|p| *p.borrow_mut() = Some(vec![replaced]));
+    fx.harness
+        .get_by_label("Replace personal document template")
+        .click_accesskit();
+    fx.wait_for_label("replacement.dotx");
+    fx.harness
+        .get_by_label("Remove personal document template")
+        .click_accesskit();
+    fx.wait_for_label("Remove template");
+    fx.harness.get_by_label("Cancel").click_accesskit();
+    fx.harness.run_steps(3);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "templates" && r["request"]["action"] == "remove")
+    );
+    fx.harness
+        .get_by_label("Remove personal document template")
+        .click_accesskit();
+    fx.wait_for_label("Remove template");
+    fx.harness.get_by_label("Remove template").click_accesskit();
+    fx.wait_for_label("Upload personal document template");
+    assert!(fx.server.requests().iter().any(|r| r["cmd"] == "templates"
+        && r["request"]["action"] == "remove"
+        && r["request"]["account"] == "482139075"));
+    // Same settings navigation switches native screens, without browser handoff.
+    fx.harness.get_by_label("Models").click_accesskit();
+    fx.wait_for_label("Save default model");
+    fx.harness.get_by_label("Templates").click_accesskit();
+    fx.wait_for_label("Upload personal document template");
+}
+
+#[test]
+fn template_picker_results_are_ignored_after_the_page_or_account_changed() {
+    let mut state = super::state::ChatState::default();
+    state.list.account.id = "482139075".into();
+    state.show_templates(None);
+    let old = state.templates.as_ref().unwrap().generation;
+    state.show_templates(Some(7));
+    assert!(
+        state
+            .update(super::state::Msg::TemplatePicked(
+                old,
+                Ok(Some("old.docx".into()))
+            ))
+            .is_empty()
+    );
+    let old = state.templates.as_ref().unwrap().generation;
+    state.new_chat();
+    assert!(
+        state
+            .update(super::state::Msg::TemplatePicked(
+                old,
+                Ok(Some("old.docx".into()))
+            ))
+            .is_empty()
+    );
+}
+
+#[test]
+fn template_settings_review_screens() {
+    let Ok(directory) = std::env::var("CWW_TEMPLATES_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.wait("template settings ready", |h| {
+                h.state().chat_state().is_some_and(|s| s.ready())
+            });
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            for (name, templates) in [("before", false), ("templates", true)] {
+                if templates {
+                    fx.harness.state_mut().set_page(Page::Templates);
+                    fx.wait_for_label("Upload personal document template");
+                    let file = fx
+                        .server
+                        .paths
+                        .daemon
+                        .data_dir
+                        .join("Northwind letterhead.docx");
+                    std::fs::write(&file, b"synthetic template").unwrap();
+                    PICKED.with(|p| *p.borrow_mut() = Some(vec![file]));
+                    fx.harness
+                        .get_by_label("Upload personal document template")
+                        .click_accesskit();
+                    fx.wait_for_label("Replace personal document template");
+                }
+                fx.logos();
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(12);
+                let path = std::path::Path::new(&directory).join(name);
+                std::fs::create_dir_all(&path).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(path.join(format!(
+                        "{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn notification_click_waits_for_a_template_request_then_opens_the_chat() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.harness.state_mut().set_page(Page::Templates);
+    fx.wait_for_label("Upload personal document template");
+    fx.chat().state.templates.as_mut().unwrap().busy = true;
+    let status = fx.harness.state().shared().status().unwrap();
+    fx.harness.state().shared().open_chat(notification_target(
+        status.server.as_deref().unwrap(),
+        "482139075",
+        11,
+    ));
+    fx.harness.run_steps(5);
+    assert!(fx.chat().state.templates.is_some());
+    assert!(
+        fx.harness
+            .state()
+            .shared()
+            .open_chat
+            .lock()
+            .unwrap()
+            .is_some()
+    );
+    fx.chat().state.templates.as_mut().unwrap().busy = false;
+    fx.wait("notification opens after template work", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.open == Some(11) && s.templates.is_none() && !s.loading)
+    });
+}

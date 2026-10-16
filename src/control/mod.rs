@@ -207,6 +207,15 @@ pub enum ControlRequest {
     },
     /// The models a question can be asked with, and the owner's default.
     Models,
+    Templates {
+        request: crate::templates::Request,
+    },
+    TemplateUpload {
+        target: crate::templates::Target,
+        filename: String,
+        content_type: Option<String>,
+        data: String,
+    },
     ModelPreferences,
     ModelPreferencesUpdate {
         account: String,
@@ -497,7 +506,9 @@ where
             Ok(request)
                 if line.len() > MAX_REQUEST_BYTES
                     && !match &request {
-                        ControlRequest::ChatUpload { .. } | ControlRequest::Dictate { .. } => true,
+                        ControlRequest::ChatUpload { .. }
+                        | ControlRequest::Dictate { .. }
+                        | ControlRequest::TemplateUpload { .. } => true,
                         // Allow the server's full instruction size, including JSON escaping.
                         ControlRequest::InstructionCount { text } => {
                             text.len() <= 100_000 && line.len() <= 604_096

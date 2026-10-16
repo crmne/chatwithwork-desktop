@@ -60,6 +60,9 @@ pub enum Command {
     /// Read the models the composer's picker offers.
     Models,
     ModelPreferences(u64, Option<(String, Option<String>)>),
+    Templates(u64, cww::templates::Request),
+    PickTemplate(u64, Vec<String>),
+    UploadTemplate(u64, cww::templates::Target, PathBuf),
     /// Upload a file picked for the next question.
     Upload {
         key: u64,
@@ -112,6 +115,8 @@ pub enum Msg {
     Access(Result<AccessRequest, Failure>),
     Models(Result<Models, Failure>),
     ModelPreferences(u64, Result<cww::tui::chat::ModelPreferences, Failure>),
+    Templates(u64, Result<cww::templates::Page, Failure>),
+    TemplatePicked(u64, Result<Option<PathBuf>, Failure>),
     Uploaded {
         key: u64,
         result: Result<Uploaded, Failure>,
@@ -344,6 +349,7 @@ pub struct ChatState {
     pub history: Option<super::history::HistoryPage>,
     pub projects: Option<super::projects::Screen>,
     pub model_preferences: Option<super::model_preferences::Screen>,
+    pub templates: Option<super::templates::Screen>,
     pub new_project: Option<cww::projects::Project>,
     /// At most one history request runs, even while the query/page changes.
     history_request: Option<u64>,
@@ -402,6 +408,7 @@ impl Default for ChatState {
             history: None,
             projects: None,
             model_preferences: None,
+            templates: None,
             new_project: None,
             history_request: None,
             menu: None,
@@ -547,6 +554,7 @@ impl ChatState {
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
         self.projects = None;
         self.model_preferences = None;
+        self.templates = None;
         self.new_project = None;
         self.history = None;
         self.moving = None;
@@ -577,6 +585,7 @@ impl ChatState {
     pub fn new_chat(&mut self) -> Vec<Command> {
         self.projects = None;
         self.model_preferences = None;
+        self.templates = None;
         self.new_project = None;
         self.history = None;
         self.moving = None;
@@ -632,6 +641,19 @@ impl ChatState {
         )]
     }
 
+    pub fn show_templates(&mut self, project: Option<u64>) -> Vec<Command> {
+        let mut commands = self.cancel_dictation();
+        self.projects = None;
+        self.history = None;
+        self.moving = None;
+        self.instructions = None;
+        self.model_preferences = None;
+        let mut screen = super::templates::Screen::new(self.list.account.id.clone(), project);
+        commands.extend(screen.load());
+        self.templates = Some(screen);
+        commands
+    }
+
     pub fn show_model_preferences(&mut self) -> Vec<Command> {
         let mut commands = self.cancel_dictation();
         self.projects = None;
@@ -641,6 +663,7 @@ impl ChatState {
         let mut screen = super::model_preferences::Screen::new(self.list.account.id.clone());
         commands.extend(screen.load());
         self.model_preferences = Some(screen);
+        self.templates = None;
         commands
     }
 
@@ -958,6 +981,7 @@ impl ChatState {
         self.history = None;
         self.projects = None;
         self.model_preferences = None;
+        self.templates = None;
         self.moving = Some(MoveChat { chat, project });
         self.notice = None;
         self.cancel_dictation()
@@ -1186,6 +1210,20 @@ impl ChatState {
                         }
                         page.error = Some(failure.message);
                     }
+                }
+            }
+            Msg::Templates(generation, result) => {
+                if let Some(screen) = &mut self.templates
+                    && screen.generation == generation
+                {
+                    return screen.loaded(result);
+                }
+            }
+            Msg::TemplatePicked(generation, result) => {
+                if let Some(screen) = &mut self.templates
+                    && screen.generation == generation
+                {
+                    return screen.picked(result);
                 }
             }
             Msg::ModelPreferences(generation, result) => {
@@ -1492,13 +1530,19 @@ impl ChatState {
         {
             self.instructions = None;
         }
-        self.projects.as_mut().map_or_else(Vec::new, |screen| {
+        let mut commands = self
+            .templates
+            .as_mut()
+            .filter(|s| s.project.is_some())
+            .map_or_else(Vec::new, |s| s.invalidate());
+        commands.extend(self.projects.as_mut().map_or_else(Vec::new, |screen| {
             if live {
                 screen.invalidate()
             } else {
                 screen.reconcile_memberships(&self.list.projects)
             }
-        })
+        }));
+        commands
     }
 
     /// A change to the list, as the server keeps it current.
@@ -1512,6 +1556,9 @@ impl ChatState {
                     if let Some(screen) = &mut self.projects {
                         commands.extend(screen.invalidate());
                     }
+                    if let Some(screen) = &mut self.templates {
+                        commands.extend(screen.invalidate());
+                    }
                     return commands;
                 }
             }
@@ -1519,6 +1566,9 @@ impl ChatState {
                 if self.ready() {
                     let mut commands = vec![Command::List];
                     if let Some(screen) = &mut self.projects {
+                        commands.extend(screen.invalidate());
+                    }
+                    if let Some(screen) = &mut self.templates {
                         commands.extend(screen.invalidate());
                     }
                     return commands;
@@ -1694,6 +1744,7 @@ impl ChatState {
         {
             self.projects = None;
             self.model_preferences = None;
+            self.templates = None;
             self.instructions = None;
             self.start = None;
             self.start_loading = None;

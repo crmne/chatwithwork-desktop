@@ -7,6 +7,7 @@
 mod assets;
 mod chats;
 mod project_pages;
+mod templates;
 
 /// Northwind's projects, as the demo's list sends them.
 #[cfg(test)]
@@ -65,6 +66,7 @@ struct State {
     workspace: Value,
     notification_preferences: Value,
     preferred_model: Value,
+    templates: Vec<Value>,
     notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
@@ -265,6 +267,7 @@ fn fresh() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        templates: vec![],
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
@@ -386,6 +389,7 @@ fn sample() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        templates: vec![],
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
@@ -529,6 +533,8 @@ impl Demo {
             | "chat_cancel"
             | "chat_access"
             | "models"
+            | "templates"
+            | "template_upload"
             | "model_preferences"
             | "model_preferences_update"
             | "chat_download"
@@ -894,6 +900,9 @@ impl Demo {
                     }),
                     None => json!({ "ok": false, "code": "not_found", "error": "No such chat" }),
                 }
+            }
+            "templates" | "template_upload" => {
+                templates::respond(&mut self.state.lock().expect("demo lock"), cmd, request)
             }
             "models" | "model_preferences" | "model_preferences_update" => {
                 let mut state = self.state.lock().expect("demo lock");

@@ -776,31 +776,7 @@ impl Daemon {
         content_type: Option<String>,
         data: String,
     ) -> Result<Value> {
-        use base64::Engine;
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(data.as_bytes())
-            .map_err(|_| Refusal::new("bad_request", "bad request: data is not base64"))?;
-        if data.is_empty() {
-            return Err(Refusal::new("attachment_refused", "That file is empty").into());
-        }
-        if data.len() > MAX_UPLOAD_BYTES {
-            return Err(Refusal::new(
-                "attachment_refused",
-                format!(
-                    "Files can be at most {} MB",
-                    MAX_UPLOAD_BYTES / (1024 * 1024)
-                ),
-            )
-            .into());
-        }
-        let upload = Upload {
-            filename: upload_filename(&filename),
-            content_type: match content_type {
-                Some(t) => plain_token(&t, 200, "content type")?.to_string(),
-                None => "application/octet-stream".into(),
-            },
-            data,
-        };
+        let upload = decode_upload(filename, content_type, data)?;
         self.chat(move |client| client.upload(&upload)).await
     }
 
@@ -1146,6 +1122,19 @@ impl ControlHandler for Daemon {
                 .await
             }
             ControlRequest::Models => self.chat(|client| client.models()).await,
+            ControlRequest::Templates { request } => {
+                self.chat(move |client| client.templates(&request)).await
+            }
+            ControlRequest::TemplateUpload {
+                target,
+                filename,
+                content_type,
+                data,
+            } => {
+                let upload = decode_upload(filename, content_type, data)?;
+                self.chat(move |client| client.upload_template(&target, &upload))
+                    .await
+            }
             ControlRequest::ModelPreferences => {
                 self.chat(|client| client.model_preferences()).await
             }
@@ -1281,6 +1270,37 @@ impl ControlHandler for Daemon {
             }
         }
     }
+}
+
+fn decode_upload(filename: String, content_type: Option<String>, data: String) -> Result<Upload> {
+    if data.len() > MAX_UPLOAD_BYTES.div_ceil(3) * 4 {
+        return Err(Refusal::new("attachment_refused", "Files can be at most 25 MB").into());
+    }
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| Refusal::new("bad_request", "bad request: data is not base64"))?;
+    if data.is_empty() {
+        return Err(Refusal::new("attachment_refused", "That file is empty").into());
+    }
+    if data.len() > MAX_UPLOAD_BYTES {
+        return Err(Refusal::new(
+            "attachment_refused",
+            format!(
+                "Files can be at most {} MB",
+                MAX_UPLOAD_BYTES / (1024 * 1024)
+            ),
+        )
+        .into());
+    }
+    Ok(Upload {
+        filename: upload_filename(&filename),
+        content_type: match content_type {
+            Some(t) => plain_token(&t, 200, "content type")?.to_string(),
+            None => "application/octet-stream".into(),
+        },
+        data,
+    })
 }
 
 #[cfg(windows)]
