@@ -280,6 +280,7 @@ impl Shell<'_> {
     }
 
     fn close_window(&mut self, event_loop: &ActiveEventLoop) {
+        self.shared.notification_foreground(false);
         if let Some(mut window) = self.window.take() {
             // Destroys the window and the GL context while the loop runs.
             window.exiting(event_loop);
@@ -354,6 +355,15 @@ impl ApplicationHandler<UserEvent> for Shell<'_> {
         window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        match &event {
+            WindowEvent::Focused(focused) => self.shared.notification_foreground(*focused),
+            WindowEvent::Occluded(occluded) => self.shared.notification_foreground(!*occluded),
+            WindowEvent::Resized(size) => self
+                .shared
+                .notification_foreground(size.width > 0 && size.height > 0),
+            WindowEvent::Destroyed => self.shared.notification_foreground(false),
+            _ => {}
+        }
         if matches!(event, WindowEvent::CloseRequested) {
             self.close_window(event_loop);
             return;

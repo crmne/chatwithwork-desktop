@@ -208,3 +208,11 @@ unknown permission state is shown honestly and still allows delivery attempts.
 Link this browser opens an explicit same-computer confirmation on the paired
 server; it does not assume the browser used for pairing was on this computer.
 Native notifications remain generic regardless of the browser preview setting.
+
+A chat suppresses notifications only while its loaded conversation is visible
+in a focused window. Switching pages, opening instructions, changing accounts,
+minimizing, closing, or leaving the window clears that presence. The shell also
+clears it when a hidden window stops rendering. The terminal follows the same
+rule using terminal focus events; a terminal without focus reporting does not
+claim to be in the foreground. Presence renews while visible and expires if a
+client disappears.

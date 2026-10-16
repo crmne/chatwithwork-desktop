@@ -784,3 +784,33 @@ fn a_wheel_notch_scrolls_as_far_as_other_apps() {
         "{moved}"
     );
 }
+
+#[test]
+fn notification_presence_requires_the_displayed_transcript_and_account() {
+    use super::chat::state::{Access, ChatState};
+    use cww::tui::chat::{ChatSummary, Transcript};
+    let mut state = ChatState::default();
+    state.access = Access::Ready;
+    state.open = Some(11);
+    state.list.account.id = "482139075".into();
+    assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
+    state.transcript = Some(Transcript {
+        chat: ChatSummary {
+            number: 12,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
+    state.transcript.as_mut().unwrap().chat.number = 11;
+    assert_eq!(
+        super::visible_notification_chat(Page::Chat, true, Some(&state))
+            .unwrap()
+            .account,
+        "482139075"
+    );
+    assert!(super::visible_notification_chat(Page::Chat, false, Some(&state)).is_none());
+    assert!(super::visible_notification_chat(Page::General, true, Some(&state)).is_none());
+    state.list.account.id.clear();
+    assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
+}

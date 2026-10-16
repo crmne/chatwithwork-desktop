@@ -2272,3 +2272,92 @@ fn renders_code_files_and_change_previews() {
         }
     }
 }
+
+fn wait_for_notification_view(fx: &mut Fixture, after: usize, visible: bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(request) = fx
+            .server
+            .requests()
+            .into_iter()
+            .skip(after)
+            .find(|request| request["cmd"] == "notification_view" && request["visible"] == visible)
+        {
+            return request;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no visibility={visible} after request {after}"
+        );
+        fx.harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn notification_presence_follows_window_focus_page_and_close() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.open(11);
+    let shown = wait_for_notification_view(&mut fx, 0, true);
+    assert_eq!(shown["account"], "482139075");
+    assert_eq!(shown["chat"], 11);
+    let after = fx.server.requests().len();
+    fx.harness.input_mut().focused = false;
+    fx.harness.event(egui::Event::WindowFocused(false));
+    let hidden = wait_for_notification_view(&mut fx, after, false);
+    assert_eq!(hidden["session"], shown["session"]);
+    assert_eq!(hidden["chat"], 11);
+    let after = fx.server.requests().len();
+    fx.harness.input_mut().focused = true;
+    fx.harness.event(egui::Event::WindowFocused(true));
+    wait_for_notification_view(&mut fx, after, true);
+    let after = fx.server.requests().len();
+    // Minimized windows may stop rendering. The shell must clear directly.
+    fx.harness.state().shared().notification_foreground(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if fx
+            .server
+            .requests()
+            .iter()
+            .skip(after)
+            .any(|request| request["cmd"] == "notification_view" && request["visible"] == false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "minimizing needed a UI frame to clear visibility"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let after = fx.server.requests().len();
+    fx.harness.state().shared().notification_foreground(true);
+    wait_for_notification_view(&mut fx, after, true);
+    let after = fx.server.requests().len();
+    fx.harness.state_mut().set_page(Page::General);
+    wait_for_notification_view(&mut fx, after, false);
+    let after = fx.server.requests().len();
+    fx.harness.state_mut().set_page(Page::Chat);
+    wait_for_notification_view(&mut fx, after, true);
+    let after = fx.server.requests().len();
+    let Fixture { server, harness } = fx;
+    drop(harness);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if server
+            .requests()
+            .iter()
+            .skip(after)
+            .any(|request| request["cmd"] == "notification_view" && request["visible"] == false)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closing the window did not clear visibility"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

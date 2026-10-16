@@ -48,6 +48,9 @@ pub struct Shared {
     ctx: Mutex<Option<egui::Context>>,
     /// Only the most recent explicit notification click needs navigation.
     open_chat: Mutex<Option<cww::notifications::navigation::Target>>,
+    notification_presence: Mutex<Option<cww::notification_presence::Presence>>,
+    /// The shell clears visibility even when minimization prevents rendering.
+    notification_foreground: AtomicBool,
 }
 
 impl Shared {
@@ -66,14 +69,53 @@ impl Shared {
             close_requested: AtomicBool::new(false),
             ctx: Mutex::new(None),
             open_chat: Mutex::new(None),
+            notification_presence: Mutex::new(None),
+            notification_foreground: AtomicBool::new(true),
         })
     }
 
     pub fn set_status(&self, status: Option<Status>) {
-        *self.status.lock().expect("status lock") = status;
+        let mut previous = self.status.lock().expect("status lock");
+        let pairing = |status: &Option<Status>| {
+            status.as_ref().map(|s| {
+                (
+                    s.server.clone(),
+                    s.device_id.clone(),
+                    s.connection.connection == "revoked",
+                )
+            })
+        };
+        if pairing(&previous) != pairing(&status) {
+            self.notification_view(None);
+        }
+        *previous = status;
+        drop(previous);
         self.known.store(true, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.repaint();
+    }
+
+    pub fn notification_foreground(&self, foreground: bool) {
+        self.notification_foreground
+            .store(foreground, Ordering::SeqCst);
+        if !foreground {
+            self.notification_view(None);
+        }
+    }
+
+    fn notification_view(&self, view: Option<cww::notification_presence::View>) {
+        let mut presence = self
+            .notification_presence
+            .lock()
+            .expect("notification presence lock");
+        if view.is_some() && presence.is_none() {
+            *presence = Some(cww::notification_presence::Presence::new(
+                self.paths.socket_path(),
+            ));
+        }
+        if let Some(presence) = presence.as_ref() {
+            presence.set(view);
+        }
     }
 
     pub fn status(&self) -> Option<Status> {
@@ -470,6 +512,7 @@ impl SettingsApp {
         }
         if self.page == Page::Chat {
             self.chat_page(ui, status.as_ref());
+            self.update_presence(ui);
             if self.custom_titlebar {
                 chrome::resize(ui, self.theme.platform);
             }
@@ -477,6 +520,7 @@ impl SettingsApp {
             return;
         }
 
+        self.update_presence(ui);
         if self.page != Page::Welcome {
             egui::Panel::left("navigation")
                 .exact_size(self.theme.metrics.sidebar_width)
@@ -603,6 +647,14 @@ impl SettingsApp {
             Some(chat::Action::StartAgent) => self.start_agent(ui.ctx()),
             None => {}
         }
+    }
+
+    fn update_presence(&mut self, ui: &Ui) {
+        let focused = ui.input(|input| input.focused && input.viewport().minimized != Some(true))
+            && !self.shared.close_requested.load(Ordering::SeqCst)
+            && self.shared.notification_foreground.load(Ordering::SeqCst);
+        let view = visible_notification_chat(self.page, focused, self.chat_state());
+        self.shared.notification_view(view);
     }
 
     /// The Chat page, once it has been shown, to look at.
@@ -1011,11 +1063,36 @@ impl eframe::App for SettingsApp {
 
 impl Drop for SettingsApp {
     fn drop(&mut self) {
+        self.shared.notification_view(None);
         if let Some(chat) = &self.chat {
             chat.stop();
         }
         self.shared.set_ctx(None);
     }
+}
+
+fn visible_notification_chat(
+    page: Page,
+    focused: bool,
+    state: Option<&chat::state::ChatState>,
+) -> Option<cww::notification_presence::View> {
+    let state = state?;
+    if page != Page::Chat
+        || !focused
+        || !state.ready()
+        || state.instructions.is_some()
+        || state.error.is_some()
+    {
+        return None;
+    }
+    let chat = state.open?;
+    if state.transcript.as_ref()?.chat.number != chat || state.list.account.id.is_empty() {
+        return None;
+    }
+    Some(cww::notification_presence::View {
+        account: state.list.account.id.clone(),
+        chat,
+    })
 }
 
 pub fn status_color(theme: &Theme, health: Health) -> Color32 {
