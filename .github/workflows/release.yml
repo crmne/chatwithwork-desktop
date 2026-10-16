@@ -472,7 +472,7 @@ jobs:
         with:
           backend: local
       # No compiler cache, as above.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config cmake
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
       - name: Check the app needs only C and ALSA libraries, glibc 2.35 or older

@@ -3737,6 +3737,10 @@ async fn relays_dictation_and_signed_downloads() {
             .unwrap();
             assert_eq!(
                 rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+                Update::Mode(cww::dictation::Mode::Cloud)
+            );
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(10)).unwrap(),
                 Update::Recording
             );
             recording.stop();

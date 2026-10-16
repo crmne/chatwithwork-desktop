@@ -1,0 +1,12 @@
+# whisper-rs ships bindings for its exact bundled whisper.cpp. Reuse them on
+# every platform so contributors and cross builds do not need libclang.
+[env]
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+# Portable binaries must not require the build machine's CPU instructions.
+GGML_NATIVE = "OFF"
+GGML_SSE42 = "OFF"
+GGML_AVX = "OFF"
+GGML_AVX2 = "OFF"
+GGML_BMI2 = "OFF"
+GGML_FMA = "OFF"
+GGML_F16C = "OFF"

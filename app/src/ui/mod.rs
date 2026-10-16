@@ -10,6 +10,7 @@ mod account;
 mod activity;
 pub mod chat;
 mod chrome;
+mod dictation;
 mod folders;
 mod general;
 mod notifications;
@@ -356,6 +357,7 @@ pub struct SettingsApp {
     activity: ActivityState,
     account: AccountState,
     general: GeneralState,
+    dictation: dictation::Settings,
     notifications: Option<notifications::Settings>,
     welcome_autostart: bool,
     mark: Option<egui::TextureHandle>,
@@ -415,6 +417,7 @@ impl SettingsApp {
                 autostart: crate::autostart::is_enabled(),
                 ..GeneralState::default()
             },
+            dictation: dictation::Settings::new(&shared.paths.daemon),
             notifications: None,
             welcome_autostart: true,
             mark: None,
@@ -609,6 +612,7 @@ impl SettingsApp {
         let page = self
             .chat
             .get_or_insert_with(|| chat::ChatPage::new(&socket, data_dir));
+        page.set_dictation_mode(self.dictation.preferences.mode);
         let env = chat::Env {
             status,
             known: self.shared.is_known(),

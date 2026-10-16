@@ -82,6 +82,8 @@ impl SettingsApp {
             widgets::notice(ui, &theme, &error, theme.palette.danger);
         }
 
+        self.dictation.show(ui, &theme, &self.shared.paths.daemon);
+
         widgets::section(ui, &theme, "Local Agent");
         match status {
             None => self.agent_missing(ui),

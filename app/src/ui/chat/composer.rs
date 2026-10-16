@@ -519,7 +519,13 @@ impl Composer<'_> {
                 cww::tui::dictation::Phase::Transcribing => "Transcribing",
                 _ => "Dictate",
             },
-            tooltip: (!dictating).then_some(cww::tui::dictation::HELP),
+            tooltip: (!dictating).then_some(
+                cww::dictation::Preferences {
+                    mode: self.dictation.mode,
+                    ..Default::default()
+                }
+                .help(),
+            ),
             color: if listening { p.live() } else { p.ink },
             hover_color: p.ink,
             wash: 7.0,

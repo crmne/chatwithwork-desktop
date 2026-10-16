@@ -123,6 +123,11 @@ const RELIST: f64 = 4.0;
 const STILL_TIME: f64 = 0.35;
 
 impl ChatPage {
+    pub fn set_dictation_mode(&mut self, mode: cww::dictation::Mode) {
+        if self.state.dictation.phase == cww::tui::dictation::Phase::Idle {
+            self.state.dictation.mode = mode;
+        }
+    }
     pub fn new(socket: &std::path::Path, data_dir: std::path::PathBuf) -> Self {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 
 use super::chat::{Chats, Failure};
 
+mod local;
 pub mod protocol;
 
-pub const HELP: &str = "Dictate using credits. Audio is transcribed in the EU through your Chat with Work server. Review the words before sending.";
+pub const HELP: &str = "Dictate. Choose EU cloud transcription using credits or local Whisper in General settings. Review the words before sending.";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Phase {
@@ -28,10 +29,8 @@ impl Phase {
     pub fn label(self) -> &'static str {
         match self {
             Self::Idle => "Dictate",
-            Self::Starting => "Checking dictation (uses credits)…",
-            Self::Recording => {
-                "Listening. Escape stops. EU transcription uses credits (up to 5 minutes)."
-            }
+            Self::Starting => "Starting dictation…",
+            Self::Recording => "Listening. Escape stops (up to 5 minutes).",
             Self::Transcribing => "Transcribing… Escape to discard.",
         }
     }
@@ -39,6 +38,7 @@ impl Phase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Update {
+    Mode(crate::dictation::Mode),
     Recording,
     Level { elapsed_ms: u32, level: u16 },
     Transcribing,
@@ -50,6 +50,7 @@ pub enum Update {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct State {
     pub phase: Phase,
+    pub mode: crate::dictation::Mode,
     pub elapsed_ms: u32,
     pub levels: [u16; 24],
     generation: u64,
@@ -79,6 +80,7 @@ impl State {
             return None;
         }
         match update {
+            Update::Mode(mode) => self.mode = mode,
             Update::Recording if self.phase == Phase::Starting => self.phase = Phase::Recording,
             Update::Recording => {}
             Update::Level { elapsed_ms, level }
@@ -114,6 +116,17 @@ impl Recording {
         helper: PathBuf,
         emit: impl Fn(Update) + Send + 'static,
     ) -> Result<Self, Failure> {
+        let paths = crate::paths::Paths::from_env()
+            .map_err(|_| Failure::new("unavailable", "Could not read dictation settings."))?;
+        Self::start_at(chats, helper, paths, emit)
+    }
+
+    fn start_at(
+        chats: Chats,
+        helper: PathBuf,
+        paths: crate::paths::Paths,
+        emit: impl Fn(Update) + Send + 'static,
+    ) -> Result<Self, Failure> {
         let (tx, rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel = Arc::clone(&cancelled);
@@ -121,24 +134,36 @@ impl Recording {
             .name("cww-dictation".into())
             .spawn(move || {
                 let result = (|| {
-                    let access = chats.dictation()?;
-                    if !access.cloud {
-                        return Err(Failure::new(
-                            "unavailable",
-                            access.reason.unwrap_or_else(|| {
-                                "Dictation isn't available on this server.".into()
-                            }),
-                        ));
+                    let preferences = crate::dictation::Preferences::load(&paths)
+                        .map_err(|_| Failure::new("unavailable", "Could not read dictation settings. Choose a mode in General settings."))?;
+                    // This decision is local and fixed for the whole recording.
+                    // Local failures never enter the cloud availability/upload path.
+                    if preferences.mode == crate::dictation::Mode::Cloud {
+                        let access = chats.dictation()?;
+                        if !access.cloud {
+                            return Err(Failure::new(
+                                "unavailable",
+                                access.reason.unwrap_or_else(|| {
+                                    "Dictation isn't available on this server.".into()
+                                }),
+                            ));
+                        }
+                    } else if !preferences.model.downloaded(&paths) {
+                        return Err(Failure::new("unavailable", "Download the selected Whisper model in General settings first."));
                     }
+                    emit(Update::Mode(preferences.mode));
                     if cancel.load(Ordering::SeqCst) {
                         return Ok(String::new());
                     }
-                    let audio = capture(helper, rx, &cancel, &emit)?;
+                    let audio = capture(helper.clone(), rx, &cancel, &emit)?;
                     if audio.is_empty() || cancel.load(Ordering::SeqCst) {
                         return Ok(String::new());
                     }
                     emit(Update::Transcribing);
-                    chats.dictate(&audio, "audio/wav")
+                    match preferences.mode {
+                        crate::dictation::Mode::Cloud => chats.dictate(&audio, "audio/wav"),
+                        crate::dictation::Mode::Local => local::transcribe(&helper, preferences.model, audio, &cancel),
+                    }
                 })();
                 if !cancel.load(Ordering::SeqCst) {
                     emit(Update::Finished(result));
@@ -164,17 +189,12 @@ impl Drop for Recording {
 
 /// No PATH lookup: use the app installed beside this command.
 pub fn installed_helper() -> Result<PathBuf, Failure> {
-    let path = std::env::current_exe().map_err(|_| microphone_failure())?;
-    let helper = path.with_file_name(if cfg!(windows) {
-        "cww-app.exe"
-    } else {
-        "cww-app"
-    });
-    if cfg!(windows) && !helper.is_file() {
-        Ok(path.with_file_name("Chat with Work.exe"))
-    } else {
-        Ok(helper)
-    }
+    crate::notifications::helper::installed_app().ok_or_else(|| {
+        Failure::new(
+            "unavailable",
+            "Install the Chat with Work desktop app beside cww to use dictation.",
+        )
+    })
 }
 
 struct Helper(Child);
@@ -298,6 +318,74 @@ fn microphone_failure() -> Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn local_recording_succeeds_without_any_daemon_and_never_falls_back() {
+        use crate::dictation::{Mode, Model, Preferences};
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::under(temp.path());
+        paths.ensure().unwrap();
+        Preferences {
+            mode: Mode::Local,
+            model: Model::Tiny,
+        }
+        .save(&paths)
+        .unwrap();
+        let model = Model::Tiny.path(&paths);
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::File::create(model)
+            .unwrap()
+            .set_len(Model::Tiny.bytes())
+            .unwrap();
+        let mut wav = b"RIFF1234WAVE".to_vec();
+        wav.resize(44, 0);
+        std::fs::write(temp.path().join("audio.wav"), wav).unwrap();
+        let helper = temp.path().join("helper");
+        for fails in [false, true] {
+            let tail = if fails {
+                "exit 1"
+            } else {
+                "printf '%s' '{\"text\":\"local words\"}'"
+            };
+            crate::test_process::write_script(
+                &helper,
+                &format!(
+                    "if [ \"$1\" = --record-audio-progress ]; then\nprintf '%s\\n' '{{\"event\":\"ready\",\"version\":1}}' '{{\"event\":\"audio\",\"bytes\":44}}'\ncat \"$(dirname \"$0\")/audio.wav\"\nelse\ncat >/dev/null\n{tail}\nfi"
+                ),
+            );
+            let (tx, rx) = mpsc::channel();
+            let _recording = Recording::start_at(
+                Chats::new(&temp.path().join("no-daemon.sock")),
+                helper.clone(),
+                paths.clone(),
+                move |event| {
+                    let _ = tx.send(event);
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Update::Mode(Mode::Local)
+            );
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Update::Recording
+            );
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Update::Transcribing
+            );
+            let Update::Finished(result) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
+                panic!("missing result")
+            };
+            if fails {
+                assert_eq!(result.unwrap_err().code, "local_transcription");
+            } else {
+                assert_eq!(result.unwrap(), "local words");
+            }
+        }
+    }
 
     #[test]
     fn late_words_never_enter_a_new_draft() {

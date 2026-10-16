@@ -175,10 +175,11 @@ access level and the file hash checked when preparing the preview.
 
 ## Dictation
 
-The microphone beside the paperclip starts an in-memory recording after the
-paired server confirms that dictation is available and credits allow it.
-Its tooltip explains the credit charge and EU transcription. The composer
-shows Listening with a 24-bar microphone waveform and elapsed time. The
+General → Dictation chooses cloud transcription (the default) or Whisper on
+this computer. Cloud checks the paired server and credits before opening the
+microphone; local mode checks the selected download and never asks the server
+for availability or uploads audio. The microphone tooltip describes the chosen
+mode. The composer shows Listening with a 24-bar microphone waveform and elapsed time. The
 microphone stays visible with a blue listening state and a spinner while
 transcribing. Escape stops and transcribes; while transcription runs it
 discards the result. A second stop click does not cancel transcription.
@@ -194,11 +195,36 @@ the microphone before returning audio, and drops silence (less than 300 ms
 continuously above RMS 0.02). Bounded JSON frames report the level and timer
 every 70 ms; one length-delimited WAV follows only after recording stops.
 The older `--record-audio` interface remains available for older clients.
-The daemon relays transcription to the paired server. Audio
+Cloud mode relays transcription through the daemon to the paired server. Audio
 is never written to disk or logs. There are no idle audio threads. Cancelling
 a transcription already sent discards its result; it cannot undo the charge.
 The terminal uses the same helper, with `/dictate` or Ctrl-R to start/stop,
 Escape to stop or discard, and Ctrl-C to discard. Its words enter at the cursor.
+
+Local mode launches `--transcribe-local <tiny|base|small>` as a separate process,
+with one bounded WAV on stdin and one bounded JSON reply on stdout. CPU-only
+`whisper-rs` stays in the app package; the daemon has no inference/native
+libraries. Language is detected automatically, without translation. Cancellation
+kills and reaps this helper; a ten-minute overall deadline bounds inference and
+pipe I/O. Exiting returns the model's memory to the OS. No silent cloud fallback.
+
+Preferences live in `config/dictation.json`, shared with the terminal. Models live
+in the private `data/speech-models` directory. An explicit Download fetches the
+multilingual Tiny (78 MB), Base (148 MB) or Small (488 MB) GGML model from
+`ggerganov/whisper.cpp` on Hugging Face, pinned to revision
+`5359861c739e955e79d9a303bcbc70fb988958b1`. HTTPS requests carry no account or
+audio data and follow at most five HTTPS redirects. One-megabyte ranges with
+ten-second request deadlines bound cancellation; the configured proxy and OS
+certificate store apply. Download progress, cancellation and removal are native
+controls. A private temporary file is published atomically only after its exact
+length and SHA-256 match; failure/cancellation removes it. The inference helper
+rechecks the checksum before loading. No models ship in app/release archives.
+Malformed preferences refuse dictation rather than defaulting back to upload.
+
+The desktop build needs CMake and a C++ compiler. Bundled bindings avoid a
+libclang dependency, and portable CPU settings avoid requiring the build host's
+instruction set. The models and whisper.cpp are MIT licensed.
+
 Tests use generated audio and a fake helper, never the host's microphone.
 
 ## Notification preferences

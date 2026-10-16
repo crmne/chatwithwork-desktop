@@ -24,6 +24,7 @@ mod paths;
 mod platform;
 mod screenshot;
 mod shell;
+mod speech;
 mod time;
 mod tray;
 mod ui;
@@ -67,6 +68,12 @@ fn main() {
     }
     if std::env::args().skip(1).eq(["--record-audio-progress"]) {
         std::process::exit(audio::record(true));
+    }
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if let [flag, model] = args.as_slice()
+        && flag == "--transcribe-local"
+    {
+        std::process::exit(speech::run(model));
     }
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("CWW_APP_LOG", "warn")).init();
     match parse(std::env::args().skip(1)) {

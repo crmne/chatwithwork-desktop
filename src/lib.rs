@@ -12,6 +12,7 @@ pub mod chats;
 pub mod config;
 pub mod control;
 pub mod daemon;
+pub mod dictation;
 pub mod error;
 pub mod limits;
 pub mod logging;

@@ -814,3 +814,69 @@ fn notification_presence_requires_the_displayed_transcript_and_account() {
     state.list.account.id.clear();
     assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
 }
+
+#[test]
+fn renders_general_dictation_settings() {
+    let Some(directory) = std::env::var_os("CWW_DICTATION_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for (name, size) in [("wide", [1080.0, 1200.0]), ("narrow", [700.0, 820.0])] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture_rendered(
+                Scenario::Sample,
+                Some(Page::General),
+                size,
+                dark,
+                Some(renderer),
+            );
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(8);
+            let theme = if dark { "dark" } else { "light" };
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("general-{name}-{theme}.png")))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn local_dictation_choices_persist_without_downloading_or_contacting_the_server() {
+    use cww::dictation::{Mode, Model, Preferences};
+    let mut fx = fixture_with_size(Scenario::Sample, Some(Page::General), [1080.0, 1200.0]);
+    fx.harness.get_by_label("On this computer").click();
+    fx.harness.run_steps(3);
+    let paths = &fx.server.paths.daemon;
+    assert_eq!(Preferences::load(paths).unwrap().mode, Mode::Local);
+    assert!(!Model::Base.downloaded(paths));
+    fx.harness
+        .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Whisper model")
+        .click();
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Tiny · 78 MB · fastest").click();
+    fx.harness.run_steps(3);
+    assert_eq!(
+        Preferences::load(&fx.server.paths.daemon).unwrap(),
+        Preferences {
+            mode: Mode::Local,
+            model: Model::Tiny
+        }
+    );
+    let path = Model::Tiny.path(&fx.server.paths.daemon);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::File::create(path)
+        .unwrap()
+        .set_len(Model::Tiny.bytes())
+        .unwrap();
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Remove model").click();
+    fx.harness.run_steps(3);
+    assert!(!Model::Tiny.downloaded(&fx.server.paths.daemon));
+    assert_eq!(
+        Preferences::load(&fx.server.paths.daemon).unwrap().mode,
+        Mode::Local
+    );
+    assert!(fx.changes().is_empty());
+}

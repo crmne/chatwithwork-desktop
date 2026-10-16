@@ -32,7 +32,7 @@
             cargoLock.allowBuiltinFetchGit = true;
             cargoBuildFlags = [ "--workspace" ];
             cargoTestFlags = [ "--workspace" ];
-            nativeBuildInputs = [ pkgs.makeWrapper ]
+            nativeBuildInputs = [ pkgs.makeWrapper pkgs.cmake ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns pkgs.rcodesign ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
