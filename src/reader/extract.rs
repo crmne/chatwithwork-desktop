@@ -221,6 +221,9 @@ fn office_xml(bytes: &[u8], kind: OfficeKind, max_chars: usize) -> Result<String
         OfficeKind::Pptx => {
             let mut slides: Vec<(u32, String)> = archive
                 .file_names()
+                .collect::<zip::result::ZipResult<Vec<_>>>()
+                .map_err(|_| ToolError::new(ErrorCode::Unsupported, "the document is damaged"))?
+                .into_iter()
                 .filter_map(|n| {
                     let num = n
                         .strip_prefix("ppt/slides/slide")?

@@ -19,7 +19,14 @@ all-features = false
 # Fail on any RustSec advisory (vulnerable, unmaintained, unsound, yanked).
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+# The current calamine/docx-rs/rust_xlsxwriter releases still require zip 8.
+# Their uses do not extract archives to disk; the affected symlink/permission
+# APIs are unreachable. Our direct reader uses zip 9. See docs/zip-review.md.
+# This exempts only the yank, not any RustSec advisory. Remove when those
+# registry dependencies support zip 9; do not broaden to other versions.
+ignore = [
+    { crate = "zip@8.6.0", reason = "Document dependencies require zip 8 and do not use its vulnerable disk extraction APIs; see docs/zip-review.md" },
+]
 
 [licenses]
 # Every license here is compatible with shipping cww as MIT OR Apache-2.0.
