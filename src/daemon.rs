@@ -475,7 +475,7 @@ impl Daemon {
                             chats: Some(Arc::clone(&self.chats)),
                             notifications: Some(Arc::clone(&self.notifications)),
                         },
-                        files,
+                        Some(files),
                         Arc::clone(&self.audit),
                         self.status.clone(),
                     )

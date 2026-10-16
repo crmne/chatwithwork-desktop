@@ -63,7 +63,7 @@ pub struct TunnelSettings {
 pub struct Tunnel {
     settings: TunnelSettings,
     tokens: Arc<Tokens>,
-    files: LocalFiles,
+    files: Option<LocalFiles>,
     audit: Arc<AuditLog>,
     status: SharedStatus,
 }
@@ -78,7 +78,7 @@ type Socket = WebSocketStream<MaybeTlsStream<ProxyStream>>;
 impl Tunnel {
     pub fn new(
         settings: TunnelSettings,
-        files: LocalFiles,
+        files: Option<LocalFiles>,
         audit: Arc<AuditLog>,
         status: SharedStatus,
     ) -> anyhow::Result<Self> {
@@ -225,7 +225,12 @@ impl Tunnel {
         let header = |v: &str| HeaderValue::from_str(v).map_err(|e| ConnectError::Other(e.into()));
         headers.insert("Authorization", header(&format!("DPoP {token}"))?);
         headers.insert("DPoP", header(&proof)?);
-        headers.insert("Sec-WebSocket-Protocol", header(OFFERED_SUBPROTOCOLS)?);
+        let protocols = if self.files.is_some() {
+            OFFERED_SUBPROTOCOLS
+        } else {
+            "actioncable-v1-json"
+        };
+        headers.insert("Sec-WebSocket-Protocol", header(protocols)?);
         headers.insert("Origin", header(&server.origin())?);
         headers.insert(
             "User-Agent",
@@ -291,6 +296,11 @@ impl Tunnel {
                 "the server chose an unknown subprotocol {selected:?}"
             ))
         })?;
+        if self.files.is_none() && framing != Framing::ActionCable {
+            return Err(ConnectError::Other(anyhow!(
+                "chat-only connections require Action Cable framing"
+            )));
+        }
         Ok((ws, framing))
     }
 }

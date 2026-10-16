@@ -86,13 +86,17 @@ pub struct SessionOptions {
 
 pub async fn run_session<S>(
     ws: WebSocketStream<S>,
-    server: LocalFiles,
+    server: Option<LocalFiles>,
     options: SessionOptions,
     shutdown: CancellationToken,
 ) -> SessionEnd
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    if server.is_none() && options.framing != Framing::ActionCable {
+        return SessionEnd::Error("chat-only connections require Action Cable framing".into());
+    }
+    let files_allowed = server.is_some();
     let (mut sink, mut stream) = ws.split();
     let (in_tx, in_rx) = mpsc::channel::<ClientJsonRpcMessage>(64);
     let (out_tx, mut out_rx) = mpsc::channel::<ServerJsonRpcMessage>(64);
@@ -102,7 +106,7 @@ where
     // The MCP side. rmcp ends a service when the first message is not a
     // valid opener (for example a stateless request without `_meta`); start a
     // fresh one so one bad message can't wedge the connection.
-    let mcp_task = {
+    let mcp_task = server.map(|server| {
         let out_tx = out_tx.clone();
         let session = session.clone();
         tokio::spawn(async move {
@@ -122,11 +126,15 @@ where
                 }
             }
         })
-    };
+    });
 
     let framing = options.framing;
     let mut notifications = options.notifications;
-    let mut opening = framing.opening_frames();
+    let mut opening = if files_allowed {
+        framing.opening_frames()
+    } else {
+        Vec::new()
+    };
     if notifications.is_some()
         && let Some(frame) = framing.follow_notifications()
     {
@@ -134,7 +142,9 @@ where
     }
     for frame in opening {
         if let Err(e) = sink.send(Message::text(frame)).await {
-            mcp_task.abort();
+            if let Some(task) = &mcp_task {
+                task.abort();
+            }
             return SessionEnd::Error(e.to_string());
         }
     }
@@ -171,7 +181,7 @@ where
                     Some(Ok(Message::Text(text))) => {
                         match framing.decode(text.as_str()) {
                             Inbound::Mcp(value) => {
-                                if let Some(reply) = accept(value, options.max_message_bytes, &in_tx).await {
+                                if files_allowed && let Some(reply) = accept(value, options.max_message_bytes, &in_tx).await {
                                     let _ = out_tx.send(reply).await;
                                 }
                             }
@@ -282,7 +292,9 @@ where
 
     session.cancel();
     drop(in_tx);
-    mcp_task.abort();
+    if let Some(task) = mcp_task {
+        task.abort();
+    }
     if let Some(hub) = &options.chats {
         hub.detach();
     }
@@ -368,4 +380,105 @@ fn serialize_capped(message: ServerJsonRpcMessage, max_bytes: usize) -> Option<S
         ErrorData::new(ErrorCode::INTERNAL_ERROR, "response too large", None),
     );
     serde_json::to_string(&reply).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::ControlEvent;
+    use crate::tunnel::framing::CHANNEL_IDENTIFIER;
+    use serde_json::json;
+    use tokio::sync::broadcast;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    #[tokio::test]
+    async fn chat_only_session_never_subscribes_to_or_answers_file_rpc() {
+        let (a, b) = tokio::io::duplex(16 * 1024);
+        let client = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
+        let mut server = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
+        let (events, _) = broadcast::channel(16);
+        let hub = Arc::new(ChatHub::new(events.clone()));
+        hub.watch("42");
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_session(
+            client,
+            None,
+            SessionOptions {
+                framing: Framing::ActionCable,
+                max_message_bytes: 8192,
+                chats: Some(Arc::clone(&hub)),
+                notifications: None,
+            },
+            shutdown.clone(),
+        ));
+        let next = tokio::time::timeout(Duration::from_secs(5), server.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let subscribe: Value = serde_json::from_str(next.to_text().unwrap()).unwrap();
+        let identifier = subscribe["identifier"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(identifier).unwrap()["channel"],
+            "LocalAgent::ChatChannel"
+        );
+        assert_eq!(subscribe["command"], "subscribe");
+        let mut received = events.subscribe();
+        server.send(Message::text(json!({"identifier": CHANNEL_IDENTIFIER, "message": {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}
+            }
+        }}).to_string())).await.unwrap();
+        server
+            .send(Message::text(
+                json!({"identifier": identifier, "message": {"type": "changed"}}).to_string(),
+            ))
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(event, ControlEvent::Chat { chat, update } if chat == "42" && update["type"] == "changed")
+        );
+        hub.unwatch("42");
+        let next = tokio::time::timeout(Duration::from_secs(5), server.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let unsubscribe: Value = serde_json::from_str(next.to_text().unwrap()).unwrap();
+        assert_eq!(
+            unsubscribe,
+            json!({"command": "unsubscribe", "identifier": identifier})
+        );
+        shutdown.cancel();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            SessionEnd::Shutdown
+        ));
+    }
+
+    #[tokio::test]
+    async fn chat_only_sessions_refuse_bare_mcp_framing() {
+        let (a, _b) = tokio::io::duplex(1024);
+        let client = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
+        let result = run_session(
+            client,
+            None,
+            SessionOptions {
+                framing: Framing::Mcp,
+                max_message_bytes: 8192,
+                chats: None,
+                notifications: None,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(result, SessionEnd::Error(_)));
+    }
 }
