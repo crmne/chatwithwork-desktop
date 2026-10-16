@@ -12,6 +12,7 @@ pub mod chat;
 mod chrome;
 mod folders;
 mod general;
+mod notifications;
 mod privacy;
 pub mod theme;
 mod welcome;
@@ -151,15 +152,17 @@ pub enum Page {
     Activity,
     Account,
     General,
+    Notifications,
 }
 
 impl Page {
-    const NAV: [Page; 6] = [
+    const NAV: [Page; 7] = [
         Page::Chat,
         Page::Folders,
         Page::Privacy,
         Page::Activity,
         Page::Account,
+        Page::Notifications,
         Page::General,
     ];
 
@@ -172,6 +175,7 @@ impl Page {
             Page::Activity => "Activity",
             Page::Account => "Account",
             Page::General => "General",
+            Page::Notifications => "Notifications",
         }
     }
 
@@ -183,6 +187,7 @@ impl Page {
             Page::Activity => widgets::Icon::Clock,
             Page::Account => widgets::Icon::Person,
             Page::General => widgets::Icon::Gear,
+            Page::Notifications => widgets::Icon::Bell,
         }
     }
 }
@@ -301,6 +306,7 @@ pub struct SettingsApp {
     activity: ActivityState,
     account: AccountState,
     general: GeneralState,
+    notifications: Option<notifications::Settings>,
     welcome_autostart: bool,
     mark: Option<egui::TextureHandle>,
     /// The Documents folder to offer, if there is one.
@@ -355,6 +361,7 @@ impl SettingsApp {
                 autostart: crate::autostart::is_enabled(),
                 ..GeneralState::default()
             },
+            notifications: None,
             welcome_autostart: true,
             mark: None,
             shared,
@@ -406,6 +413,9 @@ impl SettingsApp {
             self.shared.close_requested.store(true, Ordering::SeqCst);
         }
         let status = self.shared.status();
+        if self.page != Page::Notifications {
+            self.notifications = None;
+        }
         let p = self.theme.palette;
         self.style_for_page(ui.ctx());
         if self.page != Page::Chat
@@ -564,6 +574,7 @@ impl SettingsApp {
             Page::Activity => self.activity_page(ui, status),
             Page::Account => self.account_page(ui, status),
             Page::General => self.general_page(ui, status),
+            Page::Notifications => self.notifications_page(ui, status),
         }
     }
 

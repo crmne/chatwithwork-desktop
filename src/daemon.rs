@@ -974,6 +974,16 @@ impl ControlHandler for Daemon {
             }
             ControlRequest::SuggestedRoots => Ok(self.suggested_roots().await),
             ControlRequest::Chats => self.chat(|client| client.list()).await,
+            ControlRequest::NotificationPreferences => {
+                self.chat(|client| client.notification_preferences()).await
+            }
+            ControlRequest::NotificationPreferencesUpdate { preferences } => {
+                self.chat(move |client| client.update_notification_preferences(preferences))
+                    .await
+            }
+            ControlRequest::NotificationBrowserLink => {
+                self.chat(|client| client.notification_browser_link()).await
+            }
             ControlRequest::Workspace { project } => {
                 self.chat(move |client| client.workspace(project)).await
             }

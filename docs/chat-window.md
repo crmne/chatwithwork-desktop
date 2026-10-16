@@ -185,3 +185,17 @@ a transcription already sent discards its result; it cannot undo the charge.
 The terminal uses the same helper, with `/dictate` or Ctrl-R to start/stop,
 Escape to stop or discard, and Ctrl-C to discard. Its words enter at the cursor.
 Tests use generated audio and a fake helper, never the host's microphone.
+
+## Notification preferences
+
+The native Notifications page edits the same organization's chat push/email,
+browser-preview and other email preferences as the website. Changes are saved
+explicitly and include the displayed organization's external ID. Pairing changes
+discard old page state, and failed saves retain the draft for retry.
+
+The page also reports this computer's native permission and connection state.
+Permission is requested only through its button when the OS requires it. Linux's
+unknown permission state is shown honestly and still allows delivery attempts.
+Link this browser opens an explicit same-computer confirmation on the paired
+server; it does not assume the browser used for pairing was on this computer.
+Native notifications remain generic regardless of the browser preview setting.

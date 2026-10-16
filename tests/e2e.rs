@@ -324,6 +324,8 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/connector_handoff",
         "/local_agent/memory_preference",
         "/local_agent/memories/",
+        "/local_agent/notification_preferences",
+        "/local_agent/notification_browser_link",
     ]
     .iter()
     .any(|api| path.starts_with(api))
@@ -459,6 +461,8 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         "connector_handoff",
         "memory_preference",
         "memories/",
+        "notification_preferences",
+        "notification_browser_link",
     ]
     .iter()
     .any(|route| path.starts_with(&format!("/local_agent/{route}")));
@@ -476,6 +480,12 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 ("GET", "/local_agent/connectors") => json!({ "connectors": [], "categories": [] }),
                 ("POST", "/local_agent/connector_handoff") => {
                     json!({ "path": "/482139075/native/connector_handoff?token=example" })
+                }
+                ("GET" | "PATCH", "/local_agent/notification_preferences") => {
+                    json!({ "account": {"id": "482139075", "name": "Northwind"}, "chat_notifications": [], "notification_content": false, "notification_emails": [] })
+                }
+                ("POST", "/local_agent/notification_browser_link") => {
+                    json!({ "path": "/482139075/native/notification_browser_link?token=example" })
                 }
                 (_, path) if path.contains("/memor") => memory,
                 _ => json!({ "services": [], "suggestions": [], "instructions": [] }),
@@ -2477,6 +2487,11 @@ async fn relays_native_workspace_controls_with_device_authentication() {
                 change: InstructionChange::Restore { revision_id: 19 },
             })
             .unwrap();
+        assert_eq!(client.call(&ControlRequest::NotificationPreferences).unwrap()["account"]["id"], "482139075");
+        client.call(&ControlRequest::NotificationPreferencesUpdate {
+            preferences: json!({ "account": "482139075", "chat_notifications": {"answered": {"push": false}} }),
+        }).unwrap();
+        assert!(client.call(&ControlRequest::NotificationBrowserLink).unwrap()["path"].as_str().unwrap().starts_with("/482139075/native/notification_browser_link?"));
     })
     .await
     .unwrap();
@@ -2508,6 +2523,9 @@ async fn relays_native_workspace_controls_with_device_authentication() {
             ),
             ("PATCH", "/local_agent/instructions/project"),
             ("PATCH", "/local_agent/instructions/personal"),
+            ("GET", "/local_agent/notification_preferences"),
+            ("PATCH", "/local_agent/notification_preferences"),
+            ("POST", "/local_agent/notification_browser_link"),
         ]
     );
     assert_eq!(
@@ -2529,6 +2547,10 @@ async fn relays_native_workspace_controls_with_device_authentication() {
     assert_eq!(
         requests[11]["body"],
         json!({ "project_id": null, "revision_id": 19 })
+    );
+    assert_eq!(
+        requests[13]["body"],
+        json!({ "account": "482139075", "chat_notifications": {"answered": {"push": false}} })
     );
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(10), daemon)

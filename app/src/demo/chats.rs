@@ -191,7 +191,7 @@ fn in_project(mut chat: Value, project: (u64, &str), mine: bool) -> Value {
 pub fn account_update(left: u64) -> Value {
     json!({
         "event": "account",
-        "account": { "name": ACCOUNT, "logo": null },
+        "account": { "id": "482139075", "name": ACCOUNT, "logo": null },
         "user": { "name": USER, "avatar": null },
         "credits": credits(left),
         "locked_reason": null,
@@ -236,7 +236,7 @@ pub fn list_header(left: u64) -> Value {
         ("sharing", "Sharing", "link"),
     ];
     json!({
-        "account": { "name": ACCOUNT, "logo": null },
+        "account": { "id": "482139075", "name": ACCOUNT, "logo": null },
         "user": { "name": USER, "avatar": null },
         "credits": credits(left),
         "locked_reason": null,
@@ -685,4 +685,19 @@ pub fn title_for(question: &str) -> String {
     } else {
         title
     }
+}
+pub fn notification_preferences() -> Value {
+    json!({
+        "ok": true,
+        "account": {"id": "482139075", "name": "Northwind"},
+        "chat_notifications": [
+            {"key": "answered", "title": "Answers", "description": "When an answer is ready and you're not looking at its chat.", "push": true, "email": false},
+            {"key": "waiting", "title": "Approvals and questions", "description": "When a change waits for your approval or a tool asks you something. Emails go after 10 minutes, only if it still waits.", "push": true, "email": true},
+            {"key": "failed", "title": "Answers that couldn't finish", "description": "When something stops an answer partway.", "push": true, "email": false}
+        ],
+        "notification_content": true,
+        "notification_emails": [
+            {"key": "check_ins", "title": "Product check-ins", "description": "Occasional personal check-ins when Chat with Work has been quiet.", "enabled": true}
+        ]
+    })
 }

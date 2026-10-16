@@ -60,6 +60,8 @@ struct State {
     /// Files uploaded for questions, by `signed_id`.
     uploads: Vec<Value>,
     workspace: Value,
+    notification_preferences: Value,
+    notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
 }
@@ -118,6 +120,12 @@ impl Server {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn act_old(&self) {
         self.demo.change(|s| s.old_daemon = true);
+    }
+
+    #[cfg(test)]
+    pub fn set_notification_permission(&self, permission: &str) {
+        self.demo
+            .change(|s| s.notification_permission = permission.into());
     }
 
     #[cfg(test)]
@@ -249,6 +257,8 @@ fn fresh() -> State {
         next_id: 1000,
         uploads: Vec::new(),
         workspace: chats::workspace(),
+        notification_preferences: chats::notification_preferences(),
+        notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
     }
@@ -365,6 +375,8 @@ fn sample() -> State {
         next_id: 1000,
         uploads: Vec::new(),
         workspace: chats::workspace(),
+        notification_preferences: chats::notification_preferences(),
+        notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
     }
@@ -501,16 +513,45 @@ impl Demo {
                 });
                 json!({ "ok": true })
             }
-            "chats" | "chat" | "chat_send" | "chat_cancel" | "chat_access" | "models"
-            | "chat_download" | "chat_upload" | "chat_approve" | "chat_deny" | "chat_answer"
-            | "chat_decline" | "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete"
-            | "chat_share" | "chat_unshare" | "workspace" | "service_pause"
-            | "memory_preference" | "memory_forget" | "instructions" | "instruction_update"
-            | "instruction_count" | "computer_remove" | "connectors" | "connector_handoff" => {
+            "chats"
+            | "chat"
+            | "chat_send"
+            | "chat_cancel"
+            | "chat_access"
+            | "models"
+            | "chat_download"
+            | "chat_upload"
+            | "chat_approve"
+            | "chat_deny"
+            | "chat_answer"
+            | "chat_decline"
+            | "chat_retry"
+            | "chat_branch"
+            | "chat_rename"
+            | "chat_delete"
+            | "chat_share"
+            | "chat_unshare"
+            | "workspace"
+            | "service_pause"
+            | "memory_preference"
+            | "memory_forget"
+            | "instructions"
+            | "instruction_update"
+            | "instruction_count"
+            | "computer_remove"
+            | "connectors"
+            | "connector_handoff"
+            | "notification_preferences"
+            | "notification_preferences_update"
+            | "notification_browser_link" => {
                 let answer = self.chat_request(cmd, request);
                 self.sync_list();
                 answer
             }
+            "notification_status" => {
+                json!({"ok": true, "available": true, "permission": self.state.lock().expect("demo lock").notification_permission, "connected": true, "account": "482139075"})
+            }
+            "notification_permission" | "notification_view" => json!({"ok": true}),
             "asset" => assets::serve(request["path"].as_str().unwrap_or_default()),
             "dictation" => {
                 json!({ "ok": true, "cloud": false, "reason": "Dictation is off in the demo." })
@@ -623,6 +664,41 @@ impl Demo {
         }
         let number = request["chat"].as_str().and_then(|c| c.parse::<u64>().ok());
         match cmd {
+            "notification_preferences" => self
+                .state
+                .lock()
+                .expect("demo lock")
+                .notification_preferences
+                .clone(),
+            "notification_preferences_update" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let preferences = &mut state.notification_preferences;
+                let update = &request["preferences"];
+                if update["account"] != preferences["account"]["id"] {
+                    return json!({"ok": false, "code": "stale_account", "error": "The organization changed. Reload its preferences."});
+                }
+                for choice in preferences["chat_notifications"].as_array_mut().unwrap() {
+                    let key = choice["key"].as_str().unwrap().to_string();
+                    for channel in ["push", "email"] {
+                        if update["chat_notifications"][&key][channel].is_boolean() {
+                            choice[channel] = update["chat_notifications"][&key][channel].clone();
+                        }
+                    }
+                }
+                for choice in preferences["notification_emails"].as_array_mut().unwrap() {
+                    let key = choice["key"].as_str().unwrap();
+                    if update["notification_emails"][key].is_boolean() {
+                        choice["enabled"] = update["notification_emails"][key].clone();
+                    }
+                }
+                if update["notification_content"].is_boolean() {
+                    preferences["notification_content"] = update["notification_content"].clone();
+                }
+                preferences.clone()
+            }
+            "notification_browser_link" => {
+                json!({"ok": true, "path": "/482139075/native/notification_browser_link?token=synthetic-demo"})
+            }
             "workspace" => self.state.lock().expect("demo lock").workspace.clone(),
             "connectors" => {
                 let state = self.state.lock().expect("demo lock");

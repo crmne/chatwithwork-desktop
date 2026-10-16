@@ -28,6 +28,20 @@ struct Fixture {
 }
 
 fn fixture(scenario: Scenario, page: Option<Page>) -> Fixture {
+    fixture_with_size(scenario, page, [840.0, 700.0])
+}
+
+fn fixture_with_size(scenario: Scenario, page: Option<Page>, size: [f32; 2]) -> Fixture {
+    fixture_rendered(scenario, page, size, false, None)
+}
+
+fn fixture_rendered(
+    scenario: Scenario,
+    page: Option<Page>,
+    size: [f32; 2],
+    dark: bool,
+    renderer: Option<egui_kittest::wgpu::WgpuTestRenderer>,
+) -> Fixture {
     let server = demo::start(scenario).unwrap();
     if scenario == Scenario::Sample {
         AppState {
@@ -53,14 +67,16 @@ fn fixture(scenario: Scenario, page: Option<Page>) -> Fixture {
     shared
         .client
         .spawn_watch(move |status| watcher.set_status(status));
-    let mut app = SettingsApp::new(shared, Theme::new(Platform::current(), false, None));
+    let mut app = SettingsApp::new(shared, Theme::new(Platform::current(), dark, None));
     app.set_documents(Some(documents.clone()));
     if let Some(page) = page {
         app.set_page(page);
     }
-    let harness = Harness::builder()
-        .with_size([840.0, 700.0])
-        .build_ui_state(|ui, app: &mut SettingsApp| app.show(ui), app);
+    let mut builder = Harness::builder().with_size(size);
+    if let Some(renderer) = renderer {
+        builder = builder.renderer(renderer);
+    }
+    let harness = builder.build_ui_state(|ui, app: &mut SettingsApp| app.show(ui), app);
     let mut fixture = Fixture {
         server,
         harness,
@@ -114,6 +130,121 @@ impl Fixture {
             );
             self.harness.step();
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn notification_preferences_save_for_the_loaded_organization_and_link_only_on_request() {
+    OPENED.with(|urls| urls.borrow_mut().clear());
+    let mut fx = fixture_with_size(
+        Scenario::Sample,
+        Some(Page::Notifications),
+        [1080.0, 1200.0],
+    );
+    fx.wait_for_label("Answers Push");
+    fx.harness.get_by_label("Answers Push").click();
+    fx.harness
+        .get_by_role_and_label(
+            egui::accesskit::Role::CheckBox,
+            "Show the chat and its answer",
+        )
+        .click();
+    assert!(
+        fx.server
+            .requests()
+            .iter()
+            .all(|request| request["cmd"] != "notification_preferences_update")
+    );
+    fx.harness.get_by_label("Save preferences").click();
+    let saved = fx.wait_for_request("notification_preferences_update");
+    assert_eq!(saved["preferences"]["account"], "482139075");
+    assert_eq!(
+        saved["preferences"]["chat_notifications"]["answered"]["push"],
+        false
+    );
+    assert_eq!(
+        saved["preferences"]["chat_notifications"]["waiting"]["email"],
+        true
+    );
+    assert_eq!(saved["preferences"]["notification_content"], false);
+    fx.wait_for_label("Preferences saved.");
+    assert!(OPENED.with(|urls| urls.borrow().is_empty()));
+    fx.harness.get_by_label("Link this browser…").click();
+    fx.wait_for_request("notification_browser_link");
+    fx.wait_for_label("Confirm that this browser is on this computer.");
+    let urls = OPENED.with(|urls| urls.borrow().clone());
+    assert_eq!(urls.len(), 1);
+    assert!(urls[0].contains("/482139075/native/notification_browser_link?token="));
+}
+
+#[test]
+fn native_permission_is_requested_only_after_an_explicit_click() {
+    let mut fx = fixture_with_size(
+        Scenario::Sample,
+        Some(Page::Notifications),
+        [1080.0, 1300.0],
+    );
+    fx.server.set_notification_permission("not_determined");
+    fx.wait_for_label("Turn on native notifications…");
+    assert!(
+        fx.server
+            .requests()
+            .iter()
+            .all(|request| request["cmd"] != "notification_permission")
+    );
+    fx.harness
+        .get_by_label("Turn on native notifications…")
+        .click();
+    assert_eq!(
+        fx.wait_for_request("notification_permission")["request"],
+        true
+    );
+}
+
+#[test]
+fn renders_notification_preferences_at_wide_and_narrow_sizes() {
+    for dark in [false, true] {
+        for (size_name, size) in [("wide", [1080.0, 1200.0]), ("narrow", [700.0, 820.0])] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                eprintln!("no wgpu adapter here: skipping notification snapshots");
+                return;
+            };
+            let mut fx = fixture_rendered(
+                Scenario::Sample,
+                Some(Page::Notifications),
+                size,
+                dark,
+                Some(renderer),
+            );
+            fx.wait_for_label("Answers Push");
+            fx.wait_for_label("Chat with Work can send notifications on this computer");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(8);
+            let theme = if dark { "dark" } else { "light" };
+            for position in ["top", "bottom"] {
+                if position == "bottom" {
+                    fx.harness.get_by_label("Link this browser…").scroll_to_me();
+                    fx.harness.run_steps(8);
+                }
+                let image = fx.harness.render().expect("GPU rendering");
+                let name = format!("notifications-{size_name}-{theme}-{position}");
+                if let Some(directory) = std::env::var_os("CWW_NOTIFICATION_EVIDENCE") {
+                    image
+                        .save(std::path::Path::new(&directory).join(format!("{name}.png")))
+                        .unwrap();
+                }
+                if cfg!(target_os = "linux") {
+                    egui_kittest::image_snapshot_options(
+                        &image,
+                        name,
+                        &egui_kittest::SnapshotOptions::new()
+                            .threshold(2.0)
+                            .max_failed_pixels(1000),
+                    );
+                }
+            }
         }
     }
 }

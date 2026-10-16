@@ -344,6 +344,29 @@ sign in as the same identity in that organization and uses the existing vendor
 OAuth form. Credentials never reach the desktop. Clients discard replies to
 replaced screens and refresh service states after changes or browser sign-in.
 
+### Notifications
+
+Native delivery runs in the daemon's unsandboxed parent through a bounded helper
+process, whether the desktop window or terminal UI is open or closed. The helper
+belongs to the same installation. Notification titles and bodies are generic;
+chat content and tool arguments never enter the OS notification service.
+
+| Command | Fields | Response |
+| --- | --- | --- |
+| `notification_status` | None | `available`, `permission`, `connected`, `account`. Permission is `granted`, `not_determined`, `denied`, `unknown`, or `unavailable`. |
+| `notification_permission` | `request` | With `false`, check quietly. `true` requests permission only after an explicit user action. Queue acceptance is not permission or delivery. |
+| `notification_view` | `session`, `account`, `chat`, `visible` | Report a chat actually visible in a focused window or terminal. Session is an opaque printable identifier (at most 64 characters). Renew visibility every 30 seconds; it expires after 75 seconds. Clear it on blur, close, or account/chat change. |
+| `notification_preferences` | None | Current account, chat push/email choices, browser preview preference, and other email choices. Requires the device chat grant. |
+| `notification_preferences_update` | `preferences` | Updated preferences. Include the displayed `account` external ID; the server refuses a stale organization. |
+| `notification_browser_link` | None | Short-lived `path` for explicit same-computer browser confirmation on the paired server. |
+
+Linux reports permission as `unknown` because its notification service has no
+permission-query API. Delivery can still be attempted. Only the helper's actual,
+correlated `shown` event acknowledges an offer; queued requests, withdrawal and
+permission never do. An unsuccessful delivery leaves browser fallback eligible.
+Explicit browser linking deduplicates only that browser and organization. Actual
+foreground visibility suppresses notifications globally, matching the website.
+
 ### `asset`
 
 ```json

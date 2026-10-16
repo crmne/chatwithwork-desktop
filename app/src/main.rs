@@ -143,6 +143,7 @@ fn page(name: &str) -> Option<Page> {
         "activity" => Page::Activity,
         "account" => Page::Account,
         "general" => Page::General,
+        "notifications" => Page::Notifications,
         _ => return None,
     })
 }

@@ -138,6 +138,11 @@ pub enum ControlRequest {
     },
     /// The owner's chats, newest first, as the server lists them.
     Chats,
+    NotificationPreferences,
+    NotificationPreferencesUpdate {
+        preferences: serde_json::Value,
+    },
+    NotificationBrowserLink,
     /// The new-chat screen's services, suggestions and instruction layers.
     Workspace {
         project: Option<u64>,

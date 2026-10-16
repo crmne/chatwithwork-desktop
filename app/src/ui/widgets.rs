@@ -20,6 +20,7 @@ pub enum Icon {
     Clock,
     Person,
     Gear,
+    Bell,
 }
 
 pub fn paint_icon(
@@ -34,6 +35,28 @@ pub fn paint_icon(
     let stroke = Stroke::new(1.4 * s.max(1.0), color);
     let p = |x: f32, y: f32| -> Pos2 { center + vec2((x - 8.0) * s, (y - 8.0) * s) };
     match icon {
+        Icon::Bell => {
+            painter.add(Shape::line(
+                vec![
+                    p(3.0, 12.0),
+                    p(4.0, 10.0),
+                    p(4.0, 6.0),
+                    p(4.8, 3.8),
+                    p(6.5, 2.5),
+                    p(9.5, 2.5),
+                    p(11.2, 3.8),
+                    p(12.0, 6.0),
+                    p(12.0, 10.0),
+                    p(13.0, 12.0),
+                    p(3.0, 12.0),
+                ],
+                stroke,
+            ));
+            painter.add(Shape::line(
+                vec![p(6.0, 14.0), p(7.0, 14.8), p(9.0, 14.8), p(10.0, 14.0)],
+                stroke,
+            ));
+        }
         Icon::Chat => {
             // A speech bubble with its tail at the bottom left.
             let body = egui::Rect::from_min_max(p(1.8, 2.5), p(14.2, 11.5));

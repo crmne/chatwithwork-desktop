@@ -248,6 +248,9 @@ fn id_string_opt<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Named {
+    /// The organization's external ID, for account-bound native navigation.
+    #[serde(deserialize_with = "id_string")]
+    pub id: String,
     pub name: String,
     /// The organization's logo; the server sends none yet (the web draws
     /// the name's first letter).

@@ -331,6 +331,22 @@ impl ChatClient {
         self.call("GET", &workspace_path("new_chat", project), Body::Empty)
     }
 
+    pub fn notification_preferences(&self) -> Result<Value> {
+        self.call("GET", "local_agent/notification_preferences", Body::Empty)
+    }
+
+    pub fn update_notification_preferences(&self, preferences: Value) -> Result<Value> {
+        self.call(
+            "PATCH",
+            "local_agent/notification_preferences",
+            Body::Json(&preferences),
+        )
+    }
+
+    pub fn notification_browser_link(&self) -> Result<Value> {
+        self.call("POST", "local_agent/notification_browser_link", Body::Empty)
+    }
+
     pub fn memory_preference(&self, enabled: bool) -> Result<Value> {
         self.call(
             "PATCH",
