@@ -44,13 +44,20 @@ enum Command {
         /// Only share folders: don't ask to use your chats from `cww tui`.
         #[arg(long)]
         no_chats: bool,
+        /// Sign in to another organization for chats, without changing shared folders.
+        #[arg(long, conflicts_with = "no_chats")]
+        organization: bool,
         /// Print JSON lines for a program to read (the desktop app): the
         /// code, then the outcome. Never asks anything.
         #[arg(long)]
         json: bool,
     },
     /// Forget the pairing on this computer. Revoke it in Settings too.
-    Logout,
+    Logout {
+        /// Forget only this saved organization sign-in (its ID from login --json).
+        #[arg(long)]
+        organization: Option<String>,
+    },
     /// Manage the shared folders.
     Roots {
         #[command(subcommand)]
@@ -205,7 +212,16 @@ fn run(cli: Cli) -> Result<()> {
             no_chats,
             no_daemon,
             json: true,
-        } => login_json(&paths, &server, name, !no_browser, no_chats, !no_daemon)?,
+            organization,
+        } => login_json(
+            &paths,
+            &server,
+            name,
+            !no_browser,
+            no_chats,
+            !no_daemon,
+            organization,
+        )?,
         Command::Login {
             server,
             name,
@@ -213,6 +229,7 @@ fn run(cli: Cli) -> Result<()> {
             no_daemon,
             no_chats,
             json: false,
+            organization,
         } => {
             let options = auth::LoginOptions {
                 name,
@@ -220,10 +237,21 @@ fn run(cli: Cli) -> Result<()> {
                 open_browser: !no_browser,
                 without_chats: no_chats,
             };
-            let paired = auth::login(&paths, &server, options, |line| println!("{line}"))?;
-            println!();
-            println!("Paired with {} as device {}.", paired.url, paired.device_id);
-            if Config::load(&paths)?.roots.is_empty() {
+            if organization {
+                let profile =
+                    auth::login_organization(&paths, &server, options, |line| println!("{line}"))?;
+                println!(
+                    "\nSigned in to {}. Shared folders are unchanged.",
+                    profile.account.name
+                );
+            } else {
+                let paired = auth::login(&paths, &server, options, |line| println!("{line}"))?;
+                println!(
+                    "\nPaired with {} as device {}.",
+                    paired.url, paired.device_id
+                );
+            }
+            if !organization && Config::load(&paths)?.roots.is_empty() {
                 offer_documents(&paths)?;
             }
             proxy_hint(&paths);
@@ -237,7 +265,18 @@ fn run(cli: Cli) -> Result<()> {
                 AfterLogin::Failed(e) => eprintln!("warning: {e}\n{START_DAEMON_HINT}"),
             }
         }
-        Command::Logout => {
+        Command::Logout {
+            organization: Some(id),
+        } => {
+            if auth::organizations::forget(&paths, &id)? {
+                println!(
+                    "Signed out of this organization on this computer. Revoke the sign-in in Settings as well."
+                );
+            } else {
+                anyhow::bail!("That organization is not signed in on this computer.");
+            }
+        }
+        Command::Logout { organization: None } => {
             if auth::logout(&paths)? {
                 println!("Forgot the pairing. Revoke this computer in Settings as well.");
             } else {
@@ -618,6 +657,7 @@ fn login_json(
     open: bool,
     without_chats: bool,
     start: bool,
+    organization: bool,
 ) -> Result<()> {
     use std::sync::atomic::AtomicBool;
 
@@ -628,7 +668,12 @@ fn login_json(
         open_browser: false,
         without_chats,
     };
-    let result = auth::start_login(paths, server, options).and_then(|pending| {
+    let pending = if organization {
+        auth::start_organization_login(paths, server, options)
+    } else {
+        auth::start_login(paths, server, options)
+    };
+    let result = pending.and_then(|pending| {
         let opened = open && pending.browser_url().is_some_and(cww::browser::open);
         emit(serde_json::json!({
             "event": "code",
@@ -640,10 +685,18 @@ fn login_json(
             "fingerprint": pending.fingerprint(),
             "opened": opened,
         }));
-        pending.wait(&AtomicBool::new(false))
+        if organization {
+            pending
+                .wait_for_organization(&AtomicBool::new(false))
+                .map(|profile| (profile.server.clone(), Some(profile)))
+        } else {
+            pending
+                .wait(&AtomicBool::new(false))
+                .map(|server| (server, None))
+        }
     });
     match result {
-        Ok(paired) => {
+        Ok((paired, profile)) => {
             // The pairing is saved either way: a daemon that couldn't pick it
             // up is reported, not an error.
             let daemon = daemon_after_login(paths, start);
@@ -653,6 +706,9 @@ fn login_json(
                 "device_id": paired.device_id,
                 "daemon": daemon.name(),
             });
+            if let Some(profile) = profile {
+                event["organization"] = serde_json::to_value(profile)?;
+            }
             if let AfterLogin::Failed(e) = &daemon {
                 event["daemon_error"] = Value::String(e.clone());
             }

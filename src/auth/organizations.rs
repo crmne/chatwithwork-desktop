@@ -190,8 +190,9 @@ pub fn forget(paths: &Paths, id: &str) -> Result<bool> {
         return Ok(false);
     };
     let profile = saved.remove(index);
-    profile.forget_secrets(paths)?;
+    // Retire the runtime even if the OS keychain refuses secret cleanup.
     write(paths, saved)?;
+    profile.forget_secrets(paths)?;
     Ok(true)
 }
 
@@ -267,6 +268,28 @@ mod tests {
         assert_eq!(list(&paths).unwrap(), [second]);
         assert!(!forget(&paths, "missing").unwrap());
         assert_eq!(Config::load(&paths).unwrap(), config);
+    }
+
+    #[test]
+    fn forgetting_retires_the_runtime_even_if_secret_cleanup_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        let origin = ServerUrl::parse("https://example.com").unwrap();
+        let profile = save_grant(
+            &paths,
+            &origin,
+            &DeviceKey::generate().unwrap(),
+            token("123456789"),
+            "file",
+        )
+        .unwrap();
+        let SecretStore::File(secret) = profile.store(&paths).unwrap() else {
+            panic!("file store");
+        };
+        std::fs::remove_file(&secret).unwrap();
+        std::fs::create_dir(&secret).unwrap();
+        assert!(forget(&paths, &profile.id).is_err());
+        assert!(list(&paths).unwrap().is_empty());
     }
 
     #[test]

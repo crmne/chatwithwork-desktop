@@ -4043,3 +4043,87 @@ async fn organization_control_connections_keep_writes_bound_to_the_original_gran
             .unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn organization_cli_login_reports_the_chat_grant_without_repairing_folders() {
+    let fx = fixture();
+    let server = FakeServer::start().await;
+    pair(&fx, &server);
+    let config = std::fs::read(fx.paths.config_file()).unwrap();
+    let secrets = std::fs::read(fx.paths.secrets_file()).unwrap();
+    for json in [true, false] {
+        let (base, origin) = (fx.base.join("cww"), server.origin.clone());
+        let output = tokio::task::spawn_blocking(move || {
+            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_cww"));
+            command.args([
+                "login",
+                "--organization",
+                "--no-browser",
+                "--no-daemon",
+                "--server",
+                &origin,
+            ]);
+            if json {
+                command.arg("--json");
+            }
+            command
+                .env("CWW_HOME", base)
+                .env("CWW_SECRET_STORE", "file")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        if json {
+            let lines: Vec<Value> = stdout
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0]["event"], "code");
+            assert_eq!(lines[0]["opened"], false);
+            assert_eq!(lines[1]["event"], "paired");
+            assert_eq!(lines[1]["organization"]["account"]["id"], "123456789");
+            assert_eq!(lines[1]["daemon"], "not_running");
+        } else {
+            assert!(stdout.contains("Signed in to"));
+            assert!(stdout.contains("Shared folders are unchanged."));
+            assert!(!stdout.contains("Share your Documents"));
+        }
+        assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), config);
+        assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), secrets);
+        assert_eq!(
+            server.state.lock().unwrap().pairing_scope,
+            "local_agent:chat"
+        );
+        assert_eq!(cww::auth::organizations::list(&fx.paths).unwrap().len(), 1);
+    }
+    let profile = cww::auth::organizations::list(&fx.paths).unwrap().remove(0);
+    let base = fx.base.join("cww");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+            .args(["logout", "--organization", &profile.id])
+            .env("CWW_HOME", base)
+            .env("CWW_SECRET_STORE", "file")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(output.status.success());
+    assert!(
+        cww::auth::organizations::list(&fx.paths)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), config);
+    assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), secrets);
+}

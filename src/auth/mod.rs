@@ -335,6 +335,24 @@ pub fn login(
 ) -> Result<ServerConfig> {
     let open_browser = options.open_browser;
     let pending = start_login(paths, server, options)?;
+    explain_login(&pending, open_browser, &mut say);
+    pending.wait(&AtomicBool::new(false))
+}
+
+/// Sign in for chats with a separate key, leaving shared folders untouched.
+pub fn login_organization(
+    paths: &Paths,
+    server: &str,
+    options: LoginOptions,
+    mut say: impl FnMut(&str),
+) -> Result<organizations::SavedOrganization> {
+    let open_browser = options.open_browser;
+    let pending = start_organization_login(paths, server, options)?;
+    explain_login(&pending, open_browser, &mut say);
+    pending.wait_for_organization(&AtomicBool::new(false))
+}
+
+fn explain_login(pending: &PendingLogin, open_browser: bool, mut say: impl FnMut(&str)) {
     say(&format!(
         "To connect \"{}\" to Chat with Work:",
         pending.device_name()
@@ -352,7 +370,6 @@ pub fn login(
         say("Opened the approval page in your browser.");
     }
     say("Waiting for approval...");
-    pending.wait(&AtomicBool::new(false))
 }
 
 pub fn logout(paths: &Paths) -> Result<bool> {

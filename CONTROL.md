@@ -148,6 +148,13 @@ or `{"event": "error", "error": "..."}` and exit status 1. `browser_url` is `nul
 
 ### Independent organization sign-ins
 
+Desktop clients run `cww login --organization --json` (with the same server,
+browser and daemon options above). Its `paired` event also includes the public
+saved `organization` metadata and local sign-in ID, never credentials. Without
+`--json`, this flow prints the approval instructions and organization name.
+`cww logout --organization ID` forgets only that sign-in. The default `login`
+and `logout` still manage the original folder pairing.
+
 `cww::auth::start_organization_login` and `PendingLogin::wait_for_organization`
 create a fresh, chat-only grant. They never edit the primary folder pairing or
 its key. Saved grants live in `organizations.json`; keys and refresh credentials
