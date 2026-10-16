@@ -146,31 +146,76 @@ pub fn spawn(helper: Option<PathBuf>, shutdown: CancellationToken) -> Endpoint {
         shutdown,
         Arc::new(move |activation| {
             let app = app.clone();
-            // Reap the short IPC launcher without blocking notification delivery.
+            // Reap the IPC launcher or first GUI process without blocking delivery.
             let _ = std::thread::Builder::new()
                 .name("notification-navigation".into())
                 .spawn(move || {
-                    if let Some(app) = app
-                        && let Ok(target) = crate::notifications::navigation::Target::new(
-                            activation.server.clone(),
-                            activation.account.clone(),
-                            activation.chat,
-                        )
-                        && let Ok(mut child) = std::process::Command::new(app)
-                            .arg("--open-chat")
-                            .arg(target.encode())
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn()
-                    {
-                        let _ = child.wait();
-                        return;
-                    }
-                    let _ = crate::browser::open(&activation.browser_url());
+                    open_activation(app.as_deref(), &activation, |url| {
+                        let _ = crate::browser::open(url);
+                    });
                 });
         }),
     )
+}
+
+fn open_activation(
+    app: Option<&std::path::Path>,
+    activation: &Activation,
+    browser: impl FnOnce(&str),
+) {
+    open_activation_with_window(
+        app,
+        activation,
+        browser,
+        Duration::from_secs(5),
+        Duration::from_millis(25),
+    );
+}
+
+fn open_activation_with_window(
+    app: Option<&std::path::Path>,
+    activation: &Activation,
+    browser: impl FnOnce(&str),
+    window: Duration,
+    poll: Duration,
+) {
+    if let Some(app) = app
+        && let Ok(target) = crate::notifications::navigation::Target::new(
+            activation.server.clone(),
+            activation.account.clone(),
+            activation.chat,
+        )
+        && let Ok(mut child) = std::process::Command::new(app)
+            .arg("--open-chat")
+            .arg(target.encode())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        && desktop_started(&mut child, window, poll)
+    {
+        // Includes IPC handover and intentional account-scope rejection.
+        return;
+    }
+    browser(&activation.browser_url());
+}
+
+fn desktop_started(child: &mut std::process::Child, window: Duration, poll: Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        let remaining = window.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            // A first GUI launch stays alive. Reap it on this navigation
+            // thread, but never reopen an old notification after a later crash.
+            let _ = child.wait();
+            return true;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(poll.min(remaining)),
+            Err(_) => return false,
+        }
+    }
 }
 
 pub fn spawn_with_activation(
