@@ -1,7 +1,6 @@
-# whisper-rs ships bindings for its exact bundled whisper.cpp. Reuse them on
-# every platform so contributors and cross builds do not need libclang.
+# whisper-rs generates bindings for the target's C ABI with libclang. Its
+# bundled fallback includes Linux libc layouts and cannot be used on Windows.
 [env]
-WHISPER_DONT_GENERATE_BINDINGS = "1"
 # Portable binaries must not require the build machine's CPU instructions.
 GGML_NATIVE = "OFF"
 GGML_SSE42 = "OFF"

@@ -117,6 +117,8 @@ jobs:
       - run: mbx build --locked --release --target ${{ matrix.target }} --bins
       # Built on its own so cww's binaries come out as they always have. The
       # Linux app needs glibc, so it's built by the linux-app job.
+      - uses: ./.github/actions/speech-build
+        if: runner.os == 'Windows'
       - name: Build the desktop app
         if: runner.os == 'Windows'
         run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
@@ -283,6 +285,7 @@ jobs:
         with:
           backend: local
       # No compiler cache, as above.
+      - uses: ./.github/actions/speech-build
       - name: Build both architectures
         run: |
           mbx build --locked --release --target aarch64-apple-darwin --bin cww
@@ -472,15 +475,15 @@ jobs:
         with:
           backend: local
       # No compiler cache, as above.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config cmake
+      - uses: ./.github/actions/speech-build
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
-      - name: Check the app needs only C and ALSA libraries, glibc 2.35 or older
+      - name: Check the app needs only C, C++ and ALSA libraries, glibc 2.35 or older
         run: |
           bin="target/${{ matrix.target }}/release/cww-app"
           readelf -d "$bin" | grep NEEDED
-          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libasound\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
-            echo "::error::$bin links more than the C and ALSA libraries"
+          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libasound\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libstdc\+\+\.so\.6|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
+            echo "::error::$bin links more than the C, C++ and ALSA libraries"
             exit 1
           fi
           newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)

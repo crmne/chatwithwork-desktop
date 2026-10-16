@@ -1,0 +1,19 @@
+name: Speech build dependencies
+description: CMake and target-specific Whisper bindings for desktop builds
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config cmake libclang-dev
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew list llvm >/dev/null 2>&1 || brew install llvm
+        echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $clang = 'C:\Program Files\LLVM\bin'
+        if (!(Test-Path "$clang\libclang.dll")) { throw 'The runner needs LLVM with libclang.dll' }
+        "LIBCLANG_PATH=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

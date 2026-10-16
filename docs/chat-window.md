@@ -221,8 +221,8 @@ length and SHA-256 match; failure/cancellation removes it. The inference helper
 rechecks the checksum before loading. No models ship in app/release archives.
 Malformed preferences refuse dictation rather than defaulting back to upload.
 
-The desktop build needs CMake and a C++ compiler. Bundled bindings avoid a
-libclang dependency, and portable CPU settings avoid requiring the build host's
+The desktop build needs CMake, a C++ compiler and libclang. Bindings are generated
+for the target's C ABI; portable CPU settings avoid requiring the build host's
 instruction set. The models and whisper.cpp are MIT licensed.
 
 Tests use generated audio and a fake helper, never the host's microphone.
