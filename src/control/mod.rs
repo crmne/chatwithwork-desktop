@@ -14,6 +14,9 @@
 //! The terminal UI's chats go through here too: the daemon relays them to
 //! Chat with Work with its own token, so no client ever holds one.
 
+mod bounded;
+pub use bounded::BoundedClient;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]

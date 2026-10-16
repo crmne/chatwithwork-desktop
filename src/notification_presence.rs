@@ -24,8 +24,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::control::ControlRequest;
 
-mod control;
-
 const RENEW: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_secs(1);
 
@@ -58,8 +56,13 @@ pub struct Presence {
 
 impl Presence {
     pub fn new(socket: PathBuf) -> Self {
-        let mut sender = control::Sender::new(socket, Duration::from_secs(5));
-        Self::with_sender(move |request| sender.send(&request).map_err(|error| error.to_string()))
+        let mut sender = crate::control::BoundedClient::new(socket, Duration::from_secs(5));
+        Self::with_sender(move |request| {
+            sender
+                .request(&request)
+                .map(drop)
+                .map_err(|error| error.to_string())
+        })
     }
 
     /// Supply a blocking control sender, called only by this handle's worker.

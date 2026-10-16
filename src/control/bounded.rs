@@ -1,7 +1,7 @@
-//! One-shot presence requests with an overall deadline, including connect and
-//! write. The usual blocking control client deliberately supports long calls
-//! and subscriptions; its Windows pipe reads have no timeout. Presence must
-//! recover independently without leaving blocked worker threads behind.
+//! Short control requests with an overall deadline, including connect and
+//! write. Used by presence and UI status polling. The normal blocking client
+//! supports long calls and subscriptions; this client bounds both frames and
+//! elapsed time without leaving blocked worker threads behind.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,11 @@ use crate::control::ControlRequest;
 
 const MAX_FRAME: usize = 16 * 1024;
 
-pub(super) struct Sender {
+/// A reusable client for small requests such as status and presence. Call it
+/// from a worker thread: connect, write and response share the given deadline.
+/// Both request and response are limited to 16 KiB. Use `Client` for chats,
+/// uploads, long-running work and subscriptions.
+pub struct BoundedClient {
     socket: PathBuf,
     deadline: Duration,
     // Created lazily on the existing presence worker, then reused for every
@@ -23,8 +27,8 @@ pub(super) struct Sender {
     runtime: Option<Runtime>,
 }
 
-impl Sender {
-    pub(super) fn new(socket: PathBuf, deadline: Duration) -> Self {
+impl BoundedClient {
+    pub fn new(socket: PathBuf, deadline: Duration) -> Self {
         Self {
             socket,
             deadline,
@@ -32,7 +36,7 @@ impl Sender {
         }
     }
 
-    pub(super) fn send(&mut self, request: &ControlRequest) -> Result<()> {
+    pub fn request(&mut self, request: &ControlRequest) -> Result<serde_json::Value> {
         if self.runtime.is_none() {
             self.runtime = Some(
                 Builder::new_current_thread()
@@ -53,7 +57,7 @@ async fn request_with<S>(
     connecting: impl Future<Output = Result<S>>,
     request: &ControlRequest,
     deadline: Duration,
-) -> Result<()>
+) -> Result<serde_json::Value>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -65,7 +69,7 @@ where
         let mut frame = serde_json::to_vec(request)?;
         frame.push(b'\n');
         if frame.len() > MAX_FRAME {
-            bail!("presence request is too large");
+            bail!("control request is too large");
         }
         stream.write_all(&frame).await?;
         stream.flush().await?;
@@ -73,20 +77,20 @@ where
         let mut response = Vec::new();
         reader.read_until(b'\n', &mut response).await?;
         if response.len() > MAX_FRAME {
-            bail!("presence response is too large");
+            bail!("control response is too large");
         }
         if response.last() != Some(&b'\n') {
-            bail!("the daemon closed the presence connection");
+            bail!("the daemon closed the control connection");
         }
         let response: serde_json::Value = serde_json::from_slice(&response)
-            .context("invalid presence response from the daemon")?;
+            .context("invalid control response from the daemon")?;
         if response["ok"] != true {
-            bail!("the daemon did not accept presence");
+            bail!("the daemon did not accept this control request");
         }
-        Ok(())
+        Ok(response)
     })
     .await
-    .context("presence control request timed out")?
+    .context("control request timed out")?
 }
 
 #[cfg(unix)]
@@ -102,7 +106,7 @@ async fn connect(path: &Path) -> Result<tokio::net::windows::named_pipe::NamedPi
 
     let name = path.to_str().context("pipe name is not UTF-8")?;
     if !name.starts_with(r"\\.\pipe\") {
-        bail!("presence requires a local named pipe");
+        bail!("control requests require a local named pipe");
     }
     let own = crate::win::current_user_sid()?;
     loop {
@@ -141,6 +145,29 @@ mod tests {
             chat: 42,
             visible: true,
         }
+    }
+
+    #[tokio::test]
+    async fn successful_requests_preserve_the_status_fields() {
+        let (client, peer) = tokio::io::duplex(MAX_FRAME);
+        let expected =
+            serde_json::json!({"ok": true, "server": "https://example.com", "device_id": "42"});
+        let response = expected.to_string() + "\n";
+        let server = tokio::spawn(async move {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).unwrap()["cmd"],
+                "status"
+            );
+            peer.get_mut().write_all(response.as_bytes()).await.unwrap();
+        });
+        let actual = request_with(async { Ok(client) }, &ControlRequest::Status, TEST_DEADLINE)
+            .await
+            .unwrap();
+        assert_eq!(actual, expected);
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -262,9 +289,13 @@ mod tests {
             });
         });
         wait_ready.recv_timeout(Duration::from_secs(5)).unwrap();
-        let mut sender = Sender::new(path, TEST_DEADLINE);
-        let presence =
-            Presence::with_sender(move |request| sender.send(&request).map_err(|e| e.to_string()));
+        let mut sender = BoundedClient::new(path, TEST_DEADLINE);
+        let presence = Presence::with_sender(move |request| {
+            sender
+                .request(&request)
+                .map(drop)
+                .map_err(|e| e.to_string())
+        });
         presence.set(Some(View {
             account: "123456789".into(),
             chat: 42,
