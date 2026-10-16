@@ -16,8 +16,11 @@ impl SettingsApp {
             ui,
             &theme,
             "Account",
-            "Pair this computer with your Chat with Work account.",
+            "Manage your organization sign-ins and shared-folder connection.",
         );
+        self.organization_accounts(ui, status);
+        ui.add_space(20.0);
+        ui.label(theme.strong("Folder sharing"));
         let Some(status) = status else {
             self.agent_missing(ui);
             return;
@@ -25,9 +28,112 @@ impl SettingsApp {
         self.pairing_section(ui, status);
     }
 
+    fn organization_accounts(&mut self, ui: &mut Ui, status: Option<&Status>) {
+        let theme = self.theme;
+        ui.label(theme.strong("Organizations"));
+        ui.label(theme.weak(
+            "Sign in to another organization to use its chats, connections and instructions.",
+        ));
+        let choices = self.organizations.choices(status);
+        for choice in choices {
+            group(ui, &theme, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui.selectable_label(choice.selected, &choice.name).clicked() {
+                        self.select_organization(choice.id.clone());
+                    }
+                    if let Some(role) = &choice.role {
+                        ui.label(theme.small(role));
+                    }
+                    if let Some(id) = &choice.id {
+                        if ui
+                            .add_enabled(!self.account.requesting, egui::Button::new("Sign out"))
+                            .clicked()
+                        {
+                            self.account.confirm_organization_logout = Some(id.clone());
+                        }
+                        if self.account.confirm_organization_logout.as_ref() == Some(id) {
+                            ui.label(theme.weak("Sign out on this computer?"));
+                            if ui.button("Keep signed in").clicked() {
+                                self.account.confirm_organization_logout = None;
+                            }
+                            if ui.button("Sign out of organization").clicked() {
+                                self.account.requesting = true;
+                                self.account.confirm_organization_logout = None;
+                                let (account, id) =
+                                    (std::sync::Arc::clone(&self.shared.account), id.clone());
+                                self.jobs.spawn(ui.ctx(), move || {
+                                    super::Done::OrganizationLoggedOut(
+                                        account.logout_organization(&id),
+                                    )
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(error) = &self.organizations.error {
+            ui.label(theme.weak(error));
+        }
+        if self.account.organization
+            && let Some(pairing) = self.account.pairing.clone()
+        {
+            if let Some(code) = pairing {
+                self.pairing_card(ui, &code);
+            } else {
+                ui.label(theme.weak("Asking Chat with Work for a sign-in code…"));
+                if ui.button("Cancel").clicked() {
+                    self.cancel_pairing();
+                }
+            }
+        } else if self.account.pairing.is_none() {
+            ui.horizontal(|ui| {
+                widgets::switch(
+                    ui,
+                    &theme,
+                    &mut self.account.organization_custom_server,
+                    "Sign in to a self-hosted server",
+                );
+                ui.label("Sign in to a self-hosted server");
+            });
+            if self.account.organization_custom_server {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.account.organization_server)
+                        .hint_text("https://chat.example.com"),
+                );
+            }
+            let server = if self.account.organization_custom_server {
+                let server = self.account.organization_server.trim();
+                (!server.is_empty()).then(|| Some(server.to_owned()))
+            } else {
+                Some(None)
+            };
+            if ui
+                .add_enabled(
+                    !self.account.requesting && server.is_some(),
+                    egui::Button::new("Add an organization…"),
+                )
+                .clicked()
+                && let Some(server) = server
+            {
+                self.account.organization = true;
+                self.pair(ui.ctx(), server);
+            }
+        }
+        if self.account.organization
+            && let Some(error) = &self.account.error
+        {
+            widgets::notice(ui, &theme, error, theme.palette.danger);
+        }
+    }
+
     /// Pairing state and actions, shared with the welcome page.
     pub(super) fn pairing_section(&mut self, ui: &mut Ui, status: &Status) {
         let theme = self.theme;
+        if self.account.organization && self.account.pairing.is_some() {
+            return;
+        }
         if let Some(pairing) = self.account.pairing.clone() {
             match pairing {
                 Some(code) => self.pairing_card(ui, &code),
@@ -104,6 +210,7 @@ impl SettingsApp {
         if response.inner.clicked()
             && let Some(server) = server
         {
+            self.account.organization = false;
             self.pair(ui.ctx(), server);
         }
     }

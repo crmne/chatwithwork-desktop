@@ -14,6 +14,7 @@ mod dictation;
 mod folders;
 mod general;
 mod notifications;
+mod organizations;
 mod privacy;
 pub mod theme;
 mod welcome;
@@ -49,7 +50,8 @@ pub struct Shared {
     ctx: Mutex<Option<egui::Context>>,
     /// Only the most recent explicit notification click needs navigation.
     open_chat: Mutex<Option<cww::notifications::navigation::Target>>,
-    notification_presence: Mutex<Option<cww::notification_presence::Presence>>,
+    notification_presence: Mutex<Option<(PathBuf, cww::notification_presence::Presence)>>,
+    notification_socket: Mutex<PathBuf>,
     /// The shell clears visibility even when minimization prevents rendering.
     notification_foreground: AtomicBool,
 }
@@ -62,6 +64,7 @@ impl Shared {
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
+            notification_socket: Mutex::new(paths.socket_path()),
             paths,
             account,
             status: Mutex::new(None),
@@ -109,14 +112,40 @@ impl Shared {
             .notification_presence
             .lock()
             .expect("notification presence lock");
+        let socket = self
+            .notification_socket
+            .lock()
+            .expect("notification socket lock")
+            .clone();
+        if presence
+            .as_ref()
+            .is_some_and(|(previous, _)| *previous != socket)
+            && let Some((_, previous)) = presence.take()
+        {
+            previous.set(None);
+        }
         if view.is_some() && presence.is_none() {
-            *presence = Some(cww::notification_presence::Presence::new(
-                self.paths.socket_path(),
+            *presence = Some((
+                socket.clone(),
+                cww::notification_presence::Presence::new(socket),
             ));
         }
-        if let Some(presence) = presence.as_ref() {
+        if let Some((_, presence)) = presence.as_ref() {
             presence.set(view);
         }
+    }
+
+    fn notification_endpoint(&self, socket: PathBuf) {
+        let mut current = self
+            .notification_socket
+            .lock()
+            .expect("notification socket lock");
+        if *current == socket {
+            return;
+        }
+        *current = socket;
+        drop(current);
+        self.notification_view(None);
     }
 
     pub fn status(&self) -> Option<Status> {
@@ -166,6 +195,8 @@ pub struct AppState {
     pub onboarded: bool,
     /// None follows the platform default; an explicit choice survives upgrades.
     pub custom_titlebar: Option<bool>,
+    pub organization: Option<String>,
+    pub organization_chats: std::collections::BTreeMap<String, u64>,
 }
 
 impl AppState {
@@ -252,8 +283,9 @@ enum Done {
     Paused(Result<(), String>),
     Deny(Result<DenyList, String>),
     Log(Result<Vec<AuditEntry>, String>),
-    Pairing(crate::pairing::PairEvent),
+    Pairing(u64, crate::pairing::PairEvent),
     LoggedOut(Result<(), String>),
+    OrganizationLoggedOut(Result<(), String>),
     Started(Result<String, String>),
     Picked(Option<PathBuf>),
 }
@@ -325,6 +357,11 @@ struct ActivityState {
 #[derive(Default)]
 struct AccountState {
     requesting: bool,
+    organization: bool,
+    organization_server: String,
+    organization_custom_server: bool,
+    generation: u64,
+    confirm_organization_logout: Option<String>,
     server: String,
     custom_server: bool,
     confirm_logout: bool,
@@ -375,6 +412,8 @@ pub struct SettingsApp {
     /// The Chat page, made the first time it's shown.
     chat: Option<chat::ChatPage>,
     chat_scope: Option<(String, String)>,
+    organizations: organizations::State,
+    restore_chat: Option<u64>,
     notification: Option<cww::notifications::navigation::Target>,
     /// The style the window has now: the Chat page's (in this theme) or
     /// the platform's.
@@ -400,6 +439,8 @@ impl SettingsApp {
             scrolling: fastframe_scroll::Scrolling::default(),
             chat: None,
             chat_scope: None,
+            organizations: organizations::State::new(&shared.paths, app_state.organization.clone()),
+            restore_chat: None,
             notification: None,
             styled_for_chat: None,
             reveal: !cfg!(test),
@@ -470,28 +511,42 @@ impl SettingsApp {
             self.shared.close_requested.store(true, Ordering::SeqCst);
         }
         let status = self.shared.status();
+        if self.organizations.poll(&self.shared.paths, ui.ctx()) {
+            self.organization_changed();
+        }
         if self.page != Page::Notifications {
             self.notifications = None;
         }
-        if let Some(target) = self
+        let target = self
             .shared
             .open_chat
             .lock()
             .expect("chat navigation lock")
-            .take()
-        {
-            self.notification = Some(target);
+            .take();
+        if let Some(target) = target {
             self.page = Page::Chat;
+            if self
+                .chat
+                .as_mut()
+                .is_none_or(|chat| chat.may_open_notification(&target))
+            {
+                self.navigate_notification(target);
+            }
         }
-        let scope = status
+        let chat_status = self.organizations.status(status.clone());
+        let scope = chat_status
             .as_ref()
             .filter(|s| s.connection.connection != "revoked")
             .and_then(|s| Some((s.server.clone()?, s.device_id.clone()?)));
         if scope != self.chat_scope {
-            if let Some(chat) = self.chat.take() {
-                chat.stop();
+            self.remember_chat();
+            if let Some(mut chat) = self.chat.take() {
+                chat.leave_organization();
             }
             self.chat_scope = scope;
+            self.restore_chat = self
+                .chat_key()
+                .and_then(|key| self.app_state.organization_chats.get(&key).copied());
         }
         if self.page != Page::Chat {
             self.notification = None;
@@ -514,7 +569,7 @@ impl SettingsApp {
             chrome::show(ui, &self.theme, self.page);
         }
         if self.page == Page::Chat {
-            self.chat_page(ui, status.as_ref());
+            self.chat_page(ui, chat_status.as_ref());
             self.update_presence(ui);
             if self.custom_titlebar {
                 chrome::resize(ui, self.theme.platform);
@@ -607,15 +662,18 @@ impl SettingsApp {
     }
 
     fn chat_page(&mut self, ui: &mut Ui, status: Option<&Status>) {
-        let socket = self.shared.paths.socket_path();
+        let socket = self.organizations.socket(&self.shared.paths);
+        self.shared.notification_endpoint(socket.clone());
+        let choices = self.organizations.choices(self.shared.status().as_ref());
         let data_dir = self.shared.paths.daemon.data_dir.clone();
         let page = self
             .chat
             .get_or_insert_with(|| chat::ChatPage::new(&socket, data_dir));
         page.set_dictation_mode(self.dictation.preferences.mode);
+        page.set_organizations(choices);
         let env = chat::Env {
             status,
-            known: self.shared.is_known(),
+            known: self.organizations.known(self.shared.is_known()),
             dark: self.theme.dark,
             starting: self.general.starting,
         };
@@ -624,11 +682,14 @@ impl SettingsApp {
             .show(ui, |ui| page.show(ui, &env))
             .inner;
         if let Some(target) = &self.notification {
+            self.restore_chat = None;
             let matches_server = status
                 .and_then(|s| s.server.as_deref())
                 .and_then(|server| cww::auth::client::ServerUrl::parse(server).ok())
                 .is_some_and(|server| server == *target.server());
-            if self.shared.is_known() && (!matches_server || self.chat_scope.is_none()) {
+            if self.organizations.known(self.shared.is_known())
+                && (!matches_server || self.chat_scope.is_none())
+            {
                 self.notification = None;
             } else if page.state().ready()
                 && !page
@@ -646,11 +707,97 @@ impl SettingsApp {
                 self.notification = None;
             }
         }
+        self.organizations
+            .remember_primary(status, &page.state().list.account.name);
+        if page.state().ready()
+            && self.notification.is_none()
+            && let Some(number) = self.restore_chat.take()
+        {
+            page.open(number);
+        }
         match action {
+            Some(chat::Action::Organization(id)) => self.select_organization(id),
+            Some(chat::Action::Notification(target)) => self.navigate_notification(target),
             Some(chat::Action::Settings(page)) => self.page = page,
             Some(chat::Action::StartAgent) => self.start_agent(ui.ctx()),
             None => {}
         }
+    }
+
+    fn navigate_notification(&mut self, target: cww::notifications::navigation::Target) {
+        let same_server = |server: &str| {
+            cww::auth::client::ServerUrl::parse(server).ok().as_ref() == Some(target.server())
+        };
+        let current = self.organizations.status(self.shared.status());
+        let already_selected = current
+            .as_ref()
+            .and_then(|s| s.server.as_deref())
+            .is_some_and(same_server)
+            && self
+                .chat_state()
+                .is_some_and(|s| s.ready() && s.list.account.id == target.account());
+        if !already_selected {
+            let profile = self
+                .organizations
+                .profiles
+                .iter()
+                .find(|p| same_server(&p.server.url) && p.account.id == target.account());
+            if let Some(profile) = profile {
+                self.select_organization(Some(profile.id.clone()));
+            } else if self
+                .shared
+                .status()
+                .and_then(|s| s.server)
+                .as_deref()
+                .is_some_and(same_server)
+            {
+                self.select_organization(None);
+            }
+        }
+        // The fresh transcript list must still verify its account before a
+        // chat number can be resolved. A notification never grants access.
+        self.restore_chat = None;
+        self.notification = Some(target);
+        self.page = Page::Chat;
+    }
+
+    fn chat_key(&self) -> Option<String> {
+        self.chat_scope
+            .as_ref()
+            .map(|(server, device)| format!("{server}/{device}"))
+    }
+
+    fn remember_chat(&mut self) {
+        if let Some(key) = self.chat_key()
+            && let Some(state) = self.chat_state().filter(|state| state.ready())
+        {
+            if let Some(number) = state.open {
+                self.app_state.organization_chats.insert(key, number);
+            } else {
+                self.app_state.organization_chats.remove(&key);
+            }
+        }
+        self.app_state.save(&self.shared.paths);
+    }
+
+    fn select_organization(&mut self, id: Option<String>) {
+        if self.organizations.select(id) {
+            self.organization_changed();
+        }
+    }
+
+    fn organization_changed(&mut self) {
+        self.remember_chat();
+        self.shared
+            .notification_endpoint(self.organizations.socket(&self.shared.paths));
+        if let Some(mut chat) = self.chat.take() {
+            chat.leave_organization();
+        }
+        self.chat_scope = None;
+        self.restore_chat = None;
+        self.notifications = None;
+        self.app_state.organization = self.organizations.selected.clone();
+        self.app_state.save(&self.shared.paths);
     }
 
     fn update_presence(&mut self, ui: &Ui) {
@@ -688,7 +835,10 @@ impl SettingsApp {
             Page::Activity => self.activity_page(ui, status),
             Page::Account => self.account_page(ui, status),
             Page::General => self.general_page(ui, status),
-            Page::Notifications => self.notifications_page(ui, status),
+            Page::Notifications => {
+                let status = self.organizations.status(status.cloned());
+                self.notifications_page(ui, status.as_ref());
+            }
         }
     }
 
@@ -847,7 +997,10 @@ impl SettingsApp {
                         Err(e) => self.activity.error = Some(e),
                     }
                 }
-                Done::Pairing(event) => {
+                Done::Pairing(generation, event) => {
+                    if generation != self.account.generation {
+                        continue;
+                    }
                     use crate::pairing::PairEvent;
                     self.account.requesting = false;
                     match event {
@@ -857,6 +1010,24 @@ impl SettingsApp {
                             self.account.pairing = None;
                             self.account.cancel = None;
                             self.account.error = daemon_error;
+                        }
+                        PairEvent::OrganizationPaired {
+                            profile,
+                            daemon_error,
+                        } => {
+                            self.account.pairing = None;
+                            self.account.cancel = None;
+                            self.account.error = daemon_error;
+                            // Read back the validated saved list, never trust a subprocess
+                            // event to choose arbitrary paths or credential namespaces.
+                            if let Ok(profiles) =
+                                cww::auth::organizations::list(&self.shared.paths.daemon)
+                            {
+                                self.organizations.profiles = profiles;
+                                self.select_organization(Some(profile.id));
+                                self.page = Page::Chat;
+                            }
+                            self.organizations.refresh();
                         }
                         PairEvent::Failed(e) => {
                             self.account.pairing = None;
@@ -868,6 +1039,11 @@ impl SettingsApp {
                 Done::LoggedOut(result) => {
                     self.account.requesting = false;
                     self.account.error = result.err();
+                }
+                Done::OrganizationLoggedOut(result) => {
+                    self.account.requesting = false;
+                    self.account.error = result.err();
+                    self.organizations.refresh();
                 }
                 Done::Started(result) => {
                     self.general.starting = false;
@@ -977,18 +1153,25 @@ impl SettingsApp {
 
     /// Pair with `server`, or Chat with Work's own when `None`.
     fn pair(&mut self, ctx: &egui::Context, server: Option<String>) {
+        self.account.generation = self.account.generation.wrapping_add(1);
+        let generation = self.account.generation;
         self.account.requesting = true;
         self.account.error = None;
         self.account.pairing = Some(None);
         let (tx, ctx) = (self.jobs.tx.clone(), ctx.clone());
         let report: crate::pairing::Report = Box::new(move |event| {
-            let _ = tx.send(Done::Pairing(event));
+            let _ = tx.send(Done::Pairing(generation, event));
             ctx.request_repaint();
         });
-        self.account.cancel = Some(self.shared.account.pair(server, report));
+        self.account.cancel = Some(if self.account.organization {
+            self.shared.account.pair_organization(server, report)
+        } else {
+            self.shared.account.pair(server, report)
+        });
     }
 
     fn cancel_pairing(&mut self) {
+        self.account.generation = self.account.generation.wrapping_add(1);
         if let Some(cancel) = self.account.cancel.take() {
             cancel();
         }
@@ -1067,6 +1250,7 @@ impl eframe::App for SettingsApp {
 
 impl Drop for SettingsApp {
     fn drop(&mut self) {
+        self.remember_chat();
         self.shared.notification_view(None);
         if let Some(chat) = &self.chat {
             chat.stop();

@@ -880,3 +880,63 @@ fn local_dictation_choices_persist_without_downloading_or_contacting_the_server(
     );
     assert!(fx.changes().is_empty());
 }
+
+#[test]
+fn renders_organization_account_review() {
+    let Ok(directory) = std::env::var("CWW_ORGANIZATION_ACCOUNT_EVIDENCE") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    for dark in [false, true] {
+        for width in [700.0, 1080.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture_rendered(
+                Scenario::Sample,
+                Some(Page::Account),
+                [width, 900.0],
+                dark,
+                Some(renderer),
+            );
+            fx.wait_for_label("Device ID");
+            let profile = serde_json::json!({"id":"a".repeat(43), "server":{"url":"https://chatwithwork.com", "device_id":"second-device"},
+                "account":{"id":"918273645","name":"Akamai Robotics","role":"admin"},"secret_store":"file"});
+            cww::paths::write_private_file(
+                &fx.server.paths.daemon.config_dir.join("organizations.json"),
+                &serde_json::to_vec(&serde_json::json!({"version":1,"organizations":[profile]}))
+                    .unwrap(),
+            )
+            .unwrap();
+            fx.harness.state_mut().organizations.refresh();
+            fx.wait_for_label("Akamai Robotics");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(8);
+            let theme = if dark { "dark" } else { "light" };
+            fx.harness
+                .render()
+                .expect("GPU rendering")
+                .save(std::path::Path::new(&directory).join(format!("account-{theme}-{width}.png")))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn closing_settings_preserves_the_last_chat_without_loading_it() {
+    let fx = fixture(Scenario::Sample, Some(Page::Folders));
+    let paths = fx.server.paths.clone();
+    let mut harness = fx.harness;
+    harness.run_steps(3);
+    let scope = harness.state().chat_scope.as_ref().unwrap();
+    let key = format!("{}/{}", scope.0, scope.1);
+    harness
+        .state_mut()
+        .app_state
+        .organization_chats
+        .insert(key.clone(), 11);
+    assert!(harness.state().chat.is_none());
+    drop(harness);
+    assert_eq!(
+        AppState::load(&paths).organization_chats.get(&key),
+        Some(&11)
+    );
+}

@@ -21,6 +21,8 @@ pub const SEARCH_ID: &str = "chat-search";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     NewChat,
+    Organization(Option<String>),
+    Notification(cww::notifications::navigation::Target),
     Open(u64),
     /// The header's button: collapse when docked, close as a drawer.
     Toggle,
@@ -61,6 +63,7 @@ pub fn project_icon(project: &Project) -> Icon {
 const LINK: f32 = 35.0;
 
 pub struct Sidebar<'a> {
+    pub organizations: &'a [crate::ui::organizations::Choice],
     pub images: &'a Images,
     pub palette: &'a Palette,
     pub time: f64,
@@ -133,9 +136,18 @@ impl Sidebar<'_> {
         }
         let mut y = rect.top() + 56.0;
 
-        // The web's organization switcher shows only to someone in more than
-        // one organization. The chat API names only the one this computer is
-        // paired with, so the sidebar shows what the web shows someone in one.
+        if self.organizations.len() > 1 {
+            let row = Rect::from_min_max(
+                pos2(rect.left() + 8.0, y),
+                pos2(inner_right - 8.0, y + 38.0),
+            );
+            if let Some(selected) =
+                super::organizations::show(ui, row, self.organizations, p, self.images)
+            {
+                event = Some(selected);
+            }
+            y += 42.0;
+        }
 
         // New chat, and Chats on the web.
         y += 4.0;

@@ -2496,3 +2496,255 @@ fn notification_presence_follows_window_focus_page_and_close() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn organization_switcher_review_screens() {
+    let Ok(directory) = std::env::var("CWW_ORGANIZATIONS_SCREENSHOTS") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 900.0],
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.wait("the chats", |h| {
+                h.state().chat_state().is_some_and(|s| s.ready())
+            });
+            let (_profile, _server) = add_organization(&mut fx);
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            if width < 600.0 {
+                fx.chat().drawer = true;
+            }
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            image
+                .save(
+                    std::path::Path::new(&directory)
+                        .join(format!("organizations-{theme}-{width}.png")),
+                )
+                .unwrap();
+            fx.harness.get_by_label("Organization: Northwind").click();
+            fx.wait_for_label("Akamai Robotics");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            fx.harness
+                .render()
+                .expect("GPU rendering")
+                .save(
+                    std::path::Path::new(&directory)
+                        .join(format!("organizations-menu-{theme}-{width}.png")),
+                )
+                .unwrap();
+        }
+    }
+}
+
+fn add_organization(
+    fx: &mut Fixture,
+) -> (cww::auth::organizations::SavedOrganization, demo::Server) {
+    use cww::auth::{client::Organization, organizations::SavedOrganization};
+    let profile = SavedOrganization {
+        id: "a".repeat(43),
+        server: cww::config::ServerConfig {
+            url: "https://chatwithwork.com".into(),
+            device_id: "second-organization-device".into(),
+        },
+        account: Organization {
+            id: "918273645".into(),
+            name: "Akamai Robotics".into(),
+            role: "admin".into(),
+        },
+        secret_store: "file".into(),
+    };
+    let paths = fx.harness.state().shared.paths.clone();
+    cww::paths::write_private_file(
+        &paths.daemon.config_dir.join("organizations.json"),
+        &serde_json::to_vec(&serde_json::json!({"version":1,"organizations":[profile]})).unwrap(),
+    )
+    .unwrap();
+    let server = demo::start_organization(&paths, &profile).unwrap();
+    server.edit_elsewhere(11, |chat| {
+        chat["title"] = "Robotics contract renewal".into()
+    });
+    let app = fx.harness.state_mut();
+    app.organizations.refresh();
+    fx.wait("organization loaded", |h| {
+        h.state().organizations.profiles.len() == 1
+    });
+    (profile, server)
+}
+
+#[test]
+fn organization_switching_keeps_requests_presence_and_settings_in_their_account() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    fx.harness.get_by_label("Vendor contract renewal").click();
+    fx.wait("first chat loaded", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.open == Some(11) && !s.loading)
+    });
+    let (_, second) = add_organization(&mut fx);
+    let before = fx.server.requests().len();
+    fx.harness.get_by_label("Organization: Northwind").click();
+    fx.wait_for_label("Akamai Robotics");
+    fx.harness.get_by_label("Akamai Robotics").click();
+    fx.wait_for_label("Robotics contract renewal");
+    assert!(fx.chat().state.open.is_none());
+    fx.harness.get_by_label("Robotics contract renewal").click();
+    fx.wait("second chat loaded", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.open == Some(11) && !s.loading)
+    });
+    wait_for_notification_view(&mut fx, before, false);
+    fx.wait("second organization receives presence", |_| {
+        second.requests().iter().any(|r| {
+            r["cmd"] == "notification_view" && r["account"] == "918273645" && r["visible"] == true
+        })
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .skip(before)
+            .any(|r| r["cmd"] == "chat")
+    );
+    assert_eq!(
+        fx.harness.state().chat.as_ref().unwrap().data_dir,
+        fx.server.paths.daemon.data_dir
+    );
+    fx.harness.state_mut().set_page(Page::Notifications);
+    fx.wait("second organization preferences", |_| {
+        second
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "notification_preferences")
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .skip(before)
+            .any(|r| r["cmd"] == "notification_preferences")
+    );
+    fx.harness.state_mut().set_page(Page::Folders);
+    fx.wait_for_label("Documents");
+    assert!(!second.requests().iter().any(|r| {
+        r["cmd"]
+            .as_str()
+            .is_some_and(|cmd| cmd.starts_with("roots_"))
+    }));
+    fx.harness.state_mut().set_page(Page::Chat);
+    fx.wait_for_label("Organization: Akamai Robotics");
+    fx.harness
+        .get_by_label("Organization: Akamai Robotics")
+        .click();
+    fx.wait_for_label("Northwind");
+    fx.harness.get_by_label("Northwind").click();
+    fx.wait("first chat remembered", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "482139075" && s.open == Some(11) && !s.loading)
+    });
+}
+
+#[test]
+fn notification_switches_organization_after_unsaved_instructions_are_decided() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("write your instructions");
+    let (profile, second) = add_organization(&mut fx);
+    fx.harness
+        .query_all_by_label("write your instructions")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_label("Use a template");
+    fx.harness.run_steps(8);
+    fx.harness.get_by_label("Use a template").click();
+    fx.harness.run_steps(3);
+    let target = notification_target(&profile.server.url, &profile.account.id, 11);
+    fx.harness.state().shared().open_chat(target.clone());
+    fx.wait_for_label("Discard unsaved instructions?");
+    assert!(second.requests().iter().all(|r| r["cmd"] != "chat"));
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(4);
+    assert!(fx.harness.state().organizations.selected.is_none());
+    fx.harness.state().shared().open_chat(target);
+    fx.wait_for_label("Discard unsaved instructions?");
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait("notification opened the second account", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "918273645" && s.open == Some(11) && !s.loading)
+    });
+    assert!(!fx.server.requests().iter().any(|r| r["cmd"] == "chat"));
+}
+
+#[test]
+fn switching_sign_ins_discards_editor_history_and_forgotten_grants() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    let (profile, _second) = add_organization(&mut fx);
+    let field = fx
+        .harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput);
+    field.focus();
+    field.type_text("Synthetic private draft from first organization");
+    fx.harness.run_steps(3);
+    assert!(!fx.chat().state.input.is_empty());
+    fx.harness
+        .state_mut()
+        .select_organization(Some(profile.id.clone()));
+    assert!(
+        egui::text_edit::TextEditState::load(&fx.harness.ctx, egui::Id::new(super::composer::ID))
+            .is_none()
+    );
+    assert_eq!(
+        AppState::load(&fx.server.paths).organization,
+        Some(profile.id)
+    );
+    fx.wait_for_label("Robotics contract renewal");
+    assert!(fx.chat().state.input.is_empty());
+    let saved = fx.server.paths.daemon.config_dir.join("organizations.json");
+    cww::paths::write_private_file(&saved, br#"{"version":1,"organizations":[]}"#).unwrap();
+    fx.harness.state_mut().organizations.refresh();
+    fx.wait("forgotten grant retires its chat", |h| {
+        h.state().organizations.selected.is_none()
+            && h.state()
+                .chat_state()
+                .is_some_and(|s| s.list.account.id == "482139075")
+    });
+    assert!(AppState::load(&fx.server.paths).organization.is_none());
+}
+
+#[test]
+fn a_cancelled_native_sign_in_cannot_reopen_its_approval_code() {
+    let mut fx = fixture(Options::default());
+    let app = fx.harness.state_mut();
+    let generation = app.account.generation;
+    app.account.organization = true;
+    app.account.pairing = Some(None);
+    app.cancel_pairing();
+    app.jobs
+        .tx
+        .send(crate::ui::Done::Pairing(
+            generation,
+            crate::pairing::PairEvent::Code(crate::pairing::Code {
+                user_code: "SYNTHETIC".into(),
+                ..Default::default()
+            }),
+        ))
+        .unwrap();
+    fx.harness.run_steps(3);
+    assert!(fx.harness.state().account.pairing.is_none());
+}

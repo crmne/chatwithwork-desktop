@@ -127,7 +127,7 @@ The page asks egui for another frame only while something on it moves: a transit
 
 The page follows the web wherever the chat API gives it what the web uses. Where it doesn't, the page shows what the web shows in the commonest case:
 
-- **The organization.** The web's sidebar shows the organization switcher only to someone in more than one organization. The chat API names the organization this computer is paired with, not how many the person is in, so the sidebar never shows it, as the web doesn't for someone in one.
+- **The organization.** The web's sidebar shows the organization switcher only to someone in more than one organization. The native sidebar lists signed-in organizations, with their marks and roles. Add another sign-in in This computer > Account, without changing folder sharing. Each chat client and notification session stays bound to its own grant; switching clears drafts and undo history and restores the last chat. Unsaved instructions ask before leaving. Invitations and new-organization creation still need native screens.
 - **Pins.** The web's chat menu has Pin and Move to project, and each pinned row an unpin button. The chat API can't pin, unpin or move a chat, so the menu has Rename and Delete and pinned rows have no unpin button; pinning happens on the web.
 - **Guests.** The web adds "· Guest" after a guest's name and shows them no meter. The chat API doesn't say whether the person is a guest.
 - **The people on a project.** The web's project line counts them ("shared with 4 people"); the chat API doesn't, so it says "shared with the people on it". Its Change link and "Hide from guests" or "Show to guests" aren't there either: the chat API has no way to move a chat or change who sees it.
@@ -248,3 +248,9 @@ clears it when a hidden window stops rendering. The terminal follows the same
 rule using terminal focus events; a terminal without focus reporting does not
 claim to be in the foreground. Presence renews while visible and expires if a
 client disappears.
+
+Organization connections use one background worker per window, with five-second
+control deadlines and a bounded result channel. Saved grants and the selected
+connection are checked every two seconds without repainting unchanged UI.
+Selection changes wake the worker; stale results cannot restore a previous
+account. Closing the window stops its worker after any bounded request finishes.

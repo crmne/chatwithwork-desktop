@@ -18,6 +18,7 @@ mod instructions;
 pub mod logos;
 pub mod markdown;
 pub mod mcp_app;
+mod organizations;
 pub mod paint;
 pub mod prose;
 pub mod runner;
@@ -44,6 +45,8 @@ pub enum Action {
     /// Go to the settings, on this page.
     Settings(super::Page),
     StartAgent,
+    Organization(Option<String>),
+    Notification(cww::notifications::navigation::Target),
 }
 
 /// What the page needs to know about the daemon and the window.
@@ -109,6 +112,7 @@ pub struct ChatPage {
     reach_menu: Option<usize>,
     remove_service: Option<cww::workspace::Service>,
     pending_navigation: Option<sidebar::Event>,
+    organizations: Vec<super::organizations::Choice>,
     /// The daemon's endpoint and cww's data folder, where the web's images
     /// come from and are kept.
     socket: std::path::PathBuf,
@@ -123,6 +127,28 @@ const RELIST: f64 = 4.0;
 const STILL_TIME: f64 = 0.35;
 
 impl ChatPage {
+    pub(super) fn set_organizations(&mut self, choices: Vec<super::organizations::Choice>) {
+        self.organizations = choices;
+    }
+
+    /// The same unsaved-instructions guard applies to notification navigation.
+    pub(super) fn may_open_notification(
+        &mut self,
+        target: &cww::notifications::navigation::Target,
+    ) -> bool {
+        if let Some(page) = &mut self.state.instructions {
+            if page.busy {
+                return false;
+            }
+            if page.dirty() {
+                page.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Notification(target.clone()));
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn set_dictation_mode(&mut self, mode: cww::dictation::Mode) {
         if self.state.dictation.phase == cww::tui::dictation::Phase::Idle {
             self.state.dictation.mode = mode;
@@ -158,6 +184,7 @@ impl ChatPage {
             reach_menu: None,
             remove_service: None,
             pending_navigation: None,
+            organizations: Vec::new(),
             socket: socket.to_path_buf(),
             data_dir,
         }
@@ -208,6 +235,13 @@ impl ChatPage {
         }
         let commands = self.state.open_chat(number);
         self.run(commands);
+    }
+
+    /// Discard account-local UI state, including egui's persistent undo buffers.
+    pub(super) fn leave_organization(&mut self) {
+        self.cancel_dictation();
+        self.run(vec![Command::ResetAccount]);
+        self.stop();
     }
 
     /// The window closes: stop following.
@@ -566,6 +600,7 @@ impl ChatPage {
             let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
             let event = Sidebar {
                 images,
+                organizations: &self.organizations,
                 palette: &p,
                 time,
                 drawer: false,
@@ -601,6 +636,7 @@ impl ChatPage {
                     child.interact(rect, Id::new("chat-drawer-body"), Sense::click());
                     let event = Sidebar {
                         images,
+                        organizations: &self.organizations,
                         palette: &p,
                         time,
                         drawer: true,
@@ -614,6 +650,8 @@ impl ChatPage {
                             sidebar::Event::Open(_)
                                 | sidebar::Event::NewChat
                                 | sidebar::Event::Page(_)
+                                | sidebar::Event::Organization(_)
+                                | sidebar::Event::Notification(_)
                                 | sidebar::Event::Toggle
                         )
                     ) {
@@ -648,7 +686,13 @@ impl ChatPage {
     ) {
         if matches!(
             event,
-            Some(sidebar::Event::NewChat | sidebar::Event::Open(_) | sidebar::Event::Page(_))
+            Some(
+                sidebar::Event::NewChat
+                    | sidebar::Event::Open(_)
+                    | sidebar::Event::Page(_)
+                    | sidebar::Event::Organization(_)
+                    | sidebar::Event::Notification(_)
+            )
         ) && let Some(page) = &mut self.state.instructions
         {
             if page.busy {
@@ -669,6 +713,10 @@ impl ChatPage {
             }
             Some(sidebar::Event::OpenUrl(url)) => self.open_on_server(env, &url),
             Some(sidebar::Event::Page(page)) => *action = Some(Action::Settings(page)),
+            Some(sidebar::Event::Organization(id)) => *action = Some(Action::Organization(id)),
+            Some(sidebar::Event::Notification(target)) => {
+                *action = Some(Action::Notification(target))
+            }
             Some(sidebar::Event::Open(number)) => {
                 let commands = self.state.open_chat(number);
                 self.run(commands);

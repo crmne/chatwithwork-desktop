@@ -803,6 +803,9 @@ impl Demo {
                 let state = self.state.lock().expect("demo lock");
                 let list: Vec<Value> = state.chats.iter().map(|c| c.summary.clone()).collect();
                 let mut answer = chats::list_header(state.credits_left);
+                if state.status["account"].is_object() {
+                    answer["account"] = state.status["account"].clone();
+                }
                 answer["ok"] = json!(true);
                 answer["chats"] = json!(list);
                 answer["projects"] = json!(state.projects);
@@ -1503,7 +1506,10 @@ pub fn start(scenario: Scenario) -> anyhow::Result<Server> {
     let n = STARTED.fetch_add(1, Ordering::SeqCst);
     let base = std::env::temp_dir().join(format!("cww-demo-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    let paths = Paths::under(&base);
+    start_at(scenario, Paths::under(&base))
+}
+
+fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
     std::fs::create_dir_all(&paths.daemon.config_dir)?;
     std::fs::create_dir_all(&paths.daemon.runtime_dir)?;
     if scenario == Scenario::Sample {
@@ -1548,6 +1554,30 @@ pub fn start(scenario: Scenario) -> anyhow::Result<Server> {
         });
     });
     Ok(Server { paths, demo })
+}
+
+#[cfg(test)]
+pub fn start_organization(
+    primary: &Paths,
+    profile: &cww::auth::organizations::SavedOrganization,
+) -> anyhow::Result<Server> {
+    let server = start_at(
+        Scenario::Sample,
+        Paths {
+            daemon: profile.runtime_paths(&primary.daemon)?,
+            socket: None,
+        },
+    )?;
+    server.demo.change(|state| {
+        state.status["server"] = json!(profile.server.url);
+        state.status["device_id"] = json!(profile.server.device_id);
+        state.status["account"] = json!(profile.account);
+        state.status["chat_only"] = json!(true);
+        state.status["roots"] = json!([]);
+        state.notification_preferences["account"] = json!(profile.account);
+        state.held = true;
+    });
+    Ok(server)
 }
 
 /// Pairs instantly-ish and records what it was asked, in place of

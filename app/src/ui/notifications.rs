@@ -248,7 +248,10 @@ impl SettingsApp {
             .as_ref()
             .is_none_or(|settings| settings.scope != scope)
         {
-            let mut settings = Settings::new(self.shared.client.clone(), scope);
+            let mut settings = Settings::new(
+                Client::new(self.organizations.socket(&self.shared.paths)),
+                scope,
+            );
             settings.request(ui.ctx(), ControlRequest::NotificationPreferences);
             self.notifications = Some(settings);
         }
