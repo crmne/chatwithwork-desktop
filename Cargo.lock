@@ -1921,6 +1921,7 @@ dependencies = [
  "egui",
  "enum-map",
  "itertools 0.15.0",
+ "jiff",
  "log",
  "profiling",
  "resvg 0.45.1",
@@ -3238,10 +3239,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 

@@ -1,4 +1,5 @@
 //! Personal schedule pages. The server owns recurrence, access and run rules.
+mod timing;
 use super::{
     controls::{self, Button, FieldLook, Kind, Size},
     icons::{Icon, Images},
@@ -550,7 +551,7 @@ fn form(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, out: &mu
             row(ui, "When", p, |ui| repeats(ui, &mut draft.repeats, screen.generation, p));
             separator(ui, p);
             if draft.repeats == "once" {
-                field(ui, "Date and time", &mut draft.run_at, false, "YYYY-MM-DDTHH:MM", None, screen.generation, p);
+                timing_field(ui, "Date and time", &mut draft.run_at, true, &draft.time_zone, screen.generation, p, images);
             } else {
                 select(ui, "Every", &mut draft.frequency, &[("day", "Day"), ("weekday", "Weekday"), ("week", "Week, on"), ("month", "Month, on the"), ("custom", "Custom")], screen.generation, p);
                 separator(ui, p);
@@ -566,7 +567,7 @@ fn form(ui: &mut Ui, screen: &mut Screen, p: &Palette, images: &Images, out: &mu
                     let hint = "In plain words, like “every monday at 9:00”, or a cron line. At most once an hour.";
                     field(ui, "Custom", &mut draft.recurrence, false, "e.g. every 2 hours, or 0 9 * * 1", Some(hint), screen.generation, p);
                 } else {
-                    field(ui, "At", &mut draft.at, false, "08:30", None, screen.generation, p);
+                    timing_field(ui, "At", &mut draft.at, false, &draft.time_zone, screen.generation, p, images);
                 }
             }
             separator(ui, p);
@@ -741,6 +742,23 @@ fn field(
             ui.add_space(6.0);
             text(ui, hint, Type::sans(12.0, 18.0), p.ink_muted);
         }
+    });
+}
+#[allow(clippy::too_many_arguments)]
+fn timing_field(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut String,
+    date: bool,
+    zone: &str,
+    generation: u64,
+    p: &Palette,
+    images: &Images,
+) {
+    row(ui, name, p, |ui| {
+        ui.push_id(("schedule-timing", generation, name), |ui| {
+            timing::input(ui, name, value, date, zone, p, images);
+        });
     });
 }
 fn select(

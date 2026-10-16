@@ -331,4 +331,8 @@ server checks ownership, active membership, projects, timing and active-schedule
 limits. Refreshes preserve unsaved form values; leaving an edited form asks
 before discarding, including notification clicks and organization switches.
 Older servers report that schedule management is not available yet.
-Date and time are entered as `YYYY-MM-DDTHH:MM` and `HH:MM` respectively.
+Type a date and time as `YYYY-MM-DD HH:MM`, or use the calendar and clock
+buttons. The calendar keeps the entered time; choosing an hour or minute keeps
+the date. These are local times in the schedule’s selected time zone. Canceling
+the calendar leaves the draft unchanged; saving a picker never submits the
+schedule itself.

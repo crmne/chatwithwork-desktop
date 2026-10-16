@@ -4414,3 +4414,147 @@ fn native_schedules_review_screens() {
         }
     }
 }
+
+#[test]
+fn native_schedule_date_and_time_controls_preserve_wall_clock_values() {
+    let evidence = std::env::var("CWW_SCHEDULE_PICKERS_EVIDENCE").ok();
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: evidence
+                    .as_ref()
+                    .map(|_| egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Options::default()
+            });
+            fx.ready();
+            let commands = fx
+                .chat()
+                .state
+                .schedule_request(cww::schedules::Request::New);
+            fx.chat().run(commands);
+            fx.wait_for_label("Create schedule");
+            {
+                let draft = fx
+                    .chat()
+                    .state
+                    .schedules
+                    .as_mut()
+                    .unwrap()
+                    .draft
+                    .as_mut()
+                    .unwrap();
+                draft.repeats = "once".into();
+                draft.run_at = "2028-02-28T14:37".into();
+            }
+            fx.harness.run_steps(3);
+            fx.harness.get_by_label("Choose date").click_accesskit();
+            fx.wait_for_label("Save");
+            if let Some(directory) = &evidence {
+                std::fs::create_dir_all(directory).unwrap();
+                fx.harness.run_steps(8);
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(std::path::Path::new(directory).join(format!(
+                        "calendar-{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+            fx.harness.get_by_label("29").click_accesskit();
+            fx.harness.run_steps(2);
+            assert_eq!(
+                fx.chat()
+                    .state
+                    .schedules
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .run_at,
+                "2028-02-28T14:37",
+                "calendar selection waits for Save"
+            );
+            fx.harness
+                .query_all_by_label("Cancel")
+                .last()
+                .unwrap()
+                .click_accesskit();
+            fx.harness.run_steps(3);
+            assert_eq!(
+                fx.chat()
+                    .state
+                    .schedules
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .run_at,
+                "2028-02-28T14:37",
+                "canceling the picker leaves the schedule's date and time alone"
+            );
+            fx.harness.get_by_label("Choose date").click_accesskit();
+            fx.wait_for_label("Save");
+            fx.harness.get_by_label("29").click_accesskit();
+            fx.harness.run_steps(2);
+            fx.harness.get_by_label("Save").click_accesskit();
+            fx.harness.run_steps(3);
+            assert_eq!(
+                fx.chat()
+                    .state
+                    .schedules
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .run_at,
+                "2028-02-29T14:37",
+                "leap-day selection preserves the entered wall-clock time"
+            );
+            fx.harness.get_by_label("Choose time").click_accesskit();
+            fx.wait_for_label("Hour");
+            if let Some(directory) = &evidence {
+                fx.harness.run_steps(8);
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(std::path::Path::new(directory).join(format!(
+                        "time-{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+            fx.wait_for_label("Hour 15");
+            fx.harness.get_by_label("Hour 15").click_accesskit();
+            fx.harness.run_steps(3);
+            fx.wait_for_label("Minute 38");
+            fx.harness.get_by_label("Minute 38").click_accesskit();
+            fx.harness.run_steps(3);
+            assert_eq!(
+                fx.chat()
+                    .state
+                    .schedules
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .run_at,
+                "2028-02-29T15:38",
+                "choosing a time preserves its date without a timezone conversion"
+            );
+            assert!(
+                fx.server
+                    .requests()
+                    .iter()
+                    .all(|r| r["cmd"] != "schedules" || r["request"]["action"] == "new"),
+                "picker interaction never saves the schedule itself"
+            );
+        }
+    }
+}

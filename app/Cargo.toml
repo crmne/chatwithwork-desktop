@@ -34,7 +34,7 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "wayland", "x11"] }
 egui = "0.36"
 # Decodes the title bar’s SVG icons through egui’s image loader.
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+egui_extras = { version = "0.36", default-features = false, features = ["svg", "datepicker"] }
 # The event loop the tray and the window share. eframe already compiles it.
 winit = { version = "0.30", default-features = false }
 # PNG decoding for the icons and encoding for --screenshot. eframe already
