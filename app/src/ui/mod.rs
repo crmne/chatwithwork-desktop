@@ -692,6 +692,7 @@ impl SettingsApp {
             {
                 self.notification = None;
             } else if page.state().ready()
+                && !page.state().projects.as_ref().is_some_and(|p| p.busy)
                 && !page
                     .state()
                     .instructions
@@ -1271,6 +1272,7 @@ fn visible_notification_chat(
         || state.instructions.is_some()
         || state.moving.is_some()
         || state.history.is_some()
+        || state.projects.is_some()
         || state.error.is_some()
     {
         return None;

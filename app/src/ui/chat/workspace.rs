@@ -59,6 +59,8 @@ impl Editor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instructions {
+    pub project: Option<u64>,
+    pub back_to_project: bool,
     pub generation: u64,
     pub memory: Option<cww::workspace::Memory>,
     pub editors: Vec<Editor>,
@@ -74,6 +76,8 @@ impl Instructions {
     pub fn new(focus: Layer) -> Self {
         Self {
             generation: request_id(),
+            project: None,
+            back_to_project: false,
             memory: None,
             editors: vec![],
             focus,

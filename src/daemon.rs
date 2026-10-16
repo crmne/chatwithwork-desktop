@@ -1232,6 +1232,9 @@ impl ControlHandler for Daemon {
                 self.chat(move |client| client.move_to(&chat, project))
                     .await
             }
+            ControlRequest::Projects { request } => {
+                self.chat(move |client| client.projects(&request)).await
+            }
             ControlRequest::ChatShare { chat } => {
                 self.chat(move |client| client.share(&chat)).await
             }

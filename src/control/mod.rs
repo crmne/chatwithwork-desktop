@@ -269,6 +269,9 @@ pub enum ControlRequest {
         query: String,
         before: Option<String>,
     },
+    Projects {
+        request: crate::projects::Request,
+    },
     ChatMove {
         chat: String,
         project: Option<u64>,

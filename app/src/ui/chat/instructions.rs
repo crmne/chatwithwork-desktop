@@ -39,7 +39,7 @@ pub fn show(
     child.set_clip_rect(bounds);
     egui::ScrollArea::vertical().id_salt("instruction-page").auto_shrink([false, false]).show(&mut child, |ui| {
         ui.set_width(width);
-        if button(ui, "instructions-back", "Back to chat", Kind::Subtle, !page.busy, p, images) {
+        if button(ui, "instructions-back", if page.back_to_project { "Back to project" } else { "Back to chat" }, Kind::Subtle, !page.busy, p, images) {
             if page.dirty() { page.confirm_close = true; } else { outcome.close = true; }
         }
         ui.add_space(24.0);
@@ -91,7 +91,7 @@ pub fn show(
                 page.busy = true;
                 page.error = None;
                 page.notice = None;
-                outcome.commands.push(Command::SaveInstruction(page.generation, layer, change));
+                outcome.commands.push(Command::SaveInstruction(page.generation, layer, change, page.project));
             }
             let now = ui.input(|i| i.time);
             if editor.counting.is_none() && editor.changed_at.is_some_and(|at| now - at >= 0.5) {

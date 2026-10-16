@@ -17,6 +17,8 @@ use crate::control::{Client, Closer, ControlRequest};
 #[serde(default)]
 pub struct Project {
     pub id: u64,
+    /// Its organization-local route number (newer servers).
+    pub number: Option<u64>,
     pub name: String,
     /// The Phosphor icon the web shows for it: `buildings` for HQ,
     /// `users-three` for All-Access, `folder-simple` for invite-only. Only
@@ -1269,6 +1271,23 @@ impl Chats {
 
     pub fn history(&self, query: String, before: Option<String>) -> Result<History, Failure> {
         parse(self.call(&ControlRequest::ChatHistory { query, before })?)
+    }
+
+    pub fn projects(
+        &self,
+        request: crate::projects::Request,
+    ) -> Result<crate::projects::Reply, Failure> {
+        use crate::projects::{Reply, Request};
+        let response = self.call(&ControlRequest::Projects {
+            request: request.clone(),
+        })?;
+        match request {
+            Request::List => parse(response).map(Reply::List),
+            Request::New | Request::Edit { .. } => parse(response).map(Reply::Form),
+            Request::Pin { .. } => parse(response["pins"].clone()).map(Reply::Pins),
+            Request::Delete { .. } | Request::Membership { join: false, .. } => Ok(Reply::Removed),
+            _ => parse(response).map(Reply::Page),
+        }
     }
 
     pub fn move_to(&self, chat: u64, project: Option<u64>) -> Result<ChatSummary, Failure> {

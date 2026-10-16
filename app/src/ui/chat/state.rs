@@ -23,9 +23,10 @@ pub enum Command {
     /// Read the list of chats.
     List,
     History(u64, String, Option<String>),
-    Workspace(u64),
-    ServicePause(u64, cww::workspace::Service, bool),
-    ComputerRemove(u64, u64),
+    Projects(u64, cww::projects::Request),
+    Workspace(u64, Option<u64>),
+    ServicePause(u64, cww::workspace::Service, bool, Option<u64>),
+    ComputerRemove(u64, u64, Option<u64>),
     Connectors {
         generation: u64,
         query: String,
@@ -37,7 +38,7 @@ pub enum Command {
         access: String,
         connection: Option<String>,
     },
-    Instructions(u64),
+    Instructions(u64, Option<u64>),
     MemoryPreference(u64, bool),
     MemoryForget(u64, u64),
     CountInstruction(u64, cww::workspace::Layer, String),
@@ -45,6 +46,7 @@ pub enum Command {
         u64,
         cww::workspace::Layer,
         cww::workspace::InstructionChange,
+        Option<u64>,
     ),
     /// Read one chat.
     Open(u64),
@@ -83,6 +85,7 @@ pub enum Msg {
     Dictation(u64, dictation::Update),
     Listed(Result<ChatList, Failure>),
     History(u64, Result<cww::tui::chat::History, Failure>),
+    Projects(u64, Result<cww::projects::Reply, Failure>),
     Workspace(u64, Result<cww::workspace::NewChat, Failure>),
     Instructions(u64, Result<cww::workspace::InstructionPage, Failure>),
     Memory(u64, Result<cww::workspace::Memory, Failure>),
@@ -337,6 +340,8 @@ pub struct ChatState {
     pub dialog: Option<Dialog>,
     pub moving: Option<MoveChat>,
     pub history: Option<super::history::HistoryPage>,
+    pub projects: Option<super::projects::Screen>,
+    pub new_project: Option<cww::projects::Project>,
     /// At most one history request runs, even while the query/page changes.
     history_request: Option<u64>,
     /// The chat whose row menu is open in the sidebar.
@@ -392,6 +397,8 @@ impl Default for ChatState {
             dialog: None,
             moving: None,
             history: None,
+            projects: None,
+            new_project: None,
             history_request: None,
             menu: None,
             renaming: None,
@@ -470,6 +477,11 @@ impl ChatState {
                 .as_ref()
                 .and_then(|t| t.locked_reason.as_deref())
         } else {
+            if self.new_project.as_ref().is_some_and(|p| !p.can.chat) {
+                return Some(
+                    "You can’t start a new chat in this project. Open it to check your access.",
+                );
+            }
             self.list.locked_reason.as_deref()
         }
     }
@@ -529,6 +541,8 @@ impl ChatState {
 
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
+        self.projects = None;
+        self.new_project = None;
         self.history = None;
         self.moving = None;
         self.instructions = None;
@@ -556,9 +570,12 @@ impl ChatState {
 
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
+        self.projects = None;
+        self.new_project = None;
         self.history = None;
         self.moving = None;
         self.start = None;
+        self.start_loading = None;
         self.start_error = None;
         self.instructions = None;
         self.connectors = None;
@@ -609,6 +626,18 @@ impl ChatState {
         )]
     }
 
+    pub fn project_request(&mut self, request: cww::projects::Request) -> Vec<Command> {
+        let mut commands = vec![];
+        if self.projects.is_none() {
+            commands.extend(self.new_chat());
+            self.projects = Some(super::projects::Screen::default());
+        }
+        if let Some(screen) = &mut self.projects {
+            commands.extend(screen.request(request));
+        }
+        commands
+    }
+
     /// What belongs to the chat that was open goes with it, as a page
     /// change does on the web.
     fn leave_chat(&mut self) {
@@ -654,8 +683,7 @@ impl ChatState {
         commands.push(Command::Send(Ask {
             chat: self.open,
             text,
-            // A chat in a project starts on the project's page on the web.
-            project: None,
+            project: self.new_project.as_ref().map(|project| project.id),
             model: self.model_for_question(),
             web_search: self.web_search_control().map(|c| c.on),
             attachments,
@@ -822,7 +850,11 @@ impl ChatState {
     /// composer checks it, then uploaded.
     pub fn attach(&mut self, paths: Vec<PathBuf>) -> Vec<Command> {
         let mut commands = Vec::new();
-        if !self.ready() || self.locked_reason().is_some() || self.history.is_some() {
+        if !self.ready()
+            || self.locked_reason().is_some()
+            || self.history.is_some()
+            || self.projects.is_some()
+        {
             return commands;
         }
         for path in paths {
@@ -906,6 +938,7 @@ impl ChatState {
         };
         let project = summary.project.as_ref().map(|project| project.id);
         self.history = None;
+        self.projects = None;
         self.moving = Some(MoveChat { chat, project });
         self.notice = None;
         self.cancel_dictation()
@@ -952,6 +985,16 @@ impl ChatState {
                 self.history
                     .as_ref()?
                     .items
+                    .iter()
+                    .map(|item| &item.chat)
+                    .find(|c| c.number == number)
+            })
+            .or_else(|| {
+                let super::projects::View::Detail(page) = self.projects.as_ref()?.view.as_ref()?
+                else {
+                    return None;
+                };
+                page.chats
                     .iter()
                     .map(|item| &item.chat)
                     .find(|c| c.number == number)
@@ -1126,11 +1169,25 @@ impl ChatState {
                     }
                 }
             }
+            Msg::Projects(generation, result) => {
+                if let Some(screen) = &mut self.projects
+                    && screen.generation == generation
+                {
+                    if let Ok(cww::projects::Reply::Pins(pins)) = &result {
+                        self.list.pins = pins.clone();
+                    }
+                    return screen.loaded(result);
+                }
+            }
             Msg::Listed(Ok(list)) => {
                 let mut commands = self.reset_account_if_changed(&list.account.id);
                 let was_ready = self.ready();
                 self.access = Access::Ready;
+                let projects_changed = self.list.projects != list.projects;
                 self.list = list;
+                if projects_changed {
+                    commands.extend(self.projects_changed(false));
+                }
                 if self.models == ModelList::Unknown {
                     self.models = ModelList::Loading;
                     commands.push(Command::Models);
@@ -1382,11 +1439,39 @@ impl ChatState {
             self.renaming = None;
         }
         if self.open != Some(number) {
-            return Vec::new();
+            return self
+                .projects
+                .as_mut()
+                .map_or_else(Vec::new, |screen| screen.invalidate());
         }
         let commands = self.new_chat();
         self.notice = Some(GONE.into());
         commands
+    }
+
+    /// Membership and archive changes also invalidate content outside the
+    /// sidebar. Keep a draft's destination; never turn it into a private chat.
+    fn projects_changed(&mut self, live: bool) -> Vec<Command> {
+        if let Some(project) = &mut self.new_project {
+            project.can.chat = self.list.projects.iter().any(|p| p.id == project.id);
+            self.start = None;
+            self.start_loading = None;
+        }
+        if self
+            .instructions
+            .as_ref()
+            .and_then(|p| p.project)
+            .is_some_and(|id| !self.list.projects.iter().any(|p| p.id == id))
+        {
+            self.instructions = None;
+        }
+        self.projects.as_mut().map_or_else(Vec::new, |screen| {
+            if live {
+                screen.invalidate()
+            } else {
+                screen.reconcile_memberships(&self.list.projects)
+            }
+        })
     }
 
     /// A change to the list, as the server keeps it current.
@@ -1396,12 +1481,20 @@ impl ChatState {
                 self.list_live = true;
                 // Catch up on what changed before the subscription.
                 if self.ready() {
-                    return vec![Command::List];
+                    let mut commands = vec![Command::List];
+                    if let Some(screen) = &mut self.projects {
+                        commands.extend(screen.invalidate());
+                    }
+                    return commands;
                 }
             }
             ListLive::Missed => {
                 if self.ready() {
-                    return vec![Command::List];
+                    let mut commands = vec![Command::List];
+                    if let Some(screen) = &mut self.projects {
+                        commands.extend(screen.invalidate());
+                    }
+                    return commands;
                 }
             }
             ListLive::Refused | ListLive::Unsupported | ListLive::Offline => {
@@ -1410,6 +1503,22 @@ impl ChatState {
             // Changes only apply to a list that was read.
             _ if !self.ready() => {}
             ListLive::Chat(chat) => {
+                let project_changed = self
+                    .projects
+                    .as_ref()
+                    .and_then(|s| s.view.as_ref())
+                    .is_some_and(|view| {
+                        let super::projects::View::Detail(page) = view else {
+                            return false;
+                        };
+                        chat.project
+                            .as_ref()
+                            .is_some_and(|p| p.id == page.project.id)
+                            || page
+                                .chats
+                                .iter()
+                                .any(|item| item.chat.number == chat.number)
+                    });
                 let number = chat.number;
                 let moved = self.open == Some(number)
                     && self
@@ -1421,10 +1530,14 @@ impl ChatState {
                 if moved && self.following != Following::Live {
                     return self.refresh(number);
                 }
+                if project_changed && let Some(screen) = &mut self.projects {
+                    return screen.invalidate();
+                }
             }
             ListLive::Removed(number) => return self.remove_chat(number),
             ListLive::Projects(projects) => {
                 self.list.projects = projects;
+                return self.projects_changed(true);
             }
             ListLive::Account(account) => {
                 let mut commands = self.reset_account_if_changed(&account.account.id);
@@ -1549,6 +1662,17 @@ impl ChatState {
     }
 
     fn failure(&mut self, failure: Failure) {
+        if is_access_failure(&failure)
+            || matches!(failure.code.as_str(), "forbidden" | "invalid_token")
+        {
+            self.projects = None;
+            self.instructions = None;
+            self.start = None;
+            self.start_loading = None;
+            if let Some(project) = &mut self.new_project {
+                project.can.chat = false;
+            }
+        }
         self.access = match failure.code.as_str() {
             "chat_access_required" => Access::NeedsApproval {
                 requested: failure.requested,
@@ -1902,6 +2026,61 @@ mod tests {
     }
 
     #[test]
+    fn project_access_loss_keeps_the_draft_destination_and_rejects_queued_pages() {
+        use cww::projects::{Can, Page, Project, Reply, Request};
+        let mut state = ready();
+        let project = Project {
+            id: 81,
+            number: 17,
+            member: true,
+            can: Can {
+                chat: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        state.new_project = Some(project.clone());
+        state.input = "Keep this draft in its intended project".into();
+        assert!(state.can_send().is_ok());
+        state.start_loading = Some(123);
+        state.update(Msg::ListLive(ListLive::Projects(vec![])));
+        state.update(Msg::Workspace(123, Ok(Default::default())));
+        assert!(state.start.is_none());
+        assert!(state.send().is_empty());
+        assert_eq!(state.new_project.as_ref().unwrap().id, 81);
+        assert_eq!(state.input, "Keep this draft in its intended project");
+        state.project_request(Request::Show {
+            project: 17,
+            before: None,
+        });
+        let generation = state.projects.as_ref().unwrap().generation;
+        state.update(Msg::ListLive(ListLive::Projects(vec![])));
+        let commands = state.update(Msg::Projects(
+            generation,
+            Ok(Reply::Page(Page {
+                project,
+                ..Default::default()
+            })),
+        ));
+        assert_eq!(
+            commands,
+            vec![Command::Projects(
+                generation,
+                Request::Show {
+                    project: 17,
+                    before: None
+                }
+            )]
+        );
+        assert!(state.projects.as_ref().unwrap().view.is_none());
+        state.update(Msg::Projects(
+            generation,
+            Err(Failure::new("not_found", "No longer available")),
+        ));
+        assert!(state.projects.as_ref().unwrap().view.is_none());
+    }
+
+    #[test]
     fn account_header_changes_clear_the_old_conversation_before_status_arrives() {
         use cww::tui::chat::{AccountUpdate, Named};
         let mut state = ready();
@@ -1925,6 +2104,8 @@ mod tests {
             chat: 2,
             project: Some(7),
         });
+        state.projects = Some(super::super::projects::Screen::default());
+        state.new_project = Some(cww::projects::Project::default());
         state.clipboard = Some("private share link".into());
         state.progress = Some("Private tool work".into());
         let commands = state.update(Msg::ListLive(ListLive::Account(AccountUpdate {
@@ -1948,6 +2129,8 @@ mod tests {
                 && state.acting.is_none()
                 && state.clipboard.is_none()
                 && state.moving.is_none()
+                && state.projects.is_none()
+                && state.new_project.is_none()
         );
     }
 

@@ -6,6 +6,7 @@
 
 mod assets;
 mod chats;
+mod project_pages;
 
 /// Northwind's projects, as the demo's list sends them.
 #[cfg(test)]
@@ -50,6 +51,7 @@ struct State {
     credits_left: u64,
     /// The projects the person is on.
     projects: Vec<Value>,
+    project_catalog: Vec<Value>,
     pins: Value,
     /// Answers don't stream on their own (tests hold them still).
     held: bool,
@@ -252,6 +254,7 @@ fn fresh() -> State {
         web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
+        project_catalog: project_pages::catalog(),
         pins: chats::list_header(5000)["pins"].clone(),
         held: false,
         streaming: HashSet::new(),
@@ -371,6 +374,7 @@ fn sample() -> State {
         web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
+        project_catalog: project_pages::catalog(),
         pins: chats::list_header(5000)["pins"].clone(),
         held: false,
         streaming: HashSet::new(),
@@ -534,6 +538,7 @@ impl Demo {
             | "chat_delete"
             | "chat_pin"
             | "chat_history"
+            | "projects"
             | "chat_move"
             | "chat_share"
             | "chat_unshare"
@@ -670,6 +675,10 @@ impl Demo {
         }
         let number = request["chat"].as_str().and_then(|c| c.parse::<u64>().ok());
         match cmd {
+            "projects" => {
+                let mut state = self.state.lock().expect("demo lock");
+                project_pages::request(&mut state, &request["request"])
+            }
             "chat_history" => {
                 let state = self.state.lock().expect("demo lock");
                 let query = request["query"].as_str().unwrap_or_default().to_lowercase();
@@ -722,7 +731,17 @@ impl Demo {
             "notification_browser_link" => {
                 json!({"ok": true, "path": "/482139075/native/notification_browser_link?token=synthetic-demo"})
             }
-            "workspace" => self.state.lock().expect("demo lock").workspace.clone(),
+            "workspace" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let mut workspace = state.workspace.clone();
+                if let Some(project) = request["project"].as_u64() {
+                    let Some(instruction) = project_pages::instruction(&mut state, project) else {
+                        return json!({"ok": false, "code": "not_found", "error": "No such project"});
+                    };
+                    workspace["instructions"].as_array_mut().unwrap().push(json!({"layer": "project", "owner": instruction["owner"], "written": !instruction["body"].as_str().unwrap_or_default().is_empty(), "editable": true}));
+                }
+                workspace
+            }
             "connectors" => {
                 let state = self.state.lock().expect("demo lock");
                 chats::connectors(
@@ -760,8 +779,15 @@ impl Demo {
                 state.workspace.clone()
             }
             "instructions" => {
-                let state = self.state.lock().expect("demo lock");
-                json!({ "ok": true, "instructions": state.instructions, "memory": state.memory })
+                let mut state = self.state.lock().expect("demo lock");
+                let mut instructions = state.instructions.clone();
+                if let Some(project) = request["project"].as_u64() {
+                    let Some(instruction) = project_pages::instruction(&mut state, project) else {
+                        return json!({"ok": false, "code": "not_found", "error": "No such project"});
+                    };
+                    instructions.push(instruction.clone());
+                }
+                json!({ "ok": true, "instructions": instructions, "memory": state.memory })
             }
             "memory_preference" | "memory_forget" => {
                 let mut state = self.state.lock().expect("demo lock");
@@ -782,11 +808,15 @@ impl Demo {
             }
             "instruction_update" => {
                 let mut state = self.state.lock().expect("demo lock");
-                let Some(instruction) = state
-                    .instructions
-                    .iter_mut()
-                    .find(|i| i["layer"] == request["layer"])
-                else {
+                let instruction = if request["layer"] == "project" {
+                    project_pages::instruction(&mut state, request["project"].as_u64().unwrap_or(0))
+                } else {
+                    state
+                        .instructions
+                        .iter_mut()
+                        .find(|i| i["layer"] == request["layer"])
+                };
+                let Some(instruction) = instruction else {
                     return json!({ "ok": false, "error": "No such instructions" });
                 };
                 if instruction["editable"] != true {

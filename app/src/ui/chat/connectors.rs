@@ -312,7 +312,7 @@ impl ConnectDialog {
                         if connected && button(ui, id.with("pause"), if connector.paused { "Resume" } else { "Pause" }, Kind::Subtle, changes_ready, p, images) {
                             let service = Service { key: connector.key.clone(), kind: ServiceKind::Connector, name: connector.name.clone(), icon: connector.icon.clone(), live: !connector.paused,
                                 paused: connector.paused, label: state.into(), tone: None, removable: false };
-                            command = Some(Command::ServicePause(request_id(), service, !connector.paused));
+                            command = Some(Command::ServicePause(request_id(), service, !connector.paused, None));
                         }
                         if connected && connector.several_accounts && button(ui, id.with("another"), "Add another account", Kind::Subtle, ready, p, images) {
                             command = Some(self.connect(connector, "read", Some("new".into())));

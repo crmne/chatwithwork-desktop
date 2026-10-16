@@ -1051,36 +1051,25 @@ fn the_sidebar_shows_whats_pinned_as_the_web_does() {
 }
 
 #[test]
-fn projects_open_on_the_web_as_the_web_sidebar_links_them() {
+fn pinned_projects_and_the_project_list_open_natively() {
     OPENED.with(|o| o.borrow_mut().clear());
     let mut fx = fixture(Options::default());
     fx.ready();
     fx.wait_for_label("Falcon");
-    // A pinned project opens its page, and All projects the web's list.
     fx.harness.get_by_label("Falcon").click();
-    fx.harness.run_steps(2);
-    fx.harness.get_by_label("All projects").click();
-    fx.harness.run_steps(2);
-    assert_eq!(
-        OPENED.with(|o| o.borrow().clone()),
-        [
-            "https://chatwithwork.com/northwind/projects/7",
-            "https://chatwithwork.com/northwind/projects",
-        ]
-    );
-    // Nothing opens in the app: no picker, the same chat list, and the
-    // next question starts a chat of its own.
-    assert!(fx.harness.query_by_label("People").is_none());
-    assert!(fx.harness.query_by_label_contains("Show all").is_none());
-    let field = fx
-        .harness
-        .get_by_role(egui::accesskit::Role::MultilineTextInput);
-    field.focus();
-    field.type_text("What's left before launch?");
-    fx.harness.run_steps(2);
-    fx.harness.get_by_label("Send message").click();
-    let sent = fx.wait_for_request("chat_send", |_| true);
-    assert!(sent["project"].is_null(), "{sent}");
+    fx.wait_for_request("projects", |r| {
+        r["request"]["action"] == "show" && r["request"]["project"] == 7
+    });
+    fx.wait_for_label("New chat here");
+    fx.harness
+        .query_all_by_label("All projects")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_label("Projects you're not on");
+    assert!(fx.chat().state.projects.is_some());
+    assert!(fx.chat().state.open.is_none());
+    OPENED.with(|o| assert!(o.borrow().is_empty()));
 }
 
 #[test]
@@ -3020,6 +3009,118 @@ fn chat_history_review_screens() {
 }
 
 #[test]
+fn native_projects_open_pin_edit_and_start_a_scoped_chat() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    OPENED.with(|urls| urls.borrow_mut().clear());
+    fx.harness.get_by_label("All projects").click();
+    fx.wait_for_label("Projects you're not on");
+    fx.wait_for_request("projects", |r| r["request"]["action"] == "list");
+    fx.harness.get_by_label("Platform partners").click();
+    fx.wait_for_label("You're not on this project");
+    fx.harness.get_by_label("Join").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("Pin to sidebar").click();
+    fx.wait_for_label("Unpin from sidebar");
+    fx.harness.get_by_label("Settings").click();
+    fx.wait_for_label("Save project");
+    let field = fx.harness.get_by_label("Project name");
+    field.click();
+    field.type_text(" updated");
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("All projects").click();
+    fx.wait_for_label("Discard unsaved project changes?");
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(2);
+    assert!(fx.chat().state.projects.as_ref().unwrap().dirty());
+    fx.harness.get_by_label("Save project").click();
+    fx.wait_for_request("projects", |r| {
+        r["request"]["action"] == "update"
+            && r["request"]["fields"]["name"] == "Platform partners updated"
+    });
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("New chat here").click();
+    fx.wait_for_request("workspace", |r| r["project"] == 9);
+    assert_eq!(fx.chat().state.new_project.as_ref().unwrap().id, 9);
+    fx.chat().state.input = "Synthetic question in this project".into();
+    let commands = fx.chat().state.send();
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, super::state::Command::Send(ask) if ask.project == Some(9)))
+    );
+    OPENED.with(|urls| assert!(urls.borrow().is_empty()));
+}
+
+#[test]
+fn native_projects_create_archive_and_delete_with_confirmation() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("All projects").click();
+    fx.wait_for_label("New project");
+    fx.harness.get_by_label("New project").click();
+    fx.wait_for_label("Project name");
+    let field = fx.harness.get_by_label("Project name");
+    field.click();
+    field.type_text("Synthetic launch");
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Create project").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("Settings").click();
+    fx.wait_for_label("Archive");
+    fx.harness
+        .query_all_by_label("Archive")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness
+        .query_all_by_label("Archive")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .click();
+    fx.wait_for_request("projects", |r| r["request"]["action"] == "archive");
+    fx.wait_for_label("This project is archived.");
+    fx.harness.get_by_label("Settings").click();
+    fx.wait_for_label("Unarchive");
+    fx.harness
+        .query_all_by_label("Delete project")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness
+        .query_all_by_label("Delete project")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .click();
+    fx.wait_for_label("Delete project?");
+    fx.harness.get_by_label("Cancel project action").click();
+    fx.harness.run_steps(2);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "projects" && r["request"]["action"] == "delete")
+    );
+    fx.harness
+        .query_all_by_label("Delete project")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness
+        .query_all_by_label("Delete project")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::Button)
+        .unwrap()
+        .click();
+    fx.wait_for_label("Delete project?");
+    fx.harness.get_by_label("Delete").click();
+    fx.wait_for_request("projects", |r| r["request"]["action"] == "delete");
+    fx.wait_for_label("New project");
+}
+
+#[test]
 fn chat_history_search_open_and_delete_use_native_controls() {
     let mut fx = fixture(Options::default());
     fx.ready();
@@ -3157,4 +3258,158 @@ fn chat_history_keeps_unsaved_instructions_until_discarded() {
     fx.harness.get_by_label("Discard changes").click();
     fx.wait_for_label("Search your chats");
     assert!(fx.chat().state.instructions.is_none());
+}
+
+#[test]
+fn project_pages_review_screens() {
+    let Ok(directory) = std::env::var("CWW_PROJECTS_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for (name, size) in [("wide", [1280.0, 900.0]), ("narrow", [390.0, 844.0])] {
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Default::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().drawer = size[0] < 800.0;
+            fx.harness.run_steps(5);
+            for (kind, request) in [
+                ("before", None),
+                ("list", Some(cww::projects::Request::List)),
+                (
+                    "detail",
+                    Some(cww::projects::Request::Show {
+                        project: 7,
+                        before: None,
+                    }),
+                ),
+                ("form", Some(cww::projects::Request::Edit { project: 7 })),
+            ] {
+                if let Some(request) = request {
+                    fx.chat().drawer = false;
+                    let commands = fx.chat().state.project_request(request);
+                    fx.chat().run(commands);
+                    fx.wait("project page ready", |h| {
+                        h.state()
+                            .chat_ref()
+                            .unwrap()
+                            .state
+                            .projects
+                            .as_ref()
+                            .is_some_and(|p| !p.busy && p.view.is_some())
+                    });
+                }
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(3);
+                let path = std::path::Path::new(&directory).join(kind);
+                std::fs::create_dir_all(&path).unwrap();
+                fx.harness
+                    .render()
+                    .unwrap()
+                    .save(path.join(format!(
+                        "{name}-{}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn native_project_instructions_and_connector_changes_keep_the_project_scope() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("Falcon").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("Instructions").click();
+    fx.wait_for_label("Back to project");
+    fx.wait_for_request("instructions", |r| r["project"] == 7);
+    fx.wait_for_label("Use a template");
+    fx.harness
+        .query_all_by_label("Use a template")
+        .last()
+        .unwrap()
+        .scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness
+        .query_all_by_label("Use a template")
+        .last()
+        .unwrap()
+        .click();
+    fx.harness.run_steps(5);
+    fx.harness
+        .query_all_by_label("Save")
+        .last()
+        .unwrap()
+        .scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness
+        .query_all_by_label("Save")
+        .last()
+        .unwrap()
+        .click();
+    fx.wait_for_request("instruction_update", |r| {
+        r["project"] == 7 && r["layer"] == "project"
+    });
+    fx.wait_for_label("Saved your instructions.");
+    fx.harness.get_by_label("Back to project").scroll_to_me();
+    fx.harness.run_steps(10);
+    fx.harness.get_by_label("Back to project").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("New chat here").click();
+    fx.wait_for_label("Google Drive, connected");
+    fx.harness.get_by_label("Google Drive, connected").click();
+    fx.wait_for_label("Pause");
+    fx.harness.get_by_label("Pause").click();
+    fx.wait_for_label("Google Drive, paused");
+    let requests = fx.server.requests();
+    let paused = requests
+        .iter()
+        .rposition(|r| r["cmd"] == "service_pause")
+        .unwrap();
+    assert!(
+        requests[paused + 1..]
+            .iter()
+            .any(|r| r["cmd"] == "workspace" && r["project"] == 7)
+    );
+    assert!(
+        fx.chat()
+            .state
+            .start
+            .as_ref()
+            .unwrap()
+            .instructions
+            .iter()
+            .any(|i| i.layer == cww::workspace::Layer::Project)
+    );
+}
+
+#[test]
+fn native_project_edits_guard_notification_navigation() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("Falcon").click();
+    fx.wait_for_label("New chat here");
+    fx.harness.get_by_label("Settings").click();
+    fx.wait_for_label("Save project");
+    let field = fx.harness.get_by_label("Project name");
+    field.click();
+    field.type_text(" draft");
+    fx.harness.run_steps(3);
+    let target = notification_target("https://chatwithwork.com", "482139075", 11);
+    assert!(!fx.chat().may_open_notification(&target));
+    fx.wait_for_label("Discard unsaved project changes?");
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(3);
+    assert!(fx.chat().state.projects.as_ref().unwrap().dirty());
+    fx.chat().open(11);
+    fx.wait_for_label("Discard unsaved project changes?");
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait_for_request("chat", |r| r["chat"] == "11");
+    assert!(fx.chat().state.projects.is_none());
 }

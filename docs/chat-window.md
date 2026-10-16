@@ -265,3 +265,18 @@ batches on the server, with no plaintext title index. Search requests are
 serialized; stale responses cannot replace a newer search or organization.
 Leaving unsaved instructions still requires the same discard decision.
 Notification foreground presence is cleared while history is visible.
+
+Project pages open inside the desktop window. You can find and join projects,
+create or edit ones you administer, choose their people, pin them, and archive
+or delete them under the same rules as the website. A new chat started there
+keeps its project destination and instructions. Losing access disables sending
+without turning the draft into a private chat. Project instruction changes and
+connector pause/remove actions retain that project context. Unsaved project
+edits require a decision before changing pages or opening a notification.
+
+Project routes use organization-local numbers; chat creation and instructions
+continue using the server's internal project ID. Each request retains its
+organization's daemon connection. Older servers report that these pages need a
+server update. Native project avatars use initials, without a Gravatar request.
+Project file templates, guest visibility controls and remembered project pages
+remain on the parity inventory.

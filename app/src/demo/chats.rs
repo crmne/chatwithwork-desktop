@@ -209,7 +209,7 @@ fn page(path: &str) -> String {
 
 /// One of Northwind's projects, as the list names it.
 pub fn project(id: u64, name: &str, icon: &str, hq: bool, all_access: bool) -> Value {
-    json!({ "id": id, "name": name, "icon": icon, "hq": hq, "all_access": all_access, "people_count": 4,
+    json!({ "id": id, "number": id, "name": name, "icon": icon, "hq": hq, "all_access": all_access, "people_count": 4,
             "url": page(&format!("/projects/{id}")) })
 }
 

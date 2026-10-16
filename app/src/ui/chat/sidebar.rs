@@ -22,6 +22,9 @@ pub const SEARCH_ID: &str = "chat-search";
 pub enum Event {
     NewChat,
     History,
+    Projects(cww::projects::Request),
+    ProjectChat(cww::projects::Project),
+    ProjectInstructions(u64),
     Organization(Option<String>),
     Notification(cww::notifications::navigation::Target),
     Open(u64),
@@ -422,7 +425,7 @@ impl Sidebar<'_> {
                     pos2(header.left() + 16.0, header.top() + 12.0),
                     "Pinned",
                 );
-                if let Some(url) = &state.list.links.projects
+                if state.list.links.projects.is_some()
                     && self.micro_link(
                         ui,
                         pos2(header.right() - 8.0 - 10.0, header.top() + 12.0),
@@ -430,7 +433,7 @@ impl Sidebar<'_> {
                         Id::new("chat-all-projects"),
                     )
                 {
-                    event = Some(Event::OpenUrl(url.clone()));
+                    event = Some(Event::Projects(cww::projects::Request::List));
                 }
                 if pins.is_empty() {
                     let text = "Pin a chat or project to keep it here.";
@@ -462,7 +465,15 @@ impl Sidebar<'_> {
                                     .clone()
                                     .or_else(|| state.list.links.projects.clone())
                             {
-                                event = Some(Event::OpenUrl(url));
+                                event = Some(match project.number {
+                                    Some(project) => {
+                                        Event::Projects(cww::projects::Request::Show {
+                                            project,
+                                            before: None,
+                                        })
+                                    }
+                                    None => Event::OpenUrl(url),
+                                });
                             }
                         }
                         Pin::Chat(number, title) => {

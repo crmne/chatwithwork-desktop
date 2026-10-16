@@ -333,6 +333,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/token_count",
         "/local_agent/services/",
         "/local_agent/connectors",
+        "/local_agent/projects",
         "/local_agent/connector_handoff",
         "/local_agent/memory_preference",
         "/local_agent/memories/",
@@ -444,6 +445,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     };
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
+        || path.starts_with("/local_agent/projects")
         || path.starts_with("/local_agent/chat_history")
         || path.starts_with("/local_agent/uploads")
         || path.starts_with("/local_agent/dictations")
@@ -456,6 +458,53 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
         return (404, Value::Null);
+    }
+    if let Some(suffix) = path.strip_prefix("/local_agent/projects") {
+        let mut project = json!({"id": 81, "number": 17, "name": "Launch", "description": "Team plan", "icon": "folder-simple", "hq": false, "all_access": false, "archived": false, "member": true, "pinned": false, "audience": "2 people", "summary": "Invite-only · 2 people", "chat_count": 1, "can": {"edit": true, "chat": true}});
+        let people = json!([{"id": 1, "name": "Alex", "role": "Owner", "me": true, "creator": true, "email": "alex@example.com", "member": true, "fixed": true}]);
+        if method == "GET" && suffix.is_empty() {
+            return (
+                200,
+                json!({"account": "Acme", "owner": true, "admin": true, "projects": [project], "others": []}),
+            );
+        }
+        if suffix == "/new" || suffix == "/17/edit" {
+            assert_eq!(method, "GET");
+            return (
+                200,
+                json!({"project": if suffix == "/new" { Value::Null } else { project }, "people": people}),
+            );
+        }
+        if let Some(query) = suffix.strip_prefix("/17?") {
+            let params: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect();
+            assert_eq!(params.get("before").map(String::as_str), Some("page+/="));
+        }
+        if matches!(method, "POST" | "PATCH") && matches!(suffix, "" | "/17") {
+            let fields: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(
+                fields["project"],
+                json!({"name": "Q4 & café", "description": "Team work", "all_access": true, "user_ids": [1, 2]})
+            );
+            project["name"] = fields["project"]["name"].clone();
+        }
+        if suffix == "/17/pin" {
+            return (
+                200,
+                json!({"pins": {"projects": if method == "POST" { vec![81] } else { vec![] }, "chats": []}}),
+            );
+        }
+        if method == "DELETE" && matches!(suffix, "/17" | "/17/membership") {
+            return (204, Value::Null);
+        }
+        if suffix == "/17/archival" {
+            project["archived"] = json!(method == "POST");
+        }
+        return (
+            200,
+            json!({"project": project, "owner": true, "people": people, "chats": [{"chat": chat(7, "Budget", "idle"), "creator": "Alex", "age": "1 day ago", "visible_to_guests": false}], "next_cursor": null}),
+        );
     }
     if let Some(query) = path.strip_prefix("/local_agent/chat_history?") {
         let params: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
@@ -2443,6 +2492,82 @@ async fn relays_models_decisions_files_and_chat_actions() {
     assert_eq!(history.items[0].group, "Earlier");
     assert_eq!(history.items[0].age, "2 months ago");
     assert_eq!(history.next_cursor.as_deref(), Some("next-page"));
+    use cww::projects::{
+        Fields as ProjectFields, Reply as ProjectReply, Request as ProjectRequest,
+    };
+    let c = chats.clone();
+    let projects = blocking(move || c.projects(ProjectRequest::List))
+        .await
+        .unwrap();
+    assert!(
+        matches!(projects, ProjectReply::List(index) if index.projects[0].number == 17 && index.projects[0].id == 81)
+    );
+    let c = chats.clone();
+    let project = blocking(move || {
+        c.projects(ProjectRequest::Show {
+            project: 17,
+            before: Some("page+/=".into()),
+        })
+    })
+    .await
+    .unwrap();
+    assert!(matches!(project, ProjectReply::Page(page) if page.chats[0].chat.number == 7));
+    let c = chats.clone();
+    let form = blocking(move || c.projects(ProjectRequest::New))
+        .await
+        .unwrap();
+    assert!(
+        matches!(form, ProjectReply::Form(form) if form.project.is_none() && form.people[0].fixed)
+    );
+    let fields = ProjectFields {
+        name: "Q4 & café".into(),
+        description: "Team work".into(),
+        all_access: true,
+        user_ids: vec![1, 2],
+    };
+    for request in [
+        ProjectRequest::Create {
+            fields: fields.clone(),
+        },
+        ProjectRequest::Update {
+            project: 17,
+            fields,
+        },
+    ] {
+        let c = chats.clone();
+        let result = blocking(move || c.projects(request)).await.unwrap();
+        assert!(matches!(result, ProjectReply::Page(page) if page.project.name == "Q4 & café"));
+    }
+    let c = chats.clone();
+    let pins = blocking(move || {
+        c.projects(ProjectRequest::Pin {
+            project: 17,
+            pinned: true,
+        })
+    })
+    .await
+    .unwrap();
+    assert!(matches!(pins, ProjectReply::Pins(pins) if pins.projects == [81]));
+    let c = chats.clone();
+    let archived = blocking(move || {
+        c.projects(ProjectRequest::Archive {
+            project: 17,
+            archived: true,
+        })
+    })
+    .await
+    .unwrap();
+    assert!(matches!(archived, ProjectReply::Page(page) if page.project.archived));
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.projects(ProjectRequest::Membership {
+            project: 17,
+            join: false
+        }))
+        .await
+        .unwrap(),
+        ProjectReply::Removed
+    );
     let c = chats.clone();
     assert!(
         blocking(move || c.pin(7, false))
@@ -2527,6 +2652,14 @@ async fn relays_models_decisions_files_and_chat_actions() {
 
     // An older server: a sentence for each, and chats without a model.
     server.state.lock().unwrap().old_api = true;
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.projects(ProjectRequest::List))
+            .await
+            .unwrap_err()
+            .code,
+        "unsupported"
+    );
     let c = chats.clone();
     let old = blocking(move || c.history(String::new(), None))
         .await

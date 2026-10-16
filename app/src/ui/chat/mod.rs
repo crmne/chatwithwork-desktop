@@ -22,6 +22,7 @@ pub mod mcp_app;
 mod organizations;
 pub mod paint;
 mod project_move;
+mod projects;
 pub mod prose;
 pub mod runner;
 pub mod sidebar;
@@ -148,6 +149,16 @@ impl ChatPage {
                 return false;
             }
         }
+        if let Some(screen) = &mut self.state.projects {
+            if screen.busy {
+                return false;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Notification(target.clone()));
+                return false;
+            }
+        }
         true
     }
 
@@ -228,6 +239,16 @@ impl ChatPage {
     /// Open a chat, as choosing it in the sidebar does.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn open(&mut self, number: u64) {
+        if let Some(screen) = &mut self.state.projects {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Open(number));
+                return;
+            }
+        }
         if let Some(page) = &mut self.state.instructions
             && page.dirty()
         {
@@ -257,7 +278,12 @@ impl ChatPage {
     }
 
     fn run(&mut self, commands: Vec<Command>) {
-        for command in commands {
+        for mut command in commands {
+            if let Command::ServicePause(_, _, _, project)
+            | Command::ComputerRemove(_, _, project) = &mut command
+            {
+                *project = self.state.new_project.as_ref().map(|p| p.id);
+            }
             if command == Command::ResetAccount {
                 if let Some(ctx) = &self.ctx {
                     // Composer, instruction, rename and search undo buffers can
@@ -281,7 +307,7 @@ impl ChatPage {
                 self.last_user = None;
                 self.shown = None;
             }
-            if let Command::Workspace(generation)
+            if let Command::Workspace(generation, _)
             | Command::ServicePause(generation, ..)
             | Command::ComputerRemove(generation, ..) = &command
             {
@@ -362,13 +388,17 @@ impl ChatPage {
             && self.state.open.is_none()
             && self.state.instructions.is_none()
             && self.state.history.is_none()
+            && self.state.projects.is_none()
         {
             if self.state.start_loading.is_none()
                 && self.state.start_error.is_none()
                 && (self.state.start.is_none() || now >= self.workspace_refresh)
             {
                 self.workspace_refresh = now + 10.0;
-                self.run(vec![Command::Workspace(workspace::request_id())]);
+                self.run(vec![Command::Workspace(
+                    workspace::request_id(),
+                    self.state.new_project.as_ref().map(|p| p.id),
+                )]);
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(10));
         }
@@ -531,6 +561,19 @@ impl ChatPage {
             if let Some(chat) = outcome.open_chat {
                 self.sidebar_event(Some(sidebar::Event::Open(chat)), env, &mut action);
             }
+        } else if let Some(screen) = &mut self.state.projects {
+            let outcome =
+                projects::show(ui, main, screen, &self.state.list.account.name, &p, images);
+            if !screen.confirm_close && !outcome.discarded {
+                self.pending_navigation = None;
+            }
+            if outcome.discarded {
+                self.state.projects = None;
+                let pending = self.pending_navigation.take();
+                self.sidebar_event(pending, env, &mut action);
+            }
+            self.run(outcome.commands);
+            self.sidebar_event(outcome.event, env, &mut action);
         } else if self.state.history.is_some() {
             let (event, load) = history::show(ui, main, &mut self.state, &p, images);
             if load {
@@ -602,6 +645,7 @@ impl ChatPage {
 
         if self.state.instructions.is_none()
             && self.state.history.is_none()
+            && self.state.projects.is_none()
             && self.state.moving.is_none()
             && let Some(chat) = self
                 .state
@@ -722,6 +766,9 @@ impl ChatPage {
                                 | sidebar::Event::Notification(_)
                                 | sidebar::Event::Move(_)
                                 | sidebar::Event::History
+                                | sidebar::Event::Projects(_)
+                                | sidebar::Event::ProjectChat(_)
+                                | sidebar::Event::ProjectInstructions(_)
                                 | sidebar::Event::Toggle
                         )
                     ) {
@@ -764,6 +811,9 @@ impl ChatPage {
                     | sidebar::Event::Notification(_)
                     | sidebar::Event::Move(_)
                     | sidebar::Event::History
+                    | sidebar::Event::Projects(_)
+                    | sidebar::Event::ProjectChat(_)
+                    | sidebar::Event::ProjectInstructions(_)
             )
         ) && let Some(page) = &mut self.state.instructions
         {
@@ -777,7 +827,58 @@ impl ChatPage {
             }
             self.state.instructions = None;
         }
+        let leaving_project = matches!(
+            &event,
+            Some(
+                sidebar::Event::NewChat
+                    | sidebar::Event::Open(_)
+                    | sidebar::Event::Page(_)
+                    | sidebar::Event::Organization(_)
+                    | sidebar::Event::Notification(_)
+                    | sidebar::Event::Move(_)
+                    | sidebar::Event::History
+                    | sidebar::Event::ProjectChat(_)
+                    | sidebar::Event::ProjectInstructions(_)
+            )
+        ) || matches!(
+            &event,
+            Some(sidebar::Event::Projects(
+                cww::projects::Request::List
+                    | cww::projects::Request::New
+                    | cww::projects::Request::Edit { .. }
+                    | cww::projects::Request::Show { .. }
+            ))
+        );
+        if leaving_project && let Some(screen) = &mut self.state.projects {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = event;
+                return;
+            }
+        }
         match event {
+            Some(sidebar::Event::Projects(request)) => {
+                let commands = self.state.project_request(request);
+                self.run(commands);
+                self.drawer = false;
+            }
+            Some(sidebar::Event::ProjectChat(project)) => {
+                let commands = self.state.new_chat();
+                self.state.new_project = Some(project);
+                self.run(commands);
+                self.focus_composer = true;
+            }
+            Some(sidebar::Event::ProjectInstructions(project)) => {
+                let mut page = workspace::Instructions::new(cww::workspace::Layer::Project);
+                page.project = Some(project);
+                page.back_to_project = true;
+                let generation = page.generation;
+                self.state.instructions = Some(page);
+                self.run(vec![Command::Instructions(generation, Some(project))]);
+            }
             Some(sidebar::Event::NewChat) => {
                 let commands = self.state.new_chat();
                 self.run(commands);
@@ -1470,7 +1571,26 @@ impl ChatPage {
             .start
             .as_ref()
             .map(|data| workspace::StartLayout::new(ui, column, data, p));
+        let project_context = self.state.new_project.as_ref().map(|project| {
+            let label = format!(
+                "{} · shared with {}",
+                project.name,
+                project.audience.replacen("Everyone", "everyone", 1)
+            );
+            (
+                project.number,
+                paint::layout(
+                    ui.painter(),
+                    paint::job(&label, Type::sans(13.0, 19.5), p.ink_muted, column - 48.0),
+                ),
+                label,
+            )
+        });
+        let context_height = project_context
+            .as_ref()
+            .map_or(0.0, |(_, galley, _)| galley.size().y + 12.0);
         let content = galley.size().y
+            + context_height
             + 28.0
             + composer_h
             + start.as_ref().map_or(0.0, |layout| layout.height);
@@ -1497,8 +1617,34 @@ impl ChatPage {
             galley,
             p.ink.gamma_multiply(eased),
         );
+        if let Some((number, galley, label)) = project_context {
+            let context = Rect::from_min_size(
+                pos2(
+                    main.center().x - galley.size().x / 2.0,
+                    top + greeting_height + 28.0,
+                ),
+                galley.size(),
+            );
+            let response = ui.interact(context, Id::new("new-project-context"), Sense::click());
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &label));
+            ui.painter().galley(context.min, galley, p.ink_muted);
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                self.sidebar_event(
+                    Some(sidebar::Event::Projects(cww::projects::Request::Show {
+                        project: number,
+                        before: None,
+                    })),
+                    env,
+                    action,
+                );
+            }
+        }
         let rect = Rect::from_min_size(
-            pos2(left, top + greeting_height + 28.0),
+            pos2(left, top + greeting_height + 28.0 + context_height),
             vec2(column, composer_h),
         );
         let focus = std::mem::take(&mut self.focus_composer);
@@ -1531,13 +1677,18 @@ impl ChatPage {
                         workspace::request_id(),
                         service,
                         paused,
+                        self.state.new_project.as_ref().map(|p| p.id),
                     )]);
                 }
                 Some(workspace::Event::Instructions(layer)) => {
-                    let page = workspace::Instructions::new(layer);
+                    let mut page = workspace::Instructions::new(layer);
+                    page.project = self.state.new_project.as_ref().map(|p| p.id);
                     let generation = page.generation;
                     self.state.instructions = Some(page);
-                    self.run(vec![Command::Instructions(generation)]);
+                    self.run(vec![Command::Instructions(
+                        generation,
+                        self.state.new_project.as_ref().map(|p| p.id),
+                    )]);
                 }
                 Some(workspace::Event::Connect) => {
                     self.state.connectors = Some(connectors::ConnectDialog::default())
@@ -1575,7 +1726,10 @@ impl ChatPage {
                 .clicked()
             {
                 self.state.start_error = None;
-                self.run(vec![Command::Workspace(workspace::request_id())]);
+                self.run(vec![Command::Workspace(
+                    workspace::request_id(),
+                    self.state.new_project.as_ref().map(|p| p.id),
+                )]);
             }
         } else if self.state.start.is_none() {
             let label = paint::layout(
@@ -1644,7 +1798,11 @@ impl ChatPage {
                 },
             );
             if remove && let Ok(id) = service.key.parse() {
-                self.run(vec![Command::ComputerRemove(workspace::request_id(), id)]);
+                self.run(vec![Command::ComputerRemove(
+                    workspace::request_id(),
+                    id,
+                    self.state.new_project.as_ref().map(|p| p.id),
+                )]);
             }
             if remove || cancel || !open {
                 self.remove_service = None;

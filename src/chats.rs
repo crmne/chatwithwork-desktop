@@ -665,6 +665,58 @@ impl ChatClient {
         )
     }
 
+    pub fn projects(&self, request: &crate::projects::Request) -> Result<Value> {
+        use crate::projects::Request;
+        let (method, suffix) = match request {
+            Request::List => ("GET", String::new()),
+            Request::Show { project, before } => {
+                let query = before.as_ref().map(|cursor| {
+                    url::form_urlencoded::Serializer::new(String::new())
+                        .append_pair("before", cursor)
+                        .finish()
+                });
+                (
+                    "GET",
+                    format!(
+                        "/{project}{}",
+                        query.map_or(String::new(), |q| format!("?{q}"))
+                    ),
+                )
+            }
+            Request::New => ("GET", "/new".into()),
+            Request::Edit { project } => ("GET", format!("/{project}/edit")),
+            Request::Create { .. } => ("POST", String::new()),
+            Request::Update { project, .. } => ("PATCH", format!("/{project}")),
+            Request::Delete { project } => ("DELETE", format!("/{project}")),
+            Request::Membership { project, join } => (
+                if *join { "POST" } else { "DELETE" },
+                format!("/{project}/membership"),
+            ),
+            Request::Pin { project, pinned } => (
+                if *pinned { "POST" } else { "DELETE" },
+                format!("/{project}/pin"),
+            ),
+            Request::Archive { project, archived } => (
+                if *archived { "POST" } else { "DELETE" },
+                format!("/{project}/archival"),
+            ),
+        };
+        let fields = match request {
+            Request::Create { fields } | Request::Update { fields, .. } => {
+                Some(json!({ "project": fields }))
+            }
+            _ => None,
+        };
+        newer(
+            self.call(
+                method,
+                &format!("local_agent/projects{suffix}"),
+                fields.as_ref().map_or(Body::Empty, Body::Json),
+            ),
+            "can't manage projects from here yet",
+        )
+    }
+
     /// Make the chat's public link: `{url, expires_at, chat}`.
     pub fn share(&self, chat: &str) -> Result<Value> {
         let chat = chat_number(chat)?;
