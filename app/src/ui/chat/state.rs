@@ -15,6 +15,8 @@ use cww::tui::chat::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Stop account-bound work and invalidate every queued result from it.
+    ResetAccount,
     Dictate(u64),
     StopDictation,
     CancelDictation,
@@ -385,6 +387,22 @@ impl Default for ChatState {
 impl ChatState {
     pub fn ready(&self) -> bool {
         self.access == Access::Ready
+    }
+
+    /// A list/header can reveal a changed account before daemon status does.
+    /// Clear all account-bound state before displaying its replacement.
+    fn reset_account_if_changed(&mut self, account: &str) -> Vec<Command> {
+        if self.list.account.id == account
+            || (self.list.account.id.is_empty() && !self.ready() && self.open.is_none())
+        {
+            return Vec::new();
+        }
+        let paired = self.paired;
+        *self = Self {
+            paired,
+            ..Self::default()
+        };
+        vec![Command::ResetAccount]
     }
 
     /// Recent, as the web's sidebar lists it: the person's private chats,
@@ -960,10 +978,10 @@ impl ChatState {
                 }
             }
             Msg::Listed(Ok(list)) => {
+                let mut commands = self.reset_account_if_changed(&list.account.id);
                 let was_ready = self.ready();
                 self.access = Access::Ready;
                 self.list = list;
-                let mut commands = Vec::new();
                 if self.models == ModelList::Unknown {
                     self.models = ModelList::Loading;
                     commands.push(Command::Models);
@@ -1256,7 +1274,15 @@ impl ChatState {
             ListLive::Projects(projects) => {
                 self.list.projects = projects;
             }
-            ListLive::Account(account) => self.list.set_account(account),
+            ListLive::Account(account) => {
+                let mut commands = self.reset_account_if_changed(&account.account.id);
+                self.list.set_account(account);
+                if !commands.is_empty() {
+                    self.access = Access::Loading;
+                    commands.push(Command::List);
+                    return commands;
+                }
+            }
         }
         Vec::new()
     }
@@ -1568,6 +1594,140 @@ mod tests {
         );
         assert!(state.ready());
         state
+    }
+
+    #[test]
+    fn account_header_changes_clear_the_old_conversation_before_status_arrives() {
+        use cww::tui::chat::{AccountUpdate, Named};
+        let mut state = ready();
+        state.list.account.id = "482139075".into();
+        state.open_chat(2);
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "idle"),
+                ..Transcript::default()
+            }),
+        });
+        state.input = "A private draft".into();
+        state.pending_question = Some("A private question".into());
+        state.search = "Private search".into();
+        state.instructions = Some(super::super::workspace::Instructions::new(
+            cww::workspace::Layer::Personal,
+        ));
+        state.acting = Some((2, ChatAction::Share));
+        state.clipboard = Some("private share link".into());
+        state.progress = Some("Private tool work".into());
+        let commands = state.update(Msg::ListLive(ListLive::Account(AccountUpdate {
+            account: Named {
+                id: "987654321".into(),
+                name: "New account".into(),
+                ..Named::default()
+            },
+            ..AccountUpdate::default()
+        })));
+        assert_eq!(commands, vec![Command::ResetAccount, Command::List]);
+        assert_eq!(state.access, Access::Loading);
+        assert_eq!(state.list.account.id, "987654321");
+        assert!(state.open.is_none() && state.transcript.is_none());
+        assert_eq!(state.following, Following::No);
+        assert!(state.list.chats.is_empty());
+        assert!(state.input.is_empty() && state.search.is_empty());
+        assert!(state.pending_question.is_none() && state.progress.is_none());
+        assert!(
+            state.instructions.is_none() && state.acting.is_none() && state.clipboard.is_none()
+        );
+    }
+
+    #[test]
+    fn account_full_list_change_cannot_keep_a_same_number_transcript() {
+        let mut state = ready();
+        state.list.account.id = "482139075".into();
+        state.open_chat(2);
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "idle"),
+                ..Transcript::default()
+            }),
+        });
+        let mut next = state.list.clone();
+        next.account.id = "987654321".into();
+        let commands = state.update(Msg::Listed(Ok(next)));
+        assert_eq!(
+            commands,
+            vec![
+                Command::ResetAccount,
+                Command::Models,
+                Command::FollowList(true)
+            ]
+        );
+        assert!(state.ready());
+        assert!(state.open.is_none() && state.transcript.is_none());
+        assert_eq!(
+            state.open_chat(2),
+            vec![Command::Open(2), Command::Follow(Some(2))]
+        );
+        assert!(
+            state.transcript.is_none(),
+            "the new account's same number must be fetched"
+        );
+    }
+
+    #[test]
+    fn account_header_cannot_assign_an_unknown_accounts_old_transcript() {
+        let mut state = ready();
+        state.open_chat(2);
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "idle"),
+                ..Transcript::default()
+            }),
+        });
+        let mut next = state.list.clone();
+        next.account.id = "987654321".into();
+        assert!(
+            state
+                .update(Msg::Listed(Ok(next)))
+                .contains(&Command::ResetAccount)
+        );
+        assert!(state.open.is_none() && state.transcript.is_none());
+    }
+
+    #[test]
+    fn account_name_and_balance_updates_keep_the_same_accounts_conversation() {
+        use cww::tui::chat::{AccountUpdate, Credits};
+        let mut state = ready();
+        state.list.account.id = "482139075".into();
+        state.open_chat(2);
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "idle"),
+                ..Transcript::default()
+            }),
+        });
+        state.input = "Keep this draft".into();
+        let transcript = state.transcript.clone();
+        let mut account = state.list.account.clone();
+        account.name = "Renamed organization".into();
+        let commands = state.update(Msg::ListLive(ListLive::Account(AccountUpdate {
+            account,
+            credits: Some(Credits {
+                left: 123,
+                ..Credits::default()
+            }),
+            ..AccountUpdate::default()
+        })));
+        assert!(commands.is_empty());
+        assert_eq!(state.transcript, transcript);
+        assert_eq!(state.open, Some(2));
+        assert_eq!(state.input, "Keep this draft");
+        assert_eq!(state.list.account.name, "Renamed organization");
+        assert_eq!(state.list.credits.as_ref().unwrap().left, 123);
+        assert!(state.update(Msg::Listed(Ok(state.list.clone()))).is_empty());
+        assert_eq!(state.transcript, transcript);
     }
 
     #[test]

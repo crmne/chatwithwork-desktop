@@ -217,6 +217,29 @@ impl ChatPage {
 
     fn run(&mut self, commands: Vec<Command>) {
         for command in commands {
+            if command == Command::ResetAccount {
+                if let Some(ctx) = &self.ctx {
+                    // Composer, instruction, rename and search undo buffers can
+                    // otherwise bring the previous account's text back.
+                    ctx.data_mut(|data| data.remove_by_type::<egui::text_edit::TextEditState>());
+                    ctx.memory_mut(|memory| {
+                        if let Some(focused) = memory.focused() {
+                            memory.surrender_focus(focused);
+                        }
+                    });
+                }
+                self.focus_composer = false;
+                self.focus_search = false;
+                self.conversation = ConversationView::default();
+                self.picking = None;
+                self.saving = None;
+                self.pending_navigation = None;
+                self.remove_service = None;
+                self.reach_menu = None;
+                self.pinned = None;
+                self.last_user = None;
+                self.shown = None;
+            }
             if let Command::Workspace(generation)
             | Command::ServicePause(generation, ..)
             | Command::ComputerRemove(generation, ..) = &command
@@ -233,39 +256,13 @@ impl ChatPage {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
-        if let Some(rx) = &self.saving
-            && let Ok(result) = rx.try_recv()
-        {
-            self.saving = None;
-            self.state.notice = result.map(|r| match r {
-                Ok(name) => format!("Saved {name}"),
-                Err(e) => e.message,
-            });
-        }
-        // Files picked, or dropped on the window.
-        if let Some(rx) = &self.picking
-            && let Ok(paths) = rx.try_recv()
-        {
-            self.picking = None;
-            self.attach(paths);
-        }
-        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|f| f.path().to_path_buf())
-                .filter(|p| p.is_absolute())
-                .collect()
-        });
-        if !dropped.is_empty() {
-            self.attach(dropped);
-        }
         let paired = env
             .status
             .is_some_and(|s| s.is_paired() && s.connection.connection != "revoked");
         let commands = self.state.set_paired(paired);
         self.run(commands);
-        for msg in self.runner.drain() {
+        let mut account_changed = false;
+        while let Some(msg) = self.runner.next() {
             if let state::Msg::ConnectorHandoff {
                 generation,
                 result: Ok(path),
@@ -287,7 +284,37 @@ impl ChatPage {
                 self.open_on_server(env, &format!("{}{path}", server.trim_end_matches('/')));
             }
             let commands = self.state.update(msg);
+            account_changed |= commands.contains(&Command::ResetAccount);
             self.run(commands);
+        }
+        if !account_changed {
+            if let Some(rx) = &self.saving
+                && let Ok(result) = rx.try_recv()
+            {
+                self.saving = None;
+                self.state.notice = result.map(|r| match r {
+                    Ok(name) => format!("Saved {name}"),
+                    Err(e) => e.message,
+                });
+            }
+            // Files picked, or dropped on the window.
+            if let Some(rx) = &self.picking
+                && let Ok(paths) = rx.try_recv()
+            {
+                self.picking = None;
+                self.attach(paths);
+            }
+            let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .map(|f| f.path().to_path_buf())
+                    .filter(|p| p.is_absolute())
+                    .collect()
+            });
+            if !dropped.is_empty() {
+                self.attach(dropped);
+            }
         }
         let now = ctx.input(|i| i.time);
         if self.state.ready() && self.state.open.is_none() && self.state.instructions.is_none() {

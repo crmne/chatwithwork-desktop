@@ -542,6 +542,53 @@ fn notification_click_waits_for_the_new_pairings_account_header() {
 }
 
 #[test]
+fn account_header_reset_clears_editor_undo_and_pending_file_choices() {
+    use cww::tui::chat::{AccountUpdate, ListLive, Named};
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    let field = fx
+        .harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput);
+    field.focus();
+    field.type_text("Private draft from the old account");
+    fx.harness.run_steps(3);
+    assert!(!fx.chat().state.input.is_empty());
+    let files = tempfile::tempdir().unwrap();
+    let file = files.path().join("old-private-file.txt");
+    std::fs::write(&file, "Synthetic old-account attachment").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(vec![file]).unwrap();
+    fx.chat().picking = Some(rx);
+    let commands = fx
+        .chat()
+        .state
+        .update(super::state::Msg::ListLive(ListLive::Account(
+            AccountUpdate {
+                account: Named {
+                    id: "987654321".into(),
+                    ..Named::default()
+                },
+                ..AccountUpdate::default()
+            },
+        )));
+    fx.chat().run(commands);
+    assert!(fx.chat().picking.is_none());
+    assert!(fx.chat().state.input.is_empty());
+    assert!(fx.harness.ctx.memory(|memory| memory.focused()).is_none());
+    assert!(
+        egui::text_edit::TextEditState::load(&fx.harness.ctx, egui::Id::new(super::composer::ID))
+            .is_none()
+    );
+    fx.harness.run_steps(8);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "chat_upload")
+    );
+}
+
+#[test]
 fn notification_navigation_screenshots() {
     let Ok(directory) = std::env::var("CWW_NOTIFICATION_NAVIGATION_SCREENSHOTS") else {
         return;

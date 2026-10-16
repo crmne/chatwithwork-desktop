@@ -23,8 +23,9 @@ const ACCESS_WAIT: Duration = Duration::from_secs(15 * 60);
 pub struct Runner {
     recording: Mutex<Option<Recording>>,
     chats: Chats,
-    tx: Sender<Msg>,
-    rx: Receiver<Msg>,
+    tx: Sender<ScopedMsg>,
+    rx: Receiver<ScopedMsg>,
+    generation: AtomicU64,
     ctx: Arc<Mutex<Option<egui::Context>>>,
     following: Mutex<Option<Follower>>,
     /// Keeps the list current.
@@ -50,13 +51,25 @@ impl Follower {
 /// Sends a message and wakes the window to read it.
 #[derive(Clone)]
 struct Wake {
-    tx: Sender<Msg>,
+    tx: Sender<ScopedMsg>,
     ctx: Arc<Mutex<Option<egui::Context>>>,
+    generation: u64,
+}
+
+struct ScopedMsg {
+    generation: u64,
+    msg: Msg,
 }
 
 impl Wake {
     fn send(&self, msg: Msg) -> bool {
-        let sent = self.tx.send(msg).is_ok();
+        let sent = self
+            .tx
+            .send(ScopedMsg {
+                generation: self.generation,
+                msg,
+            })
+            .is_ok();
         if let Some(ctx) = &*self.ctx.lock().expect("ctx") {
             ctx.request_repaint();
         }
@@ -72,6 +85,7 @@ impl Runner {
             chats: Chats::new(socket),
             tx,
             rx,
+            generation: AtomicU64::new(0),
             ctx: Arc::new(Mutex::new(None)),
             following: Mutex::new(None),
             list: Mutex::new(None),
@@ -87,15 +101,22 @@ impl Runner {
         }
     }
 
-    /// Answers that came back since the last frame.
-    pub fn drain(&self) -> Vec<Msg> {
-        self.rx.try_iter().collect()
+    /// Validate each result as it is consumed. A changed account can invalidate
+    /// later results that were already queued in the very same frame.
+    pub fn next(&self) -> Option<Msg> {
+        while let Ok(message) = self.rx.try_recv() {
+            if message.generation == self.generation.load(Ordering::SeqCst) {
+                return Some(message.msg);
+            }
+        }
+        None
     }
 
     fn wake(&self) -> Wake {
         Wake {
             tx: self.tx.clone(),
             ctx: Arc::clone(&self.ctx),
+            generation: self.generation.load(Ordering::SeqCst),
         }
     }
 
@@ -107,6 +128,7 @@ impl Runner {
             }
         };
         match command {
+            Command::ResetAccount => self.invalidate(),
             Command::Dictate(generation) => {
                 let result = std::env::current_exe()
                     .map_err(|_| {
@@ -431,8 +453,9 @@ impl Runner {
         }
     }
 
-    /// Stop following, as the window closes.
-    pub fn stop(&self) {
+    /// Stop every old account's observer and reject its buffered/in-flight work.
+    fn invalidate(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         self.recording.lock().expect("recording").take();
         if let Some(follower) = self.following.lock().expect("following").take() {
             follower.stop();
@@ -441,6 +464,11 @@ impl Runner {
             follower.stop();
         }
         self.access_wait.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Stop following, as the window closes.
+    pub fn stop(&self) {
+        self.invalidate();
         *self.ctx.lock().expect("ctx") = None;
     }
 }
@@ -467,5 +495,72 @@ fn wait_for_access(chats: &Chats, wake: &Wake, current: impl Fn() -> bool) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::state::ChatState;
+    use super::*;
+    use cww::tui::chat::{AccountUpdate, ChatList, ChatSummary, ListLive, Named, Transcript};
+
+    #[test]
+    fn account_reset_rejects_buffered_and_late_same_number_results() {
+        let runner = Runner::new(Path::new("unused-test-socket"));
+        let old = runner.wake();
+        let mut state = ChatState::default();
+        state.set_paired(true);
+        state.update(Msg::Listed(Ok(ChatList {
+            account: Named {
+                id: "482139075".into(),
+                ..Named::default()
+            },
+            ..ChatList::default()
+        })));
+        state.open_chat(16);
+        let shown = |title: &str| Msg::Shown {
+            chat: 16,
+            result: Ok(Transcript {
+                chat: ChatSummary {
+                    number: 16,
+                    title: title.into(),
+                    ..ChatSummary::default()
+                },
+                ..Transcript::default()
+            }),
+        };
+        old.send(Msg::ListLive(ListLive::Account(AccountUpdate {
+            account: Named {
+                id: "987654321".into(),
+                ..Named::default()
+            },
+            ..AccountUpdate::default()
+        })));
+        old.send(shown("Old account's buffered transcript"));
+        let commands = state.update(runner.next().unwrap());
+        assert_eq!(commands, vec![Command::ResetAccount, Command::List]);
+        runner.run(Command::ResetAccount);
+        state.update(Msg::Listed(Ok(state.list.clone())));
+        state.open_chat(16);
+        old.send(shown("Old account's late transcript"));
+        old.send(Msg::Listed(Ok(ChatList {
+            account: Named {
+                id: "482139075".into(),
+                ..Named::default()
+            },
+            ..ChatList::default()
+        })));
+        assert!(
+            runner.next().is_none(),
+            "queued and late old account callbacks are discarded"
+        );
+        assert_eq!(state.list.account.id, "987654321");
+        assert!(state.transcript.is_none());
+        runner.wake().send(shown("New account's transcript"));
+        state.update(runner.next().unwrap());
+        assert_eq!(
+            state.transcript.unwrap().chat.title,
+            "New account's transcript"
+        );
     }
 }
