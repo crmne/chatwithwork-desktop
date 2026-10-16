@@ -157,7 +157,7 @@ pub fn default_model() -> Value {
 
 /// Everything the person who started a private chat may do with it.
 pub fn can_all() -> Value {
-    json!({ "retry": true, "branch": true, "rename": true, "delete": true, "share": true })
+    json!({ "retry": true, "branch": true, "rename": true, "delete": true, "share": true, "pin": true, "move": true })
 }
 
 /// A private chat, started when it was last updated.
@@ -181,8 +181,7 @@ pub fn summary(number: u64, title: &str, state: &str, updated_at: String) -> Val
 fn in_project(mut chat: Value, project: (u64, &str), mine: bool) -> Value {
     chat["project"] = json!({ "id": project.0, "name": project.1 });
     chat["mine"] = json!(mine);
-    chat["can"] =
-        json!({ "retry": mine, "branch": true, "rename": mine, "delete": mine, "share": false });
+    chat["can"] = json!({ "retry": mine, "branch": true, "rename": mine, "delete": mine, "share": false, "pin": true, "move": mine });
     chat
 }
 
@@ -210,7 +209,7 @@ fn page(path: &str) -> String {
 
 /// One of Northwind's projects, as the list names it.
 pub fn project(id: u64, name: &str, icon: &str, hq: bool, all_access: bool) -> Value {
-    json!({ "id": id, "name": name, "icon": icon, "hq": hq, "all_access": all_access,
+    json!({ "id": id, "name": name, "icon": icon, "hq": hq, "all_access": all_access, "people_count": 4,
             "url": page(&format!("/projects/{id}")) })
 }
 

@@ -20,6 +20,7 @@ pub mod markdown;
 pub mod mcp_app;
 mod organizations;
 pub mod paint;
+mod project_move;
 pub mod prose;
 pub mod runner;
 pub mod sidebar;
@@ -525,6 +526,9 @@ impl ChatPage {
             if let Some(chat) = outcome.open_chat {
                 self.sidebar_event(Some(sidebar::Event::Open(chat)), env, &mut action);
             }
+        } else if self.state.moving.is_some() {
+            let commands = project_move::show(ui, main, &mut self.state, &p, images);
+            self.run(commands);
         } else if conversing {
             animating |= self.conversation_area(ui, main, &p, images, time, env, &mut action);
         } else {
@@ -582,6 +586,57 @@ impl ChatPage {
                         }
                     }
                 });
+        }
+
+        if self.state.instructions.is_none()
+            && self.state.moving.is_none()
+            && let Some(chat) = self
+                .state
+                .open_summary()
+                .filter(|chat| chat.can(|can| can.pin))
+        {
+            let number = chat.number;
+            let pinned = self.state.list.pins.chats.contains(&number);
+            let mut clicked = false;
+            egui::Area::new(Id::new("chat-pin-action"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos2(main.right() - 48.0, main.top() + 8.0))
+                .show(&ctx, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+                    if pinned {
+                        ui.painter()
+                            .rect_filled(rect, tokens::RADIUS_CONTROL, p.ink_wash(6.0));
+                    }
+                    clicked = widgets::IconButton {
+                        icon: if pinned {
+                            Icon::PushPinSlash
+                        } else {
+                            Icon::PushPin
+                        },
+                        icon_size: 16.0,
+                        label: if pinned {
+                            "Unpin from sidebar"
+                        } else {
+                            "Pin to sidebar"
+                        },
+                        tooltip: Some(if pinned {
+                            "Unpin from sidebar"
+                        } else {
+                            "Pin to sidebar"
+                        }),
+                        color: p.ink_muted,
+                        hover_color: p.ink,
+                        wash: 7.0,
+                        radius: tokens::RADIUS_CONTROL,
+                        enabled: self.state.acting.is_none(),
+                    }
+                    .show(ui, Id::new("chat-pin-button"), rect, images, &p)
+                    .clicked();
+                });
+            if clicked {
+                let commands = self.state.act(number, state::ChatAction::Pin(!pinned));
+                self.run(commands);
+            }
         }
 
         let user = if self.state.list.user.name.is_empty() {
@@ -652,6 +707,7 @@ impl ChatPage {
                                 | sidebar::Event::Page(_)
                                 | sidebar::Event::Organization(_)
                                 | sidebar::Event::Notification(_)
+                                | sidebar::Event::Move(_)
                                 | sidebar::Event::Toggle
                         )
                     ) {
@@ -692,6 +748,7 @@ impl ChatPage {
                     | sidebar::Event::Page(_)
                     | sidebar::Event::Organization(_)
                     | sidebar::Event::Notification(_)
+                    | sidebar::Event::Move(_)
             )
         ) && let Some(page) = &mut self.state.instructions
         {
@@ -735,6 +792,15 @@ impl ChatPage {
             }
             Some(sidebar::Event::Delete(chat)) => {
                 self.state.dialog = Some(state::Dialog::Delete { chat });
+            }
+            Some(sidebar::Event::Pin(chat, pinned)) => {
+                let commands = self.state.act(chat, state::ChatAction::Pin(pinned));
+                self.run(commands);
+            }
+            Some(sidebar::Event::Move(chat)) => {
+                let commands = self.state.move_chat(chat);
+                self.run(commands);
+                self.drawer = false;
             }
             None => {}
         }
@@ -1030,6 +1096,7 @@ impl ChatPage {
         let mut animating = false;
         let mut events = Vec::new();
         let mut project_url = None;
+        let mut change_project = false;
         let mut child = ui.new_child(UiBuilder::new().max_rect(main));
         // Back to the latest message, from the scroll button.
         let scroll_to_bottom = self.scroll_to_bottom > 0 && !self.state.loading;
@@ -1056,17 +1123,16 @@ impl ChatPage {
                 );
                 col.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 if let Some(project) = self.open_project() {
-                    let (rect, _) = col.allocate_exact_size(vec2(column, 19.5), Sense::hover());
-                    if let Some(url) = project_line(
+                    (project_url, change_project) = project_line(
                         &mut col,
-                        rect,
                         &project,
                         &self.state.list.account.name,
+                        self.state
+                            .open_summary()
+                            .is_some_and(|chat| chat.can(|can| can.r#move)),
                         images,
                         p,
-                    ) {
-                        project_url = Some(url);
-                    }
+                    );
                     col.add_space(12.0);
                 }
                 let (found, moving) = Conversation {
@@ -1145,6 +1211,9 @@ impl ChatPage {
                     );
                 }
             });
+        if change_project && let Some(chat) = self.state.open {
+            self.sidebar_event(Some(sidebar::Event::Move(chat)), env, action);
+        }
         if let Some(url) = project_url {
             self.open_on_server(env, &url);
         }
@@ -1565,75 +1634,87 @@ impl ChatPage {
     }
 }
 
-/// `.chat-project`: above a chat in a project, centered: its icon, its name, which opens its page on the web, and
-/// who reads it. The web counts the people on a project; the chat API
-/// doesn't say, so the app names them without a count. Returns the page to
-/// open when the name was clicked.
+/// The project's audience and the creator's Change link, wrapping on phones.
 fn project_line(
     ui: &mut Ui,
-    rect: Rect,
     project: &cww::tui::chat::Project,
     account: &str,
+    movable: bool,
     images: &Images,
     p: &Palette,
-) -> Option<String> {
-    let ty = tokens::scale::SMALLER;
-    let painter = ui.painter().clone();
-    let name = paint::layout(
-        &painter,
-        paint::job(&project.name, ty.weight(550.0), p.ink, f32::INFINITY),
-    );
-    let audience = if project.hq && !account.trim().is_empty() {
-        format!(" · shared with everyone in {}", account.trim())
-    } else {
-        " · shared with the people on it".to_string()
-    };
-    let rest = paint::layout(
-        &painter,
-        paint::job(&audience, ty, p.ink_muted, f32::INFINITY),
-    );
-    let width = 16.0 + 8.0 + name.size().x + rest.size().x;
-    let mut x = rect.center().x - width / 2.0;
-    let cy = rect.center().y;
-    images.icon_at(
-        &painter,
-        pos2(x + 8.0, cy),
-        16.0,
-        sidebar::project_icon(project),
-        p.ink_faint,
-    );
-    x += 16.0 + 8.0;
-    let name_rect = Rect::from_min_size(pos2(x, cy - name.size().y / 2.0), name.size());
-    let response = ui.interact(
-        name_rect,
-        Id::new(("chat-project-line", project.id)),
-        if project.url.is_some() {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, true, &project.name));
-    widgets::label(ui, rect, &format!("{}{audience}", project.name));
-    if response.hovered() && project.url.is_some() {
-        painter.hline(
-            name_rect.x_range(),
-            name_rect.bottom() + 1.0,
-            egui::Stroke::new(1.0, p.ink),
+) -> (Option<String>, bool) {
+    let mut url = None;
+    let mut change = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+        let (icon, _) = ui.allocate_exact_size(vec2(16.0, 19.5), Sense::hover());
+        images.icon_at(
+            ui.painter(),
+            icon.center(),
+            16.0,
+            sidebar::project_icon(project),
+            p.ink_faint,
         );
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    painter.galley(name_rect.min, name, p.ink);
-    painter.galley(
-        pos2(name_rect.right(), cy - rest.size().y / 2.0),
-        rest,
-        p.ink_muted,
-    );
-    if response.clicked() {
-        project.url.clone()
-    } else {
-        None
-    }
+        let name = ui.add(
+            egui::Label::new(paint::job(
+                &project.name,
+                tokens::scale::SMALLER.weight(550.0),
+                p.ink,
+                ui.available_width(),
+            ))
+            .sense(Sense::click()),
+        );
+        name.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Link, project.url.is_some(), &project.name)
+        });
+        if name.hovered() && project.url.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if name.clicked() {
+            url = project.url.clone();
+        }
+        let audience = if project.hq {
+            format!(" · shared with everyone in {}", account.trim())
+        } else {
+            project.people_count.map_or_else(
+                || " · shared with the people on it".into(),
+                |n| {
+                    format!(
+                        " · shared with {n} {}",
+                        if n == 1 { "person" } else { "people" }
+                    )
+                },
+            )
+        };
+        ui.add(
+            egui::Label::new(paint::job(
+                &audience,
+                tokens::scale::SMALLER,
+                p.ink_muted,
+                ui.available_width(),
+            ))
+            .wrap(),
+        );
+        if movable {
+            let response = ui.add(
+                egui::Label::new(paint::job(
+                    "Change",
+                    tokens::scale::SMALLER.weight(550.0),
+                    p.ink_muted,
+                    f32::INFINITY,
+                ))
+                .sense(Sense::click()),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Link, true, "Change project")
+            });
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            change = response.clicked();
+        }
+    });
+    (url, change)
 }
 
 /// A failure over the composer: a question that didn't go, a file or a

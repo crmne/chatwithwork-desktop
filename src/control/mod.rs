@@ -261,6 +261,14 @@ pub enum ControlRequest {
     ChatDelete {
         chat: String,
     },
+    ChatPin {
+        chat: String,
+        pinned: bool,
+    },
+    ChatMove {
+        chat: String,
+        project: Option<u64>,
+    },
     /// Share `chat` with a public link, as the web's Share does.
     ChatShare {
         chat: String,

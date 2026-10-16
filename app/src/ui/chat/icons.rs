@@ -69,9 +69,14 @@ pub enum Icon {
     Pause,
     Play,
     Notebook,
+    PushPin,
+    PushPinSlash,
+    FolderSimplePlus,
+    Eye,
+    EyeSlash,
 }
 
-const COUNT: usize = Icon::Notebook as usize + 1;
+const COUNT: usize = Icon::EyeSlash as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if

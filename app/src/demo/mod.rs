@@ -50,6 +50,7 @@ struct State {
     credits_left: u64,
     /// The projects the person is on.
     projects: Vec<Value>,
+    pins: Value,
     /// Answers don't stream on their own (tests hold them still).
     held: bool,
     /// Chats whose answer is streaming now.
@@ -251,6 +252,7 @@ fn fresh() -> State {
         web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
+        pins: chats::list_header(5000)["pins"].clone(),
         held: false,
         streaming: HashSet::new(),
         cancelled: HashSet::new(),
@@ -369,6 +371,7 @@ fn sample() -> State {
         web_search: false,
         credits_left: 1250,
         projects: chats::projects(),
+        pins: chats::list_header(5000)["pins"].clone(),
         held: false,
         streaming: HashSet::new(),
         cancelled: HashSet::new(),
@@ -529,6 +532,8 @@ impl Demo {
             | "chat_branch"
             | "chat_rename"
             | "chat_delete"
+            | "chat_pin"
+            | "chat_move"
             | "chat_share"
             | "chat_unshare"
             | "workspace"
@@ -809,6 +814,7 @@ impl Demo {
                 answer["ok"] = json!(true);
                 answer["chats"] = json!(list);
                 answer["projects"] = json!(state.projects);
+                answer["pins"] = state.pins.clone();
                 if state.web_search {
                     answer["web_search"] = json!({
                         "allowed": true,
@@ -854,8 +860,8 @@ impl Demo {
                 };
                 self.decide(cmd, number, request)
             }
-            "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete" | "chat_share"
-            | "chat_unshare" => {
+            "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete" | "chat_pin"
+            | "chat_move" | "chat_share" | "chat_unshare" => {
                 let Some(number) = number else {
                     return json!({ "ok": false, "code": "bad_request", "error": "No chat" });
                 };
@@ -1186,6 +1192,35 @@ impl Demo {
                 drop(state);
                 self.changed(number);
                 json!({ "ok": true, "chat": summary })
+            }
+            "chat_pin" => {
+                if !can("pin") {
+                    return forbidden("pin");
+                }
+                let pins = state.pins["chats"].as_array_mut().unwrap();
+                pins.retain(|pin| *pin != number);
+                if request["pinned"] == true {
+                    pins.push(json!(number));
+                }
+                json!({ "ok": true, "pins": state.pins })
+            }
+            "chat_move" => {
+                if !can("move") {
+                    return forbidden("move");
+                }
+                let project = match request["project"].as_u64() {
+                    Some(id) => match state.projects.iter().find(|project| project["id"] == id) {
+                        Some(project) => project.clone(),
+                        None => {
+                            return json!({ "ok": false, "code": "not_found", "error": "No such project" });
+                        }
+                    },
+                    None => Value::Null,
+                };
+                state.chats[at].summary["can"]["share"] = json!(project.is_null());
+                state.chats[at].summary["project"] = project;
+                state.chats[at].summary["share"] = Value::Null;
+                json!({ "ok": true, "chat": state.chats[at].summary })
             }
             "chat_delete" => {
                 if !can("delete") {

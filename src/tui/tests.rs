@@ -2084,6 +2084,8 @@ fn every_action() -> Option<super::chat::Can> {
         rename: true,
         delete: true,
         share: true,
+        pin: true,
+        r#move: true,
     })
 }
 

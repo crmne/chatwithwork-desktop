@@ -206,6 +206,8 @@ pub enum ChatAction {
     Branch(u64),
     Rename(String),
     Delete,
+    Pin(bool),
+    Move(Option<u64>),
     Share,
     Unshare,
 }
@@ -216,6 +218,7 @@ pub enum Acted {
     Chat(ChatSummary),
     Shared(Shared),
     Deleted,
+    Pins(cww::tui::chat::Pins),
 }
 
 /// The models to pick from, as far as they're known.
@@ -262,6 +265,12 @@ pub enum Dialog {
     Delete { chat: u64 },
     /// "That file can't be attached".
     Unsupported { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveChat {
+    pub chat: u64,
+    pub project: Option<u64>,
 }
 
 /// One field of a question's form, as it's filled in.
@@ -324,6 +333,7 @@ pub struct ChatState {
     pub attachments: Vec<Attached>,
     next_key: u64,
     pub dialog: Option<Dialog>,
+    pub moving: Option<MoveChat>,
     /// The chat whose row menu is open in the sidebar.
     pub menu: Option<u64>,
     /// The chat being renamed in the sidebar, and its title so far.
@@ -375,6 +385,7 @@ impl Default for ChatState {
             attachments: Vec::new(),
             next_key: 1,
             dialog: None,
+            moving: None,
             menu: None,
             renaming: None,
             deciding: None,
@@ -511,6 +522,7 @@ impl ChatState {
 
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
+        self.moving = None;
         self.instructions = None;
         self.connectors = None;
         if self.open == Some(number) && self.transcript.is_some() {
@@ -536,6 +548,7 @@ impl ChatState {
 
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
+        self.moving = None;
         self.start = None;
         self.start_error = None;
         self.instructions = None;
@@ -849,6 +862,18 @@ impl ChatState {
         self.notice = None;
         self.acting = Some((chat, action.clone()));
         vec![Command::Act { chat, action }]
+    }
+
+    pub fn move_chat(&mut self, chat: u64) -> Vec<Command> {
+        let Some(summary) = self.summary(chat).filter(|chat| chat.can(|can| can.r#move)) else {
+            return Vec::new();
+        };
+        self.moving = Some(MoveChat {
+            chat,
+            project: summary.project.as_ref().map(|project| project.id),
+        });
+        self.notice = None;
+        self.cancel_dictation()
     }
 
     /// A chat as the server last answered with it, in the list and the
@@ -1333,6 +1358,22 @@ impl ChatState {
             }
         };
         match (action, acted) {
+            (_, Acted::Pins(pins)) => {
+                self.list.pins = pins;
+                Vec::new()
+            }
+            (ChatAction::Move(_), Acted::Chat(summary)) => {
+                let notice = summary.project.as_ref().map_or_else(
+                    || "This chat is private again.".to_string(),
+                    |project| format!("Moved to {}. Everyone there can read it now.", project.name),
+                );
+                self.update_summary(summary);
+                let mut commands = self.open_chat(chat);
+                commands.push(Command::List);
+                commands.extend(self.refresh(chat));
+                self.notice = Some(notice);
+                commands
+            }
             (ChatAction::Branch(_), Acted::Chat(branch)) => {
                 let number = branch.number;
                 self.upsert_chat(branch);
@@ -1647,6 +1688,10 @@ mod tests {
             cww::workspace::Layer::Personal,
         ));
         state.acting = Some((2, ChatAction::Share));
+        state.moving = Some(MoveChat {
+            chat: 2,
+            project: Some(7),
+        });
         state.clipboard = Some("private share link".into());
         state.progress = Some("Private tool work".into());
         let commands = state.update(Msg::ListLive(ListLive::Account(AccountUpdate {
@@ -1666,7 +1711,10 @@ mod tests {
         assert!(state.input.is_empty() && state.search.is_empty());
         assert!(state.pending_question.is_none() && state.progress.is_none());
         assert!(
-            state.instructions.is_none() && state.acting.is_none() && state.clipboard.is_none()
+            state.instructions.is_none()
+                && state.acting.is_none()
+                && state.clipboard.is_none()
+                && state.moving.is_none()
         );
     }
 
@@ -2433,5 +2481,44 @@ mod tests {
         });
         assert_eq!(state.open, None);
         assert!(state.list.chats.iter().all(|c| c.number != 9));
+    }
+    #[test]
+    fn refused_moves_and_pins_keep_the_choice_and_current_sidebar() {
+        let mut state = ready();
+        assert!(state.move_chat(2).is_empty());
+        assert!(
+            state.moving.is_none(),
+            "older servers and noncreators offer no move action"
+        );
+        state
+            .list
+            .chats
+            .iter_mut()
+            .find(|chat| chat.number == 2)
+            .unwrap()
+            .can = Some(cww::tui::chat::Can {
+            r#move: true,
+            pin: true,
+            ..Default::default()
+        });
+        state.move_chat(2);
+        state.moving.as_mut().unwrap().project = Some(7);
+        state.act(2, ChatAction::Move(Some(7)));
+        state.update(Msg::Acted {
+            chat: 2,
+            action: ChatAction::Move(Some(7)),
+            result: Err(Failure::new("not_found", "No such project")),
+        });
+        assert_eq!(state.moving.as_ref().unwrap().project, Some(7));
+        assert_eq!(state.notice.as_deref(), Some("No such project"));
+        assert!(state.acting.is_none());
+        state.list.pins.chats = vec![3];
+        state.act(2, ChatAction::Pin(true));
+        state.update(Msg::Acted {
+            chat: 2,
+            action: ChatAction::Pin(true),
+            result: Err(Failure::new("offline", "Try again")),
+        });
+        assert_eq!(state.list.pins.chats, vec![3]);
     }
 }

@@ -310,6 +310,8 @@ impl Runner {
                         }
                         ChatAction::Rename(title) => chats.rename(chat, title).map(Acted::Chat),
                         ChatAction::Delete => chats.delete(chat).map(|()| Acted::Deleted),
+                        ChatAction::Pin(pinned) => chats.pin(chat, *pinned).map(Acted::Pins),
+                        ChatAction::Move(project) => chats.move_to(chat, *project).map(Acted::Chat),
                         ChatAction::Share => chats.share(chat).map(Acted::Shared),
                         ChatAction::Unshare => chats.unshare(chat).map(Acted::Chat),
                     };

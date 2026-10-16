@@ -449,6 +449,8 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || path.ends_with("/retry")
         || path.ends_with("/branches")
         || path.ends_with("/share")
+        || path.ends_with("/pin")
+        || path.ends_with("/project")
         || path.ends_with("/input")
         || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
@@ -588,6 +590,24 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         ("DELETE", "/local_agent/chats/7") => {
             st.decisions.push("delete 7".into());
             (204, Value::Null)
+        }
+        (method @ ("POST" | "DELETE"), "/local_agent/chats/7/pin") => {
+            st.decisions.push(format!("pin 7 {method}"));
+            (
+                200,
+                json!({ "pins": { "projects": [5], "chats": if method == "POST" { vec![7] } else { vec![] } } }),
+            )
+        }
+        ("PATCH", "/local_agent/chats/7/project") => {
+            st.decisions
+                .push(format!("move 7 {}", posted["project_id"]));
+            let mut moved = chat(7, "Budget", "idle");
+            moved["project"] = json!({ "id": posted["project_id"], "name": "Falcon" });
+            (200, json!({ "chat": moved }))
+        }
+        ("DELETE", "/local_agent/chats/7/project") => {
+            st.decisions.push("private 7".into());
+            (200, json!({ "chat": chat(7, "Budget", "idle") }))
         }
         ("POST", "/local_agent/chats/7/share") => {
             st.decisions.push("share 7".into());
@@ -2399,6 +2419,36 @@ async fn relays_models_decisions_files_and_chat_actions() {
     let unshared = blocking(move || c.unshare(7)).await.unwrap();
     assert_eq!(unshared.share, None);
 
+    let c = chats.clone();
+    let pinned = blocking(move || c.pin(7, true)).await.unwrap();
+    assert_eq!(pinned.chats, vec![7]);
+    let c = chats.clone();
+    assert!(
+        blocking(move || c.pin(7, false))
+            .await
+            .unwrap()
+            .chats
+            .is_empty()
+    );
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.move_to(7, Some(5)))
+            .await
+            .unwrap()
+            .project
+            .unwrap()
+            .id,
+        5
+    );
+    let c = chats.clone();
+    assert!(
+        blocking(move || c.move_to(7, None))
+            .await
+            .unwrap()
+            .project
+            .is_none()
+    );
+
     // Answering a question from a tool's server, or declining it.
     let c = chats.clone();
     let missing = blocking(move || c.answer(7, 32, Some(json!({ "days": "30" }))))
@@ -2432,6 +2482,10 @@ async fn relays_models_decisions_files_and_chat_actions() {
             "rename 7 \"Budget\"",
             "share 7",
             "unshare 7",
+            "pin 7 POST",
+            "pin 7 DELETE",
+            "move 7 5",
+            "private 7",
             "answer 7 32 {\"days\":\"30\",\"environment\":\"production\"}",
             "answer 7 32 null",
             "decline 7 32",

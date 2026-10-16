@@ -811,6 +811,12 @@ fn notification_presence_requires_the_displayed_transcript_and_account() {
     );
     assert!(super::visible_notification_chat(Page::Chat, false, Some(&state)).is_none());
     assert!(super::visible_notification_chat(Page::General, true, Some(&state)).is_none());
+    state.moving = Some(super::chat::state::MoveChat {
+        chat: 11,
+        project: None,
+    });
+    assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
+    state.moving = None;
     state.list.account.id.clear();
     assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
 }

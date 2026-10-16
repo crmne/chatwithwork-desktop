@@ -621,6 +621,34 @@ impl ChatClient {
         )
     }
 
+    pub fn pin(&self, chat: &str, pinned: bool) -> Result<Value> {
+        let chat = chat_number(chat)?;
+        newer(
+            self.call(
+                if pinned { "POST" } else { "DELETE" },
+                &format!("local_agent/chats/{chat}/pin"),
+                Body::Empty,
+            ),
+            "can't pin chats from here yet",
+        )
+    }
+
+    pub fn move_to(&self, chat: &str, project: Option<u64>) -> Result<Value> {
+        let chat = chat_number(chat)?;
+        let path = format!("local_agent/chats/{chat}/project");
+        newer(
+            match project {
+                Some(project) => self.call(
+                    "PATCH",
+                    &path,
+                    Body::Json(&json!({ "project_id": project })),
+                ),
+                None => self.call("DELETE", &path, Body::Empty),
+            },
+            "can't move chats from here yet",
+        )
+    }
+
     /// Make the chat's public link: `{url, expires_at, chat}`.
     pub fn share(&self, chat: &str) -> Result<Value> {
         let chat = chat_number(chat)?;

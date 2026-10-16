@@ -1269,6 +1269,7 @@ fn visible_notification_chat(
         || !focused
         || !state.ready()
         || state.instructions.is_some()
+        || state.moving.is_some()
         || state.error.is_some()
     {
         return None;

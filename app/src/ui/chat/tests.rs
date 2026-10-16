@@ -2748,3 +2748,199 @@ fn a_cancelled_native_sign_in_cannot_reopen_its_approval_code() {
     fx.harness.run_steps(3);
     assert!(fx.harness.state().account.pairing.is_none());
 }
+
+#[test]
+fn chat_organization_review_screens() {
+    let Ok(directory) = std::env::var("CWW_CHAT_ORGANIZATION_EVIDENCE") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    for dark in [false, true] {
+        for (name, size) in [("wide", [1280.0, 900.0]), ("narrow", [390.0, 844.0])] {
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Default::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().drawer = size[0] < 800.0;
+            fx.harness.run_steps(5);
+            fx.chat().state.menu = Some(11);
+            fx.harness.run_steps(5);
+            fx.harness.event(egui::Event::PointerGone);
+            let theme = if dark { "dark" } else { "light" };
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("menu-{name}-{theme}.png")))
+                .unwrap();
+            fx.harness.get_by_label("Move to project").click();
+            fx.wait_for_label("What they'll see");
+            fx.harness.run_steps(5);
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("move-top-{name}-{theme}.png")))
+                .unwrap();
+            fx.harness.event(egui::Event::PointerMoved(egui::pos2(
+                size[0] - 80.0,
+                size[1] / 2.0,
+            )));
+            fx.harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, -1000.0),
+                modifiers: egui::Modifiers::NONE,
+            });
+            fx.harness.run_steps(15);
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness
+                .render()
+                .unwrap()
+                .save(
+                    std::path::Path::new(&directory)
+                        .join(format!("move-bottom-{name}-{theme}.png")),
+                )
+                .unwrap();
+            fx.chat().state.move_chat(10);
+            fx.harness.run_steps(5);
+            fx.harness.event(egui::Event::PointerMoved(egui::pos2(
+                size[0] - 80.0,
+                size[1] / 2.0,
+            )));
+            fx.harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, -1500.0),
+                modifiers: egui::Modifiers::NONE,
+            });
+            fx.harness.run_steps(15);
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!("private-{name}-{theme}.png")))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn chat_pins_and_project_moves_use_native_controls_and_explain_the_audience() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.open(11);
+    fx.wait_for_label("The Acme contract renews");
+    fx.harness
+        .get_all_by_label("Chat options")
+        .nth(1)
+        .unwrap()
+        .click();
+    fx.wait("pin menu item", |h| h.query_by_label("Pin").is_some());
+    fx.harness.get_by_label("Pin").click();
+    fx.wait("pin returned", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .list
+            .pins
+            .chats
+            .contains(&11)
+    });
+    fx.wait_for_request("chat_pin", |r| r["chat"] == "11" && r["pinned"] == true);
+    fx.harness
+        .get_by_label("Unpin Vendor contract renewal")
+        .click();
+    fx.wait("unpin returned", |h| {
+        !h.state()
+            .chat_state()
+            .unwrap()
+            .list
+            .pins
+            .chats
+            .contains(&11)
+    });
+    fx.harness.get_by_label("Pin to sidebar").click();
+    fx.wait("conversation pin returned", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .list
+            .pins
+            .chats
+            .contains(&11)
+    });
+    fx.harness.get_by_label("Unpin from sidebar").click();
+    fx.wait("conversation unpin returned", |h| {
+        !h.state()
+            .chat_state()
+            .unwrap()
+            .list
+            .pins
+            .chats
+            .contains(&11)
+    });
+    fx.harness
+        .get_all_by_label("Chat options")
+        .nth(1)
+        .unwrap()
+        .click();
+    fx.wait_for_label("Move to project");
+    fx.harness.get_by_label("Move to project").click();
+    fx.wait_for_label("What they'll see");
+    fx.harness.get_by_label("Not what your tools returned");
+    assert!(!fx.server.requests().iter().any(|r| r["cmd"] == "chat_move"));
+    assert!(
+        super::super::visible_notification_chat(Page::Chat, true, fx.harness.state().chat_state())
+            .is_none()
+    );
+    fx.harness.get_by_label("Project: Falcon").click();
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Move chat").click();
+    fx.wait_for_request("chat_move", |r| r["chat"] == "11" && r["project"] == 7);
+    fx.wait("project move returned", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .open_summary()
+            .is_some_and(|chat| chat.project.as_ref().is_some_and(|p| p.id == 7))
+    });
+    fx.wait_for_label("Change project");
+    fx.caught_up();
+    fx.harness
+        .event(egui::Event::PointerMoved(egui::pos2(1000.0, 400.0)));
+    fx.harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0.0, 2000.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(15);
+    fx.harness.get_by_label("Change project").click();
+    fx.wait_for_label("What they'll see");
+    fx.harness
+        .event(egui::Event::PointerMoved(egui::pos2(1000.0, 600.0)));
+    fx.harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0.0, -1000.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(15);
+    fx.wait_for_label("Make private");
+    fx.harness
+        .get_by_label("Only you will see it. Anything people already read stays with them.");
+    fx.harness.get_by_label("Make private").click();
+    fx.wait_for_request("chat_move", |r| r["chat"] == "11" && r["project"].is_null());
+    fx.wait("private again", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .open_summary()
+            .is_some_and(|chat| chat.project.is_none())
+    });
+    assert!(fx.harness.state().chat_state().unwrap().moving.is_none());
+}

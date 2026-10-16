@@ -35,6 +35,8 @@ pub enum Event {
     Rename(u64, String),
     /// Delete a chat, once confirmed.
     Delete(u64),
+    Pin(u64, bool),
+    Move(u64),
 }
 
 /// A row under Pinned.
@@ -465,8 +467,45 @@ impl Sidebar<'_> {
                         Pin::Chat(number, title) => {
                             let current = state.open == Some(*number);
                             let id = Id::new(("chat-pin-chat", *number));
-                            if self.link(ui, row, Icon::ChatCircle, title, current, id) {
+                            let link_row =
+                                Rect::from_min_max(row.min, pos2(row.right() - 28.0, row.bottom()));
+                            if self.link(ui, link_row, Icon::ChatCircle, title, current, id) {
                                 event = Some(Event::Open(*number));
+                            }
+                            if state
+                                .summary(*number)
+                                .is_some_and(|chat| chat.can(|can| can.pin))
+                            {
+                                let button = Rect::from_center_size(
+                                    pos2(row.right() - 14.0, row.center().y),
+                                    vec2(24.0, 24.0),
+                                );
+                                let mut faded =
+                                    ui.new_child(egui::UiBuilder::new().max_rect(button));
+                                let focused =
+                                    ui.memory(|memory| memory.has_focus(id.with("unpin")));
+                                faded.set_opacity(widgets::hover(
+                                    ui,
+                                    id.with("unpin-shown"),
+                                    ui.rect_contains_pointer(row) || focused,
+                                    tokens::INSTANT,
+                                ));
+                                if (widgets::IconButton {
+                                    icon: Icon::PushPinSlash,
+                                    icon_size: 14.0,
+                                    label: &format!("Unpin {title}"),
+                                    tooltip: Some("Unpin"),
+                                    color: p.ink_muted,
+                                    hover_color: p.ink,
+                                    wash: 7.0,
+                                    radius: tokens::RADIUS_CONTROL,
+                                    enabled: state.acting.is_none(),
+                                })
+                                .show(&mut faded, id.with("unpin"), button, self.images, p)
+                                .clicked()
+                                {
+                                    event = Some(Event::Pin(*number, false));
+                                }
                             }
                         }
                     }
@@ -840,7 +879,7 @@ impl Sidebar<'_> {
         } else {
             tokens::lerp_rgb(p.ink_muted, p.ink, t)
         };
-        let has_menu = chat.can(|c| c.rename || c.delete);
+        let has_menu = chat.can(|c| c.rename || c.delete || c.pin || c.r#move);
         let text_right = if has_menu {
             rect.right() - 4.0 - 24.0 - 4.0
         } else {
@@ -962,12 +1001,40 @@ impl Sidebar<'_> {
         state: &mut ChatState,
     ) -> Option<Event> {
         let p = self.palette;
-        let mut items: Vec<(Icon, &str, bool)> = Vec::new();
+        #[derive(Clone, Copy)]
+        enum Choice {
+            Rename,
+            Pin(bool),
+            Move,
+            Delete,
+        }
+        let mut items: Vec<(Icon, &str, bool, Choice)> = Vec::new();
         if chat.can(|c| c.rename) {
-            items.push((Icon::PencilSimple, "Rename", false));
+            items.push((Icon::PencilSimple, "Rename", false, Choice::Rename));
+        }
+        if chat.can(|c| c.pin) {
+            let pinned = state.list.pins.chats.contains(&chat.number);
+            items.push((
+                if pinned {
+                    Icon::PushPinSlash
+                } else {
+                    Icon::PushPin
+                },
+                if pinned { "Unpin" } else { "Pin" },
+                false,
+                Choice::Pin(!pinned),
+            ));
+        }
+        if chat.can(|c| c.r#move) {
+            items.push((
+                Icon::FolderSimplePlus,
+                "Move to project",
+                false,
+                Choice::Move,
+            ));
         }
         if chat.can(|c| c.delete) {
-            items.push((Icon::Trash, "Delete", true));
+            items.push((Icon::Trash, "Delete", true, Choice::Delete));
         }
         let item_h = 33.8;
         let height = items.len() as f32 * item_h + (items.len().saturating_sub(1)) as f32 + 8.0;
@@ -982,7 +1049,7 @@ impl Sidebar<'_> {
             .fixed_pos(rect.min)
             .show(ui.ctx(), |ui| {
                 controls::menu_panel(ui.painter(), rect, p);
-                for (n, (icon, label, negative)) in items.iter().enumerate() {
+                for (n, (icon, label, negative, choice)) in items.iter().enumerate() {
                     let row = Rect::from_min_size(
                         pos2(rect.left() + 8.0, rect.top() + n as f32 * (item_h + 1.0)),
                         vec2(160.0, item_h),
@@ -1002,10 +1069,13 @@ impl Sidebar<'_> {
                     .clicked()
                     {
                         close = true;
-                        if *negative {
-                            event = Some(Event::Delete(chat.number));
-                        } else {
-                            state.renaming = Some((chat.number, chat.title.clone()));
+                        match choice {
+                            Choice::Rename => {
+                                state.renaming = Some((chat.number, chat.title.clone()))
+                            }
+                            Choice::Delete => event = Some(Event::Delete(chat.number)),
+                            Choice::Move => event = Some(Event::Move(chat.number)),
+                            Choice::Pin(pinned) => event = Some(Event::Pin(chat.number, *pinned)),
                         }
                     }
                 }

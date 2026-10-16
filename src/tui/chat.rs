@@ -26,6 +26,7 @@ pub struct Project {
     pub hq: bool,
     /// Everyone in the organization is in it.
     pub all_access: bool,
+    pub people_count: Option<u64>,
     /// Its page on the web.
     pub url: Option<String>,
 }
@@ -178,6 +179,8 @@ pub struct Can {
     pub rename: bool,
     pub delete: bool,
     pub share: bool,
+    pub pin: bool,
+    pub r#move: bool,
 }
 
 /// The models a question can be asked with (`GET /local_agent/models`).
@@ -1240,6 +1243,22 @@ impl Chats {
             chat: chat.to_string(),
         })
         .map(|_| ())
+    }
+
+    pub fn pin(&self, chat: u64, pinned: bool) -> Result<Pins, Failure> {
+        let response = self.call(&ControlRequest::ChatPin {
+            chat: chat.to_string(),
+            pinned,
+        })?;
+        parse(response["pins"].clone())
+    }
+
+    pub fn move_to(&self, chat: u64, project: Option<u64>) -> Result<ChatSummary, Failure> {
+        let response = self.call(&ControlRequest::ChatMove {
+            chat: chat.to_string(),
+            project,
+        })?;
+        parse(response["chat"].clone())
     }
 
     /// Make the chat's public link, or give the one it has 30 more days.

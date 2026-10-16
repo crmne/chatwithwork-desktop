@@ -292,7 +292,7 @@ The terminal UI's chats go through the daemon, which asks Chat with Work as this
 {"cmd": "chats"}
 ```
 
-The server's list, as it sent it: `chats` (newest first, each with `number`, `title`, `state`, `project`, `mine`, `updated_at`, `created_at`, `url`, and from newer servers `model` (`{"id", "name"}`, the model the next question goes to, or null), `share` (`{"url", "expires_at"}` while it has a public link, only for the person who started it, else null) and `can` (`retry`, `branch`, `rename`, `delete`, `share`, each true or false; without `can`, offer none of them)), `projects` (each `id`, `name`, and from newer servers `icon`, the Phosphor icon the web shows, `hq`, `all_access` and `url`), `account` and `user` (each with `name`), `locked_reason`, the sentence the composer shows when a question can't be asked, and from newer servers `credits` (`left`, `capacity`, `running_low`), `pins` (`projects` by id and `chats` by number, in pin order, as current as the list) and `links` (the web's `new_chat`, `chats` and `projects` pages, and `settings`, the tabs of the web's Settings this person may open, each `tab`, `label`, `icon` and `url`).
+The server's list, as it sent it: `chats` (newest first, each with `number`, `title`, `state`, `project`, `mine`, `updated_at`, `created_at`, `url`, and from newer servers `model` (`{"id", "name"}`, the model the next question goes to, or null), `share` (`{"url", "expires_at"}` while it has a public link, only for the person who started it, else null) and `can` (`retry`, `branch`, `rename`, `delete`, `share`, `pin`, `move`, each true or false; without `can`, offer none of them)), `projects` (each `id`, `name`, and from newer servers `icon`, the Phosphor icon the web shows, `hq`, `all_access`, `people_count` and `url`), `account` and `user` (each with `name`), `locked_reason`, the sentence the composer shows when a question can't be asked, and from newer servers `credits` (`left`, `capacity`, `running_low`), `pins` (`projects` by id and `chats` by number, in pin order, as current as the list) and `links` (the web's `new_chat`, `chats` and `projects` pages, and `settings`, the tabs of the web's Settings this person may open, each `tab`, `label`, `icon` and `url`).
 
 ```json
 {"cmd": "chat", "chat": "42"}
@@ -337,11 +337,15 @@ Answers or declines a question from `questions`, as the web's question card does
 {"cmd": "chat_branch", "chat": "42", "message": "5"}
 {"cmd": "chat_rename", "chat": "42", "title": "Q3 budget"}
 {"cmd": "chat_delete", "chat": "42"}
+{"cmd": "chat_pin", "chat": "42", "pinned": true}
+{"cmd": "chat_move", "chat": "42", "project": 7}
 {"cmd": "chat_share", "chat": "42"}
 {"cmd": "chat_unshare", "chat": "42"}
 ```
 
 What the chat's `can` allows: answer a question again (`message`, or the latest; `{"chat"}`, or `chat_busy` while an answer is written), start a new chat with the conversation up to `message` (or all of it; `{"chat"}`, the new one), rename it (`{"chat"}`), delete it (`{}`), make its public link (`{"url", "expires_at", "chat"}`; again gives the same link 30 more days), and stop sharing it (`{"chat"}`). A server without one of these fails with `unsupported` and a sentence saying so.
+
+`chat_pin` changes only this person's sidebar and returns `{ "pins": { "projects": [...], "chats": [...] } }`; false unpins. `chat_move` uses a project ID from the chat list, or null to make the chat private, and returns `{ "chat": {...} }`. The server requires active membership of the destination and ownership of the chat. Moving into a project retires any public link. Clients must explain the new audience before sending the request. The chat's `can.pin` and `can.move` advertise support; older servers omit them.
 
 ```json
 {"cmd": "chat_cancel", "chat": "42"}

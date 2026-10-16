@@ -1221,6 +1221,13 @@ impl ControlHandler for Daemon {
             ControlRequest::ChatDelete { chat } => {
                 self.chat(move |client| client.delete(&chat)).await
             }
+            ControlRequest::ChatPin { chat, pinned } => {
+                self.chat(move |client| client.pin(&chat, pinned)).await
+            }
+            ControlRequest::ChatMove { chat, project } => {
+                self.chat(move |client| client.move_to(&chat, project))
+                    .await
+            }
             ControlRequest::ChatShare { chat } => {
                 self.chat(move |client| client.share(&chat)).await
             }
