@@ -59,6 +59,7 @@ pub enum Command {
     Cancel(u64),
     /// Read the models the composer's picker offers.
     Models,
+    ModelPreferences(u64, Option<(String, Option<String>)>),
     /// Upload a file picked for the next question.
     Upload {
         key: u64,
@@ -110,6 +111,7 @@ pub enum Msg {
     Cancelled(Result<(), Failure>),
     Access(Result<AccessRequest, Failure>),
     Models(Result<Models, Failure>),
+    ModelPreferences(u64, Result<cww::tui::chat::ModelPreferences, Failure>),
     Uploaded {
         key: u64,
         result: Result<Uploaded, Failure>,
@@ -341,6 +343,7 @@ pub struct ChatState {
     pub moving: Option<MoveChat>,
     pub history: Option<super::history::HistoryPage>,
     pub projects: Option<super::projects::Screen>,
+    pub model_preferences: Option<super::model_preferences::Screen>,
     pub new_project: Option<cww::projects::Project>,
     /// At most one history request runs, even while the query/page changes.
     history_request: Option<u64>,
@@ -398,6 +401,7 @@ impl Default for ChatState {
             moving: None,
             history: None,
             projects: None,
+            model_preferences: None,
             new_project: None,
             history_request: None,
             menu: None,
@@ -542,6 +546,7 @@ impl ChatState {
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
         self.projects = None;
+        self.model_preferences = None;
         self.new_project = None;
         self.history = None;
         self.moving = None;
@@ -571,6 +576,7 @@ impl ChatState {
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
         self.projects = None;
+        self.model_preferences = None;
         self.new_project = None;
         self.history = None;
         self.moving = None;
@@ -624,6 +630,18 @@ impl ChatState {
             page.query.clone(),
             page.next_cursor.clone(),
         )]
+    }
+
+    pub fn show_model_preferences(&mut self) -> Vec<Command> {
+        let mut commands = self.cancel_dictation();
+        self.projects = None;
+        self.history = None;
+        self.moving = None;
+        self.instructions = None;
+        let mut screen = super::model_preferences::Screen::new(self.list.account.id.clone());
+        commands.extend(screen.load());
+        self.model_preferences = Some(screen);
+        commands
     }
 
     pub fn project_request(&mut self, request: cww::projects::Request) -> Vec<Command> {
@@ -939,6 +957,7 @@ impl ChatState {
         let project = summary.project.as_ref().map(|project| project.id);
         self.history = None;
         self.projects = None;
+        self.model_preferences = None;
         self.moving = Some(MoveChat { chat, project });
         self.notice = None;
         self.cancel_dictation()
@@ -1167,6 +1186,14 @@ impl ChatState {
                         }
                         page.error = Some(failure.message);
                     }
+                }
+            }
+            Msg::ModelPreferences(generation, result) => {
+                if let Some(screen) = &mut self.model_preferences
+                    && screen.generation == generation
+                    && let Some(catalog) = screen.loaded(result)
+                {
+                    self.models = ModelList::Ready(catalog);
                 }
             }
             Msg::Projects(generation, result) => {
@@ -1666,6 +1693,7 @@ impl ChatState {
             || matches!(failure.code.as_str(), "forbidden" | "invalid_token")
         {
             self.projects = None;
+            self.model_preferences = None;
             self.instructions = None;
             self.start = None;
             self.start_loading = None;

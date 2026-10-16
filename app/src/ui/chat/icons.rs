@@ -86,6 +86,7 @@ impl Icon {
             "terminal-window" => Icon::TerminalWindow,
             "globe" | "globe-simple" => Icon::GlobeSimple,
             "clock" => Icon::Clock,
+            "notebook" => Icon::Notebook,
             "buildings" => Icon::Buildings,
             "users-three" => Icon::UsersThree,
             "folder-simple" => Icon::FolderSimple,

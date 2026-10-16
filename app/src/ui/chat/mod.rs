@@ -19,6 +19,7 @@ mod instructions;
 pub mod logos;
 pub mod markdown;
 pub mod mcp_app;
+mod model_preferences;
 mod organizations;
 pub mod paint;
 mod project_move;
@@ -134,11 +135,28 @@ impl ChatPage {
         self.organizations = choices;
     }
 
+    pub(super) fn open_model_preferences(&mut self) {
+        if self.state.model_preferences.is_none() {
+            let commands = self.state.show_model_preferences();
+            self.run(commands);
+        }
+    }
+
     /// The same unsaved-instructions guard applies to notification navigation.
     pub(super) fn may_open_notification(
         &mut self,
         target: &cww::notifications::navigation::Target,
     ) -> bool {
+        if let Some(page) = &mut self.state.model_preferences {
+            if page.busy {
+                return false;
+            }
+            if page.dirty() {
+                page.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Notification(target.clone()));
+                return false;
+            }
+        }
         if let Some(page) = &mut self.state.instructions {
             if page.busy {
                 return false;
@@ -239,6 +257,16 @@ impl ChatPage {
     /// Open a chat, as choosing it in the sidebar does.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn open(&mut self, number: u64) {
+        if let Some(screen) = &mut self.state.model_preferences {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Open(number));
+                return;
+            }
+        }
         if let Some(screen) = &mut self.state.projects {
             if screen.busy {
                 return;
@@ -547,7 +575,26 @@ impl ChatPage {
 
         let conversing = self.state.open.is_some() || self.state.pending_question.is_some();
         let mut animating = false;
-        if let Some(page) = &mut self.state.instructions {
+        if let Some(screen) = &mut self.state.model_preferences {
+            let outcome = model_preferences::show(
+                ui,
+                main,
+                screen,
+                &self.state.list.links.settings,
+                &p,
+                images,
+            );
+            if !screen.confirm_close && !outcome.discarded {
+                self.pending_navigation = None;
+            }
+            if outcome.discarded {
+                self.state.model_preferences = None;
+                let pending = self.pending_navigation.take();
+                self.sidebar_event(pending, env, &mut action);
+            }
+            self.run(outcome.commands);
+            self.sidebar_event(outcome.event, env, &mut action);
+        } else if let Some(page) = &mut self.state.instructions {
             let outcome = instructions::show(ui, main, page, &p, images);
             if !page.confirm_close && !outcome.close {
                 self.pending_navigation = None;
@@ -801,6 +848,33 @@ impl ChatPage {
         env: &Env,
         action: &mut Option<Action>,
     ) {
+        let leaving_models = matches!(
+            &event,
+            Some(
+                sidebar::Event::NewChat
+                    | sidebar::Event::Open(_)
+                    | sidebar::Event::Page(_)
+                    | sidebar::Event::Organization(_)
+                    | sidebar::Event::Notification(_)
+                    | sidebar::Event::Move(_)
+                    | sidebar::Event::History
+                    | sidebar::Event::Projects(_)
+                    | sidebar::Event::ProjectChat(_)
+                    | sidebar::Event::ProjectInstructions(_)
+                    | sidebar::Event::OpenUrl(_)
+            )
+        );
+        if leaving_models && let Some(screen) = &mut self.state.model_preferences {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = event;
+                return;
+            }
+            self.state.model_preferences = None;
+        }
         if matches!(
             event,
             Some(

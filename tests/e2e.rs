@@ -326,6 +326,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
     let (status, json) = if [
         "/local_agent/chat",
         "/local_agent/models",
+        "/local_agent/model_preferences",
         "/local_agent/uploads",
         "/local_agent/dictations",
         "/local_agent/new_chat",
@@ -445,6 +446,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     };
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
+        || path.starts_with("/local_agent/model_preferences")
         || path.starts_with("/local_agent/projects")
         || path.starts_with("/local_agent/chat_history")
         || path.starts_with("/local_agent/uploads")
@@ -518,7 +520,8 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     let posted: Value = serde_json::from_str(body).unwrap_or_default();
-    if let Some(model) = posted.get("model_id")
+    if path != "/local_agent/model_preferences"
+        && let Some(model) = posted.get("model_id")
         && model != "3"
         && model != 3
     {
@@ -568,6 +571,21 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     match (method, path) {
+        ("GET" | "PATCH", "/local_agent/model_preferences") => {
+            let body: Value = serde_json::from_str(body).unwrap_or_default();
+            if method == "PATCH" && body["account"] != "482139075" {
+                return (
+                    409,
+                    json!({"error":"stale_account","error_description":"Your organization changed."}),
+                );
+            }
+            (
+                200,
+                json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com",
+                "preferred_model_id": if method == "PATCH" {body["model_id"].clone()} else {json!(4)},
+                "default_model_id":3,"models":[{"id":3,"name":"Claude Sonnet","selectable":true},{"id":4,"name":"Claude Opus","selectable":false,"reason":"Upgrade to use it"}]}),
+            )
+        }
         ("GET", "/local_agent/models") => (
             200,
             json!({ "default_model_id": 3, "models": [
@@ -2405,6 +2423,29 @@ async fn relays_models_decisions_files_and_chat_actions() {
         models.models[1].reason.as_deref(),
         Some("Upgrade to use it")
     );
+    let c = chats.clone();
+    let preferences = blocking(move || c.model_preferences()).await.unwrap();
+    assert_eq!(preferences.preferred_model_id.as_deref(), Some("4"));
+    assert_eq!(preferences.catalog.default_model_id.as_deref(), Some("3"));
+    assert_eq!(preferences.account.id, "482139075");
+    let c = chats.clone();
+    let saved = blocking(move || c.update_model_preferences("482139075".into(), Some("4".into())))
+        .await
+        .unwrap();
+    assert_eq!(saved.preferred_model_id.as_deref(), Some("4"));
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.update_model_preferences("123456789".into(), None))
+            .await
+            .unwrap_err()
+            .code,
+        "stale_account"
+    );
+    let c = chats.clone();
+    let reset = blocking(move || c.update_model_preferences("482139075".into(), None))
+        .await
+        .unwrap();
+    assert_eq!(reset.preferred_model_id, None);
     let c = chats.clone();
     let list = blocking(move || c.list()).await.unwrap();
     assert_eq!(list.chats[0].model.as_ref().unwrap().name, "Claude Sonnet");

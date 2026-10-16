@@ -3419,3 +3419,147 @@ fn native_project_edits_guard_notification_navigation() {
     fx.wait_for_request("chat", |r| r["chat"] == "11");
     assert!(fx.chat().state.projects.is_none());
 }
+
+#[test]
+fn model_preferences_save_the_personal_default_without_changing_the_open_chat() {
+    let mut fx = fixture(Options::default());
+    fx.open(11);
+    fx.wait("the original transcript", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.transcript.is_some() && !s.loading)
+    });
+    let original_model = fx
+        .chat()
+        .state
+        .transcript
+        .as_ref()
+        .unwrap()
+        .chat
+        .model
+        .clone();
+    fx.harness.state_mut().set_page(Page::Models);
+    fx.wait_for_label("Save default model");
+    fx.harness.get_by_label("GPT-6.1 Sol").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness
+        .get_by_label("Save default model")
+        .click_accesskit();
+    fx.wait_for_label("Default model updated.");
+    let request = fx.wait_for_request("model_preferences_update", |r| r["model_id"] == "15");
+    assert_eq!(request["account"], "482139075");
+    let state = &fx.chat().state;
+    let screen = state.model_preferences.as_ref().unwrap();
+    let preferences = screen.preferences.as_ref().unwrap();
+    assert_eq!(preferences.preferred_model_id.as_deref(), Some("15"));
+    assert_eq!(preferences.catalog.default_model_id.as_deref(), Some("12"));
+    assert_eq!(
+        state.transcript.as_ref().unwrap().chat.model,
+        original_model
+    );
+    assert!(super::super::visible_notification_chat(Page::Chat, true, Some(state)).is_none());
+    fx.harness.get_by_label("Gemini 4 Argon").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness
+        .get_by_label("Save default model")
+        .click_accesskit();
+    fx.wait_for_request("model_preferences_update", |r| r["model_id"] == "14");
+    fx.wait_for_label("Default model updated.");
+    fx.harness.get_by_label("New chat").click_accesskit();
+    fx.wait_for_label("Model: Gemini 4 Argon");
+}
+
+#[test]
+fn model_preferences_guard_unsaved_navigation_and_keep_organization_requests_separate() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Vendor contract renewal");
+    let (profile, second) = add_organization(&mut fx);
+    fx.harness.state_mut().set_page(Page::Models);
+    fx.wait_for_label("Save default model");
+    fx.harness.get_by_label("Gemini 4 Argon").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard model selection?");
+    fx.harness.get_by_label("Keep editing").click_accesskit();
+    fx.harness.run_steps(4);
+    assert!(fx.harness.state().organizations.selected.is_none());
+    assert!(fx.chat().state.model_preferences.as_ref().unwrap().dirty());
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard model selection?");
+    fx.harness.get_by_label("Discard changes").click_accesskit();
+    fx.wait("second account opened", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "918273645" && s.open == Some(11) && !s.loading)
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "model_preferences_update")
+    );
+    fx.harness.state_mut().set_page(Page::Models);
+    fx.wait_for_label("Save default model");
+    fx.harness.get_by_label("Gemini 4 Argon").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness
+        .get_by_label("Save default model")
+        .click_accesskit();
+    fx.wait_for_label("Default model updated.");
+    assert!(
+        second
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "model_preferences_update" && r["account"] == "918273645")
+    );
+}
+
+#[test]
+fn model_preferences_review_screens() {
+    let Ok(directory) = std::env::var("CWW_MODEL_PREFERENCES_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 900.0],
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.wait("the model settings account", |h| {
+                h.state().chat_state().is_some_and(|s| s.ready())
+            });
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            for (name, models) in [("before", false), ("models", true)] {
+                if models {
+                    fx.harness.state_mut().set_page(Page::Models);
+                    fx.wait_for_label("Save default model");
+                }
+                fx.logos();
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(12);
+                let path = std::path::Path::new(&directory).join(name);
+                std::fs::create_dir_all(&path).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(path.join(format!(
+                        "{}-{width}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+        }
+    }
+}

@@ -64,6 +64,7 @@ struct State {
     uploads: Vec<Value>,
     workspace: Value,
     notification_preferences: Value,
+    preferred_model: Value,
     notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
@@ -263,6 +264,7 @@ fn fresh() -> State {
         uploads: Vec::new(),
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
+        preferred_model: json!(12),
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
@@ -383,6 +385,7 @@ fn sample() -> State {
         uploads: Vec::new(),
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
+        preferred_model: json!(12),
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
@@ -526,6 +529,8 @@ impl Demo {
             | "chat_cancel"
             | "chat_access"
             | "models"
+            | "model_preferences"
+            | "model_preferences_update"
             | "chat_download"
             | "chat_upload"
             | "chat_approve"
@@ -890,11 +895,40 @@ impl Demo {
                     None => json!({ "ok": false, "code": "not_found", "error": "No such chat" }),
                 }
             }
-            "models" => {
+            "models" | "model_preferences" | "model_preferences_update" => {
+                let mut state = self.state.lock().expect("demo lock");
                 let mut models = chats::models();
+                if cmd == "model_preferences_update" {
+                    if request["account"] != state.notification_preferences["account"]["id"] {
+                        return json!({"ok":false,"code":"stale_account","error":"Your organization changed."});
+                    }
+                    let model = request["model_id"]
+                        .as_str()
+                        .and_then(|id| id.parse::<u64>().ok());
+                    if let Some(id) = model
+                        && !models["models"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|m| m["id"] == id)
+                    {
+                        return json!({"ok":false,"code":"invalid","error":"Please select an available model."});
+                    }
+                    state.preferred_model = json!(model.unwrap_or(12));
+                }
                 models["ok"] = json!(true);
-                if self.state.lock().expect("demo lock").web_search {
+                if state.web_search {
                     models["models"][0]["searches_web"] = json!(true);
+                }
+                models["default_model_id"] = if state.preferred_model == 15 {
+                    json!(12)
+                } else {
+                    state.preferred_model.clone()
+                };
+                if cmd != "models" {
+                    models["account"] = state.notification_preferences["account"].clone();
+                    models["email"] = json!("alex@example.com");
+                    models["preferred_model_id"] = state.preferred_model.clone();
                 }
                 models
             }

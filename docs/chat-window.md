@@ -280,3 +280,17 @@ organization's daemon connection. Older servers report that these pages need a
 server update. Native project avatars use initials, without a Gravatar request.
 Project file templates, guest visibility controls and remembered project pages
 remain on the parity inventory.
+
+## Personal model default
+
+This computer > Models opens native model settings for the selected organization.
+The page uses the website's settings rows, descriptions, rates, maker logos and
+radio choices. Save default model changes that person's default for new chats
+on both desktop and web. It keeps the saved preference distinct from a temporary
+free-model fallback when credits run out, and does not change a model already
+selected for a conversation. An unsaved choice guards chat and notification
+navigation; requests stay bound to the organization where the page opened.
+
+The Models settings layout has a side navigation at desktop widths and a
+scrolling tab strip on narrow windows. The other tabs still use their existing
+browser destinations; unifying the remaining native settings pages is pending.

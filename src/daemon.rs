@@ -1146,6 +1146,15 @@ impl ControlHandler for Daemon {
                 .await
             }
             ControlRequest::Models => self.chat(|client| client.models()).await,
+            ControlRequest::ModelPreferences => {
+                self.chat(|client| client.model_preferences()).await
+            }
+            ControlRequest::ModelPreferencesUpdate { account, model_id } => {
+                self.chat(move |client| {
+                    client.update_model_preferences(&account, model_id.as_deref())
+                })
+                .await
+            }
             ControlRequest::ChatApprove {
                 chat,
                 tool_call,

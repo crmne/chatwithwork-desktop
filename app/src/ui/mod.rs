@@ -235,16 +235,18 @@ pub enum Page {
     Account,
     General,
     Notifications,
+    Models,
 }
 
 impl Page {
-    const NAV: [Page; 7] = [
+    const NAV: [Page; 8] = [
         Page::Chat,
         Page::Folders,
         Page::Privacy,
         Page::Activity,
         Page::Account,
         Page::Notifications,
+        Page::Models,
         Page::General,
     ];
 
@@ -258,6 +260,7 @@ impl Page {
             Page::Account => "Account",
             Page::General => "General",
             Page::Notifications => "Notifications",
+            Page::Models => "Models",
         }
     }
 
@@ -268,7 +271,7 @@ impl Page {
             Page::Privacy => widgets::Icon::Lock,
             Page::Activity => widgets::Icon::Clock,
             Page::Account => widgets::Icon::Person,
-            Page::General => widgets::Icon::Gear,
+            Page::General | Page::Models => widgets::Icon::Gear,
             Page::Notifications => widgets::Icon::Bell,
         }
     }
@@ -568,7 +571,7 @@ impl SettingsApp {
         if self.custom_titlebar {
             chrome::show(ui, &self.theme, self.page);
         }
-        if self.page == Page::Chat {
+        if matches!(self.page, Page::Chat | Page::Models) {
             self.chat_page(ui, chat_status.as_ref());
             self.update_presence(ui);
             if self.custom_titlebar {
@@ -636,7 +639,7 @@ impl SettingsApp {
     /// The Chat page has the web's look and fills the window; the others
     /// follow the platform.
     fn style_for_page(&mut self, ctx: &egui::Context) {
-        let chat = self.page == Page::Chat;
+        let chat = matches!(self.page, Page::Chat | Page::Models);
         let wanted = chat.then_some(self.theme.dark);
         let current = self
             .styled_for_chat
@@ -669,6 +672,11 @@ impl SettingsApp {
         let page = self
             .chat
             .get_or_insert_with(|| chat::ChatPage::new(&socket, data_dir));
+        if self.page == Page::Models && page.state().ready() {
+            page.open_model_preferences();
+            self.restore_chat = None;
+            self.page = Page::Chat;
+        }
         page.set_dictation_mode(self.dictation.preferences.mode);
         page.set_organizations(choices);
         let env = chat::Env {
@@ -830,7 +838,7 @@ impl SettingsApp {
     fn page_contents(&mut self, ui: &mut Ui, status: Option<&Status>) {
         match self.page {
             Page::Welcome => self.welcome_page(ui, status),
-            Page::Chat => {}
+            Page::Chat | Page::Models => {}
             Page::Folders => self.folders_page(ui, status),
             Page::Privacy => self.privacy_page(ui, status),
             Page::Activity => self.activity_page(ui, status),
@@ -1273,6 +1281,7 @@ fn visible_notification_chat(
         || state.moving.is_some()
         || state.history.is_some()
         || state.projects.is_some()
+        || state.model_preferences.is_some()
         || state.error.is_some()
     {
         return None;

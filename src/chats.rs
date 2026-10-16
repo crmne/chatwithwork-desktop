@@ -457,6 +457,24 @@ impl ChatClient {
         )
     }
 
+    pub fn model_preferences(&self) -> Result<Value> {
+        newer(
+            self.call("GET", "local_agent/model_preferences", Body::Empty),
+            "can't manage default model settings from here yet",
+        )
+    }
+
+    pub fn update_model_preferences(&self, account: &str, model_id: Option<&str>) -> Result<Value> {
+        newer(
+            self.call(
+                "PATCH",
+                "local_agent/model_preferences",
+                Body::Json(&json!({ "account": account, "model_id": model_id })),
+            ),
+            "can't manage default model settings from here yet",
+        )
+    }
+
     pub fn send(&self, question: &Question) -> Result<Value> {
         let mut body = json!({ "content": question.text });
         if let Some(model) = &question.model {

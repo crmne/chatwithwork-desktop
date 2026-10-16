@@ -281,6 +281,16 @@ impl Runner {
                     });
                 }),
             ),
+            Command::ModelPreferences(generation, update) => spawn(
+                "cww-model-preferences",
+                Box::new(move || {
+                    let result = match update {
+                        Some((account, model)) => chats.update_model_preferences(account, model),
+                        None => chats.model_preferences(),
+                    };
+                    wake.send(Msg::ModelPreferences(generation, result));
+                }),
+            ),
             Command::Models => spawn(
                 "cww-chat-models",
                 Box::new(move || {

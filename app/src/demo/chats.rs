@@ -227,10 +227,13 @@ pub fn projects() -> Vec<Value> {
 pub fn list_header(left: u64) -> Value {
     let tabs = [
         ("account", "Account", "user-circle"),
+        ("instructions", "Instructions", "notebook"),
+        ("templates", "Templates", "swatches"),
         ("people", "People", "users-three"),
         ("usage", "Usage", "chart-bar"),
         ("models", "Models", "sparkle"),
         ("connectors", "Connectors", "plugs-connected"),
+        ("schedules", "Schedules", "clock"),
         ("notifications", "Notifications", "bell"),
         ("sharing", "Sharing", "link"),
     ];

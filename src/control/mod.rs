@@ -207,6 +207,11 @@ pub enum ControlRequest {
     },
     /// The models a question can be asked with, and the owner's default.
     Models,
+    ModelPreferences,
+    ModelPreferencesUpdate {
+        account: String,
+        model_id: Option<String>,
+    },
     /// Approve a change the answer in `chat` stopped at.
     ChatApprove {
         chat: String,

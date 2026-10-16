@@ -313,6 +313,19 @@ Asks in chat 42, or in a new chat without `chat` (`project` puts a new chat in a
 The models a question can be asked with: `{"default_model_id": 12, "models": [{"id": 12, "name": "Gemini 3.8 Flash", "provider": "vertexai", "description": "…", "rate": "About 3 credits per answer", "selectable": true, "reason": null}, ...]}`. `selectable: false` means a question to it would be refused now, for the `reason`. IDs may be numbers or strings; pass them back as strings. A server without the choice fails with `unsupported` and a sentence saying so.
 
 ```json
+{"cmd":"model_preferences"}
+{"cmd":"model_preferences_update","account":"482139075","model_id":"12"}
+```
+
+Reads or saves the same personal default as website Settings > Models. The reply
+includes `account`, `email`, `preferred_model_id`, and the `models` catalog with
+its effective `default_model_id`. The preference can be a currently credit-locked
+model; `selectable` describes asking now, not saving a future default. Null resets
+the preference. Updates require the displayed organization's external ID and a
+current chat grant. Requests use the client's existing organization-bound socket.
+
+
+```json
 {"cmd": "chat_approve", "chat": "42", "tool_call": "12", "for_rest_of_chat": false}
 {"cmd": "chat_deny", "chat": "42", "tool_call": "12", "reason": "Use the Web team"}
 ```

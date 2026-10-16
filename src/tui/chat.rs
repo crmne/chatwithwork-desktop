@@ -208,6 +208,17 @@ pub struct Models {
     pub models: Vec<Model>,
 }
 
+/// The website preference can differ from the effective credit fallback.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelPreferences {
+    pub account: Named,
+    pub email: String,
+    #[serde(deserialize_with = "id_string_opt")]
+    pub preferred_model_id: Option<String>,
+    #[serde(flatten)]
+    pub catalog: Models,
+}
+
 impl Models {
     pub fn get(&self, id: &str) -> Option<&Model> {
         self.models.iter().find(|m| m.id == id)
@@ -1100,6 +1111,18 @@ impl Chats {
     /// choice, `daemon_outdated` a daemon that can't relay it.
     pub fn models(&self) -> Result<Models, Failure> {
         parse(self.call(&ControlRequest::Models)?)
+    }
+
+    pub fn model_preferences(&self) -> Result<ModelPreferences, Failure> {
+        parse(self.call(&ControlRequest::ModelPreferences)?)
+    }
+
+    pub fn update_model_preferences(
+        &self,
+        account: String,
+        model_id: Option<String>,
+    ) -> Result<ModelPreferences, Failure> {
+        parse(self.call(&ControlRequest::ModelPreferencesUpdate { account, model_id })?)
     }
 
     pub fn dictation(&self) -> Result<Dictation, Failure> {
