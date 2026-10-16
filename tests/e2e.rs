@@ -329,6 +329,10 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/model_preferences",
         "/local_agent/account_settings",
         "/local_agent/schedules",
+        "/local_agent/people",
+        "/local_agent/organization",
+        "/local_agent/invitations",
+        "/local_agent/join_code",
         "/local_agent/templates",
         "/local_agent/uploads",
         "/local_agent/dictations",
@@ -448,7 +452,11 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         chat
     };
     // Rails without the route: an HTML 404, not the API's JSON.
-    let newer = path.starts_with("/local_agent/models")
+    let newer = path.starts_with("/local_agent/people")
+        || path.starts_with("/local_agent/organization")
+        || path.starts_with("/local_agent/invitations")
+        || path.starts_with("/local_agent/join_code")
+        || path.starts_with("/local_agent/models")
         || path.starts_with("/local_agent/model_preferences")
         || path.starts_with("/local_agent/account_settings")
         || path.starts_with("/local_agent/schedules")
@@ -606,6 +614,40 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 }
                 (_, path) if path.contains("/memor") => memory,
                 _ => json!({ "services": [], "suggestions": [], "instructions": [] }),
+            },
+        );
+    }
+    if [
+        "/local_agent/people",
+        "/local_agent/organization",
+        "/local_agent/invitations",
+        "/local_agent/join_code",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+    {
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let mut posted = posted;
+        if method == "DELETE" {
+            let values: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect();
+            posted = json!({"account":values.get("account")});
+        }
+        if method != "GET" && posted["account"] != "482139075" {
+            return (
+                409,
+                json!({"error":"stale_account","error_description":"Your organization changed."}),
+            );
+        }
+        st.workspace_requests
+            .push(json!({"method":method,"path":path,"body":posted}));
+        return (
+            200,
+            if path == "/local_agent/people/1" && method == "DELETE" {
+                json!({"account":{"id":"482139075","name":"Northwind"},"left":true,"notice":"You left Northwind."})
+            } else {
+                json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","admin":true,"role":"owner","organization":{"name":"Northwind","policies":[]},"people":[],"invitations":[],"projects":[],"roles":["admin","member","guest"],"join_link":"https://example.com/join/test"})
             },
         );
     }
@@ -2493,6 +2535,116 @@ async fn relays_models_decisions_files_and_chat_actions() {
     async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         tokio::task::spawn_blocking(f).await.unwrap()
     }
+
+    use cww::people::{
+        InvitationFields, OrganizationFields, Reply as PeopleReply, Request as PeopleRequest,
+    };
+    let people_account = "482139075".to_owned();
+    for (request, method, path) in [
+        (PeopleRequest::List, "GET", "/local_agent/people"),
+        (
+            PeopleRequest::Organization {
+                account: people_account.clone(),
+                fields: OrganizationFields {
+                    name: "Northwind updated".into(),
+                    policies: [("connector_changes".into(), false)].into(),
+                },
+            },
+            "PATCH",
+            "/local_agent/organization",
+        ),
+        (
+            PeopleRequest::Role {
+                account: people_account.clone(),
+                id: 2,
+                role: "guest".into(),
+            },
+            "PATCH",
+            "/local_agent/people/2/role",
+        ),
+        (
+            PeopleRequest::Invite {
+                account: people_account.clone(),
+                fields: InvitationFields {
+                    email: "invited@example.com".into(),
+                    role: "guest".into(),
+                    project_ids: vec![71],
+                },
+            },
+            "POST",
+            "/local_agent/invitations",
+        ),
+        (
+            PeopleRequest::Withdraw {
+                account: people_account.clone(),
+                id: 5,
+            },
+            "DELETE",
+            "/local_agent/invitations/5",
+        ),
+        (
+            PeopleRequest::ResetJoinLink {
+                account: people_account.clone(),
+            },
+            "DELETE",
+            "/local_agent/join_code",
+        ),
+        (
+            PeopleRequest::Remove {
+                account: people_account.clone(),
+                id: 2,
+            },
+            "DELETE",
+            "/local_agent/people/2",
+        ),
+        (
+            PeopleRequest::Remove {
+                account: people_account.clone(),
+                id: 1,
+            },
+            "DELETE",
+            "/local_agent/people/1",
+        ),
+    ] {
+        let c = chats.clone();
+        let reply = blocking(move || c.people(request)).await.unwrap();
+        assert_eq!(
+            matches!(reply, PeopleReply::Left { left: true, .. }),
+            path == "/local_agent/people/1"
+        );
+        let sent = server
+            .state
+            .lock()
+            .unwrap()
+            .workspace_requests
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(sent["method"], method);
+        assert_eq!(sent["path"], path);
+        if method != "GET" {
+            assert_eq!(sent["body"]["account"], people_account);
+        }
+        if path == "/local_agent/organization" {
+            assert_eq!(sent["body"]["organization"]["connector_changes"], false);
+        }
+        if path == "/local_agent/invitations" {
+            assert_eq!(sent["body"]["invitation"]["project_ids"], json!([71]));
+        }
+        if path.ends_with("/role") {
+            assert_eq!(sent["body"]["role"], "guest");
+        }
+    }
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.people(PeopleRequest::ResetJoinLink {
+            account: "918273645".into()
+        }))
+        .await
+        .unwrap_err()
+        .code,
+        "stale_account"
+    );
 
     use cww::schedules::{Fields, Reply as ScheduleReply, Request as ScheduleRequest};
     let account_id = "482139075".to_owned();

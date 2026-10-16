@@ -59,6 +59,7 @@ pub enum Command {
     Cancel(u64),
     /// Read the models the composer's picker offers.
     Models,
+    People(u64, cww::people::Request),
     Schedules(u64, cww::schedules::Request),
     AccountSettings(u64, cww::account_settings::Request),
     ModelPreferences(u64, Option<(String, Option<String>)>),
@@ -116,6 +117,7 @@ pub enum Msg {
     Cancelled(Result<(), Failure>),
     Access(Result<AccessRequest, Failure>),
     Models(Result<Models, Failure>),
+    People(u64, Result<cww::people::Reply, Failure>),
     Schedules(u64, Result<cww::schedules::Reply, Failure>),
     AccountSettings(u64, Result<cww::account_settings::Page, Failure>),
     ModelPreferences(u64, Result<cww::tui::chat::ModelPreferences, Failure>),
@@ -352,6 +354,7 @@ pub struct ChatState {
     pub moving: Option<MoveChat>,
     pub history: Option<super::history::HistoryPage>,
     pub projects: Option<super::projects::Screen>,
+    pub people: Option<super::people::Screen>,
     pub schedules: Option<super::schedules::Screen>,
     pub account_settings: Option<super::account_settings::Screen>,
     pub model_preferences: Option<super::model_preferences::Screen>,
@@ -413,6 +416,7 @@ impl Default for ChatState {
             moving: None,
             history: None,
             projects: None,
+            people: None,
             schedules: None,
             account_settings: None,
             model_preferences: None,
@@ -527,6 +531,7 @@ impl ChatState {
         } else {
             self.schedules = None;
             self.account_settings = None;
+            self.people = None;
             self.access = Access::Unknown;
             self.start = None;
             self.start_loading = None;
@@ -565,6 +570,7 @@ impl ChatState {
         self.projects = None;
         self.schedules = None;
         self.account_settings = None;
+        self.people = None;
         self.model_preferences = None;
         self.templates = None;
         self.new_project = None;
@@ -598,6 +604,7 @@ impl ChatState {
         self.projects = None;
         self.schedules = None;
         self.account_settings = None;
+        self.people = None;
         self.model_preferences = None;
         self.templates = None;
         self.new_project = None;
@@ -669,6 +676,7 @@ impl ChatState {
         self.instructions = None;
         self.schedules = None;
         self.account_settings = None;
+        self.people = None;
         self.model_preferences = None;
         let mut screen = super::templates::Screen::new(self.list.account.id.clone(), project);
         commands.extend(screen.load());
@@ -683,6 +691,7 @@ impl ChatState {
         self.moving = None;
         self.instructions = None;
         self.account_settings = None;
+        self.people = None;
         self.model_preferences = None;
         self.templates = None;
         let screen = self
@@ -692,7 +701,24 @@ impl ChatState {
         commands
     }
 
+    pub fn show_people(&mut self) -> Vec<Command> {
+        let mut commands = self.cancel_dictation();
+        self.projects = None;
+        self.history = None;
+        self.moving = None;
+        self.instructions = None;
+        self.schedules = None;
+        self.account_settings = None;
+        self.model_preferences = None;
+        self.templates = None;
+        let mut screen = super::people::Screen::new(self.list.account.id.clone());
+        commands.extend(screen.request(cww::people::Request::List));
+        self.people = Some(screen);
+        commands
+    }
+
     pub fn show_account_settings(&mut self) -> Vec<Command> {
+        self.people = None;
         self.schedules = None;
         let mut commands = self.cancel_dictation();
         self.projects = None;
@@ -710,6 +736,7 @@ impl ChatState {
     pub fn show_model_preferences(&mut self) -> Vec<Command> {
         self.schedules = None;
         self.account_settings = None;
+        self.people = None;
         let mut commands = self.cancel_dictation();
         self.projects = None;
         self.history = None;
@@ -1037,6 +1064,7 @@ impl ChatState {
         self.projects = None;
         self.schedules = None;
         self.account_settings = None;
+        self.people = None;
         self.model_preferences = None;
         self.templates = None;
         self.moving = Some(MoveChat { chat, project });
@@ -1281,6 +1309,23 @@ impl ChatState {
                     && screen.generation == generation
                 {
                     return screen.picked(result);
+                }
+            }
+            Msg::People(generation, result) => {
+                if let Some(screen) = &mut self.people
+                    && screen.generation == generation
+                {
+                    let left = screen.loaded(result);
+                    if let Some(notice) = left {
+                        // A confirmed departure revokes this grant. Drop all
+                        // cached account content before refreshing daemon status.
+                        *self = Self::default();
+                        self.failure(Failure::new("revoked", notice));
+                        return vec![Command::ResetAccount, Command::List];
+                    }
+                    if let Some(page) = &screen.page {
+                        self.list.account.name = page.account.name.clone();
+                    }
                 }
             }
             Msg::Schedules(generation, result) => {
@@ -1833,6 +1878,7 @@ impl ChatState {
             self.projects = None;
             self.schedules = None;
             self.account_settings = None;
+            self.people = None;
             self.model_preferences = None;
             self.templates = None;
             self.instructions = None;

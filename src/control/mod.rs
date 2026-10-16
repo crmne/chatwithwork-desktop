@@ -220,6 +220,9 @@ pub enum ControlRequest {
     Schedules {
         request: crate::schedules::Request,
     },
+    People {
+        request: crate::people::Request,
+    },
     AccountSettings {
         request: crate::account_settings::Request,
     },

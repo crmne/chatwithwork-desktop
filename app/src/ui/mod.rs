@@ -721,6 +721,7 @@ impl SettingsApp {
             {
                 self.notification = None;
             } else if page.state().ready()
+                && !page.state().people.as_ref().is_some_and(|p| p.busy)
                 && !page.state().schedules.as_ref().is_some_and(|p| p.busy)
                 && !page.state().projects.as_ref().is_some_and(|p| p.busy)
                 && !page.state().templates.as_ref().is_some_and(|p| p.busy)
@@ -1315,6 +1316,7 @@ fn visible_notification_chat(
         || state.history.is_some()
         || state.projects.is_some()
         || state.schedules.is_some()
+        || state.people.is_some()
         || state.account_settings.is_some()
         || state.model_preferences.is_some()
         || state.templates.is_some()

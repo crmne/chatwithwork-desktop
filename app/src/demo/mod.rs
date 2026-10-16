@@ -6,6 +6,7 @@
 
 mod assets;
 mod chats;
+mod people;
 mod project_pages;
 mod schedules;
 mod templates;
@@ -71,6 +72,7 @@ struct State {
     copy_answers_as: Value,
     templates: Vec<Value>,
     schedules: Vec<Value>,
+    people: Value,
     notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
@@ -275,6 +277,7 @@ fn fresh() -> State {
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
         schedules: vec![],
+        people: Value::Null,
         profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
         copy_answers_as: json!("rich_text"),
         templates: vec![],
@@ -400,6 +403,7 @@ fn sample() -> State {
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
         schedules: vec![],
+        people: Value::Null,
         profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
         copy_answers_as: json!("rich_text"),
         templates: vec![],
@@ -548,6 +552,7 @@ impl Demo {
             | "models"
             | "templates"
             | "template_upload"
+            | "people"
             | "account_settings"
             | "schedules"
             | "model_preferences"
@@ -927,6 +932,10 @@ impl Demo {
             "templates" | "template_upload" => {
                 templates::respond(&mut self.state.lock().expect("demo lock"), cmd, request)
             }
+            "people" => people::respond(
+                &mut self.state.lock().expect("demo lock"),
+                &request["request"],
+            ),
             "schedules" => schedules::respond(
                 &mut self.state.lock().expect("demo lock"),
                 &request["request"],
@@ -1818,4 +1827,9 @@ impl crate::pairing::Account for Account {
         });
         Ok(())
     }
+}
+
+#[cfg(test)]
+pub fn people_page() -> Value {
+    people::page()
 }

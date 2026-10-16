@@ -334,13 +334,13 @@ fn content(
         }
     }
 }
-fn heading(ui: &mut Ui, label: &str, p: &Palette) {
+pub(super) fn heading(ui: &mut Ui, label: &str, p: &Palette) {
     text(ui, label, Type::sans(15.0, 22.5).weight(600.0), p.ink);
 }
-fn text(ui: &mut Ui, label: &str, ty: Type, color: egui::Color32) {
+pub(super) fn text(ui: &mut Ui, label: &str, ty: Type, color: egui::Color32) {
     ui.add(egui::Label::new(paint::job(label, ty, color, ui.available_width())).wrap());
 }
-fn group(ui: &mut Ui, p: &Palette, contents: impl FnOnce(&mut Ui)) {
+pub(super) fn group(ui: &mut Ui, p: &Palette, contents: impl FnOnce(&mut Ui)) {
     egui::Frame::new()
         .fill(p.surface)
         .stroke(Stroke::new(1.0, p.line))
@@ -375,7 +375,7 @@ fn field(
         );
     });
 }
-fn separator(ui: &mut Ui, p: &Palette) {
+pub(super) fn separator(ui: &mut Ui, p: &Palette) {
     ui.painter().hline(
         ui.cursor().left()..=ui.cursor().left() + ui.available_width(),
         ui.cursor().top(),
@@ -501,7 +501,7 @@ fn copy_format(ui: &mut Ui, selected: CopyFormat, enabled: bool, p: &Palette) ->
     chosen
 }
 
-fn button(
+pub(super) fn button(
     ui: &mut Ui,
     label: &str,
     right: bool,

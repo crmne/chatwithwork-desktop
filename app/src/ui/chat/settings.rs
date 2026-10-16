@@ -172,6 +172,7 @@ fn navigation(ui: &mut Ui, shell: &Shell, wide: bool, reveal: bool, event: &mut 
                 "instructions" => Event::Instructions(cww::workspace::Layer::Personal),
                 "schedules" => Event::Schedules(cww::schedules::Request::List),
                 "account" => Event::AccountSettings,
+                "people" => Event::People,
                 "models" => Event::ModelPreferences,
                 "templates" => Event::Templates(None),
                 _ => Event::OpenUrl(tab.url.clone()),

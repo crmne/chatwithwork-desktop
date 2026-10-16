@@ -4558,3 +4558,259 @@ fn native_schedule_date_and_time_controls_preserve_wall_clock_values() {
         }
     }
 }
+
+#[test]
+fn native_people_save_each_form_without_losing_other_drafts() {
+    let mut fx = fixture(Options {
+        size: [1280.0, 2600.0],
+        ..Options::default()
+    });
+    fx.ready();
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    fx.harness.get_by_label("People").click_accesskit();
+    fx.wait_for_label("Guests see document titles");
+    let field = fx.harness.get_by_label("Name");
+    field.click();
+    field.type_text(" Labs");
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Email").click();
+    fx.harness
+        .get_by_label("Email")
+        .type_text("guest@example.com");
+    fx.harness.get_by_label("Guest").click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Launch plan")
+        .click_accesskit();
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Send invitation").click_accesskit();
+    fx.wait_for_label("Invitation sent.");
+    let request = fx.wait_for_request("people", |r| r["request"]["action"] == "invite");
+    assert_eq!(request["request"]["account"], "482139075");
+    assert_eq!(
+        request["request"]["fields"],
+        serde_json::json!({"email":"guest@example.com","role":"guest","project_ids":[71]})
+    );
+    let screen = fx.chat().state.people.as_ref().unwrap();
+    assert_eq!(screen.organization.name, "Northwind Labs");
+    assert!(screen.dirty());
+    assert_eq!(screen.invitation, cww::people::InvitationFields::default());
+    fx.harness.get_by_label("Save").click_accesskit();
+    fx.wait_for_label("Organization updated.");
+    assert!(!fx.chat().state.people.as_ref().unwrap().dirty());
+    fx.harness.get_by_label("Role for Sam Lee").click();
+    fx.harness.run_steps(2);
+    fx.harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Admin")
+        .click_accesskit();
+    fx.wait_for_label("Role updated.");
+    let role = fx.wait_for_request("people", |r| r["request"]["action"] == "role");
+    assert_eq!(role["request"]["role"], "admin");
+    fx.harness
+        .get_by_label("Withdraw invitation to guest@example.com")
+        .click_accesskit();
+    fx.wait_for_label("Invitation withdrawn.");
+    assert!(
+        fx.chat()
+            .state
+            .people
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .invitations
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
+    fx.harness
+        .get_by_label("Reset the join link")
+        .click_accesskit();
+    fx.wait_for_label("Reset link");
+    fx.harness.get_by_label("Cancel").click_accesskit();
+    fx.harness.run_steps(3);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "people" && r["request"]["action"] == "reset_join_link")
+    );
+    fx.harness
+        .get_by_label("Reset the join link")
+        .click_accesskit();
+    fx.wait_for_label("Reset link");
+    fx.harness.get_by_label("Reset link").click_accesskit();
+    fx.wait_for_label("Join link reset.");
+    assert!(
+        fx.chat()
+            .state
+            .people
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .join_link
+            .ends_with("synthetic-reset")
+    );
+    fx.harness.get_by_label("Remove Sam Lee").click_accesskit();
+    fx.wait_for_label("Remove");
+    fx.harness.get_by_label("Remove").click_accesskit();
+    fx.wait_for_label("Person removed.");
+    assert_eq!(
+        fx.chat()
+            .state
+            .people
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .people
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn native_people_guard_unsaved_and_stale_account_navigation() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    let (profile, _second) = add_organization(&mut fx);
+    let commands = fx.chat().state.show_people();
+    fx.chat().run(commands);
+    fx.wait_for_label("Guests see document titles");
+    fx.chat().state.people.as_mut().unwrap().invitation.email = "unsent@example.com".into();
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard People changes?");
+    fx.harness.get_by_label("Keep editing").click_accesskit();
+    fx.harness.run_steps(3);
+    assert!(fx.chat().state.people.as_ref().unwrap().dirty());
+    assert!(
+        super::super::visible_notification_chat(Page::Chat, true, Some(&fx.chat().state)).is_none()
+    );
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard People changes?");
+    fx.harness.get_by_label("Discard changes").click_accesskit();
+    fx.wait("the other organization", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "918273645" && s.open == Some(11) && !s.loading)
+    });
+    assert!(fx.chat().state.people.is_none());
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "people" && r["request"]["action"] != "list")
+    );
+}
+
+#[test]
+fn native_people_bind_responses_and_departure_to_the_current_request() {
+    use super::state::{ChatState, Msg};
+    use cww::people::{Reply, Request};
+    let mut state = ChatState::default();
+    state.list.account.id = "482139075".into();
+    state.show_people();
+    let old = state.people.as_ref().unwrap().generation;
+    state.show_people();
+    let current = state.people.as_ref().unwrap().generation;
+    let page: Reply = serde_json::from_value(demo::people_page()).unwrap();
+    state.update(Msg::People(old, Ok(page.clone())));
+    assert!(state.people.as_ref().unwrap().page.is_none());
+    state.update(Msg::People(current, Ok(page.clone())));
+    assert!(state.people.as_ref().unwrap().page.is_some());
+    let screen = state.people.as_mut().unwrap();
+    screen.organization.name = "draft".into();
+    screen.invitation.email = "draft@example.com".into();
+    screen.request(Request::Invite {
+        account: "482139075".into(),
+        fields: screen.invitation.clone(),
+    });
+    screen.loaded(Err(cww::tui::chat::Failure::new("invalid", "Bad email")));
+    assert!(screen.dirty());
+    let mut denied = demo::people_page();
+    denied["admin"] = false.into();
+    screen.loaded(Ok(serde_json::from_value(denied).unwrap()));
+    assert!(!screen.dirty());
+    assert!(screen.invitation.email.is_empty());
+    let left:Reply=serde_json::from_value(serde_json::json!({"account":{"id":"482139075","name":"Northwind"},"left":true,"notice":"You left Northwind."})).unwrap();
+    assert!(screen.loaded(Ok(left.clone())).is_none());
+    assert!(screen.page.is_none());
+    screen.loaded(Ok(page));
+    screen.request(Request::Remove {
+        account: "482139075".into(),
+        id: 1,
+    });
+    let commands = state.update(Msg::People(current, Ok(left)));
+    assert!(commands.contains(&super::state::Command::ResetAccount));
+    assert!(state.people.is_none());
+    assert!(state.list.chats.is_empty());
+    state.list.account.id = "482139075".into();
+    state.show_people();
+    let current = state.people.as_ref().unwrap().generation;
+    state.update(Msg::People(
+        current,
+        Err(cww::tui::chat::Failure::new("revoked", "Access removed.")),
+    ));
+    assert!(state.people.as_ref().unwrap().page.is_none());
+}
+
+#[test]
+fn native_people_review_screens() {
+    let Ok(directory) = std::env::var("CWW_PEOPLE_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Options::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            fx.logos();
+            let suffix = format!("{}-{width}.png", if dark { "dark" } else { "light" });
+            for view in ["before", "top", "middle", "bottom"] {
+                if view == "top" {
+                    let commands = fx.chat().state.show_people();
+                    fx.chat().run(commands);
+                    fx.wait_for_label("Guests see document titles");
+                }
+                if view == "middle" || view == "bottom" {
+                    fx.harness
+                        .event(egui::Event::PointerMoved(egui::pos2(width - 40.0, 800.0)));
+                    fx.harness.event(egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -650.0),
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(16);
+                let path = std::path::Path::new(&directory).join(view);
+                std::fs::create_dir_all(&path).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(path.join(&suffix))
+                    .unwrap();
+            }
+        }
+    }
+}

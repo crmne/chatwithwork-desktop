@@ -78,9 +78,12 @@ pub enum Icon {
     ArrowRight,
     User,
     Brain,
+    UserMinus,
+    SignOut,
+    EnvelopeSimple,
 }
 
-const COUNT: usize = Icon::Brain as usize + 1;
+const COUNT: usize = Icon::EnvelopeSimple as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if

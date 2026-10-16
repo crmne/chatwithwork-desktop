@@ -510,6 +510,40 @@ impl ChatClient {
         )
     }
 
+    pub fn people(&self, request: &crate::people::Request) -> Result<Value> {
+        use crate::people::Request;
+        let delete = |path: String, account: &str| {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("account", account)
+                .finish();
+            self.call("DELETE", &format!("{path}?{query}"), Body::Empty)
+        };
+        let result = match request {
+            Request::List => self.call("GET", "local_agent/people", Body::Empty),
+            Request::Organization { account, fields } => self.call(
+                "PATCH",
+                "local_agent/organization",
+                Body::Json(&json!({"account": account, "organization": fields})),
+            ),
+            Request::Role { account, id, role } => self.call(
+                "PATCH",
+                &format!("local_agent/people/{id}/role"),
+                Body::Json(&json!({"account": account, "role": role})),
+            ),
+            Request::Remove { account, id } => delete(format!("local_agent/people/{id}"), account),
+            Request::Invite { account, fields } => self.call(
+                "POST",
+                "local_agent/invitations",
+                Body::Json(&json!({"account": account, "invitation": fields})),
+            ),
+            Request::Withdraw { account, id } => {
+                delete(format!("local_agent/invitations/{id}"), account)
+            }
+            Request::ResetJoinLink { account } => delete("local_agent/join_code".into(), account),
+        };
+        newer(result, "can't manage people from here yet")
+    }
+
     pub fn schedules(&self, request: &crate::schedules::Request) -> Result<Value> {
         use crate::schedules::Request;
         let result = match request {

@@ -632,3 +632,14 @@ daemon never receives or reads the original local path. Mutations carry the
 organization's nine-digit `account` to reject stale UI state. The device must
 have current chat access; server roles, membership, file validation and audit
 are the same as website template settings.
+
+### People and organization administration
+
+`{"cmd":"people","request":{"action":"list"}}` reads the current device
+organization's People page while chats are permitted. The typed `request` also
+accepts `organization` (fields), `role` (person id and role), `remove` (person id),
+`invite` (fields), `withdraw` (invitation id), and `reset_join_link`. All writes
+include `account`, the displayed nine-digit organization ID. They return the
+refreshed page and notice, or a confirmed own departure with account, `left: true`
+and notice. Only the server decides permissions and applies membership,
+invitation, revocation and organization-policy changes.

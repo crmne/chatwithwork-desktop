@@ -127,7 +127,7 @@ The page asks egui for another frame only while something on it moves: a transit
 
 The page follows the web wherever the chat API gives it what the web uses. Where it doesn't, the page shows what the web shows in the commonest case:
 
-- **The organization.** The web's sidebar shows the organization switcher only to someone in more than one organization. The native sidebar lists signed-in organizations, with their marks and roles. Add another sign-in in This computer > Account, without changing folder sharing. Each chat client and notification session stays bound to its own grant; switching clears drafts and undo history and restores the last chat. Unsaved instructions ask before leaving. Invitations and new-organization creation still need native screens.
+- **The organization.** The web's sidebar shows the organization switcher only to someone in more than one organization. The native sidebar lists signed-in organizations, with their marks and roles. Add another sign-in in This computer > Account, without changing folder sharing. Each chat client and notification session stays bound to its own grant; switching clears drafts and undo history and restores the last chat. Unsaved instructions ask before leaving. People settings now manage invitations and organization membership natively. Creating another organization still uses the signed-in website session.
 - **Pins.** The web's chat menu has Pin and Move to project, and each pinned row an unpin button. The chat API can't pin, unpin or move a chat, so the menu has Rename and Delete and pinned rows have no unpin button; pinning happens on the web.
 - **Guests.** The web adds "· Guest" after a guest's name and shows them no meter. The chat API doesn't say whether the person is a guest.
 - **The people on a project.** The web's project line counts them ("shared with 4 people"); the chat API doesn't, so it says "shared with the people on it". Its Change link and "Hide from guests" or "Show to guests" aren't there either: the chat API has no way to move a chat or change who sees it.
@@ -336,3 +336,19 @@ buttons. The calendar keeps the entered time; choosing an hour or minute keeps
 the date. These are local times in the schedule’s selected time zone. Canceling
 the calendar leaves the draft unchanged; saving a picker never submits the
 schedule itself.
+
+### People settings
+
+People uses the shared Settings shell, organization policy switches, person rows,
+role controls, invitation form and project choices, pending invitation actions,
+and join-link copy/reset. Every change carries the displayed organization ID
+through its original device-bound daemon client. Role and removal controls come
+from the website's current permissions; protected owners and self-role changes
+remain unavailable. Leaving clears the cached organization before refreshing.
+
+Organization and invitation drafts save independently. Unrelated role or
+invitation replies preserve the other draft. Validation errors keep inputs;
+access loss clears cached forms, and stale generations/accounts cannot replace
+the current page. Chat, settings, organization and notification navigation share
+the unsaved-change guard. Account creation still needs the website identity
+session, and avatar initials remain until the native profile-picture integration.

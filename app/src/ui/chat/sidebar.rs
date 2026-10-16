@@ -24,6 +24,7 @@ pub enum Event {
     History,
     Schedules(cww::schedules::Request),
     AccountSettings,
+    People,
     ModelPreferences,
     Templates(Option<u64>),
     Projects(cww::projects::Request),

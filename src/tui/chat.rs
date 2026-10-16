@@ -1179,6 +1179,10 @@ impl Chats {
         parse(self.call(&ControlRequest::ModelPreferences)?)
     }
 
+    pub fn people(&self, request: crate::people::Request) -> Result<crate::people::Reply, Failure> {
+        parse(self.call(&ControlRequest::People { request })?)
+    }
+
     pub fn schedules(
         &self,
         request: crate::schedules::Request,

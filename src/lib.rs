@@ -21,6 +21,7 @@ pub mod notification_delivery;
 pub mod notification_presence;
 pub mod notifications;
 pub mod paths;
+pub mod people;
 pub mod policy;
 pub mod projects;
 pub mod proxy;

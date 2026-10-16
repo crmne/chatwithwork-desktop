@@ -23,6 +23,7 @@ pub mod mcp_app;
 mod model_preferences;
 mod organizations;
 pub mod paint;
+mod people;
 mod project_move;
 mod projects;
 pub mod prose;
@@ -152,6 +153,9 @@ impl ChatPage {
     }
 
     pub(super) fn navigation_busy(&self) -> bool {
+        if self.state.people.as_ref().is_some_and(|p| p.busy) {
+            return true;
+        }
         if self.state.schedules.as_ref().is_some_and(|p| p.busy) {
             return true;
         }
@@ -179,6 +183,16 @@ impl ChatPage {
             return false;
         }
         if let Some(page) = &mut self.state.schedules {
+            if page.busy {
+                return false;
+            }
+            if page.dirty() {
+                page.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Notification(target.clone()));
+                return false;
+            }
+        }
+        if let Some(page) = &mut self.state.people {
             if page.busy {
                 return false;
             }
@@ -312,6 +326,16 @@ impl ChatPage {
             return;
         }
         if let Some(screen) = &mut self.state.schedules {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Open(number));
+                return;
+            }
+        }
+        if let Some(screen) = &mut self.state.people {
             if screen.busy {
                 return;
             }
@@ -489,6 +513,7 @@ impl ChatPage {
         if self.state.ready()
             && self.state.open.is_none()
             && self.state.schedules.is_none()
+            && self.state.people.is_none()
             && self.state.account_settings.is_none()
             && self.state.model_preferences.is_none()
             && self.state.templates.is_none()
@@ -672,6 +697,25 @@ impl ChatPage {
             }
             self.run(outcome.commands);
             self.sidebar_event(outcome.event, env, &mut action);
+        } else if let Some(screen) = &mut self.state.people {
+            let outcome = people::show(
+                ui,
+                main,
+                screen,
+                &self.state.list.links.settings,
+                &p,
+                images,
+            );
+            if !screen.confirm_close && !outcome.discarded {
+                self.pending_navigation = None;
+            }
+            if outcome.discarded {
+                self.state.people = None;
+                let pending = self.pending_navigation.take();
+                self.sidebar_event(pending, env, &mut action);
+            }
+            self.run(outcome.commands);
+            self.sidebar_event(outcome.event, env, &mut action);
         } else if let Some(screen) = &mut self.state.account_settings {
             let outcome = account_settings::show(
                 ui,
@@ -834,6 +878,7 @@ impl ChatPage {
         }
 
         if self.state.schedules.is_none()
+            && self.state.people.is_none()
             && self.state.account_settings.is_none()
             && self.state.model_preferences.is_none()
             && self.state.templates.is_none()
@@ -965,6 +1010,7 @@ impl ChatPage {
                                 | sidebar::Event::ProjectInstructions(_)
                                 | sidebar::Event::Instructions(_)
                                 | sidebar::Event::Schedules(_)
+                                | sidebar::Event::People
                                 | sidebar::Event::AccountSettings
                                 | sidebar::Event::ModelPreferences
                                 | sidebar::Event::Templates(_)
@@ -1015,6 +1061,7 @@ impl ChatPage {
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
                     | sidebar::Event::Schedules(_)
+                    | sidebar::Event::People
                     | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
@@ -1031,6 +1078,17 @@ impl ChatPage {
                 return;
             }
             self.state.schedules = None;
+        }
+        if leaving_models && let Some(screen) = &mut self.state.people {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = event;
+                return;
+            }
+            self.state.people = None;
         }
         if leaving_models && let Some(screen) = &mut self.state.account_settings {
             if screen.busy {
@@ -1075,6 +1133,7 @@ impl ChatPage {
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
                     | sidebar::Event::Schedules(_)
+                    | sidebar::Event::People
                     | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
@@ -1105,6 +1164,7 @@ impl ChatPage {
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
                     | sidebar::Event::Schedules(_)
+                    | sidebar::Event::People
                     | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
@@ -1131,6 +1191,10 @@ impl ChatPage {
         match event {
             Some(sidebar::Event::Schedules(request)) => {
                 let commands = self.state.schedule_request(request);
+                self.run(commands);
+            }
+            Some(sidebar::Event::People) => {
+                let commands = self.state.show_people();
                 self.run(commands);
             }
             Some(sidebar::Event::AccountSettings) => {
