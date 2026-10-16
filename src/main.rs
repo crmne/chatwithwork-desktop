@@ -99,7 +99,16 @@ enum Command {
         command: DebugCommand,
     },
     /// Open the terminal UI (the default when run in a terminal).
-    Tui,
+    Tui {
+        /// Saved organization name or ID from `cww organizations`.
+        #[arg(long)]
+        organization: Option<String>,
+    },
+    /// List organization sign-ins saved on this computer.
+    Organizations {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -204,7 +213,24 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     };
     match command {
-        Command::Tui => cww::tui::run(paths)?,
+        Command::Tui { organization } => {
+            cww::tui::run_organization(paths, organization.as_deref())?
+        }
+        Command::Organizations { json } => {
+            let profiles = auth::organizations::list(&paths)?;
+            if json {
+                println!("{}", serde_json::to_string(&profiles)?);
+            } else if profiles.is_empty() {
+                println!("No additional organizations. Sign in with cww login --organization.");
+            } else {
+                for profile in profiles {
+                    println!(
+                        "{}  {}  {}",
+                        profile.id, profile.account.name, profile.server.url
+                    );
+                }
+            }
+        }
         Command::Login {
             server,
             name,

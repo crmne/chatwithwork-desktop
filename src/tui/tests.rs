@@ -3497,3 +3497,134 @@ fn local_change_previews_include_the_diff_and_unchecked_warning() {
         "raw details must not replace the preview: {screen}"
     );
 }
+
+#[test]
+fn selected_organization_is_independent_of_folder_pairing_and_rejects_stale_replies() {
+    let mut app = App::new(UtcOffset::UTC).with_organization("918273645".into());
+    assert!(
+        app.update(Msg::Daemon(DaemonMsg::Status(Box::new(status(
+            "connected",
+            vec![root("documents", "Documents", "ready", 1)]
+        )))))
+        .is_empty()
+    );
+    let mut selected = status("connected", vec![]);
+    selected.device_id = Some("second-device".into());
+    selected.server = Some("https://other.example".into());
+    let effects = app.update(Msg::OrganizationStatus(Ok(Box::new(selected))));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
+    let mut list = chat_list();
+    list.account.id = "918273645".into();
+    list.account.name = "Akamai Robotics".into();
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(list.clone()))));
+    for width in [60, 100] {
+        assert!(render_to_string(&app, width, 30).contains("Akamai Robotics"));
+    }
+    app.update(key(KeyCode::Down));
+    app.update(key(KeyCode::Enter));
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(budget_transcript("idle")),
+    }));
+    app.chat.list.account.id = "918273645".into();
+    app.update(Msg::WindowFocus(true));
+    assert_eq!(app.notification_view().unwrap().account, "918273645");
+    let generation = app.chat_generation;
+    let transcript = app.chat.transcript.clone().unwrap();
+    app.update(Msg::Daemon(DaemonMsg::Status(Box::new(status(
+        "not_paired",
+        vec![],
+    )))));
+    assert_eq!(app.chat_generation, generation);
+    assert!(
+        app.chat.transcript.is_some(),
+        "folder logout must not clear another chat grant"
+    );
+    app.update(Msg::OrganizationStatus(Err(
+        "The selected sign-in was removed".into(),
+    )));
+    assert!(app.chat.transcript.is_none());
+    assert!(app.notification_view().is_none());
+    app.update(Msg::ScopedChat {
+        generation,
+        message: ChatMsg::Shown {
+            chat: 42,
+            result: Ok(transcript),
+        },
+    });
+    assert!(app.chat.transcript.is_none());
+    let effects = app.update(Msg::Chat(ChatMsg::Listed(Ok(chat_list()))));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::FollowList(false))));
+    assert!(!app.chat.ready());
+    assert!(app.chat.list.chats.is_empty());
+}
+
+#[test]
+fn organization_terminal_review_screens() {
+    let Ok(directory) = std::env::var("CWW_ORGANIZATION_TUI_EVIDENCE") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut before = app();
+    chats_ready(&mut before);
+    let mut after = App::new(UtcOffset::UTC).with_organization("918273645".into());
+    after.update(Msg::OrganizationStatus(Ok(Box::new(status(
+        "connected",
+        vec![],
+    )))));
+    let mut list = chat_list();
+    list.account.id = "918273645".into();
+    list.account.name = "Akamai Robotics".into();
+    after.update(Msg::Chat(ChatMsg::Listed(Ok(list))));
+    for (name, app) in [("before", before), ("after", after)] {
+        for (width, height) in [(60, 24), (100, 36)] {
+            for (mode, depth, ink, canvas) in [
+                ("dark", Depth::TrueColor, "#e9ecf4", "#06070b"),
+                ("mono", Depth::Mono, "#111111", "#ffffff"),
+            ] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| render(frame, &app, &Theme::new(depth), NOW))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let mut svg = format!(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}"><rect width="100%" height="100%" fill="{canvas}"/><g font-family="DejaVu Sans Mono" font-size="14">"#,
+                    width * 9,
+                    height * 18
+                );
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = &buffer[(x, y)];
+                        let color = |color, fallback: &str| match color {
+                            ratatui::style::Color::Rgb(r, g, b) => {
+                                format!("#{r:02x}{g:02x}{b:02x}")
+                            }
+                            _ => fallback.into(),
+                        };
+                        let (mut fg, mut bg) = (color(cell.fg, ink), color(cell.bg, canvas));
+                        if cell.modifier.contains(ratatui::style::Modifier::REVERSED) {
+                            std::mem::swap(&mut fg, &mut bg);
+                        }
+                        let weight = if cell.modifier.contains(ratatui::style::Modifier::BOLD) {
+                            "bold"
+                        } else {
+                            "normal"
+                        };
+                        let text = cell
+                            .symbol()
+                            .replace('&', "&amp;")
+                            .replace('<', "&lt;")
+                            .replace('>', "&gt;");
+                        svg.push_str(&format!(r#"<rect x="{}" y="{}" width="9" height="18" fill="{bg}"/><text x="{}" y="{}" fill="{fg}" font-weight="{weight}">{text}</text>"#, x*9, y*18, x*9, y*18+14));
+                    }
+                }
+                svg.push_str("</g></svg>");
+                std::fs::write(
+                    std::path::Path::new(&directory).join(format!("tui-{name}-{mode}-{width}.svg")),
+                    svg,
+                )
+                .unwrap();
+            }
+        }
+    }
+}

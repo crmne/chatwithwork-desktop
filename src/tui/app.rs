@@ -559,6 +559,7 @@ pub enum Msg {
     Paste(String),
     Resize,
     Daemon(DaemonMsg),
+    OrganizationStatus(Result<Box<DaemonStatus>, String>),
     Chat(ChatMsg),
     /// Production worker replies are tied to the pairing that requested them.
     ScopedChat {
@@ -1250,6 +1251,8 @@ impl ChatPane {
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     pub daemon: Daemon,
+    chat_daemon: Option<Daemon>,
+    chat_account: Option<String>,
     /// Unknown initial terminal focus is treated as background.
     pub window_focused: bool,
     pub chat_generation: u64,
@@ -1290,6 +1293,8 @@ impl App {
     pub fn new(utc_offset: UtcOffset) -> Self {
         Self {
             daemon: Daemon::Unknown,
+            chat_daemon: None,
+            chat_account: None,
             window_focused: false,
             chat_generation: 0,
             chat_scope: None,
@@ -1321,6 +1326,45 @@ impl App {
         self
     }
 
+    pub fn with_organization(mut self, account: String) -> Self {
+        self.chat_daemon = Some(Daemon::Unknown);
+        self.chat_account = Some(account);
+        self
+    }
+
+    pub fn organization_name(&self) -> Option<&str> {
+        self.chat_account.as_ref().and_then(|_| {
+            (!self.chat.list.account.name.is_empty())
+                .then_some(self.chat.list.account.name.as_str())
+        })
+    }
+
+    pub fn chat_daemon(&self) -> &Daemon {
+        self.chat_daemon.as_ref().unwrap_or(&self.daemon)
+    }
+
+    fn organization_status(&mut self, status: Result<Box<DaemonStatus>, String>) -> Vec<Effect> {
+        if self.chat_daemon.is_none() {
+            return Vec::new();
+        }
+        let connected = self.chat_daemon().connection() == Some("connected");
+        match status {
+            Ok(status) => {
+                self.chat_daemon = Some(Daemon::Running(status));
+                self.notice = None;
+                self.load_chats(connected)
+            }
+            Err(error) => {
+                self.chat_daemon = Some(Daemon::Unknown);
+                let effects = self.reset_chat_scope();
+                self.chat.access =
+                    Access::Unavailable(super::chat::Failure::new("unavailable", &error));
+                self.notice(super::theme::Signal::Attention, &error);
+                effects
+            }
+        }
+    }
+
     /// Effects to run once, at start. Chats wait for the daemon's status.
     pub fn start(&self) -> Vec<Effect> {
         Vec::new()
@@ -1349,6 +1393,7 @@ impl App {
             }
             Msg::Resize => Vec::new(),
             Msg::Daemon(msg) => self.daemon_msg(msg),
+            Msg::OrganizationStatus(status) => self.organization_status(status),
             Msg::Chat(msg) => self.chat_msg(msg),
             Msg::ScopedChat {
                 generation,
@@ -1435,7 +1480,12 @@ impl App {
             && (self.chat.working()
                 || listed
                 || (self.chat.loading && self.chat.transcript.is_none()));
-        indexing || self.daemon.connection() == Some("connecting") || chat
+        let connection = if self.view == View::Chat {
+            self.chat_daemon()
+        } else {
+            &self.daemon
+        };
+        indexing || connection.connection() == Some("connecting") || chat
     }
 
     /// How long the loop may sleep before the screen goes stale: a frame
@@ -3345,7 +3395,7 @@ impl App {
     /// Whether `url` is a page of the paired server, the only kind the TUI
     /// opens, so a server can't send the browser anywhere else.
     fn on_server(&self, url: &str) -> bool {
-        self.daemon.server().is_some_and(|server| {
+        self.chat_daemon().server().is_some_and(|server| {
             let origin = format!("{}/", server.trim_end_matches('/'));
             url.starts_with(&origin)
         })
@@ -3353,7 +3403,7 @@ impl App {
 
     /// A running daemon, paired and not revoked: chats can be asked for.
     fn paired(&self) -> bool {
-        match &self.daemon {
+        match self.chat_daemon() {
             Daemon::Running(status) => status.paired && status.connection.connection != "revoked",
             _ => false,
         }
@@ -3441,7 +3491,9 @@ impl App {
             }
             _ => None,
         };
-        if let Some((paired, server, device)) = scope {
+        if let Some((paired, server, device)) = scope
+            && self.chat_daemon.is_none()
+        {
             let scope = paired.then(|| server.clone().zip(device.clone())).flatten();
             if self.chat_scope.is_some() && self.chat_scope != scope {
                 effects.extend(self.reset_chat_scope());
@@ -3580,7 +3632,9 @@ impl App {
         }
         let roots = self.daemon.roots().len();
         self.selected_root = self.selected_root.min(roots.saturating_sub(1));
-        effects.extend(self.load_chats(was_connected));
+        if self.chat_daemon.is_none() {
+            effects.extend(self.load_chats(was_connected));
+        }
         effects
     }
 
@@ -3612,7 +3666,7 @@ impl App {
             }
             return Vec::new();
         }
-        let reconnected = !was_connected && self.daemon.connection() == Some("connected");
+        let reconnected = !was_connected && self.chat_daemon().connection() == Some("connected");
         let retry = match &self.chat.access {
             Access::Unknown => true,
             Access::Unavailable(_) | Access::NeedsApproval { .. } => reconnected,
@@ -3639,6 +3693,21 @@ impl App {
 
     fn chat_msg(&mut self, msg: ChatMsg) -> Vec<Effect> {
         use super::theme::Signal;
+        let account = match &msg {
+            ChatMsg::Listed(Ok(list)) => Some(&list.account.id),
+            ChatMsg::ListLive(super::chat::ListLive::Account(update)) => Some(&update.account.id),
+            _ => None,
+        };
+        if let Some(expected) = &self.chat_account
+            && account.is_some_and(|account| account != expected)
+        {
+            let effects = self.reset_chat_scope();
+            self.chat.access = Access::Unavailable(super::chat::Failure::new(
+                "wrong_account",
+                "This connection belongs to a different organization. Sign in again.",
+            ));
+            return effects;
+        }
         match msg {
             ChatMsg::Dictation(generation, update) => {
                 if let Some(result) = self.chat.dictation.update(generation, update) {

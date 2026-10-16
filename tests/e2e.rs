@@ -4106,6 +4106,26 @@ async fn organization_cli_login_reports_the_chat_grant_without_repairing_folders
         assert_eq!(cww::auth::organizations::list(&fx.paths).unwrap().len(), 1);
     }
     let profile = cww::auth::organizations::list(&fx.paths).unwrap().remove(0);
+    let catalog = std::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+        .args(["organizations", "--json"])
+        .env("CWW_HOME", fx.base.join("cww"))
+        .output()
+        .unwrap();
+    assert!(catalog.status.success());
+    let catalog: Value = serde_json::from_slice(&catalog.stdout).unwrap();
+    assert_eq!(catalog[0]["id"], profile.id);
+    assert_eq!(catalog[0]["account"]["id"], "123456789");
+    assert!(catalog[0].get("access_token").is_none());
+    let invalid = std::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+        .args(["tui", "--organization", "not signed in"])
+        .env("CWW_HOME", fx.base.join("cww"))
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(
+        invalid.stdout.is_empty(),
+        "invalid selection must fail before taking over the terminal"
+    );
     let base = fx.base.join("cww");
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new(env!("CARGO_BIN_EXE_cww"))

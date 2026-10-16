@@ -139,6 +139,15 @@ The CLI, the terminal UI and the settings app talk to the daemon over a local so
 cww        # or cww tui
 ```
 
+Sign in to another organization with `cww login --organization`, then list
+saved sign-ins with `cww organizations` (`--json` for scripts). Open its chats
+with `cww tui --organization "Akamai Robotics"`, using its name or sign-in ID.
+Names must be unambiguous. Chat requests, notifications and question history
+stay with that sign-in. Shared folders, daemon settings and dictation model
+preferences remain on this computer's original connection. To remove only one
+sign-in, use `cww logout --organization ID`. The desktop sidebar also switches
+between signed-in organizations; This computer > Account adds or removes them.
+
 Run in a terminal, `cww` opens a terminal UI laid out like the desktop app's chat page. On the left: New chat, the search, Recent (your chats, newest first), and Pinned under it as on the web: the projects you pinned (picking one shows its chats and starts a new chat in it; picking it again shows every chat), then the chats you pinned, with your name at the foot, and your credits under it when they run low. The list stays current as chats start, change or go, on the web too. On the right, with no title over it, as on the web: the open chat and the composer, with the model on its edge. Your name, `,` or `/settings` open the settings, with the same pages as the desktop app: Shared folders (with their index state), Always private (the deny list, which only `config.toml` changes), Activity (every request from Chat with Work, colour-coded by decision), Account (the pairing, the connection, whether chats are allowed here, your organization and credits, and the web's own settings pages, which open in the browser) and General (the daemon, pausing, and where its files are). Nothing else stays on screen: a single word at the top right says when something needs you (the daemon stopped, offline, connecting, paused, not paired, revoked, or the open chat not live), and clicking it opens the page that helps.
 
 Use the microphone beside the desktop composer's paperclip, or `Ctrl-R` / `/dictate` in the terminal. Choose transcription in the desktop app’s **General → Dictation** settings: **Cloud transcription** uses your paired server in the EU and credits; **On this computer** uses Whisper locally with no audio upload or credits. Download Tiny, Base or Small once, then use that model offline. Models support multiple languages, are verified before use, can be removed, and are not bundled in releases. Local failures never fall back to cloud. The terminal shares this choice. Words remain editable before you send them. Stop with the microphone button or Escape; Escape during transcription discards the result. The terminal also accepts Ctrl-C to discard a recording. Recordings stay in memory, stop after five minutes, and silence is never uploaded. Dictation needs the desktop app installed beside `cww`; terminal-only archives have no microphone helper. System microphone permission may be requested on first use.

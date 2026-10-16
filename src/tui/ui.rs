@@ -92,7 +92,11 @@ fn sidebar(
         .as_ref()
         .filter(|c| c.running_low && app.chat.ready());
     let [brand, body, foot] = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(if app.organization_name().is_some() {
+            4
+        } else {
+            2
+        }),
         Constraint::Min(0),
         Constraint::Length(if low.is_some() { 3 } else { 2 }),
     ])
@@ -103,6 +107,15 @@ fn sidebar(
         Span::styled("Chat with Work", theme.strong()),
     ]);
     frame.render_widget(Paragraph::new(name), brand);
+    if let Some(organization) = app.organization_name() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                ellipsize(organization, brand.width as usize),
+                theme.muted(),
+            )),
+            row(brand, 2),
+        );
+    }
     match app.view {
         View::Chat => chats_section(frame, body, app, theme, now, hits),
         View::Settings(page) => pages::nav(frame, body, page, theme, hits),
@@ -187,7 +200,7 @@ fn chats_section(
             } => "Chats need your OK · o asks".into(),
             Access::NeedsApproval { .. } => "Waiting for your OK".into(),
             Access::Unavailable(_) => "Chats aren't available here".into(),
-            Access::Ready | Access::Unknown => match &app.daemon {
+            Access::Ready | Access::Unknown => match app.chat_daemon() {
                 Daemon::NotRunning(_) => "Start the daemon to chat".into(),
                 Daemon::Running(s) if !s.paired || s.connection.connection == "revoked" => {
                     "Pair this computer to chat".into()
@@ -448,7 +461,11 @@ pub(super) fn attention(
     app: &App,
     now: OffsetDateTime,
 ) -> Option<(&'static str, Signal, &'static str)> {
-    match &app.daemon {
+    match if app.view == View::Chat {
+        app.chat_daemon()
+    } else {
+        &app.daemon
+    } {
         Daemon::Unknown => None,
         Daemon::NotRunning(_) => Some((RING, Signal::Negative, "daemon stopped")),
         Daemon::Running(status) if status.paused => Some(("‖", Signal::Attention, "paused")),
@@ -520,7 +537,12 @@ fn main_pane(
     let notice = notice_lines(app, area.width.saturating_sub(4) as usize, theme);
     // No title over the chat, as on the web: the header only holds the
     // status word, while something needs attention.
-    let header_height = if attention(app, now).is_some() { 2 } else { 0 };
+    let organization = app.organization_name().filter(|_| frame.area().width < 64);
+    let header_height = if attention(app, now).is_some() || organization.is_some() {
+        2
+    } else {
+        0
+    };
     let [header, body, notice_area, composer] = Layout::vertical([
         Constraint::Length(header_height),
         Constraint::Min(0),
@@ -529,7 +551,15 @@ fn main_pane(
     ])
     .areas(area);
     if header_height > 0 {
-        heading(frame, pad(header, 2, 0), Vec::new(), app, theme, now, hits);
+        let left = organization
+            .map(|name| {
+                vec![Span::styled(
+                    ellipsize(name, header.width.saturating_sub(18) as usize),
+                    theme.muted(),
+                )]
+            })
+            .unwrap_or_default();
+        heading(frame, pad(header, 2, 0), left, app, theme, now, hits);
     }
     chat_view(frame, pad(body, 2, 0), app, theme, now, hits);
     // A notice that needs you is tinted whole, as the web's are.
@@ -1750,9 +1780,11 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
                 } => "Chats need your OK first: press o",
                 Access::NeedsApproval { .. } => "Waiting for your OK in Chat with Work",
                 Access::Unavailable(_) => "Chats aren't available here",
-                _ => match &app.daemon {
+                _ => match app.chat_daemon() {
                     Daemon::NotRunning(_) => "Start the daemon to chat here: press s",
-                    Daemon::Running(_) if app.can_pair() => {
+                    Daemon::Running(status)
+                        if !status.paired || status.connection.connection == "revoked" =>
+                    {
                         "Pair this computer to chat here: press c"
                     }
                     _ => "Looking for the daemon…",

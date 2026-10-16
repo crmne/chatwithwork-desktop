@@ -112,6 +112,30 @@ pub fn list(paths: &Paths) -> Result<Vec<SavedOrganization>> {
     Ok(saved.organizations)
 }
 
+/// Select a saved sign-in by its local ID, account ID or unambiguous name.
+pub fn resolve(paths: &Paths, selector: &str) -> Result<SavedOrganization> {
+    let profiles = list(paths)?;
+    if let Some(profile) = profiles.iter().find(|profile| profile.id == selector) {
+        return Ok(profile.clone());
+    }
+    let matched: Vec<_> = profiles
+        .into_iter()
+        .filter(|profile| {
+            profile.account.id == selector
+                || profile.account.name.to_lowercase() == selector.to_lowercase()
+        })
+        .collect();
+    ensure!(
+        !matched.is_empty(),
+        "No saved organization matches. Run cww organizations or cww login --organization."
+    );
+    ensure!(
+        matched.len() == 1,
+        "Several saved organizations match. Use the sign-in ID from cww organizations."
+    );
+    Ok(matched.into_iter().next().unwrap())
+}
+
 fn write(paths: &Paths, organizations: Vec<SavedOrganization>) -> Result<()> {
     write_private_file(
         &file(paths),
@@ -316,5 +340,38 @@ mod tests {
         assert!(SecretStore::for_organization("file", &paths, "../escape").is_err());
         std::fs::write(file(&paths), b"{broken").unwrap();
         assert!(list(&paths).is_err());
+    }
+    #[test]
+    fn selection_names_are_unambiguous_and_ids_work_across_servers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        let origin = ServerUrl::parse("https://example.com").unwrap();
+        let first = save_grant(
+            &paths,
+            &origin,
+            &DeviceKey::generate().unwrap(),
+            token("123456789"),
+            "file",
+        )
+        .unwrap();
+        assert_eq!(resolve(&paths, &first.id).unwrap(), first);
+        assert_eq!(resolve(&paths, "123456789").unwrap(), first);
+        assert_eq!(
+            resolve(&paths, &first.account.name.to_uppercase()).unwrap(),
+            first
+        );
+        let mut same_name = token("987654321");
+        same_name.account.as_mut().unwrap().name = first.account.name.clone();
+        let second = save_grant(
+            &paths,
+            &ServerUrl::parse("https://second.example").unwrap(),
+            &DeviceKey::generate().unwrap(),
+            same_name,
+            "file",
+        )
+        .unwrap();
+        assert!(resolve(&paths, &first.account.name).is_err());
+        assert_eq!(resolve(&paths, &second.id).unwrap(), second);
+        assert!(resolve(&paths, "not signed in").is_err());
     }
 }

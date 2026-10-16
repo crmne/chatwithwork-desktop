@@ -16,6 +16,7 @@ mod daemon;
 pub mod dictation;
 mod history;
 pub mod markdown;
+mod organizations;
 mod pages;
 pub mod streaming;
 pub mod theme;
@@ -56,11 +57,26 @@ const ACCESS_POLL: Duration = Duration::from_secs(5);
 const ACCESS_WAIT: Duration = Duration::from_secs(15 * 60);
 
 pub fn run(paths: Paths) -> Result<()> {
+    run_organization(paths, None)
+}
+
+pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
+    let profile = selector
+        .map(|selector| crate::auth::organizations::resolve(&paths, selector))
+        .transpose()?;
+    let chat_paths = profile
+        .as_ref()
+        .map(|profile| profile.runtime_paths(&paths))
+        .transpose()?
+        .unwrap_or_else(|| paths.clone());
     // Only safe to ask before any thread starts.
     let utc_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let theme = Theme::detect();
-    let history_file = history::path(&paths);
+    let history_file = history::path(&chat_paths);
     let mut app = App::new(utc_offset).with_history(history::load(&history_file));
+    if let Some(profile) = &profile {
+        app = app.with_organization(profile.account.id.clone());
+    }
     let mouse = Config::load(&paths).map_or(true, |c| c.tui.mouse);
 
     let (tx, rx) = mpsc::channel();
@@ -77,8 +93,10 @@ pub fn run(paths: Paths) -> Result<()> {
         let _ = execute!(stdout(), EnableMouseCapture);
     }
     spawn_input(tx.clone());
-    let chats = ChatRunner::new(Chats::new(&paths.socket_path()), tx.clone());
-    let presence = Presence::new(paths.socket_path());
+    let chats = ChatRunner::new(Chats::new(&chat_paths.socket_path()), tx.clone());
+    let presence = Presence::new(chat_paths.socket_path());
+    let _organization =
+        profile.map(|profile| organizations::Watcher::spawn(paths.clone(), profile, tx.clone()));
     let link = daemon::Link::spawn(paths, tx.clone());
     let out = Outputs {
         link,
