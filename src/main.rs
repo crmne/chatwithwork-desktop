@@ -55,7 +55,7 @@ enum Command {
     /// Forget the pairing on this computer. Revoke it in Settings too.
     Logout {
         /// Forget only this saved organization sign-in (its ID from login --json).
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         organization: Option<String>,
     },
     /// Manage the shared folders.
@@ -101,7 +101,7 @@ enum Command {
     /// Open the terminal UI (the default when run in a terminal).
     Tui {
         /// Saved organization name or ID from `cww organizations`.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         organization: Option<String>,
     },
     /// List organization sign-ins saved on this computer.
@@ -831,4 +831,24 @@ fn offer_documents(paths: &Paths) -> Result<()> {
             allow_changes: false,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_organization_ids_can_start_with_a_hyphen() {
+        // Ed25519 public keys use URL-safe Base64, whose alphabet includes '-'.
+        let id = "-aBcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH";
+        for subcommand in ["logout", "tui"] {
+            let cli = Cli::try_parse_from(["cww", subcommand, "--organization", id]).unwrap();
+            let Some(Command::Logout { organization } | Command::Tui { organization }) =
+                cli.command
+            else {
+                panic!("organization command");
+            };
+            assert_eq!(organization.as_deref(), Some(id));
+        }
+    }
 }

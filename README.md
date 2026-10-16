@@ -142,6 +142,7 @@ cww        # or cww tui
 Sign in to another organization with `cww login --organization`, then list
 saved sign-ins with `cww organizations` (`--json` for scripts). Open its chats
 with `cww tui --organization "Akamai Robotics"`, using its name or sign-in ID.
+Sign-in IDs may start with a hyphen; use the complete ID for both `tui` and `logout`.
 Names must be unambiguous. Chat requests, notifications and question history
 stay with that sign-in. Shared folders, daemon settings and dictation model
 preferences remain on this computer's original connection. To remove only one
