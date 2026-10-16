@@ -31,6 +31,69 @@ pub const USER: &str = "Alex";
 pub const ACCOUNT: &str = "Northwind";
 const SERVER: &str = "https://chatwithwork.com";
 
+pub fn workspace() -> Value {
+    json!({ "ok": true,
+        "services": [
+            { "key": "google", "kind": "connector", "name": "Google Drive", "icon": logo("drive"), "live": true, "paused": false, "label": "Connected", "tone": "positive", "removable": false },
+            { "key": "slack", "kind": "connector", "name": "Slack", "icon": logo("slack"), "live": true, "paused": false, "label": "Connected", "tone": "positive", "removable": false },
+            { "key": "42", "kind": "computer", "name": "Alex's laptop", "icon": null, "live": true, "paused": false, "label": "Connected", "tone": "positive", "removable": true }
+        ],
+        "suggestions": [
+            { "label": "Find a document", "prompt": "Find the latest Acme contract in Google Drive." },
+            { "label": "Catch up on Slack", "prompt": "What did I miss in Slack this week?" },
+            { "label": "Ask me how you can help", "prompt": "Ask me about my work, one question at a time, and help me find useful ways to work with you." }
+        ],
+        "instructions": [
+            { "layer": "organization", "owner": ACCOUNT, "written": true, "editable": false },
+            { "layer": "personal", "owner": "You", "written": false, "editable": true }
+        ]
+    })
+}
+
+pub fn instructions() -> Vec<Value> {
+    vec![
+        json!({ "layer": "organization", "heading": "Northwind", "owner": ACCOUNT,
+            "body": "- We build tools for independent teams.\n- Write in clear English.", "tokens": 16, "token_limit": 3000,
+            "editable": false, "editors_note": "Only owners and admins edit it: Dana Kim.",
+            "placeholder": "", "template": "", "template_topics": "about us, teams, and house style", "revisions": []
+        }),
+        json!({ "layer": "personal", "heading": "Your instructions", "owner": "You", "body": "", "tokens": 0,
+            "token_limit": 3000, "editable": true, "editors_note": null,
+            "placeholder": "- I run sales for the DACH region\n- Contracts live in Drive > Legal > Contracts\n- Keep answers short; tables for numbers",
+            "template": "## About me\n- Role, team, and what I'm responsible for\n\n## My team\n- Who I work with most\n\n## Where things live\n- Which folders and channels hold what\n\n## How I like answers\n- Length, tone, and format",
+            "template_topics": "about me, my team, where things live, and how I like answers", "revisions": []
+        }),
+    ]
+}
+
+pub fn connectors(workspace: &Value, query: &str, category: Option<&str>) -> Value {
+    let mut connectors = vec![
+        json!({ "key": "google", "name": "Google Drive", "description": "Search documents, spreadsheets, and presentations.", "category": "files", "icon": logo("drive"), "status": "connected", "paused": false, "changeable": true, "several_accounts": true, "changes_allowed": true, "connections": [{ "id": 1, "label": "Work", "status": "connected", "paused": false, "access": "read", "needs_grant": false }] }),
+        json!({ "key": "slack", "name": "Slack", "description": "Catch up on conversations and find messages.", "category": "chat", "icon": logo("slack"), "status": "connected", "paused": false, "changeable": true, "several_accounts": true, "changes_allowed": true, "connections": [{ "id": 2, "label": "Northwind", "status": "connected", "paused": false, "access": "read", "needs_grant": false }] }),
+        json!({ "key": "linear", "name": "Linear", "description": "Search issues and track projects.", "category": "projects", "icon": logo("linear"), "status": "not_connected", "paused": false, "changeable": true, "several_accounts": true, "changes_allowed": false, "connections": [] }),
+    ];
+    for connector in &mut connectors {
+        if let Some(service) = workspace["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == connector["key"])
+        {
+            connector["paused"] = service["paused"].clone();
+        }
+    }
+    let query = query.to_lowercase();
+    connectors.retain(|c| {
+        c["name"].as_str().unwrap().to_lowercase().contains(&query)
+            && category.is_none_or(|cat| c["category"] == cat)
+    });
+    json!({ "ok": true, "connectors": connectors, "categories": [
+        { "key": "files", "name": "Files", "count": 40 },
+        { "key": "chat", "name": "Chat", "count": 18 },
+        { "key": "projects", "name": "Projects and docs", "count": 52 }
+    ] })
+}
+
 const RENEWAL_URL: &str = "https://drive.google.com/file/d/1AcmeRenewal2026Final/view";
 const MSA_URL: &str = "https://drive.google.com/file/d/1AcmeMsa2024Signed/view";
 
@@ -89,7 +152,7 @@ const CANNED: [&str; 4] = [
 
 /// The default model, as chats name it.
 pub fn default_model() -> Value {
-    json!({ "id": 12, "name": "Gemini 3.8 Flash", "logo": logo("vertexai") })
+    json!({ "id": 12, "name": "GPT-6 Luna", "logo": logo("azure") })
 }
 
 /// Everything the person who started a private chat may do with it.
@@ -195,13 +258,13 @@ pub fn models() -> Value {
     json!({
         "default_model_id": 12,
         "models": [
-            { "id": 12, "name": "Gemini 3.8 Flash", "provider": "vertexai", "logo": logo("vertexai"),
-              "description": "Google's latest Flash for documents, tool use, and everyday work",
+            { "id": 12, "name": "GPT-6 Luna", "provider": "azure", "logo": logo("azure"),
+              "description": "OpenAI's fast model for everyday work",
               "rate": "About 3 credits per answer", "selectable": true, "reason": null },
-            { "id": 14, "name": "Gemini 3.8 Pro", "provider": "vertexai", "logo": logo("vertexai"),
+            { "id": 14, "name": "Gemini 4 Argon", "provider": "vertexai", "logo": logo("vertexai"),
               "description": "Google's strongest Gemini, for long documents and careful reasoning",
               "rate": "About 9 credits per answer", "selectable": true, "reason": null },
-            { "id": 15, "name": "GPT-6 Sol", "provider": "azure", "logo": logo("azure"),
+            { "id": 15, "name": "GPT-6.1 Sol", "provider": "azure", "logo": logo("azure"),
               "description": "OpenAI's GPT-6 for complex reasoning and multi-step tool use",
               "rate": "About 12 credits per answer", "selectable": false,
               "reason": "You're out of credits. Add credits in Settings to keep going." },

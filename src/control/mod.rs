@@ -123,6 +123,44 @@ pub enum ControlRequest {
     },
     /// The owner's chats, newest first, as the server lists them.
     Chats,
+    /// The new-chat screen's services, suggestions and instruction layers.
+    Workspace {
+        project: Option<u64>,
+    },
+    ServicePause {
+        kind: crate::workspace::ServiceKind,
+        key: String,
+        paused: bool,
+    },
+    Instructions {
+        project: Option<u64>,
+    },
+    InstructionCount {
+        text: String,
+    },
+    MemoryPreference {
+        enabled: bool,
+    },
+    MemoryForget {
+        id: u64,
+    },
+    ComputerRemove {
+        id: u64,
+    },
+    Connectors {
+        query: String,
+        category: Option<String>,
+    },
+    ConnectorHandoff {
+        key: String,
+        access: String,
+        connection: Option<String>,
+    },
+    InstructionUpdate {
+        project: Option<u64>,
+        layer: crate::workspace::Layer,
+        change: crate::workspace::InstructionChange,
+    },
     /// One chat and its transcript.
     Chat {
         chat: String,
@@ -413,13 +451,20 @@ where
             bail!("control request too long");
         }
         let request = match serde_json::from_str::<ControlRequest>(&line) {
-            // Only an upload carries a file.
             Ok(request)
                 if line.len() > MAX_REQUEST_BYTES
-                    && !matches!(
-                        request,
-                        ControlRequest::ChatUpload { .. } | ControlRequest::Dictate { .. }
-                    ) =>
+                    && !match &request {
+                        ControlRequest::ChatUpload { .. } | ControlRequest::Dictate { .. } => true,
+                        // Allow the server's full instruction size, including JSON escaping.
+                        ControlRequest::InstructionCount { text } => {
+                            text.len() <= 100_000 && line.len() <= 604_096
+                        }
+                        ControlRequest::InstructionUpdate {
+                            change: crate::workspace::InstructionChange::Edit { body },
+                            ..
+                        } => body.len() <= 100_000 && line.len() <= 604_096,
+                        _ => false,
+                    } =>
             {
                 bail!("control request too long");
             }

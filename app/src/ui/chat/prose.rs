@@ -215,7 +215,7 @@ impl Prose<'_> {
 
     /// A paragraph or heading: one galley, with chips, inline code and
     /// links drawn around and under its runs.
-    fn text(
+    pub(super) fn text(
         &self,
         ui: &mut Ui,
         inlines: &[Inline],
@@ -223,13 +223,37 @@ impl Prose<'_> {
         color: Color32,
         caret: bool,
     ) -> Option<Clicked> {
+        self.paragraph(ui, inlines, ty, color, caret, egui::Align::Min)
+    }
+
+    pub(super) fn centered_text(
+        &self,
+        ui: &mut Ui,
+        inlines: &[Inline],
+        ty: Type,
+        color: Color32,
+    ) -> Option<Clicked> {
+        self.paragraph(ui, inlines, ty, color, false, egui::Align::Center)
+    }
+
+    fn paragraph(
+        &self,
+        ui: &mut Ui,
+        inlines: &[Inline],
+        ty: Type,
+        color: Color32,
+        caret: bool,
+        align: egui::Align,
+    ) -> Option<Clicked> {
         let width = ui.available_width();
-        let (job, runs) = self.inline_job(ui.painter(), inlines, ty, color, width);
+        let (mut job, runs) = self.inline_job(ui.painter(), inlines, ty, color, width);
+        job.halign = align;
         let galley = ui.painter().layout_job(job);
         // Selectable with the mouse, as text on a web page is: drag to
         // select (across paragraphs too), and copy with the shortcut.
         let (rect, response) =
             ui.allocate_exact_size(vec2(width, galley.size().y), selectable_sense());
+        let origin = rect.min + vec2(align.to_factor() * width, 0.0);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Label,
@@ -240,11 +264,11 @@ impl Prose<'_> {
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
-        let (clicked, link_hovered) = self.decorate(ui, rect.min, &galley, &runs);
+        let (clicked, link_hovered) = self.decorate(ui, origin, &galley, &runs);
         egui::text_selection::LabelSelectionState::label_text_selection(
             ui,
             &response,
-            rect.min,
+            origin,
             Arc::clone(&galley),
             color,
             Stroke::NONE,
@@ -255,7 +279,7 @@ impl Prose<'_> {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if caret {
-            self.caret(ui.painter(), rect.min, &galley, ty);
+            self.caret(ui.painter(), origin, &galley, ty);
         }
         clicked
     }
@@ -450,7 +474,11 @@ impl Prose<'_> {
                             .with(("link", n, rect.left() as i32, rect.top() as i32));
                         let response = ui.interact(rect, id, Sense::click());
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::WidgetType::Link, true, url)
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Link,
+                                true,
+                                galley.job.text.get(run.range.clone()).unwrap_or(url),
+                            )
                         });
                         let color = if response.hovered() {
                             p.ink

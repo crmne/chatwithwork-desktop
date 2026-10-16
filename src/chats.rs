@@ -37,6 +37,13 @@ pub fn chat_number(chat: &str) -> Result<&str, Refusal> {
     }
 }
 
+fn workspace_path(page: &str, project: Option<u64>) -> String {
+    match project {
+        Some(project) => format!("local_agent/{page}?project_id={project}"),
+        None => format!("local_agent/{page}"),
+    }
+}
+
 /// The longest image the daemon fetches for a client.
 pub const MAX_ASSET_BYTES: usize = 1024 * 1024;
 
@@ -318,6 +325,107 @@ impl ChatClient {
 
     pub fn list(&self) -> Result<Value> {
         self.call("GET", "local_agent/chats", Body::Empty)
+    }
+
+    pub fn workspace(&self, project: Option<u64>) -> Result<Value> {
+        self.call("GET", &workspace_path("new_chat", project), Body::Empty)
+    }
+
+    pub fn memory_preference(&self, enabled: bool) -> Result<Value> {
+        self.call(
+            "PATCH",
+            "local_agent/memory_preference",
+            Body::Json(&json!({ "user": { "remembers": enabled } })),
+        )
+    }
+
+    pub fn memory_forget(&self, id: u64) -> Result<Value> {
+        self.call("DELETE", &format!("local_agent/memories/{id}"), Body::Empty)
+    }
+
+    pub fn instruction_count(&self, text: &str) -> Result<Value> {
+        self.call(
+            "POST",
+            "local_agent/token_count",
+            Body::Json(&json!({ "text": text })),
+        )
+    }
+
+    pub fn computer_remove(&self, id: u64) -> Result<Value> {
+        self.call(
+            "DELETE",
+            &format!("local_agent/services/computer/{id}"),
+            Body::Empty,
+        )
+    }
+
+    pub fn connectors(&self, query: &str, category: Option<&str>) -> Result<Value> {
+        let params = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("q", query)
+            .append_pair("category", category.unwrap_or_default())
+            .finish();
+        self.call(
+            "GET",
+            &format!("local_agent/connectors?{params}"),
+            Body::Empty,
+        )
+    }
+
+    pub fn connector_handoff(
+        &self,
+        key: &str,
+        access: &str,
+        connection: Option<&str>,
+    ) -> Result<Value> {
+        self.call(
+            "POST",
+            "local_agent/connector_handoff",
+            Body::Json(&json!({ "key": key, "access": access, "connection": connection })),
+        )
+    }
+
+    pub fn service_pause(
+        &self,
+        kind: crate::workspace::ServiceKind,
+        key: &str,
+        paused: bool,
+    ) -> Result<Value> {
+        if key.is_empty()
+            || key.len() > 100
+            || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(Refusal::new("invalid", "Invalid service").into());
+        }
+        self.call(
+            if paused { "POST" } else { "DELETE" },
+            &format!("local_agent/services/{}/{key}/pause", kind.path()),
+            Body::Empty,
+        )
+    }
+
+    pub fn instructions(&self, project: Option<u64>) -> Result<Value> {
+        self.call("GET", &workspace_path("instructions", project), Body::Empty)
+    }
+
+    pub fn instruction_update(
+        &self,
+        project: Option<u64>,
+        layer: crate::workspace::Layer,
+        change: crate::workspace::InstructionChange,
+    ) -> Result<Value> {
+        let body = match change {
+            crate::workspace::InstructionChange::Edit { body } => {
+                json!({ "instruction": { "body": body }, "project_id": project })
+            }
+            crate::workspace::InstructionChange::Restore { revision_id } => {
+                json!({ "revision_id": revision_id, "project_id": project })
+            }
+        };
+        self.call(
+            "PATCH",
+            &format!("local_agent/instructions/{}", layer.path()),
+            Body::Json(&body),
+        )
     }
 
     pub fn show(&self, chat: &str) -> Result<Value> {

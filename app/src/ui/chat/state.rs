@@ -20,6 +20,29 @@ pub enum Command {
     CancelDictation,
     /// Read the list of chats.
     List,
+    Workspace(u64),
+    ServicePause(u64, cww::workspace::Service, bool),
+    ComputerRemove(u64, u64),
+    Connectors {
+        generation: u64,
+        query: String,
+        category: Option<String>,
+    },
+    ConnectorHandoff {
+        generation: u64,
+        key: String,
+        access: String,
+        connection: Option<String>,
+    },
+    Instructions(u64),
+    MemoryPreference(u64, bool),
+    MemoryForget(u64, u64),
+    CountInstruction(u64, cww::workspace::Layer, String),
+    SaveInstruction(
+        u64,
+        cww::workspace::Layer,
+        cww::workspace::InstructionChange,
+    ),
     /// Read one chat.
     Open(u64),
     /// Follow one chat live, or stop following.
@@ -56,6 +79,19 @@ pub enum Command {
 pub enum Msg {
     Dictation(u64, dictation::Update),
     Listed(Result<ChatList, Failure>),
+    Workspace(u64, Result<cww::workspace::NewChat, Failure>),
+    Instructions(u64, Result<cww::workspace::InstructionPage, Failure>),
+    Memory(u64, Result<cww::workspace::Memory, Failure>),
+    InstructionSaved(u64, Result<cww::workspace::SavedInstruction, Failure>),
+    InstructionCounted(u64, cww::workspace::Layer, String, Result<usize, Failure>),
+    Connectors {
+        generation: u64,
+        result: Result<cww::workspace::Catalog, Failure>,
+    },
+    ConnectorHandoff {
+        generation: u64,
+        result: Result<String, Failure>,
+    },
     Shown {
         chat: u64,
         result: Result<Transcript, Failure>,
@@ -246,6 +282,11 @@ pub struct ApprovalInput {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatState {
+    pub start: Option<cww::workspace::NewChat>,
+    pub start_loading: Option<u64>,
+    pub start_error: Option<String>,
+    pub instructions: Option<super::workspace::Instructions>,
+    pub connectors: Option<super::connectors::ConnectDialog>,
     pub access: Access,
     pub list: ChatList,
     /// What's typed in the sidebar's search.
@@ -301,6 +342,11 @@ pub struct ChatState {
 impl Default for ChatState {
     fn default() -> Self {
         Self {
+            start: None,
+            start_loading: None,
+            start_error: None,
+            instructions: None,
+            connectors: None,
             access: Access::Unknown,
             list: ChatList::default(),
             search: String::new(),
@@ -410,6 +456,11 @@ impl ChatState {
             Vec::new()
         } else {
             self.access = Access::Unknown;
+            self.start = None;
+            self.start_loading = None;
+            self.start_error = None;
+            self.instructions = None;
+            self.connectors = None;
             let followed = self.following != Following::No;
             self.following = Following::No;
             self.sending = false;
@@ -439,6 +490,8 @@ impl ChatState {
 
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
+        self.instructions = None;
+        self.connectors = None;
         if self.open == Some(number) && self.transcript.is_some() {
             return Vec::new();
         }
@@ -462,6 +515,10 @@ impl ChatState {
 
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
+        self.start = None;
+        self.start_error = None;
+        self.instructions = None;
+        self.connectors = None;
         let followed = self.open.is_some();
         self.open = None;
         self.transcript = None;
@@ -827,6 +884,80 @@ impl ChatState {
                     }
                 }
                 return Vec::new();
+            }
+            Msg::Workspace(generation, result) => {
+                if self.start_loading != Some(generation) {
+                    return vec![];
+                }
+                self.start_loading = None;
+                if self.ready() {
+                    match result {
+                        Ok(data) => {
+                            self.start = Some(data);
+                            self.start_error = None;
+                            if let Some(dialog) = &mut self.connectors {
+                                dialog.reload();
+                            }
+                        }
+                        Err(failure) => self.start_error = Some(failure.message),
+                    }
+                }
+            }
+            Msg::Instructions(generation, result) => {
+                if let Some(page) = &mut self.instructions
+                    && page.generation == generation
+                {
+                    page.loaded(result);
+                }
+            }
+            Msg::Memory(generation, result) => {
+                if let Some(page) = &mut self.instructions
+                    && page.generation == generation
+                {
+                    page.busy = false;
+                    match result {
+                        Ok(memory) => {
+                            page.memory = Some(memory);
+                            page.error = None;
+                        }
+                        Err(failure) => page.error = Some(failure.message),
+                    }
+                }
+            }
+            Msg::InstructionSaved(generation, result) => {
+                if let Some(page) = &mut self.instructions
+                    && page.generation == generation
+                {
+                    page.saved(result);
+                    self.start = None;
+                }
+            }
+            Msg::InstructionCounted(generation, layer, body, result) => {
+                if let Some(page) = &mut self.instructions
+                    && page.generation == generation
+                {
+                    page.counted(layer, body, result);
+                }
+            }
+            Msg::Connectors { generation, result } => {
+                if let Some(dialog) = &mut self.connectors {
+                    dialog.loaded(generation, result);
+                }
+            }
+            Msg::ConnectorHandoff { generation, result } => {
+                if let Some(dialog) = &mut self.connectors
+                    && dialog.handoff == Some(generation)
+                {
+                    dialog.handoff = None;
+                    match result {
+                        Ok(_) => {
+                            dialog.waiting_for_browser = true;
+                            dialog.notice =
+                                Some("Finish signing in in your browser, then return here.".into());
+                        }
+                        Err(failure) => dialog.error = Some(failure.message),
+                    }
+                }
             }
             Msg::Listed(Ok(list)) => {
                 let was_ready = self.ready();
@@ -1437,6 +1568,58 @@ mod tests {
         );
         assert!(state.ready());
         state
+    }
+
+    #[test]
+    fn closed_workspace_requests_cannot_replace_a_reopened_screen() {
+        use super::super::workspace::{Instructions, request_id};
+        use cww::workspace::{InstructionPage, Layer, Memory, NewChat};
+        let mut state = ready();
+        let old = request_id();
+        let current = request_id();
+        state.start_loading = Some(current);
+        state.update(Msg::Workspace(old, Ok(NewChat::default())));
+        assert_eq!(state.start_loading, Some(current));
+        assert!(state.start.is_none());
+        state.update(Msg::Workspace(current, Ok(NewChat::default())));
+        assert!(state.start.is_some());
+        state.start_loading = Some(request_id());
+        state.set_paired(false);
+        state.update(Msg::Workspace(current, Ok(NewChat::default())));
+        assert!(state.start.is_none());
+
+        state.instructions = Some(Instructions::new(Layer::Personal));
+        let previous = state.instructions.as_ref().unwrap().generation;
+        state.instructions = Some(Instructions::new(Layer::Personal));
+        let current = state.instructions.as_ref().unwrap().generation;
+        let result = InstructionPage {
+            instructions: vec![],
+            memory: Memory {
+                enabled: true,
+                entries: vec![],
+            },
+        };
+        state.update(Msg::Instructions(previous, Ok(result.clone())));
+        assert!(state.instructions.as_ref().unwrap().busy);
+        state.update(Msg::Instructions(current, Ok(result)));
+        assert!(!state.instructions.as_ref().unwrap().busy);
+        state.update(Msg::Memory(
+            previous,
+            Ok(Memory {
+                enabled: false,
+                entries: vec![],
+            }),
+        ));
+        assert!(
+            state
+                .instructions
+                .as_ref()
+                .unwrap()
+                .memory
+                .as_ref()
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]

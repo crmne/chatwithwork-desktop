@@ -37,7 +37,7 @@ There is no authentication beyond this: any process running as the user can driv
 
 ## 3. Framing
 
-- UTF-8 JSON, one object per line, each line ending in `\n`. A request line is at most 16 KiB, except `chat_upload`, which carries a file of up to 25 MB.
+- UTF-8 JSON, one object per line, each line ending in `\n`. A request line is at most 16 KiB, except uploads and dictation (up to 25 MB of binary data), and instruction counts/edits (up to 100,000 bytes of text, with room for JSON escaping).
 - The client sends a request object with a `cmd` field. The daemon answers with exactly one response line, in order. A connection can carry any number of requests.
 - A successful response has `"ok": true` plus the fields listed below. A failure is `{"ok": false, "error": "<message for a person>"}`.
 - A malformed request gets `{"ok": false, "error": "bad request: ..."}` and the connection stays open.
@@ -320,6 +320,29 @@ Stops the answer being written.
 ```
 
 Asks the owner to let this computer use their chats: `{"granted": false, "requested": true, "approve_url": "https://…/settings?tab=connectors#computers"}`. Nothing is allowed until they say yes in Chat with Work.
+
+### Workspace and instructions
+
+These requests use the same device chat grant as conversations. The server
+enforces organization membership, ownership, project access and edit roles.
+
+| Command | Fields | Response |
+| --- | --- | --- |
+| `workspace` | Optional `project` number | Connected services, suggested questions and instruction layers. |
+| `instructions` | Optional `project` number | `instructions` array with bodies, templates, revisions and limits, plus `memory`. |
+| `instruction_count` | `text` | `tokens`: server tokenizer's count. |
+| `instruction_update` | `layer`, optional `project`, `change` | Saved instruction and notice. `change` is `{"kind":"edit","body":"…"}` or `{"kind":"restore","revision_id":123}`. |
+| `memory_preference` | `enabled` | Memory preference and entries. |
+| `memory_forget` | `id` | Memory preference and remaining entries. |
+| `service_pause` | `kind` (`connector`, `mcp`, `computer`), `key`, `paused` | Updated workspace. |
+| `computer_remove` | `id` | Updated workspace after revocation. |
+| `connectors` | `query`, optional `category` | Connector states, connection labels, categories and allowed access choices. |
+| `connector_handoff` | `key`, `access` (`read` or `change`), optional `connection` (ID or `new`) | `path`: short-lived account-scoped browser handoff. |
+
+Open a connector handoff only on the currently paired server. The browser must
+sign in as the same identity in that organization and uses the existing vendor
+OAuth form. Credentials never reach the desktop. Clients discard replies to
+replaced screens and refresh service states after changes or browser sign-in.
 
 ### `asset`
 

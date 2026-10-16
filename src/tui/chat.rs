@@ -969,6 +969,82 @@ impl Chats {
         parse(self.call(&ControlRequest::Chats)?)
     }
 
+    pub fn workspace(&self, project: Option<u64>) -> Result<crate::workspace::NewChat, Failure> {
+        parse(self.call(&ControlRequest::Workspace { project })?)
+    }
+
+    pub fn service_pause(
+        &self,
+        service: &crate::workspace::Service,
+        paused: bool,
+    ) -> Result<crate::workspace::NewChat, Failure> {
+        parse(self.call(&ControlRequest::ServicePause {
+            kind: service.kind,
+            key: service.key.clone(),
+            paused,
+        })?)
+    }
+
+    pub fn instructions(
+        &self,
+        project: Option<u64>,
+    ) -> Result<crate::workspace::InstructionPage, Failure> {
+        parse(self.call(&ControlRequest::Instructions { project })?)
+    }
+
+    pub fn memory_preference(&self, enabled: bool) -> Result<crate::workspace::Memory, Failure> {
+        parse(self.call(&ControlRequest::MemoryPreference { enabled })?)
+    }
+
+    pub fn memory_forget(&self, id: u64) -> Result<crate::workspace::Memory, Failure> {
+        parse(self.call(&ControlRequest::MemoryForget { id })?)
+    }
+
+    pub fn instruction_count(&self, text: String) -> Result<usize, Failure> {
+        parse(self.call(&ControlRequest::InstructionCount { text })?["tokens"].take())
+    }
+
+    pub fn computer_remove(&self, id: u64) -> Result<crate::workspace::NewChat, Failure> {
+        parse(self.call(&ControlRequest::ComputerRemove { id })?)
+    }
+
+    pub fn connectors(
+        &self,
+        query: String,
+        category: Option<String>,
+    ) -> Result<crate::workspace::Catalog, Failure> {
+        parse(self.call(&ControlRequest::Connectors { query, category })?)
+    }
+
+    pub fn connector_handoff(
+        &self,
+        key: String,
+        access: String,
+        connection: Option<String>,
+    ) -> Result<String, Failure> {
+        parse(
+            self.call(&ControlRequest::ConnectorHandoff {
+                key,
+                access,
+                connection,
+            })?["path"]
+                .take(),
+        )
+    }
+
+    pub fn instruction_update(
+        &self,
+        project: Option<u64>,
+        layer: crate::workspace::Layer,
+        change: crate::workspace::InstructionChange,
+    ) -> Result<crate::workspace::SavedInstruction, Failure> {
+        parse(self.call(&ControlRequest::InstructionUpdate {
+            project,
+            layer,
+            change,
+        })?)
+    }
+
     pub fn show(&self, chat: u64) -> Result<Transcript, Failure> {
         parse(self.call(&ControlRequest::Chat {
             chat: chat.to_string(),

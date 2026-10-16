@@ -142,6 +142,88 @@ impl Runner {
                     wake.send(Msg::Listed(chats.list()));
                 }),
             ),
+            Command::Workspace(generation) => spawn(
+                "cww-workspace",
+                Box::new(move || {
+                    wake.send(Msg::Workspace(generation, chats.workspace(None)));
+                }),
+            ),
+            Command::CountInstruction(generation, layer, body) => spawn(
+                "cww-instruction-count",
+                Box::new(move || {
+                    let result = chats.instruction_count(body.clone());
+                    wake.send(Msg::InstructionCounted(generation, layer, body, result));
+                }),
+            ),
+            Command::ComputerRemove(generation, id) => spawn(
+                "cww-computer-remove",
+                Box::new(move || {
+                    wake.send(Msg::Workspace(generation, chats.computer_remove(id)));
+                }),
+            ),
+            Command::Connectors {
+                generation,
+                query,
+                category,
+            } => spawn(
+                "cww-connectors",
+                Box::new(move || {
+                    wake.send(Msg::Connectors {
+                        generation,
+                        result: chats.connectors(query, category),
+                    });
+                }),
+            ),
+            Command::ConnectorHandoff {
+                generation,
+                key,
+                access,
+                connection,
+            } => spawn(
+                "cww-connector-handoff",
+                Box::new(move || {
+                    wake.send(Msg::ConnectorHandoff {
+                        generation,
+                        result: chats.connector_handoff(key, access, connection),
+                    });
+                }),
+            ),
+            Command::ServicePause(generation, service, paused) => spawn(
+                "cww-service-pause",
+                Box::new(move || {
+                    wake.send(Msg::Workspace(
+                        generation,
+                        chats.service_pause(&service, paused),
+                    ));
+                }),
+            ),
+            Command::MemoryPreference(generation, enabled) => spawn(
+                "cww-memory-preference",
+                Box::new(move || {
+                    wake.send(Msg::Memory(generation, chats.memory_preference(enabled)));
+                }),
+            ),
+            Command::MemoryForget(generation, id) => spawn(
+                "cww-memory-forget",
+                Box::new(move || {
+                    wake.send(Msg::Memory(generation, chats.memory_forget(id)));
+                }),
+            ),
+            Command::Instructions(generation) => spawn(
+                "cww-instructions",
+                Box::new(move || {
+                    wake.send(Msg::Instructions(generation, chats.instructions(None)));
+                }),
+            ),
+            Command::SaveInstruction(generation, layer, change) => spawn(
+                "cww-instruction-save",
+                Box::new(move || {
+                    wake.send(Msg::InstructionSaved(
+                        generation,
+                        chats.instruction_update(None, layer, change),
+                    ));
+                }),
+            ),
             Command::Open(chat) => spawn(
                 "cww-chat",
                 Box::new(move || {

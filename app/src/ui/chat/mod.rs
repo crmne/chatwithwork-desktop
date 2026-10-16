@@ -8,11 +8,13 @@
 
 pub mod cards;
 pub mod composer;
+mod connectors;
 pub mod controls;
 pub mod conversation;
 pub mod dialogs;
 pub mod highlight;
 pub mod icons;
+mod instructions;
 pub mod logos;
 pub mod markdown;
 pub mod mcp_app;
@@ -23,6 +25,7 @@ pub mod sidebar;
 pub mod state;
 pub mod tokens;
 pub mod widgets;
+pub mod workspace;
 
 use egui::{Id, Key, Modifiers, Rect, Sense, Ui, UiBuilder, pos2, vec2};
 
@@ -102,6 +105,10 @@ pub struct ChatPage {
     ctx: Option<egui::Context>,
     /// When the list was last read because a chat in it was running.
     relisted: f64,
+    workspace_refresh: f64,
+    reach_menu: Option<usize>,
+    remove_service: Option<cww::workspace::Service>,
+    pending_navigation: Option<sidebar::Event>,
     /// The daemon's endpoint and cww's data folder, where the web's images
     /// come from and are kept.
     socket: std::path::PathBuf,
@@ -142,6 +149,10 @@ impl ChatPage {
             saving: None,
             ctx: None,
             relisted: 0.0,
+            workspace_refresh: 0.0,
+            reach_menu: None,
+            remove_service: None,
+            pending_navigation: None,
             socket: socket.to_path_buf(),
             data_dir,
         }
@@ -183,6 +194,13 @@ impl ChatPage {
     /// Open a chat, as choosing it in the sidebar does.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn open(&mut self, number: u64) {
+        if let Some(page) = &mut self.state.instructions
+            && page.dirty()
+        {
+            page.confirm_close = true;
+            self.pending_navigation = Some(sidebar::Event::Open(number));
+            return;
+        }
         let commands = self.state.open_chat(number);
         self.run(commands);
     }
@@ -199,6 +217,12 @@ impl ChatPage {
 
     fn run(&mut self, commands: Vec<Command>) {
         for command in commands {
+            if let Command::Workspace(generation)
+            | Command::ServicePause(generation, ..)
+            | Command::ComputerRemove(generation, ..) = &command
+            {
+                self.state.start_loading = Some(*generation);
+            }
             self.runner.run(command);
         }
     }
@@ -242,8 +266,39 @@ impl ChatPage {
         let commands = self.state.set_paired(paired);
         self.run(commands);
         for msg in self.runner.drain() {
+            if let state::Msg::ConnectorHandoff {
+                generation,
+                result: Ok(path),
+            } = &msg
+                && self.state.ready()
+                && self
+                    .state
+                    .connectors
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.handoff == Some(*generation))
+                && let Some((account, endpoint)) =
+                    path.strip_prefix('/').and_then(|path| path.split_once('/'))
+                && account.len() == 9
+                && account.bytes().all(|b| b.is_ascii_digit())
+                && endpoint.starts_with("native/connector_handoff?")
+                && !path.contains('\\')
+                && let Some(server) = env.status.and_then(|status| status.server.as_deref())
+            {
+                self.open_on_server(env, &format!("{}{path}", server.trim_end_matches('/')));
+            }
             let commands = self.state.update(msg);
             self.run(commands);
+        }
+        let now = ctx.input(|i| i.time);
+        if self.state.ready() && self.state.open.is_none() && self.state.instructions.is_none() {
+            if self.state.start_loading.is_none()
+                && self.state.start_error.is_none()
+                && (self.state.start.is_none() || now >= self.workspace_refresh)
+            {
+                self.workspace_refresh = now + 10.0;
+                self.run(vec![Command::Workspace(workspace::request_id())]);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(10));
         }
         // A chat being answered elsewhere, while the server doesn't keep
         // the list current (an older daemon or server): read the list again
@@ -324,9 +379,7 @@ impl ChatPage {
             }
         }
         if new_chat && self.state.ready() {
-            let commands = self.state.new_chat();
-            self.run(commands);
-            self.focus_composer = true;
+            self.sidebar_event(Some(sidebar::Event::NewChat), env, &mut action);
         }
         if focus {
             self.focus_composer = true;
@@ -351,10 +404,33 @@ impl ChatPage {
 
         let conversing = self.state.open.is_some() || self.state.pending_question.is_some();
         let mut animating = false;
-        if conversing {
+        if let Some(page) = &mut self.state.instructions {
+            let outcome = instructions::show(ui, main, page, &p, images);
+            if !page.confirm_close && !outcome.close {
+                self.pending_navigation = None;
+            }
+            if outcome.close {
+                self.state.instructions = None;
+                let pending = self.pending_navigation.take();
+                self.sidebar_event(pending, env, &mut action);
+            }
+            self.run(outcome.commands);
+            if let Some(chat) = outcome.open_chat {
+                self.sidebar_event(Some(sidebar::Event::Open(chat)), env, &mut action);
+            }
+        } else if conversing {
             animating |= self.conversation_area(ui, main, &p, images, time, env, &mut action);
         } else {
             animating |= self.new_chat_area(ui, main, &p, images, time, env, &mut action);
+        }
+
+        if let Some(dialog) = &mut self.state.connectors {
+            let (open, commands) = dialog.show(ui, self.state.start_loading.is_none(), &p, images);
+            if !open {
+                self.state.connectors = None;
+                self.state.start = None;
+            }
+            self.run(commands);
         }
 
         // Moving things: running work, streaming, uploads, the drawer.
@@ -497,6 +573,21 @@ impl ChatPage {
         env: &Env,
         action: &mut Option<Action>,
     ) {
+        if matches!(
+            event,
+            Some(sidebar::Event::NewChat | sidebar::Event::Open(_) | sidebar::Event::Page(_))
+        ) && let Some(page) = &mut self.state.instructions
+        {
+            if page.busy {
+                return;
+            }
+            if page.dirty() {
+                page.confirm_close = true;
+                self.pending_navigation = event;
+                return;
+            }
+            self.state.instructions = None;
+        }
         match event {
             Some(sidebar::Event::NewChat) => {
                 let commands = self.state.new_chat();
@@ -1096,6 +1187,30 @@ impl ChatPage {
         env: &Env,
         action: &mut Option<Action>,
     ) -> bool {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(main));
+        child.set_clip_rect(main);
+        egui::ScrollArea::vertical()
+            .id_salt("new-chat-page")
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                ui.set_min_size(main.size());
+                let content = Rect::from_min_size(ui.cursor().min, main.size());
+                self.new_chat_content(ui, content, p, images, time, env, action)
+            })
+            .inner
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_chat_content(
+        &mut self,
+        ui: &mut Ui,
+        main: Rect,
+        p: &Palette,
+        images: &Images,
+        time: f64,
+        env: &Env,
+        action: &mut Option<Action>,
+    ) -> bool {
         let ctx = ui.ctx().clone();
         let full_width = ctx.content_rect().width();
         let since = *self.new_chat_since.get_or_insert(time);
@@ -1140,7 +1255,16 @@ impl ChatPage {
             GREETINGS[self.greeting].replace("{}", &name)
         };
         let galley = paint::layout(ui.painter(), paint::job(&greeting, ty, p.ink, column));
-        let content = galley.size().y + 28.0 + composer_h;
+        let start = self
+            .state
+            .start
+            .as_ref()
+            .map(|data| workspace::StartLayout::new(ui, column, data, p));
+        let content = galley.size().y
+            + 28.0
+            + composer_h
+            + start.as_ref().map_or(0.0, |layout| layout.height);
+        ui.set_min_height((content + 168.0).max(main.height()));
         // The column's padding, and the page's 8 at the bottom.
         let available = main.height() - 64.0 - 96.0 - 8.0;
         let top = main.top() + 64.0 + ((available - content) / 2.0).max(0.0);
@@ -1173,6 +1297,149 @@ impl ChatPage {
             notice_toast(&ctx, rect, &notice, p, images);
         }
         self.composer_event(event, env, action);
+        if let (Some(start), Some(data)) = (start, self.state.start.as_ref()) {
+            let start_rect =
+                Rect::from_min_size(pos2(left, rect.bottom()), vec2(column, start.height));
+            let event = start.show(
+                ui,
+                start_rect,
+                data,
+                &mut self.reach_menu,
+                self.state.can_send().is_ok(),
+                self.state.start_loading.is_some(),
+                p,
+                images,
+            );
+            match event {
+                Some(workspace::Event::Ask(prompt)) => {
+                    self.state.input = prompt;
+                    let commands = self.state.send();
+                    self.run(commands);
+                }
+                Some(workspace::Event::Pause(service, paused)) => {
+                    self.run(vec![Command::ServicePause(
+                        workspace::request_id(),
+                        service,
+                        paused,
+                    )]);
+                }
+                Some(workspace::Event::Instructions(layer)) => {
+                    let page = workspace::Instructions::new(layer);
+                    let generation = page.generation;
+                    self.state.instructions = Some(page);
+                    self.run(vec![Command::Instructions(generation)]);
+                }
+                Some(workspace::Event::Connect) => {
+                    self.state.connectors = Some(connectors::ConnectDialog::default())
+                }
+                Some(workspace::Event::Remove(service)) => self.remove_service = Some(service),
+                None => {}
+            }
+        }
+        if let Some(error) = self.state.start_error.clone() {
+            let y = rect.bottom()
+                + self.state.start.as_ref().map_or(20.0, |data| {
+                    workspace::StartLayout::new(ui, column, data, p).height + 16.0
+                });
+            let error_text = paint::layout(
+                ui.painter(),
+                paint::job(
+                    &error,
+                    tokens::scale::SMALLER,
+                    p.negative_ink(),
+                    (column - 80.0).max(1.0),
+                ),
+            );
+            ui.painter()
+                .galley(pos2(left, y), error_text, p.negative_ink());
+            let retry =
+                controls::Button::new(controls::Kind::Subtle, controls::Size::Small, "Try again");
+            if retry
+                .show_at(
+                    ui,
+                    Id::new("workspace-retry"),
+                    pos2(left + column - retry.width(ui), y),
+                    p,
+                    images,
+                )
+                .clicked()
+            {
+                self.state.start_error = None;
+                self.run(vec![Command::Workspace(workspace::request_id())]);
+            }
+        } else if self.state.start.is_none() {
+            let label = paint::layout(
+                ui.painter(),
+                paint::job(
+                    "Loading your workspace…",
+                    tokens::scale::SMALLER,
+                    p.ink_muted,
+                    column,
+                ),
+            );
+            ui.painter().galley(
+                pos2(main.center().x - label.size().x / 2.0, rect.bottom() + 24.0),
+                label,
+                p.ink_muted,
+            );
+        }
+        if let Some(service) = self.remove_service.clone() {
+            let mut remove = false;
+            let mut cancel = false;
+            let open = controls::modal(
+                &ctx,
+                Id::new("remove-computer"),
+                480.0,
+                235.0,
+                p,
+                |ui, rect| {
+                    controls::dialog_header(
+                        ui,
+                        rect.min,
+                        rect.width(),
+                        &format!("Remove {}?", service.name),
+                        &[(
+                            "This disconnects the computer and removes its cached files from Chat with Work. Pair it again to reconnect.",
+                            false,
+                        )],
+                        p,
+                    );
+                    let y = rect.bottom() - 32.0;
+                    cancel = controls::Button::new(
+                        controls::Kind::Subtle,
+                        controls::Size::Small,
+                        "Cancel",
+                    )
+                    .show_at(
+                        ui,
+                        Id::new("remove-computer-cancel"),
+                        pos2(rect.left(), y),
+                        p,
+                        images,
+                    )
+                    .clicked();
+                    remove = controls::Button::new(
+                        controls::Kind::Error,
+                        controls::Size::Small,
+                        "Remove computer",
+                    )
+                    .show_at(
+                        ui,
+                        Id::new("remove-computer-confirm"),
+                        pos2(rect.left() + 86.0, y),
+                        p,
+                        images,
+                    )
+                    .clicked();
+                },
+            );
+            if remove && let Ok(id) = service.key.parse() {
+                self.run(vec![Command::ComputerRemove(workspace::request_id(), id)]);
+            }
+            if remove || cancel || !open {
+                self.remove_service = None;
+            }
+        }
         rise < 1.0
     }
 }

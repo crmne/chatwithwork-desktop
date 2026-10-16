@@ -31,4 +31,5 @@ pub mod tui;
 pub mod tunnel;
 #[cfg(windows)]
 pub mod win;
+pub mod workspace;
 pub mod writer;

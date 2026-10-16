@@ -890,6 +890,52 @@ impl ControlHandler for Daemon {
             }
             ControlRequest::SuggestedRoots => Ok(self.suggested_roots().await),
             ControlRequest::Chats => self.chat(|client| client.list()).await,
+            ControlRequest::Workspace { project } => {
+                self.chat(move |client| client.workspace(project)).await
+            }
+            ControlRequest::ServicePause { kind, key, paused } => {
+                self.chat(move |client| client.service_pause(kind, &key, paused))
+                    .await
+            }
+            ControlRequest::Instructions { project } => {
+                self.chat(move |client| client.instructions(project)).await
+            }
+            ControlRequest::MemoryPreference { enabled } => {
+                self.chat(move |client| client.memory_preference(enabled))
+                    .await
+            }
+            ControlRequest::MemoryForget { id } => {
+                self.chat(move |client| client.memory_forget(id)).await
+            }
+            ControlRequest::InstructionCount { text } => {
+                self.chat(move |client| client.instruction_count(&text))
+                    .await
+            }
+            ControlRequest::ComputerRemove { id } => {
+                self.chat(move |client| client.computer_remove(id)).await
+            }
+            ControlRequest::Connectors { query, category } => {
+                self.chat(move |client| client.connectors(&query, category.as_deref()))
+                    .await
+            }
+            ControlRequest::ConnectorHandoff {
+                key,
+                access,
+                connection,
+            } => {
+                self.chat(move |client| {
+                    client.connector_handoff(&key, &access, connection.as_deref())
+                })
+                .await
+            }
+            ControlRequest::InstructionUpdate {
+                project,
+                layer,
+                change,
+            } => {
+                self.chat(move |client| client.instruction_update(project, layer, change))
+                    .await
+            }
             ControlRequest::Chat { chat } => self.chat(move |client| client.show(&chat)).await,
             ControlRequest::ChatSend {
                 chat,

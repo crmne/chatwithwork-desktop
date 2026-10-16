@@ -195,6 +195,316 @@ fn chats_are_listed_by_day_and_open_with_their_answers() {
 }
 
 #[test]
+fn new_chat_workspace_pauses_resumes_and_asks_suggested_questions() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Google Drive, connected");
+    fx.harness.get_by_label("Google Drive, connected").click();
+    fx.wait_for_label("Pause");
+    fx.harness.get_by_label("Pause").click();
+    fx.wait_for_request("service_pause", |r| {
+        r["key"] == "google" && r["paused"] == true
+    });
+    fx.wait_for_label("Google Drive, paused");
+    fx.harness.get_by_label("Google Drive, paused").click();
+    fx.wait_for_label("Resume");
+    fx.harness.get_by_label("Resume").click();
+    fx.wait_for_label("Google Drive, connected");
+    fx.harness.get_by_label("Find a document").click();
+    let asked = fx.wait_for_request("chat_send", |_| true);
+    assert_eq!(
+        asked["text"],
+        "Find the latest Acme contract in Google Drive."
+    );
+}
+
+#[test]
+fn new_chat_workspace_connects_in_the_browser_with_the_chosen_access() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Connect a service");
+    fx.harness.get_by_label("Connect a service").click();
+    fx.wait_for_label("Search services");
+    fx.harness.get_by_label("Search services").click();
+    fx.harness
+        .get_by_label("Search services")
+        .type_text("Linear");
+    fx.wait_for_request("connectors", |r| r["query"] == "Linear");
+    fx.wait("the filtered catalog", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .connectors
+            .as_ref()
+            .unwrap()
+            .catalog
+            .as_ref()
+            .is_some_and(|c| c.connectors.len() == 1)
+    });
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Choose access").click();
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Read and change").click();
+    fx.harness.run_steps(3);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "connector_handoff")
+    );
+    OPENED.with(|opened| opened.borrow_mut().clear());
+    fx.harness.get_by_label("Read").click();
+    fx.wait_for_request("connector_handoff", |r| {
+        r["key"] == "linear" && r["access"] == "read"
+    });
+    fx.wait_for_label("Finish signing in in your browser, then return here.");
+    OPENED.with(|opened| assert_eq!(opened.borrow().last().map(String::as_str), Some("https://chatwithwork.com/482139075/native/connector_handoff?key=linear&access=read&token=synthetic-demo")));
+}
+
+#[test]
+fn new_chat_workspace_confirms_computer_removal() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("Alex's laptop, connected");
+    fx.harness.get_by_label("Alex's laptop, connected").click();
+    fx.wait_for_label("Remove…");
+    fx.harness.get_by_label("Remove…").click();
+    fx.wait_for_label("Remove computer");
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "computer_remove")
+    );
+    fx.harness.get_by_label("Remove computer").click();
+    fx.wait_for_request("computer_remove", |r| r["id"] == 42);
+    fx.wait("the computer to disappear", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .start
+            .as_ref()
+            .is_some_and(|s| s.services.len() == 2)
+    });
+}
+
+#[test]
+fn new_chat_workspace_edits_instructions_and_brings_a_version_back() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("write your instructions");
+    fx.harness
+        .query_all_by_label("write your instructions")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_request("instructions", |_| true);
+    fx.wait_for_label("Use a template");
+    fx.harness.run_steps(8);
+    fx.harness.get_by_label("Use a template").click();
+    fx.harness.run_steps(15);
+    fx.harness.get_by_label("Save").click();
+    let first = fx.wait_for_request("instruction_update", |r| r["change"]["kind"] == "edit");
+    assert_eq!(first["layer"], "personal");
+    assert!(
+        first["change"]["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("## About me")
+    );
+    fx.wait_for_label("Saved your instructions.");
+    {
+        let page = fx.chat().state.instructions.as_mut().unwrap();
+        let editor = page
+            .editors
+            .iter_mut()
+            .find(|e| e.instruction.layer == cww::workspace::Layer::Personal)
+            .unwrap();
+        editor.body = "- Prefer tables for numbers.".into();
+    }
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Save").click();
+    fx.wait_for_request("instruction_update", |r| {
+        r["change"]["body"] == "- Prefer tables for numbers."
+    });
+    fx.wait_for_label("Earlier versions (1)");
+    fx.harness
+        .event(egui::Event::PointerMoved(egui::pos2(900.0, 600.0)));
+    fx.harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0.0, -1000.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(15);
+    fx.harness.get_by_label("Earlier versions (1)").click();
+    fx.harness.run_steps(15);
+    fx.harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0.0, -1000.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(15);
+    fx.harness.get_by_label("Bring back").click();
+    fx.wait_for_request("instruction_update", |r| r["change"]["revision_id"] == 1);
+    fx.wait_for_label("Brought back that version of your instructions.");
+    assert!(
+        fx.chat()
+            .state
+            .instructions
+            .as_ref()
+            .unwrap()
+            .editors
+            .iter()
+            .find(|e| e.instruction.layer == cww::workspace::Layer::Personal)
+            .unwrap()
+            .body
+            .starts_with("## About me")
+    );
+}
+
+#[test]
+fn new_chat_workspace_keeps_unsaved_edits_and_controls_memory() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("write your instructions");
+    fx.harness
+        .query_all_by_label("write your instructions")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_label("Use a template");
+    fx.harness.run_steps(8);
+    fx.harness.get_by_label("Use a template").click();
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Vendor contract renewal").click();
+    fx.wait_for_label("Discard unsaved instructions?");
+    fx.harness.get_by_label("Keep editing").click();
+    fx.harness.run_steps(3);
+    assert!(fx.chat().state.instructions.as_ref().unwrap().dirty());
+    assert!(fx.chat().state.open.is_none());
+    fx.harness
+        .event(egui::Event::PointerMoved(egui::pos2(900.0, 600.0)));
+    fx.harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        delta: egui::vec2(0.0, -2000.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    fx.harness.run_steps(15);
+    fx.harness
+        .get_by_label("Let the assistant remember things")
+        .click();
+    fx.wait_for_request("memory_preference", |r| r["enabled"] == false);
+    fx.wait("memory is disabled", |h| {
+        h.state()
+            .chat_state()
+            .unwrap()
+            .instructions
+            .as_ref()
+            .unwrap()
+            .memory
+            .as_ref()
+            .is_some_and(|m| !m.enabled)
+    });
+    fx.harness.get_by_label("Prefers short answers");
+    fx.harness.get_by_label("Forget").click();
+    fx.wait_for_request("memory_forget", |r| r["id"] == 1);
+    fx.wait_for_label("Nothing remembered yet");
+    assert!(fx.chat().state.instructions.as_ref().unwrap().dirty());
+    fx.harness.get_by_label("Vendor contract renewal").click();
+    fx.wait_for_label("Discard unsaved instructions?");
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait_for_request("chat", |r| r["chat"] == "11");
+    assert!(fx.chat().state.instructions.is_none());
+}
+
+#[test]
+fn renders_new_chat_workspace() {
+    for dark in [false, true] {
+        for (name, size) in [
+            ("workspace", [1280.0, 820.0]),
+            ("workspace-narrow", [760.0, 820.0]),
+        ] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                return;
+            };
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Default::default()
+            });
+            fx.wait_for_label("Google Drive, connected");
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(15);
+            let theme = if dark { "dark" } else { "light" };
+            let directory = std::env::var_os("CWW_WORKSPACE_EVIDENCE");
+            if let Some(directory) = &directory {
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(std::path::Path::new(directory).join(format!("{name}-{theme}.png")))
+                    .unwrap();
+            }
+            fx.harness
+                .query_all_by_label("write your instructions")
+                .next()
+                .unwrap()
+                .click();
+            fx.wait_for_label("Use a template");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(15);
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &fx.harness.render().expect("GPU rendering"),
+                    format!("{name}-instructions-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(((size[0] * size[1]) * 0.01) as usize),
+                );
+            }
+            if let Some(directory) = &directory {
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(
+                        std::path::Path::new(directory)
+                            .join(format!("{name}-instructions-{theme}.png")),
+                    )
+                    .unwrap();
+            }
+            fx.chat().state.instructions = None;
+            fx.harness.run_steps(3);
+            fx.harness.get_by_label("Connect a service").click();
+            fx.wait_for_request("connectors", |_| true);
+            fx.wait_for_label("Search services");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(15);
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &fx.harness.render().expect("GPU rendering"),
+                    format!("{name}-connectors-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(((size[0] * size[1]) * 0.01) as usize),
+                );
+            }
+            if let Some(directory) = &directory {
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(
+                        std::path::Path::new(directory)
+                            .join(format!("{name}-connectors-{theme}.png")),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn the_activity_line_opens_into_its_steps() {
     let mut fx = fixture(Options::default());
     fx.wait_for_label("Vendor contract renewal");
@@ -457,7 +767,7 @@ fn the_webs_logos_come_from_the_server_once_and_are_kept() {
         .map(|r| r["path"].as_str().unwrap_or_default().to_string())
         .collect();
     for path in [
-        "/assets/providers/vertexai-4d2e8f90.svg",
+        "/assets/providers/azure-6a1b2c3d.svg",
         "/assets/providers/drive-7a3c91e0.svg",
         "/assets/providers/slack-2b8d4f61.svg",
         "/assets/mimetypes/application-pdf-1e2d3c4b.svg",
@@ -499,7 +809,7 @@ fn the_sidebar_shows_whats_pinned_as_the_web_does() {
     fx.wait_for_label("Pinned");
     // The web shows the organization only to someone in more than one,
     // which the chat API doesn't say: none, as for someone in one.
-    assert!(fx.harness.query_by_label_contains("Northwind").is_none());
+    assert!(fx.harness.query_by_label("Northwind").is_none());
     for label in ["Recent", "Pinned", "All projects", "Falcon"] {
         fx.harness.get_by_label(label);
     }
@@ -811,16 +1121,16 @@ impl Fixture {
 fn a_model_picked_goes_with_the_question() {
     let mut fx = fixture(Options::default());
     fx.ready();
-    fx.wait_for_label("Model: Gemini 3.8 Flash");
-    fx.harness.get_by_label("Model: Gemini 3.8 Flash").click();
+    fx.wait_for_label("Model: GPT-6 Luna");
+    fx.harness.get_by_label("Model: GPT-6 Luna").click();
     fx.wait_for_label("Mistral Large 3");
     // One that can't be asked now says why, and stays unpicked.
-    fx.harness.get_by_label("GPT-6 Sol").click();
+    fx.harness.get_by_label("GPT-6.1 Sol").click();
     fx.wait_for_label("You're out of credits. Add credits in Settings to keep going.");
-    fx.harness.get_by_label("Model: Gemini 3.8 Flash").click();
-    fx.wait_for_label("Gemini 3.8 Pro");
-    fx.harness.get_by_label("Gemini 3.8 Pro").click();
-    fx.wait_for_label("Model: Gemini 3.8 Pro");
+    fx.harness.get_by_label("Model: GPT-6 Luna").click();
+    fx.wait_for_label("Gemini 4 Argon");
+    fx.harness.get_by_label("Gemini 4 Argon").click();
+    fx.wait_for_label("Model: Gemini 4 Argon");
     let field = fx
         .harness
         .get_by_role(egui::accesskit::Role::MultilineTextInput);
@@ -1147,8 +1457,8 @@ fn review_screens() -> Vec<Screen> {
             name: "picker",
             chat: None,
             setup: |fx| {
-                fx.wait_for_label("Model: Gemini 3.8 Flash");
-                fx.harness.get_by_label("Model: Gemini 3.8 Flash").click();
+                fx.wait_for_label("Model: GPT-6 Luna");
+                fx.harness.get_by_label("Model: GPT-6 Luna").click();
             },
         },
         Screen {
@@ -1560,7 +1870,7 @@ fn renders_inline_links_and_citations() {
             }
             OPENED.with(|opened| opened.borrow_mut().clear());
             for (label, url) in [
-                ("https://example.com/rollout", "https://example.com/rollout"),
+                ("here", "https://example.com/rollout"),
                 ("Source 2: Sentry alert rule", "https://example.com/rule"),
             ] {
                 fx.harness.get_by_label(label).hover();

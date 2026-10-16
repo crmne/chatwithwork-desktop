@@ -65,9 +65,13 @@ pub enum Icon {
     Clock,
     TerminalWindow,
     Microphone,
+    Plus,
+    Pause,
+    Play,
+    Notebook,
 }
 
-const COUNT: usize = Icon::TerminalWindow as usize + 1;
+const COUNT: usize = Icon::Notebook as usize + 1;
 
 impl Icon {
     /// A Phosphor icon the server names (a project's, a Settings tab's), if

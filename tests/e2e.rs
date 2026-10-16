@@ -60,6 +60,7 @@ struct ServerState {
     uploads: Vec<(String, String, String)>,
     /// Images asked for that came with a token or a proof.
     assets_with_credentials: usize,
+    workspace_requests: Vec<Value>,
 }
 
 struct FakeServer {
@@ -301,6 +302,14 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/models",
         "/local_agent/uploads",
         "/local_agent/dictations",
+        "/local_agent/new_chat",
+        "/local_agent/instructions",
+        "/local_agent/token_count",
+        "/local_agent/services/",
+        "/local_agent/connectors",
+        "/local_agent/connector_handoff",
+        "/local_agent/memory_preference",
+        "/local_agent/memories/",
     ]
     .iter()
     .any(|api| path.starts_with(api))
@@ -425,6 +434,38 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         return (
             422,
             json!({ "error": "model_unavailable", "error_description": "That model isn't available on your plan" }),
+        );
+    }
+    let workspace_api = [
+        "new_chat",
+        "instructions",
+        "token_count",
+        "services/",
+        "connectors",
+        "connector_handoff",
+        "memory_preference",
+        "memories/",
+    ]
+    .iter()
+    .any(|route| path.starts_with(&format!("/local_agent/{route}")));
+    if workspace_api {
+        st.workspace_requests
+            .push(json!({ "method": method, "path": path, "body": posted }));
+        let memory = json!({ "enabled": true, "entries": [] });
+        return (
+            200,
+            match (method, path.split('?').next().unwrap()) {
+                ("GET", "/local_agent/instructions") => {
+                    json!({ "instructions": [], "memory": memory })
+                }
+                ("POST", "/local_agent/token_count") => json!({ "tokens": 7 }),
+                ("GET", "/local_agent/connectors") => json!({ "connectors": [], "categories": [] }),
+                ("POST", "/local_agent/connector_handoff") => {
+                    json!({ "path": "/482139075/native/connector_handoff?token=example" })
+                }
+                (_, path) if path.contains("/memor") => memory,
+                _ => json!({ "services": [], "suggestions": [], "instructions": [] }),
+            },
         );
     }
     match (method, path) {
@@ -2151,6 +2192,142 @@ async fn relays_models_decisions_files_and_chat_actions() {
     tokio::time::timeout(Duration::from_secs(10), daemon)
         .await
         .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
+/// Workspace calls keep authentication in the daemon and use the exact Rails
+/// verbs/parameters, including URL escaping for search and project context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relays_native_workspace_controls_with_device_authentication() {
+    use cww::control::{Client, ControlRequest};
+    use cww::workspace::{InstructionChange, Layer, ServiceKind};
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair(&fx, &server);
+    server.state.lock().unwrap().chat_access = true;
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let _ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let path = fx.paths.socket_path();
+    tokio::task::spawn_blocking(move || {
+        let chats = cww::tui::chat::Chats::new(&path);
+        assert!(chats.workspace(Some(42)).unwrap().services.is_empty());
+        assert!(chats.instructions(Some(42)).unwrap().memory.enabled);
+        assert_eq!(
+            chats
+                .instruction_count("Hello\r\nworld".repeat(5_000))
+                .unwrap(),
+            7
+        );
+        assert!(chats.instruction_count("a".repeat(100_001)).is_err());
+        assert!(
+            chats
+                .connectors("docs & files".into(), Some("files".into()))
+                .unwrap()
+                .connectors
+                .is_empty()
+        );
+        assert!(
+            chats
+                .connector_handoff("google_workspace".into(), "read".into(), Some("new".into()))
+                .unwrap()
+                .starts_with("/482139075/")
+        );
+        chats.memory_preference(false).unwrap();
+        chats.memory_forget(7).unwrap();
+        chats.computer_remove(8).unwrap();
+        let mut client = Client::connect(&path).unwrap().unwrap();
+        client
+            .call(&ControlRequest::ServicePause {
+                kind: ServiceKind::Connector,
+                key: "google_workspace".into(),
+                paused: true,
+            })
+            .unwrap();
+        client
+            .call(&ControlRequest::ServicePause {
+                kind: ServiceKind::Connector,
+                key: "google_workspace".into(),
+                paused: false,
+            })
+            .unwrap();
+        client
+            .call(&ControlRequest::InstructionUpdate {
+                project: Some(42),
+                layer: Layer::Project,
+                change: InstructionChange::Edit {
+                    body: "Release on Monday\n".repeat(2_000),
+                },
+            })
+            .unwrap();
+        client
+            .call(&ControlRequest::InstructionUpdate {
+                project: None,
+                layer: Layer::Personal,
+                change: InstructionChange::Restore { revision_id: 19 },
+            })
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    let requests = server.state.lock().unwrap().workspace_requests.clone();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|r| (r["method"].as_str().unwrap(), r["path"].as_str().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("GET", "/local_agent/new_chat?project_id=42"),
+            ("GET", "/local_agent/instructions?project_id=42"),
+            ("POST", "/local_agent/token_count"),
+            (
+                "GET",
+                "/local_agent/connectors?q=docs+%26+files&category=files"
+            ),
+            ("POST", "/local_agent/connector_handoff"),
+            ("PATCH", "/local_agent/memory_preference"),
+            ("DELETE", "/local_agent/memories/7"),
+            ("DELETE", "/local_agent/services/computer/8"),
+            (
+                "POST",
+                "/local_agent/services/connector/google_workspace/pause"
+            ),
+            (
+                "DELETE",
+                "/local_agent/services/connector/google_workspace/pause"
+            ),
+            ("PATCH", "/local_agent/instructions/project"),
+            ("PATCH", "/local_agent/instructions/personal"),
+        ]
+    );
+    assert_eq!(
+        requests[2]["body"],
+        json!({ "text": "Hello\r\nworld".repeat(5_000) })
+    );
+    assert_eq!(
+        requests[4]["body"],
+        json!({ "key": "google_workspace", "access": "read", "connection": "new" })
+    );
+    assert_eq!(
+        requests[5]["body"],
+        json!({ "user": { "remembers": false } })
+    );
+    assert_eq!(
+        requests[10]["body"],
+        json!({ "project_id": 42, "instruction": { "body": "Release on Monday\n".repeat(2_000) } })
+    );
+    assert_eq!(
+        requests[11]["body"],
+        json!({ "project_id": null, "revision_id": 19 })
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .unwrap()
         .unwrap()
         .unwrap();
 }

@@ -59,6 +59,9 @@ struct State {
     next_id: u64,
     /// Files uploaded for questions, by `signed_id`.
     uploads: Vec<Value>,
+    workspace: Value,
+    instructions: Vec<Value>,
+    memory: Value,
 }
 
 struct Demo {
@@ -245,6 +248,9 @@ fn fresh() -> State {
         cancelled: HashSet::new(),
         next_id: 1000,
         uploads: Vec::new(),
+        workspace: chats::workspace(),
+        instructions: chats::instructions(),
+        memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
     }
 }
 
@@ -358,6 +364,9 @@ fn sample() -> State {
         cancelled: HashSet::new(),
         next_id: 1000,
         uploads: Vec::new(),
+        workspace: chats::workspace(),
+        instructions: chats::instructions(),
+        memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
     }
 }
 
@@ -495,7 +504,9 @@ impl Demo {
             "chats" | "chat" | "chat_send" | "chat_cancel" | "chat_access" | "models"
             | "chat_download" | "chat_upload" | "chat_approve" | "chat_deny" | "chat_answer"
             | "chat_decline" | "chat_retry" | "chat_branch" | "chat_rename" | "chat_delete"
-            | "chat_share" | "chat_unshare" => {
+            | "chat_share" | "chat_unshare" | "workspace" | "service_pause"
+            | "memory_preference" | "memory_forget" | "instructions" | "instruction_update"
+            | "instruction_count" | "computer_remove" | "connectors" | "connector_handoff" => {
                 let answer = self.chat_request(cmd, request);
                 self.sync_list();
                 answer
@@ -612,6 +623,106 @@ impl Demo {
         }
         let number = request["chat"].as_str().and_then(|c| c.parse::<u64>().ok());
         match cmd {
+            "workspace" => self.state.lock().expect("demo lock").workspace.clone(),
+            "connectors" => {
+                let state = self.state.lock().expect("demo lock");
+                chats::connectors(
+                    &state.workspace,
+                    request["query"].as_str().unwrap_or_default(),
+                    request["category"].as_str(),
+                )
+            }
+            "connector_handoff" => {
+                json!({ "ok": true, "path": format!("/482139075/native/connector_handoff?key={}&access={}&token=synthetic-demo", request["key"].as_str().unwrap_or_default(), request["access"].as_str().unwrap_or("read")) })
+            }
+            "computer_remove" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let id = request["id"].as_u64().unwrap_or(0).to_string();
+                state.workspace["services"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|s| !(s["kind"] == "computer" && s["key"] == id));
+                state.workspace.clone()
+            }
+            "service_pause" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let Some(service) = state.workspace["services"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|s| s["key"] == request["key"] && s["kind"] == request["kind"])
+                else {
+                    return json!({ "ok": false, "error": "No such service" });
+                };
+                let paused = request["paused"].as_bool().unwrap_or(false);
+                service["paused"] = json!(paused);
+                service["live"] = json!(!paused);
+                service["label"] = json!(if paused { "Paused" } else { "Connected" });
+                state.workspace.clone()
+            }
+            "instructions" => {
+                let state = self.state.lock().expect("demo lock");
+                json!({ "ok": true, "instructions": state.instructions, "memory": state.memory })
+            }
+            "memory_preference" | "memory_forget" => {
+                let mut state = self.state.lock().expect("demo lock");
+                if cmd == "memory_preference" {
+                    state.memory["enabled"] = request["enabled"].clone();
+                } else {
+                    state.memory["entries"]
+                        .as_array_mut()
+                        .unwrap()
+                        .retain(|entry| entry["id"] != request["id"]);
+                }
+                let mut memory = state.memory.clone();
+                memory["ok"] = json!(true);
+                memory
+            }
+            "instruction_count" => {
+                json!({ "ok": true, "tokens": request["text"].as_str().unwrap_or_default().split_whitespace().count() })
+            }
+            "instruction_update" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let Some(instruction) = state
+                    .instructions
+                    .iter_mut()
+                    .find(|i| i["layer"] == request["layer"])
+                else {
+                    return json!({ "ok": false, "error": "No such instructions" });
+                };
+                if instruction["editable"] != true {
+                    return json!({ "ok": false, "error": "You cannot edit these instructions." });
+                }
+                let restoring = request["change"]["kind"] == "restore";
+                let body = if restoring {
+                    instruction["revisions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r["id"] == request["change"]["revision_id"])
+                        .map(|r| r["body"].clone())
+                } else {
+                    Some(request["change"]["body"].clone())
+                };
+                let Some(body) = body else {
+                    return json!({ "ok": false, "error": "That revision is no longer available." });
+                };
+                let tokens = body.as_str().unwrap_or_default().split_whitespace().count();
+                if tokens > 3000 {
+                    return json!({ "ok": false, "error": "Please keep it under 3,000 tokens." });
+                }
+                instruction["body"] = body.clone();
+                instruction["tokens"] = json!(tokens);
+                let id = instruction["revisions"].as_array().unwrap().len() + 1;
+                instruction["revisions"].as_array_mut().unwrap().insert(0, json!({ "id": id, "body": body, "tokens": tokens, "author": "You", "created_at": ago(0), "age": "less than a minute ago", "changes": "+1 line" }));
+                let instruction = instruction.clone();
+                for summary in state.workspace["instructions"].as_array_mut().unwrap() {
+                    if summary["layer"] == request["layer"] {
+                        summary["written"] = json!(!body.as_str().unwrap_or_default().is_empty());
+                    }
+                }
+                json!({ "ok": true, "instruction": instruction, "notice": if restoring { "Brought back that version of your instructions." } else { "Saved your instructions." } })
+            }
             "chats" => {
                 let state = self.state.lock().expect("demo lock");
                 let list: Vec<Value> = state.chats.iter().map(|c| c.summary.clone()).collect();
