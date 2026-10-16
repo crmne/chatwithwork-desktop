@@ -97,7 +97,6 @@ impl Tray {
                 // The glyph changes with the state, so panels must draw it
                 // rather than the installed app icon.
                 themed_icon: false,
-                menu_on_click: true,
                 menu: menu(view, platform),
             },
             move || waker.wake(),
