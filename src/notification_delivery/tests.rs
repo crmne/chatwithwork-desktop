@@ -1,18 +1,8 @@
 use super::*;
 
 #[cfg(unix)]
-fn test_shell() -> PathBuf {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|path| path.join("sh"))
-        .find(|path| path.is_absolute() && path.is_file())
-        .expect("test PATH contains sh")
-}
-
-#[cfg(unix)]
 #[test]
 fn notification_navigation_falls_back_only_when_the_desktop_launcher_fails() {
-    use std::os::unix::fs::PermissionsExt;
-
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let launcher = directory.path().join("cww-app");
     let activation = Activation {
@@ -21,14 +11,8 @@ fn notification_navigation_falls_back_only_when_the_desktop_launcher_fails() {
         chat: 16,
     };
     let mut opened = Vec::new();
-    let shell = test_shell();
     for exit_code in [0, 2, 1] {
-        std::fs::write(
-            &launcher,
-            format!("#!{}\nexit {exit_code}\n", shell.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_process::write_script(&launcher, &format!("exit {exit_code}"));
         opened.clear();
         open_activation(Some(&launcher), &activation, |url| {
             opened.push(url.to_owned())
@@ -53,16 +37,9 @@ fn notification_navigation_falls_back_only_when_the_desktop_launcher_fails() {
 #[cfg(unix)]
 #[test]
 fn notification_navigation_does_not_reopen_the_browser_after_a_later_desktop_failure() {
-    use std::os::unix::fs::PermissionsExt;
-
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let launcher = directory.path().join("cww-app");
-    std::fs::write(
-        &launcher,
-        format!("#!{}\nsleep 0.15\nexit 1\n", test_shell().display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_process::write_script(&launcher, "sleep 0.15\nexit 1");
     let activation = Activation {
         server: ServerUrl::parse("https://staging.example.com").unwrap(),
         account: "482139075".into(),

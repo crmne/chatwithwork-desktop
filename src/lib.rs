@@ -35,3 +35,6 @@ pub mod tunnel;
 pub mod win;
 pub mod workspace;
 pub mod writer;
+
+#[cfg(all(test, unix))]
+mod test_process;
