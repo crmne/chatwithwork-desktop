@@ -134,9 +134,10 @@ jobs:
         run: |
           for name in cww cww-notify; do
             bin="target/${{ matrix.target }}/release/$name"
-            if readelf -d "$bin" | grep -q NEEDED; then
-              readelf -d "$bin"
-              echo "::error::$bin links shared libraries"
+            dynamic="$(readelf -d "$bin")"
+            program="$(readelf -l "$bin")"
+            if [[ "$dynamic" == *NEEDED* || "$program" == *INTERP* ]]; then
+              echo "::error::$bin must be fully static"
               exit 1
             fi
             "$bin" --version

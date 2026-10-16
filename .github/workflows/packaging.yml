@@ -85,18 +85,26 @@ jobs:
           backend: local
       # No compiler cache: these binaries become the published packages.
       - run: mbx build --locked --release --target ${{ matrix.target }} --bin cww
+      - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-notification-broker --bin cww-notify
       - run: mbx build --locked --release --target ${{ matrix.app-target }} -p cww-app --bin cww-app
       - name: Release-shaped archives
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          name="cww-v${VERSION}-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          cp README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
-          cp "target/${{ matrix.target }}/release/cww" "dist/$name/"
-          cp --parents packaging/systemd/cww.service "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          rm -rf "dist/$name"
+          for name in cww cww-notify; do
+            binary="target/${{ matrix.target }}/release/$name"
+            "$binary" --version
+            dynamic="$(readelf -d "$binary")"
+            program="$(readelf -l "$binary")"
+            if [[ "$dynamic" == *NEEDED* || "$program" == *INTERP* ]]; then
+              echo "::error::$name must be fully static"
+              exit 1
+            fi
+          done
+          ruby packaging/linux/cli-archive.rb \
+            "target/${{ matrix.target }}/release/cww" \
+            "target/${{ matrix.target }}/release/cww-notify" \
+            "$VERSION" "${{ matrix.target }}" dist
           bash packaging/linux/archive.sh "target/${{ matrix.target }}/release/cww" \
             "target/${{ matrix.app-target }}/release/cww-app" "$VERSION" "${{ matrix.app-target }}" dist
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
