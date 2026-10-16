@@ -1138,6 +1138,9 @@ impl ControlHandler for Daemon {
             ControlRequest::ModelPreferences => {
                 self.chat(|client| client.model_preferences()).await
             }
+            ControlRequest::Schedules { request } => {
+                self.chat(move |client| client.schedules(&request)).await
+            }
             ControlRequest::AccountSettings { request } => {
                 self.chat(move |client| client.account_settings(&request))
                     .await

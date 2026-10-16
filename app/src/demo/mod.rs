@@ -7,6 +7,7 @@
 mod assets;
 mod chats;
 mod project_pages;
+mod schedules;
 mod templates;
 
 /// Northwind's projects, as the demo's list sends them.
@@ -69,6 +70,7 @@ struct State {
     profile: Value,
     copy_answers_as: Value,
     templates: Vec<Value>,
+    schedules: Vec<Value>,
     notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
@@ -272,6 +274,7 @@ fn fresh() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        schedules: vec![],
         profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
         copy_answers_as: json!("rich_text"),
         templates: vec![],
@@ -396,6 +399,7 @@ fn sample() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        schedules: vec![],
         profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
         copy_answers_as: json!("rich_text"),
         templates: vec![],
@@ -545,6 +549,7 @@ impl Demo {
             | "templates"
             | "template_upload"
             | "account_settings"
+            | "schedules"
             | "model_preferences"
             | "model_preferences_update"
             | "chat_download"
@@ -922,6 +927,10 @@ impl Demo {
             "templates" | "template_upload" => {
                 templates::respond(&mut self.state.lock().expect("demo lock"), cmd, request)
             }
+            "schedules" => schedules::respond(
+                &mut self.state.lock().expect("demo lock"),
+                &request["request"],
+            ),
             "account_settings" => {
                 let mut state = self.state.lock().expect("demo lock");
                 let request: cww::account_settings::Request =

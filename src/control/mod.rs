@@ -217,6 +217,9 @@ pub enum ControlRequest {
         data: String,
     },
     ModelPreferences,
+    Schedules {
+        request: crate::schedules::Request,
+    },
     AccountSettings {
         request: crate::account_settings::Request,
     },

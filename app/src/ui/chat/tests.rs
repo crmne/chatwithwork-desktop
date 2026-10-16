@@ -4176,3 +4176,241 @@ fn native_account_settings_review_screens() {
         }
     }
 }
+
+#[test]
+fn native_schedules_create_edit_pause_run_and_delete() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    fx.harness.get_by_label("Schedules").click_accesskit();
+    fx.wait_for_label("No schedules yet");
+    fx.harness.get_by_label("Add schedule").click_accesskit();
+    fx.wait_for_label("Create schedule");
+    fx.harness.get_by_label("Create schedule").click_accesskit();
+    fx.wait_for_label("Give the schedule a name and write what to ask.");
+    let name = fx.harness.get_by_label("Name");
+    name.click();
+    name.type_text("Morning briefing");
+    let prompt = fx.harness.get_by_label("Ask");
+    prompt.click();
+    prompt.type_text("Summarize the Q4 folder.");
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Once").click_accesskit();
+    fx.wait_for_label("Date and time");
+    fx.harness.get_by_label("Repeat").click_accesskit();
+    fx.wait_for_label("Every");
+    fx.harness.get_by_label("Create schedule").click_accesskit();
+    fx.wait_for_label("Schedule saved.");
+    let request = fx.wait_for_request("schedules", |r| r["request"]["action"] == "create");
+    assert_eq!(request["request"]["account"], "482139075");
+    assert_eq!(
+        request["request"]["fields"]["prompt"],
+        "Summarize the Q4 folder."
+    );
+    fx.harness
+        .get_by_label("Pause Morning briefing")
+        .click_accesskit();
+    fx.wait_for_label("Resume");
+    fx.harness.get_by_label("Resume").click_accesskit();
+    fx.wait_for_label("Pause Morning briefing");
+    fx.harness.get_by_label("Edit").click_accesskit();
+    fx.wait_for_label("Save schedule");
+    let name = fx.harness.get_by_label("Name");
+    name.click();
+    name.type_text(" updated");
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Save schedule").click_accesskit();
+    fx.wait_for_label("Morning briefing updated");
+    fx.harness.get_by_label("Run now").click_accesskit();
+    fx.wait("schedule run opens its chat", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.open == Some(11) && s.schedules.is_none() && !s.loading)
+    });
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    fx.harness.get_by_label("Schedules").click_accesskit();
+    fx.wait_for_label("Morning briefing updated");
+    fx.harness
+        .get_by_label("Delete Morning briefing updated")
+        .click_accesskit();
+    fx.wait_for_label("Delete schedule");
+    fx.harness.get_by_label("Cancel").click_accesskit();
+    fx.harness.run_steps(3);
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "schedules" && r["request"]["action"] == "delete")
+    );
+    fx.harness
+        .get_by_label("Delete Morning briefing updated")
+        .click_accesskit();
+    fx.wait_for_label("Delete schedule");
+    fx.harness.get_by_label("Delete schedule").click_accesskit();
+    fx.wait_for_label("No schedules yet");
+}
+
+#[test]
+fn native_schedules_keep_drafts_on_refresh_and_guard_account_navigation() {
+    use cww::schedules::Request;
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    let (profile, second) = add_organization(&mut fx);
+    let commands = fx.chat().state.schedule_request(Request::New);
+    fx.chat().run(commands);
+    fx.wait_for_label("Create schedule");
+    let name = fx.harness.get_by_label("Name");
+    name.click();
+    name.type_text("Keep this draft");
+    fx.harness.run_steps(3);
+    let commands = fx.chat().state.update(super::state::Msg::ListLive(
+        cww::tui::chat::ListLive::Schedules,
+    ));
+    assert!(commands.is_empty());
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard schedule changes?");
+    fx.harness.get_by_label("Keep editing").click_accesskit();
+    fx.harness.run_steps(3);
+    assert_eq!(
+        fx.chat()
+            .state
+            .schedules
+            .as_ref()
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap()
+            .name,
+        "Keep this draft"
+    );
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard schedule changes?");
+    fx.harness.get_by_label("Discard changes").click_accesskit();
+    fx.wait("new organization's chat", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "918273645" && s.open == Some(11) && !s.loading)
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .chain(second.requests().iter())
+            .any(|r| r["cmd"] == "schedules" && r["request"]["action"] == "create")
+    );
+}
+
+#[test]
+fn native_schedules_guard_page_identity_access_and_coalesce_live_refresh() {
+    use super::state::{ChatState, Command, Msg};
+    use cww::schedules::{Reply, Request};
+    let mut state = ChatState::default();
+    state.access = super::state::Access::Ready;
+    state.list.account.id = "482139075".into();
+    state.schedule_request(Request::List);
+    let old = state.schedules.as_ref().unwrap().generation;
+    state.new_chat();
+    state.schedule_request(Request::List);
+    let generation = state.schedules.as_ref().unwrap().generation;
+    let page=serde_json::from_value(serde_json::json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","active_count":0,"limit":10,"schedules":[]})).unwrap();
+    assert!(
+        state
+            .update(Msg::Schedules(old, Ok(Reply::Page(page))))
+            .is_empty()
+    );
+    assert!(state.schedules.as_ref().unwrap().page.is_none());
+    assert!(
+        state
+            .update(Msg::ListLive(cww::tui::chat::ListLive::Schedules))
+            .is_empty()
+    );
+    let page=serde_json::from_value(serde_json::json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","active_count":0,"limit":10,"schedules":[]})).unwrap();
+    assert!(matches!(
+        state
+            .update(Msg::Schedules(generation, Ok(Reply::Page(page))))
+            .as_slice(),
+        [Command::Schedules(_, Request::List)]
+    ));
+    let wrong=serde_json::from_value(serde_json::json!({"account":{"id":"918273645","name":"Other"},"email":"other@example.com","active_count":0,"limit":10,"schedules":[]})).unwrap();
+    state.update(Msg::Schedules(generation, Ok(Reply::Page(wrong))));
+    assert!(state.schedules.as_ref().unwrap().page.is_none());
+    state.update(Msg::Listed(Err(cww::tui::chat::Failure::new(
+        "forbidden",
+        "Access removed.",
+    ))));
+    assert!(state.schedules.is_none());
+}
+
+#[test]
+fn native_schedules_review_screens() {
+    let Ok(directory) = std::env::var("CWW_SCHEDULES_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 1000.0],
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            fx.logos();
+            let suffix = format!("{}-{width}.png", if dark { "dark" } else { "light" });
+            for view in ["before", "empty", "form", "list"] {
+                if view == "empty" {
+                    let commands = fx
+                        .chat()
+                        .state
+                        .schedule_request(cww::schedules::Request::List);
+                    fx.chat().run(commands);
+                    fx.wait_for_label("No schedules yet");
+                }
+                if view == "form" {
+                    fx.harness.get_by_label("Add schedule").click_accesskit();
+                    fx.wait_for_label("Create schedule");
+                }
+                if view == "list" {
+                    {
+                        let fields = fx
+                            .chat()
+                            .state
+                            .schedules
+                            .as_mut()
+                            .unwrap()
+                            .draft
+                            .as_mut()
+                            .unwrap();
+                        fields.name = "Morning briefing".into();
+                        fields.prompt = "Summarize the Q4 folder and today's meetings.".into();
+                    }
+                    let commands = fx.chat().state.schedules.as_mut().unwrap().save();
+                    fx.chat().run(commands);
+                    fx.wait_for_label("Morning briefing");
+                }
+                fx.harness.event(egui::Event::PointerGone);
+                fx.harness.run_steps(12);
+                let output = std::path::Path::new(&directory).join(view);
+                std::fs::create_dir_all(&output).unwrap();
+                fx.harness
+                    .render()
+                    .expect("GPU rendering")
+                    .save(output.join(&suffix))
+                    .unwrap();
+            }
+        }
+    }
+}

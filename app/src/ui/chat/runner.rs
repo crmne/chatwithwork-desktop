@@ -281,6 +281,12 @@ impl Runner {
                     });
                 }),
             ),
+            Command::Schedules(generation, request) => spawn(
+                "cww-schedules",
+                Box::new(move || {
+                    wake.send(Msg::Schedules(generation, chats.schedules(request)));
+                }),
+            ),
             Command::AccountSettings(generation, request) => spawn(
                 "cww-account-settings",
                 Box::new(move || {

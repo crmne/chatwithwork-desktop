@@ -27,6 +27,7 @@ pub mod proxy;
 pub mod reader;
 pub mod roots;
 pub mod sandbox;
+pub mod schedules;
 pub mod service;
 pub mod status;
 pub mod templates;

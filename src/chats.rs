@@ -510,6 +510,64 @@ impl ChatClient {
         )
     }
 
+    pub fn schedules(&self, request: &crate::schedules::Request) -> Result<Value> {
+        use crate::schedules::Request;
+        let result = match request {
+            Request::List => self.call("GET", "local_agent/schedules", Body::Empty),
+            Request::New => self.call("GET", "local_agent/schedules/new", Body::Empty),
+            Request::Edit { id } => self.call(
+                "GET",
+                &format!("local_agent/schedules/{id}/edit"),
+                Body::Empty,
+            ),
+            Request::Create { account, fields } => self.call(
+                "POST",
+                "local_agent/schedules",
+                Body::Json(&json!({"account":account,"schedule":fields})),
+            ),
+            Request::Update {
+                account,
+                id,
+                fields,
+            } => self.call(
+                "PATCH",
+                &format!("local_agent/schedules/{id}"),
+                Body::Json(&json!({"account":account,"schedule":fields})),
+            ),
+            Request::Pause { account, id } => self.call(
+                "POST",
+                &format!("local_agent/schedules/{id}/pause"),
+                Body::Json(&json!({"account":account})),
+            ),
+            Request::Resume { account, id } => self.call(
+                "DELETE",
+                &format!(
+                    "local_agent/schedules/{id}/pause?{}",
+                    url::form_urlencoded::Serializer::new(String::new())
+                        .append_pair("account", account)
+                        .finish()
+                ),
+                Body::Empty,
+            ),
+            Request::Delete { account, id } => self.call(
+                "DELETE",
+                &format!(
+                    "local_agent/schedules/{id}?{}",
+                    url::form_urlencoded::Serializer::new(String::new())
+                        .append_pair("account", account)
+                        .finish()
+                ),
+                Body::Empty,
+            ),
+            Request::Run { account, id } => self.call(
+                "POST",
+                &format!("local_agent/schedules/{id}/run"),
+                Body::Json(&json!({"account":account})),
+            ),
+        };
+        newer(result, "can't manage schedules from here yet")
+    }
+
     pub fn account_settings(&self, request: &crate::account_settings::Request) -> Result<Value> {
         use crate::account_settings::Request;
         let result = match request {

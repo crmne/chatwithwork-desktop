@@ -328,6 +328,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/models",
         "/local_agent/model_preferences",
         "/local_agent/account_settings",
+        "/local_agent/schedules",
         "/local_agent/templates",
         "/local_agent/uploads",
         "/local_agent/dictations",
@@ -450,6 +451,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     let newer = path.starts_with("/local_agent/models")
         || path.starts_with("/local_agent/model_preferences")
         || path.starts_with("/local_agent/account_settings")
+        || path.starts_with("/local_agent/schedules")
         || path.starts_with("/local_agent/templates")
         || path.starts_with("/local_agent/projects")
         || path.starts_with("/local_agent/chat_history")
@@ -604,6 +606,32 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 }
                 (_, path) if path.contains("/memor") => memory,
                 _ => json!({ "services": [], "suggestions": [], "instructions": [] }),
+            },
+        );
+    }
+    if path.starts_with("/local_agent/schedules") {
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let mut posted = posted;
+        if method == "DELETE" {
+            let values: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect();
+            posted = json!({"account":values.get("account")});
+        }
+        if method != "GET" && posted["account"] != "482139075" {
+            return (
+                409,
+                json!({"error":"stale_account","error_description":"Your organization changed."}),
+            );
+        }
+        st.workspace_requests
+            .push(json!({"method":method,"path":path,"body":posted}));
+        return (
+            200,
+            if path.ends_with("/run") {
+                json!({"account":{"id":"482139075","name":"Northwind"},"chat":7})
+            } else {
+                json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","active_count":0,"limit":10,"schedules":[],"form":null})
             },
         );
     }
@@ -2466,6 +2494,110 @@ async fn relays_models_decisions_files_and_chat_actions() {
         tokio::task::spawn_blocking(f).await.unwrap()
     }
 
+    use cww::schedules::{Fields, Reply as ScheduleReply, Request as ScheduleRequest};
+    let account_id = "482139075".to_owned();
+    let fields = Fields {
+        name: "Morning briefing".into(),
+        prompt: "Summarize Q4".into(),
+        repeats: "repeat".into(),
+        frequency: "weekday".into(),
+        at: "08:30".into(),
+        time_zone: "Europe/Berlin".into(),
+        ..Fields::default()
+    };
+    for (request, method, path) in [
+        (ScheduleRequest::List, "GET", "/local_agent/schedules"),
+        (ScheduleRequest::New, "GET", "/local_agent/schedules/new"),
+        (
+            ScheduleRequest::Edit { id: 42 },
+            "GET",
+            "/local_agent/schedules/42/edit",
+        ),
+        (
+            ScheduleRequest::Create {
+                account: account_id.clone(),
+                fields: fields.clone(),
+            },
+            "POST",
+            "/local_agent/schedules",
+        ),
+        (
+            ScheduleRequest::Update {
+                account: account_id.clone(),
+                id: 42,
+                fields: fields.clone(),
+            },
+            "PATCH",
+            "/local_agent/schedules/42",
+        ),
+        (
+            ScheduleRequest::Pause {
+                account: account_id.clone(),
+                id: 42,
+            },
+            "POST",
+            "/local_agent/schedules/42/pause",
+        ),
+        (
+            ScheduleRequest::Resume {
+                account: account_id.clone(),
+                id: 42,
+            },
+            "DELETE",
+            "/local_agent/schedules/42/pause",
+        ),
+        (
+            ScheduleRequest::Delete {
+                account: account_id.clone(),
+                id: 42,
+            },
+            "DELETE",
+            "/local_agent/schedules/42",
+        ),
+        (
+            ScheduleRequest::Run {
+                account: account_id.clone(),
+                id: 42,
+            },
+            "POST",
+            "/local_agent/schedules/42/run",
+        ),
+    ] {
+        let c = chats.clone();
+        let reply = blocking(move || c.schedules(request)).await.unwrap();
+        if path.ends_with("/run") {
+            assert!(matches!(reply, ScheduleReply::Run { chat: 7, .. }));
+        } else {
+            assert!(matches!(reply, ScheduleReply::Page(_)));
+        }
+        let sent = server
+            .state
+            .lock()
+            .unwrap()
+            .workspace_requests
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(sent["method"], method);
+        assert_eq!(sent["path"], path);
+        if method != "GET" {
+            assert_eq!(sent["body"]["account"], account_id);
+        }
+        if method == "PATCH" {
+            assert_eq!(sent["body"]["schedule"]["prompt"], "Summarize Q4");
+        }
+    }
+    let c = chats.clone();
+    let failure = blocking(move || {
+        c.schedules(ScheduleRequest::Delete {
+            account: "918273645".into(),
+            id: 42,
+        })
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(failure.code, "stale_account");
+
     // Account settings travel through the daemon's device-bound HTTP client.
     use cww::account_settings::{Change, CopyFormat, Request as AccountRequest};
     let c = chats.clone();
@@ -2499,7 +2631,15 @@ async fn relays_models_decisions_files_and_chat_actions() {
     .await
     .unwrap();
     assert_eq!(saved.copy_answers_as, CopyFormat::Markdown);
-    let sent = server.state.lock().unwrap().workspace_requests.clone();
+    let sent: Vec<_> = server
+        .state
+        .lock()
+        .unwrap()
+        .workspace_requests
+        .iter()
+        .filter(|r| r["path"] == "/local_agent/account_settings")
+        .cloned()
+        .collect();
     assert_eq!(
         sent[1]["body"],
         json!({"account":"482139075","user":{"full_name":"Alex Morgan","display_name":"Morgan"}})
@@ -2802,6 +2942,12 @@ async fn relays_models_decisions_files_and_chat_actions() {
 
     // An older server: a sentence for each, and chats without a model.
     server.state.lock().unwrap().old_api = true;
+    let c = chats.clone();
+    let error = blocking(move || c.schedules(ScheduleRequest::List))
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("can't manage schedules"));
+
     let c = chats.clone();
     let error = blocking(move || c.account_settings(AccountRequest::Read))
         .await

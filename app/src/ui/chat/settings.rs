@@ -170,6 +170,7 @@ fn navigation(ui: &mut Ui, shell: &Shell, wide: bool, reveal: bool, event: &mut 
         if response.clicked() && !selected {
             *event = Some(match tab.tab.as_str() {
                 "instructions" => Event::Instructions(cww::workspace::Layer::Personal),
+                "schedules" => Event::Schedules(cww::schedules::Request::List),
                 "account" => Event::AccountSettings,
                 "models" => Event::ModelPreferences,
                 "templates" => Event::Templates(None),

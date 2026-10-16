@@ -948,6 +948,8 @@ pub enum ListLive {
     Removed(u64),
     /// Every project again.
     Projects(Vec<Project>),
+    /// Personal schedules changed; refresh their page without sending content.
+    Schedules,
     /// The list's header again.
     Account(AccountUpdate),
     /// The server keeps the list current (again): list the chats once.
@@ -978,6 +980,7 @@ impl ListLive {
             "chat" => Self::Chat(serde_json::from_value(update["chat"].clone()).ok()?),
             "removed" => Self::Removed(update["number"].as_u64()?),
             "projects" => Self::Projects(serde_json::from_value(update["projects"].clone()).ok()?),
+            "schedules" => Self::Schedules,
             "account" => Self::Account(serde_json::from_value(update.clone()).ok()?),
             "watching" => Self::Watching,
             "refused" => Self::Refused,
@@ -1174,6 +1177,13 @@ impl Chats {
 
     pub fn model_preferences(&self) -> Result<ModelPreferences, Failure> {
         parse(self.call(&ControlRequest::ModelPreferences)?)
+    }
+
+    pub fn schedules(
+        &self,
+        request: crate::schedules::Request,
+    ) -> Result<crate::schedules::Reply, Failure> {
+        parse(self.call(&ControlRequest::Schedules { request })?)
     }
 
     pub fn account_settings(

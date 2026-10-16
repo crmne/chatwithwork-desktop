@@ -4047,6 +4047,7 @@ impl App {
                     return self.new_chat();
                 }
             }
+            ListLive::Schedules => {}
             ListLive::Projects(projects) => self.chat.set_projects(projects),
             ListLive::Account(account) => {
                 if self.account_changed(&account.account.id) {

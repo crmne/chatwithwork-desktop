@@ -317,3 +317,18 @@ shows its own editor, Office templates, and the instruction stack, with links ba
 to personal/organization settings. Those links preserve the unsaved-text decision.
 Template uploads retain project numbers separately from instruction IDs, and late
 picker/API replies cannot populate a replacement screen or another organization.
+
+### Schedules
+
+Settings > Schedules manages the same personal schedules as the website.
+Create or edit a one-time or repeating prompt, choose its time zone, project and
+model, or pause, resume, run now and delete it. Deleting a schedule keeps its run
+chats. Next run, last run and paused/skip states come from the server, with live
+list refreshes. Runs open the returned chat in the current organization.
+
+The organization-bound daemon relays these requests with its chat grant. The
+server checks ownership, active membership, projects, timing and active-schedule
+limits. Refreshes preserve unsaved form values; leaving an edited form asks
+before discarding, including notification clicks and organization switches.
+Older servers report that schedule management is not available yet.
+Date and time are entered as `YYYY-MM-DDTHH:MM` and `HH:MM` respectively.

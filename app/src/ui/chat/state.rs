@@ -59,6 +59,7 @@ pub enum Command {
     Cancel(u64),
     /// Read the models the composer's picker offers.
     Models,
+    Schedules(u64, cww::schedules::Request),
     AccountSettings(u64, cww::account_settings::Request),
     ModelPreferences(u64, Option<(String, Option<String>)>),
     Templates(u64, cww::templates::Request),
@@ -115,6 +116,7 @@ pub enum Msg {
     Cancelled(Result<(), Failure>),
     Access(Result<AccessRequest, Failure>),
     Models(Result<Models, Failure>),
+    Schedules(u64, Result<cww::schedules::Reply, Failure>),
     AccountSettings(u64, Result<cww::account_settings::Page, Failure>),
     ModelPreferences(u64, Result<cww::tui::chat::ModelPreferences, Failure>),
     Templates(u64, Result<cww::templates::Page, Failure>),
@@ -350,6 +352,7 @@ pub struct ChatState {
     pub moving: Option<MoveChat>,
     pub history: Option<super::history::HistoryPage>,
     pub projects: Option<super::projects::Screen>,
+    pub schedules: Option<super::schedules::Screen>,
     pub account_settings: Option<super::account_settings::Screen>,
     pub model_preferences: Option<super::model_preferences::Screen>,
     pub templates: Option<super::templates::Screen>,
@@ -410,6 +413,7 @@ impl Default for ChatState {
             moving: None,
             history: None,
             projects: None,
+            schedules: None,
             account_settings: None,
             model_preferences: None,
             templates: None,
@@ -521,6 +525,7 @@ impl ChatState {
             }
             Vec::new()
         } else {
+            self.schedules = None;
             self.account_settings = None;
             self.access = Access::Unknown;
             self.start = None;
@@ -558,6 +563,7 @@ impl ChatState {
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
         self.projects = None;
+        self.schedules = None;
         self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
@@ -590,6 +596,7 @@ impl ChatState {
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
         self.projects = None;
+        self.schedules = None;
         self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
@@ -660,6 +667,7 @@ impl ChatState {
         self.history = None;
         self.moving = None;
         self.instructions = None;
+        self.schedules = None;
         self.account_settings = None;
         self.model_preferences = None;
         let mut screen = super::templates::Screen::new(self.list.account.id.clone(), project);
@@ -668,7 +676,24 @@ impl ChatState {
         commands
     }
 
+    pub fn schedule_request(&mut self, request: cww::schedules::Request) -> Vec<Command> {
+        let mut commands = self.cancel_dictation();
+        self.projects = None;
+        self.history = None;
+        self.moving = None;
+        self.instructions = None;
+        self.account_settings = None;
+        self.model_preferences = None;
+        self.templates = None;
+        let screen = self
+            .schedules
+            .get_or_insert_with(|| super::schedules::Screen::new(self.list.account.id.clone()));
+        commands.extend(screen.request(request));
+        commands
+    }
+
     pub fn show_account_settings(&mut self) -> Vec<Command> {
+        self.schedules = None;
         let mut commands = self.cancel_dictation();
         self.projects = None;
         self.history = None;
@@ -683,6 +708,7 @@ impl ChatState {
     }
 
     pub fn show_model_preferences(&mut self) -> Vec<Command> {
+        self.schedules = None;
         self.account_settings = None;
         let mut commands = self.cancel_dictation();
         self.projects = None;
@@ -1009,6 +1035,7 @@ impl ChatState {
         let project = summary.project.as_ref().map(|project| project.id);
         self.history = None;
         self.projects = None;
+        self.schedules = None;
         self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
@@ -1254,6 +1281,17 @@ impl ChatState {
                     && screen.generation == generation
                 {
                     return screen.picked(result);
+                }
+            }
+            Msg::Schedules(generation, result) => {
+                if let Some(screen) = &mut self.schedules
+                    && screen.generation == generation
+                {
+                    let (mut commands, chat) = screen.loaded(result);
+                    if let Some(chat) = chat {
+                        commands.extend(self.open_chat(chat));
+                    }
+                    return commands;
                 }
             }
             Msg::AccountSettings(generation, result) => {
@@ -1591,6 +1629,9 @@ impl ChatState {
                 // Catch up on what changed before the subscription.
                 if self.ready() {
                     let mut commands = vec![Command::List];
+                    if let Some(screen) = &mut self.schedules {
+                        commands.extend(screen.invalidate());
+                    }
                     if let Some(screen) = &mut self.projects {
                         commands.extend(screen.invalidate());
                     }
@@ -1603,6 +1644,9 @@ impl ChatState {
             ListLive::Missed => {
                 if self.ready() {
                     let mut commands = vec![Command::List];
+                    if let Some(screen) = &mut self.schedules {
+                        commands.extend(screen.invalidate());
+                    }
                     if let Some(screen) = &mut self.projects {
                         commands.extend(screen.invalidate());
                     }
@@ -1650,6 +1694,12 @@ impl ChatState {
                 }
             }
             ListLive::Removed(number) => return self.remove_chat(number),
+            ListLive::Schedules => {
+                return self
+                    .schedules
+                    .as_mut()
+                    .map_or_else(Vec::new, |screen| screen.invalidate());
+            }
             ListLive::Projects(projects) => {
                 self.list.projects = projects;
                 return self.projects_changed(true);
@@ -1781,6 +1831,7 @@ impl ChatState {
             || matches!(failure.code.as_str(), "forbidden" | "invalid_token")
         {
             self.projects = None;
+            self.schedules = None;
             self.account_settings = None;
             self.model_preferences = None;
             self.templates = None;
