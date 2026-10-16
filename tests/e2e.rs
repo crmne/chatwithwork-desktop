@@ -327,6 +327,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/local_agent/chat",
         "/local_agent/models",
         "/local_agent/model_preferences",
+        "/local_agent/account_settings",
         "/local_agent/templates",
         "/local_agent/uploads",
         "/local_agent/dictations",
@@ -448,6 +449,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
         || path.starts_with("/local_agent/model_preferences")
+        || path.starts_with("/local_agent/account_settings")
         || path.starts_with("/local_agent/templates")
         || path.starts_with("/local_agent/projects")
         || path.starts_with("/local_agent/chat_history")
@@ -606,6 +608,22 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     match (method, path) {
+        ("GET" | "PATCH", "/local_agent/account_settings") => {
+            if method == "PATCH" && posted["account"] != "482139075" {
+                return (
+                    409,
+                    json!({"error":"stale_account","error_description":"Your organization changed."}),
+                );
+            }
+            st.workspace_requests
+                .push(json!({"method":method,"path":path,"body":posted}));
+            (
+                200,
+                json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com",
+                "profile":{"full_name":posted["user"]["full_name"].as_str().unwrap_or("Alex Rivera"),"display_name":posted["user"]["display_name"].as_str().unwrap_or("Alex")},
+                "copy_answers_as":posted["user"]["copy_answers_as"].as_str().unwrap_or("rich_text")}),
+            )
+        }
         ("GET" | "PATCH", "/local_agent/model_preferences") => {
             let body: Value = serde_json::from_str(body).unwrap_or_default();
             if method == "PATCH" && body["account"] != "482139075" {
@@ -2448,6 +2466,62 @@ async fn relays_models_decisions_files_and_chat_actions() {
         tokio::task::spawn_blocking(f).await.unwrap()
     }
 
+    // Account settings travel through the daemon's device-bound HTTP client.
+    use cww::account_settings::{Change, CopyFormat, Request as AccountRequest};
+    let c = chats.clone();
+    let account = blocking(move || c.account_settings(AccountRequest::Read))
+        .await
+        .unwrap();
+    assert_eq!(account.account.id, "482139075");
+    assert_eq!(account.profile.display_name, "Alex");
+    let c = chats.clone();
+    let saved = blocking(move || {
+        c.account_settings(AccountRequest::Update {
+            account: "482139075".into(),
+            change: Change::Profile {
+                full_name: "Alex Morgan".into(),
+                display_name: "Morgan".into(),
+            },
+        })
+    })
+    .await
+    .unwrap();
+    assert_eq!(saved.profile.full_name, "Alex Morgan");
+    let c = chats.clone();
+    let saved = blocking(move || {
+        c.account_settings(AccountRequest::Update {
+            account: "482139075".into(),
+            change: Change::CopyFormat {
+                copy_answers_as: CopyFormat::Markdown,
+            },
+        })
+    })
+    .await
+    .unwrap();
+    assert_eq!(saved.copy_answers_as, CopyFormat::Markdown);
+    let sent = server.state.lock().unwrap().workspace_requests.clone();
+    assert_eq!(
+        sent[1]["body"],
+        json!({"account":"482139075","user":{"full_name":"Alex Morgan","display_name":"Morgan"}})
+    );
+    assert_eq!(
+        sent[2]["body"],
+        json!({"account":"482139075","user":{"copy_answers_as":"markdown"}})
+    );
+    let c = chats.clone();
+    assert_eq!(
+        blocking(move || c.account_settings(AccountRequest::Update {
+            account: "918273645".into(),
+            change: Change::CopyFormat {
+                copy_answers_as: CopyFormat::Markdown
+            }
+        }))
+        .await
+        .unwrap_err()
+        .code,
+        "stale_account"
+    );
+
     // Models, with the chat's own and a reason for one that can't be used.
     let c = chats.clone();
     let models = blocking(move || c.models()).await.unwrap();
@@ -2728,6 +2802,16 @@ async fn relays_models_decisions_files_and_chat_actions() {
 
     // An older server: a sentence for each, and chats without a model.
     server.state.lock().unwrap().old_api = true;
+    let c = chats.clone();
+    let error = blocking(move || c.account_settings(AccountRequest::Read))
+        .await
+        .unwrap_err();
+    assert!(
+        error.message.contains("can't manage account settings"),
+        "{}",
+        error.message
+    );
+
     let c = chats.clone();
     assert_eq!(
         blocking(move || c.projects(ProjectRequest::List))

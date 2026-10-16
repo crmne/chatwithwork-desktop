@@ -725,6 +725,11 @@ impl SettingsApp {
                 && !page.state().templates.as_ref().is_some_and(|p| p.busy)
                 && !page
                     .state()
+                    .account_settings
+                    .as_ref()
+                    .is_some_and(|p| p.busy)
+                && !page
+                    .state()
                     .model_preferences
                     .as_ref()
                     .is_some_and(|p| p.busy)
@@ -1308,6 +1313,7 @@ fn visible_notification_chat(
         || state.moving.is_some()
         || state.history.is_some()
         || state.projects.is_some()
+        || state.account_settings.is_some()
         || state.model_preferences.is_some()
         || state.templates.is_some()
         || state.error.is_some()

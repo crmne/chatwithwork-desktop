@@ -1319,6 +1319,7 @@ fn chat_list() -> ChatList {
     });
     launch.mine = false;
     ChatList {
+        copy_answers_as: Default::default(),
         chats: vec![
             summary(42, "Q3 budget", "2026-09-25T08:14:03Z"),
             launch,

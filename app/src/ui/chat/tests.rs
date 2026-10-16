@@ -1097,18 +1097,15 @@ fn a_pinned_project_is_current_while_one_of_its_chats_is_open() {
 }
 
 #[test]
-fn your_name_opens_settings_on_the_web_and_this_computer_its_own() {
+fn your_name_opens_native_account_settings_and_this_computer_its_own() {
     OPENED.with(|o| o.borrow_mut().clear());
     let mut fx = fixture(Options::default());
     fx.ready();
     // As on the web, your name links to Settings: no menu.
     fx.harness.get_by_label("Settings and usage").click();
-    fx.harness.run_steps(2);
-    assert_eq!(
-        OPENED.with(|o| o.borrow().clone()),
-        ["https://chatwithwork.com/northwind/settings?tab=account"]
-    );
-    assert!(fx.harness.query_by_label("Usage").is_none(), "no menu");
+    fx.wait_for_label("Save profile");
+    assert!(OPENED.with(|o| o.borrow().is_empty()));
+    assert!(fx.chat().state.account_settings.is_some());
     assert_eq!(fx.harness.state().page(), Page::Chat);
     // This computer's settings are one link of their own.
     fx.harness.get_by_label("This computer").click();
@@ -3986,4 +3983,190 @@ fn notification_click_waits_for_a_template_request_then_opens_the_chat() {
             .chat_state()
             .is_some_and(|s| s.open == Some(11) && s.templates.is_none() && !s.loading)
     });
+}
+
+#[test]
+fn native_account_settings_save_names_and_copying_separately() {
+    use cww::account_settings::CopyFormat;
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    let field = fx.harness.get_by_label("Full name");
+    field.click();
+    field.type_text(" Morgan");
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Markdown").click_accesskit();
+    fx.wait_for_label("Copying preference updated.");
+    let request = fx.wait_for_request("account_settings", |r| {
+        r["request"]["change"]["kind"] == "copy_format"
+    });
+    assert_eq!(request["request"]["account"], "482139075");
+    assert_eq!(
+        request["request"]["change"],
+        serde_json::json!({"kind":"copy_format","copy_answers_as":"markdown"})
+    );
+    let state = &fx.chat().state;
+    let screen = state.account_settings.as_ref().unwrap();
+    assert_eq!(screen.draft.full_name, "Alex Rivera Morgan");
+    assert!(screen.dirty());
+    assert_eq!(state.list.copy_answers_as, CopyFormat::Markdown);
+    assert!(super::super::visible_notification_chat(Page::Chat, true, Some(state)).is_none());
+    fx.harness.get_by_label("Save profile").click_accesskit();
+    fx.wait_for_label("Profile updated.");
+    let request = fx.wait_for_request("account_settings", |r| {
+        r["request"]["change"]["kind"] == "profile"
+    });
+    assert_eq!(
+        request["request"]["change"]["full_name"],
+        "Alex Rivera Morgan"
+    );
+    assert!(
+        request["request"]["change"]
+            .get("copy_answers_as")
+            .is_none()
+    );
+    assert!(!fx.chat().state.account_settings.as_ref().unwrap().dirty());
+    fx.harness.get_by_label("Rich text").click_accesskit();
+    fx.wait_for_label("Copying preference updated.");
+    assert_eq!(fx.chat().state.list.copy_answers_as, CopyFormat::RichText);
+    fx.open_waiting(11, "Want me to add it to the Q4 checklist?");
+    crate::clipboard::COPIED.with(|slot| *slot.borrow_mut() = None);
+    fx.harness
+        .query_all_by_label("Copy message")
+        .last()
+        .unwrap()
+        .click_accesskit();
+    fx.wait_for_label("Copied");
+    let (html, markdown) =
+        crate::clipboard::COPIED.with(|slot| slot.borrow_mut().take().expect("rich answer copy"));
+    assert!(html.contains("<p>") && markdown.contains("Q4 checklist"));
+}
+
+#[test]
+fn native_account_settings_guard_unsaved_notification_and_organization_navigation() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    let (profile, second) = add_organization(&mut fx);
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    let field = fx.harness.get_by_label("Full name");
+    field.click();
+    field.type_text(" draft");
+    fx.harness.run_steps(2);
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard profile changes?");
+    fx.harness.get_by_label("Keep editing").click_accesskit();
+    fx.harness.run_steps(3);
+    assert!(fx.harness.state().organizations.selected.is_none());
+    assert!(fx.chat().state.account_settings.as_ref().unwrap().dirty());
+    fx.harness.state().shared().open_chat(notification_target(
+        &profile.server.url,
+        &profile.account.id,
+        11,
+    ));
+    fx.wait_for_label("Discard profile changes?");
+    fx.harness.get_by_label("Discard changes").click_accesskit();
+    fx.wait("second organization", |h| {
+        h.state()
+            .chat_state()
+            .is_some_and(|s| s.list.account.id == "918273645" && s.open == Some(11) && !s.loading)
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "account_settings" && r["request"]["action"] == "update")
+    );
+    fx.harness.get_by_label("Settings and usage").click();
+    fx.wait_for_label("Save profile");
+    fx.harness.get_by_label("Markdown").click_accesskit();
+    fx.wait_for_label("Copying preference updated.");
+    assert!(
+        second
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "account_settings" && r["request"]["account"] == "918273645")
+    );
+}
+
+#[test]
+fn native_account_settings_reject_results_for_old_pages_and_clear_on_access_loss() {
+    let mut state = super::state::ChatState::default();
+    state.list.account.id = "482139075".into();
+    state.show_account_settings();
+    let old = state.account_settings.as_ref().unwrap().generation;
+    state.show_account_settings();
+    let current = state.account_settings.as_ref().unwrap().generation;
+    let page: cww::account_settings::Page = serde_json::from_value(serde_json::json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","profile":{"full_name":"Alex","display_name":"Alex"},"copy_answers_as":"markdown"})).unwrap();
+    assert!(
+        state
+            .update(super::state::Msg::AccountSettings(old, Ok(page.clone())))
+            .is_empty()
+    );
+    assert!(state.account_settings.as_ref().unwrap().page.is_none());
+    state.update(super::state::Msg::AccountSettings(
+        current,
+        Ok(page.clone()),
+    ));
+    assert!(state.account_settings.as_ref().unwrap().page.is_some());
+    state.update(super::state::Msg::Listed(Err(
+        cww::tui::chat::Failure::new("forbidden", "Access removed."),
+    )));
+    assert!(state.account_settings.is_none());
+    assert!(
+        state
+            .update(super::state::Msg::AccountSettings(current, Ok(page)))
+            .is_empty()
+    );
+}
+
+#[test]
+fn native_account_settings_review_screens() {
+    let Ok(directory) = std::env::var("CWW_ACCOUNT_EVIDENCE") else {
+        return;
+    };
+    for dark in [false, true] {
+        for width in [390.0, 1280.0] {
+            let renderer = egui_kittest::wgpu::WgpuTestRenderer::new();
+            let mut fx = fixture(Options {
+                dark,
+                size: [width, 900.0],
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(6);
+            let suffix = format!("{}-{width}.png", if dark { "dark" } else { "light" });
+            let before = std::path::Path::new(&directory).join("before");
+            std::fs::create_dir_all(&before).unwrap();
+            fx.harness
+                .render()
+                .expect("GPU rendering")
+                .save(before.join(&suffix))
+                .unwrap();
+            // Narrow screens reach the same page via the drawer; direct event
+            // here keeps the evidence focused on the settings layout.
+            let commands = fx.chat().state.show_account_settings();
+            fx.chat().run(commands);
+            fx.wait_for_label("Save profile");
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            let after = std::path::Path::new(&directory).join("after");
+            std::fs::create_dir_all(&after).unwrap();
+            fx.harness
+                .render()
+                .expect("GPU rendering")
+                .save(after.join(suffix))
+                .unwrap();
+        }
+    }
 }

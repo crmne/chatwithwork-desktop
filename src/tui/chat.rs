@@ -299,6 +299,7 @@ pub struct ChatList {
     pub projects: Vec<Project>,
     pub account: Named,
     pub user: Named,
+    pub copy_answers_as: crate::account_settings::CopyFormat,
     /// The organization's credits; `None` from an older server.
     pub credits: Option<Credits>,
     pub web_search: WebSearch,
@@ -372,6 +373,7 @@ fn whole<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
 pub struct AccountUpdate {
     pub account: Named,
     pub user: Named,
+    pub copy_answers_as: crate::account_settings::CopyFormat,
     pub credits: Option<Credits>,
     pub web_search: WebSearch,
     pub locked_reason: Option<String>,
@@ -382,6 +384,7 @@ impl ChatList {
     pub fn set_account(&mut self, update: AccountUpdate) {
         self.account = update.account;
         self.user = update.user;
+        self.copy_answers_as = update.copy_answers_as;
         self.credits = update.credits;
         self.web_search = update.web_search;
         self.locked_reason = update.locked_reason;
@@ -1171,6 +1174,13 @@ impl Chats {
 
     pub fn model_preferences(&self) -> Result<ModelPreferences, Failure> {
         parse(self.call(&ControlRequest::ModelPreferences)?)
+    }
+
+    pub fn account_settings(
+        &self,
+        request: crate::account_settings::Request,
+    ) -> Result<crate::account_settings::Page, Failure> {
+        parse(self.call(&ControlRequest::AccountSettings { request })?)
     }
 
     pub fn update_model_preferences(

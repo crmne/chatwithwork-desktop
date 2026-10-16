@@ -217,6 +217,9 @@ pub enum ControlRequest {
         data: String,
     },
     ModelPreferences,
+    AccountSettings {
+        request: crate::account_settings::Request,
+    },
     ModelPreferencesUpdate {
         account: String,
         model_id: Option<String>,

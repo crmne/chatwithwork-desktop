@@ -18,6 +18,7 @@ name = "cww-app"
 path = "src/main.rs"
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false }
 # The daemon's paths and control client, so the app finds its socket or pipe
 # exactly where it listens and checks the pipe's owner on Windows. Only the
 # control client and paths are linked in.
@@ -89,7 +90,7 @@ notify = "8.2"
 resvg = { version = "0.48", default-features = false }
 # Answers in chats are Markdown (CommonMark with GitHub's tables and
 # strikethrough), parsed here and drawn as the web app draws them.
-pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # Shared async control and demo support.
 tokio = { version = "1.53", features = ["sync", "macros"] }
 # Only for --demo, whose stand-in daemon uses the real listener.
@@ -99,6 +100,7 @@ tokio-util = { version = "0.7", features = ["io-util"], optional = true }
 whisper-rs = { version = "0.16.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 # Not used directly. zbus runs AccessKit's screen reader bridge on this
 # pool, and in blocking 1.7.0 an idle pool thread never exits: its exit test
 # needs the pool to be over its 500-thread limit as well as idle, so it

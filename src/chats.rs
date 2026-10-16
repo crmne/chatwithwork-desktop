@@ -510,6 +510,19 @@ impl ChatClient {
         )
     }
 
+    pub fn account_settings(&self, request: &crate::account_settings::Request) -> Result<Value> {
+        use crate::account_settings::Request;
+        let result = match request {
+            Request::Read => self.call("GET", "local_agent/account_settings", Body::Empty),
+            Request::Update { account, change } => self.call(
+                "PATCH",
+                "local_agent/account_settings",
+                Body::Json(&json!({"account":account,"user":change.attributes()})),
+            ),
+        };
+        newer(result, "can't manage account settings from here yet")
+    }
+
     pub fn update_model_preferences(&self, account: &str, model_id: Option<&str>) -> Result<Value> {
         newer(
             self.call(

@@ -33,6 +33,7 @@ pub enum Event {
     /// Open this chat in the browser (a tool's view, for now).
     OpenChat,
     Copy(String),
+    CopyAnswer(String),
     /// Retry this question or answer (after the web's confirmation).
     Retry {
         message: u64,
@@ -795,7 +796,7 @@ impl Conversation<'_> {
                 Icon::Copy,
                 "Copy message",
                 "Copy",
-                Event::Copy(text.to_string()),
+                Event::CopyAnswer(text.to_string()),
             )];
             if can.retry {
                 actions.push((
@@ -857,7 +858,7 @@ impl Conversation<'_> {
         event: &Event,
         idle: (Icon, &'a str, &'a str),
     ) -> (Icon, &'a str, &'a str) {
-        if !matches!(event, Event::Copy(_)) {
+        if !matches!(event, Event::Copy(_) | Event::CopyAnswer(_)) {
             return idle;
         }
         let at = ui.ctx().data(|d| d.get_temp::<f64>(button.with("copied")));
@@ -872,7 +873,7 @@ impl Conversation<'_> {
     }
 
     fn mark_copied(&self, ui: &Ui, button: Id, event: &Event) {
-        if matches!(event, Event::Copy(_)) {
+        if matches!(event, Event::Copy(_) | Event::CopyAnswer(_)) {
             let time = self.time;
             ui.ctx()
                 .data_mut(|d| d.insert_temp(button.with("copied"), time));

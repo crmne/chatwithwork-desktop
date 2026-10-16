@@ -5,6 +5,7 @@
 //! files in the folders where the user allows changes. See README.md for the
 //! threat model and PROTOCOL.md for the wire protocol.
 
+pub mod account_settings;
 pub mod audit;
 pub mod auth;
 pub mod browser;

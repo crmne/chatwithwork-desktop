@@ -66,6 +66,8 @@ struct State {
     workspace: Value,
     notification_preferences: Value,
     preferred_model: Value,
+    profile: Value,
+    copy_answers_as: Value,
     templates: Vec<Value>,
     notification_permission: String,
     instructions: Vec<Value>,
@@ -185,7 +187,10 @@ impl Server {
     pub fn spend(&self, left: u64) {
         self.demo.change(|s| {
             s.credits_left = left;
-            s.list_events.push(chats::account_update(left));
+            let mut update = chats::account_update(left);
+            update["copy_answers_as"] = s.copy_answers_as.clone();
+            update["user"]["name"] = s.profile["display_name"].clone();
+            s.list_events.push(update);
         });
     }
 
@@ -267,6 +272,8 @@ fn fresh() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
+        copy_answers_as: json!("rich_text"),
         templates: vec![],
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
@@ -389,6 +396,8 @@ fn sample() -> State {
         workspace: chats::workspace(),
         notification_preferences: chats::notification_preferences(),
         preferred_model: json!(12),
+        profile: json!({"full_name":"Alex Rivera","display_name":"Alex"}),
+        copy_answers_as: json!("rich_text"),
         templates: vec![],
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
@@ -535,6 +544,7 @@ impl Demo {
             | "models"
             | "templates"
             | "template_upload"
+            | "account_settings"
             | "model_preferences"
             | "model_preferences_update"
             | "chat_download"
@@ -876,6 +886,8 @@ impl Demo {
                 if state.status["account"].is_object() {
                     answer["account"] = state.status["account"].clone();
                 }
+                answer["copy_answers_as"] = state.copy_answers_as.clone();
+                answer["user"]["name"] = state.profile["display_name"].clone();
                 answer["ok"] = json!(true);
                 answer["chats"] = json!(list);
                 answer["projects"] = json!(state.projects);
@@ -909,6 +921,33 @@ impl Demo {
             }
             "templates" | "template_upload" => {
                 templates::respond(&mut self.state.lock().expect("demo lock"), cmd, request)
+            }
+            "account_settings" => {
+                let mut state = self.state.lock().expect("demo lock");
+                let request: cww::account_settings::Request =
+                    serde_json::from_value(request["request"].clone()).unwrap();
+                if let cww::account_settings::Request::Update { account, change } = request {
+                    if account
+                        != state.notification_preferences["account"]["id"]
+                            .as_str()
+                            .unwrap()
+                    {
+                        return json!({"ok":false,"code":"stale_account","error":"Your organization changed."});
+                    }
+                    match change {
+                        cww::account_settings::Change::Profile {
+                            full_name,
+                            display_name,
+                        } => {
+                            state.profile =
+                                json!({"full_name":full_name,"display_name":display_name});
+                        }
+                        cww::account_settings::Change::CopyFormat { copy_answers_as } => {
+                            state.copy_answers_as = json!(copy_answers_as);
+                        }
+                    }
+                }
+                json!({"ok":true,"account":state.notification_preferences["account"],"email":"alex@example.com","profile":state.profile,"copy_answers_as":state.copy_answers_as})
             }
             "models" | "model_preferences" | "model_preferences_update" => {
                 let mut state = self.state.lock().expect("demo lock");

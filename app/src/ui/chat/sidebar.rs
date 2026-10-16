@@ -22,6 +22,7 @@ pub const SEARCH_ID: &str = "chat-search";
 pub enum Event {
     NewChat,
     History,
+    AccountSettings,
     ModelPreferences,
     Templates(Option<u64>),
     Projects(cww::projects::Request),
@@ -244,10 +245,8 @@ impl Sidebar<'_> {
             pos2(rect.left() + 8.0, rect.bottom() - 8.0 - foot),
             pos2(inner_right - 8.0, rect.bottom() - 8.0),
         );
-        if self.person(ui, account_rect, meter.as_ref())
-            && let Some(url) = settings_url(state)
-        {
-            event = Some(Event::OpenUrl(url));
+        if self.person(ui, account_rect, meter.as_ref()) {
+            event = Some(Event::AccountSettings);
         }
 
         // What's pinned.
@@ -551,7 +550,7 @@ impl Sidebar<'_> {
 
     /// `.sidebar__account`: your initials (the web shows your Gravatar,
     /// which only the browser fetches), your name, and the credits meter
-    /// while they run low. True when clicked: it opens the web's Settings.
+    /// while they run low. True when clicked: it opens Account settings.
     fn person(&self, ui: &mut Ui, account: Rect, meter: Option<&cww::tui::chat::Credits>) -> bool {
         let p = self.palette;
         let painter = ui.painter().clone();
@@ -1122,16 +1121,6 @@ impl Sidebar<'_> {
         }
         event
     }
-}
-
-/// The web's Settings, which opens on its Account tab, as the link under
-/// the web's sidebar does.
-fn settings_url(state: &ChatState) -> Option<String> {
-    let tabs = &state.list.links.settings;
-    tabs.iter()
-        .find(|tab| tab.tab == "account")
-        .or(tabs.first())
-        .map(|tab| tab.url.clone())
 }
 
 /// What the person pinned, projects then chats, each in pin order, as far

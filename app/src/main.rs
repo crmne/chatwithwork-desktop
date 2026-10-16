@@ -12,6 +12,7 @@
 mod agent;
 mod audio;
 mod autostart;
+mod clipboard;
 mod control;
 #[cfg(any(test, feature = "demo"))]
 mod demo;

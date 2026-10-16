@@ -6,6 +6,7 @@
 //! transition, a streaming answer, running work's rings and shimmer. New
 //! text arrives from the follower thread, which wakes the window.
 
+mod account_settings;
 pub mod cards;
 pub mod composer;
 mod connectors;
@@ -150,7 +151,8 @@ impl ChatPage {
     }
 
     pub(super) fn navigation_busy(&self) -> bool {
-        self.state.templates.as_ref().is_some_and(|p| p.busy)
+        self.state.account_settings.as_ref().is_some_and(|p| p.busy)
+            || self.state.templates.as_ref().is_some_and(|p| p.busy)
             || self
                 .state
                 .model_preferences
@@ -171,6 +173,16 @@ impl ChatPage {
     ) -> bool {
         if self.state.templates.as_ref().is_some_and(|p| p.busy) {
             return false;
+        }
+        if let Some(page) = &mut self.state.account_settings {
+            if page.busy {
+                return false;
+            }
+            if page.dirty() {
+                page.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Notification(target.clone()));
+                return false;
+            }
         }
         if let Some(page) = &mut self.state.model_preferences {
             if page.busy {
@@ -284,6 +296,16 @@ impl ChatPage {
     pub fn open(&mut self, number: u64) {
         if self.state.templates.as_ref().is_some_and(|p| p.busy) {
             return;
+        }
+        if let Some(screen) = &mut self.state.account_settings {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = Some(sidebar::Event::Open(number));
+                return;
+            }
         }
         if let Some(screen) = &mut self.state.model_preferences {
             if screen.busy {
@@ -442,6 +464,9 @@ impl ChatPage {
         let now = ctx.input(|i| i.time);
         if self.state.ready()
             && self.state.open.is_none()
+            && self.state.account_settings.is_none()
+            && self.state.model_preferences.is_none()
+            && self.state.templates.is_none()
             && self.state.instructions.is_none()
             && self.state.history.is_none()
             && self.state.projects.is_none()
@@ -603,7 +628,26 @@ impl ChatPage {
 
         let conversing = self.state.open.is_some() || self.state.pending_question.is_some();
         let mut animating = false;
-        if let Some(screen) = &mut self.state.model_preferences {
+        if let Some(screen) = &mut self.state.account_settings {
+            let outcome = account_settings::show(
+                ui,
+                main,
+                screen,
+                &self.state.list.links.settings,
+                &p,
+                images,
+            );
+            if !screen.confirm_close && !outcome.discarded {
+                self.pending_navigation = None;
+            }
+            if outcome.discarded {
+                self.state.account_settings = None;
+                let pending = self.pending_navigation.take();
+                self.sidebar_event(pending, env, &mut action);
+            }
+            self.run(outcome.commands);
+            self.sidebar_event(outcome.event, env, &mut action);
+        } else if let Some(screen) = &mut self.state.model_preferences {
             let outcome = model_preferences::show(
                 ui,
                 main,
@@ -745,7 +789,10 @@ impl ChatPage {
                 });
         }
 
-        if self.state.instructions.is_none()
+        if self.state.account_settings.is_none()
+            && self.state.model_preferences.is_none()
+            && self.state.templates.is_none()
+            && self.state.instructions.is_none()
             && self.state.history.is_none()
             && self.state.projects.is_none()
             && self.state.moving.is_none()
@@ -872,6 +919,7 @@ impl ChatPage {
                                 | sidebar::Event::ProjectChat(_)
                                 | sidebar::Event::ProjectInstructions(_)
                                 | sidebar::Event::Instructions(_)
+                                | sidebar::Event::AccountSettings
                                 | sidebar::Event::ModelPreferences
                                 | sidebar::Event::Templates(_)
                                 | sidebar::Event::Toggle
@@ -920,11 +968,23 @@ impl ChatPage {
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
+                    | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
                     | sidebar::Event::OpenUrl(_)
             )
         );
+        if leaving_models && let Some(screen) = &mut self.state.account_settings {
+            if screen.busy {
+                return;
+            }
+            if screen.dirty() {
+                screen.confirm_close = true;
+                self.pending_navigation = event;
+                return;
+            }
+            self.state.account_settings = None;
+        }
         if leaving_models && let Some(screen) = &self.state.templates {
             if screen.busy {
                 return;
@@ -956,6 +1016,7 @@ impl ChatPage {
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
+                    | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
             )
@@ -984,6 +1045,7 @@ impl ChatPage {
                     | sidebar::Event::ProjectChat(_)
                     | sidebar::Event::ProjectInstructions(_)
                     | sidebar::Event::Instructions(_)
+                    | sidebar::Event::AccountSettings
                     | sidebar::Event::ModelPreferences
                     | sidebar::Event::Templates(_)
             )
@@ -1007,6 +1069,10 @@ impl ChatPage {
             }
         }
         match event {
+            Some(sidebar::Event::AccountSettings) => {
+                let commands = self.state.show_account_settings();
+                self.run(commands);
+            }
             Some(sidebar::Event::ModelPreferences) => {
                 let commands = self.state.show_model_preferences();
                 self.run(commands);
@@ -1504,6 +1570,9 @@ impl ChatPage {
                 conversation::Event::OpenUrl(url) => super::open_url(&url),
                 conversation::Event::OpenChat => self.open_chat_in_browser(env),
                 conversation::Event::Copy(text) => ctx.copy_text(text),
+                conversation::Event::CopyAnswer(text) => {
+                    crate::clipboard::answer(&ctx, text, self.state.list.copy_answers_as)
+                }
                 conversation::Event::Download(file) => self.save_file(file),
                 conversation::Event::Retry { message, user } => {
                     if let Some(chat) = self.state.open {

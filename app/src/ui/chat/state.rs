@@ -59,6 +59,7 @@ pub enum Command {
     Cancel(u64),
     /// Read the models the composer's picker offers.
     Models,
+    AccountSettings(u64, cww::account_settings::Request),
     ModelPreferences(u64, Option<(String, Option<String>)>),
     Templates(u64, cww::templates::Request),
     PickTemplate(u64, Vec<String>),
@@ -114,6 +115,7 @@ pub enum Msg {
     Cancelled(Result<(), Failure>),
     Access(Result<AccessRequest, Failure>),
     Models(Result<Models, Failure>),
+    AccountSettings(u64, Result<cww::account_settings::Page, Failure>),
     ModelPreferences(u64, Result<cww::tui::chat::ModelPreferences, Failure>),
     Templates(u64, Result<cww::templates::Page, Failure>),
     TemplatePicked(u64, Result<Option<PathBuf>, Failure>),
@@ -348,6 +350,7 @@ pub struct ChatState {
     pub moving: Option<MoveChat>,
     pub history: Option<super::history::HistoryPage>,
     pub projects: Option<super::projects::Screen>,
+    pub account_settings: Option<super::account_settings::Screen>,
     pub model_preferences: Option<super::model_preferences::Screen>,
     pub templates: Option<super::templates::Screen>,
     pub new_project: Option<cww::projects::Project>,
@@ -407,6 +410,7 @@ impl Default for ChatState {
             moving: None,
             history: None,
             projects: None,
+            account_settings: None,
             model_preferences: None,
             templates: None,
             new_project: None,
@@ -517,6 +521,7 @@ impl ChatState {
             }
             Vec::new()
         } else {
+            self.account_settings = None;
             self.access = Access::Unknown;
             self.start = None;
             self.start_loading = None;
@@ -553,6 +558,7 @@ impl ChatState {
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
         self.projects = None;
+        self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
         self.new_project = None;
@@ -584,6 +590,7 @@ impl ChatState {
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
         self.projects = None;
+        self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
         self.new_project = None;
@@ -653,6 +660,7 @@ impl ChatState {
         self.history = None;
         self.moving = None;
         self.instructions = None;
+        self.account_settings = None;
         self.model_preferences = None;
         let mut screen = super::templates::Screen::new(self.list.account.id.clone(), project);
         commands.extend(screen.load());
@@ -660,7 +668,22 @@ impl ChatState {
         commands
     }
 
+    pub fn show_account_settings(&mut self) -> Vec<Command> {
+        let mut commands = self.cancel_dictation();
+        self.projects = None;
+        self.history = None;
+        self.moving = None;
+        self.instructions = None;
+        self.model_preferences = None;
+        self.templates = None;
+        let mut screen = super::account_settings::Screen::new(self.list.account.id.clone());
+        commands.extend(screen.load());
+        self.account_settings = Some(screen);
+        commands
+    }
+
     pub fn show_model_preferences(&mut self) -> Vec<Command> {
+        self.account_settings = None;
         let mut commands = self.cancel_dictation();
         self.projects = None;
         self.history = None;
@@ -986,6 +1009,7 @@ impl ChatState {
         let project = summary.project.as_ref().map(|project| project.id);
         self.history = None;
         self.projects = None;
+        self.account_settings = None;
         self.model_preferences = None;
         self.templates = None;
         self.moving = Some(MoveChat { chat, project });
@@ -1230,6 +1254,15 @@ impl ChatState {
                     && screen.generation == generation
                 {
                     return screen.picked(result);
+                }
+            }
+            Msg::AccountSettings(generation, result) => {
+                if let Some(screen) = &mut self.account_settings
+                    && screen.generation == generation
+                    && let Some(page) = screen.loaded(result)
+                {
+                    self.list.copy_answers_as = page.copy_answers_as;
+                    return vec![Command::List];
                 }
             }
             Msg::ModelPreferences(generation, result) => {
@@ -1748,6 +1781,7 @@ impl ChatState {
             || matches!(failure.code.as_str(), "forbidden" | "invalid_token")
         {
             self.projects = None;
+            self.account_settings = None;
             self.model_preferences = None;
             self.templates = None;
             self.instructions = None;
