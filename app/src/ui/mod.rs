@@ -1270,6 +1270,7 @@ fn visible_notification_chat(
         || !state.ready()
         || state.instructions.is_some()
         || state.moving.is_some()
+        || state.history.is_some()
         || state.error.is_some()
     {
         return None;

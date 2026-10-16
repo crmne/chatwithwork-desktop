@@ -582,3 +582,15 @@ printf '{"cmd":"status"}\n' | nc -U "$XDG_RUNTIME_DIR/cww/cww.sock"
 `{"cmd":"dictation"}` returns `{"cloud":true}` when the owner can dictate, or `{"cloud":false,"reason":"..."}`. Older servers return `unsupported`.
 
 `{"cmd":"dictate","content_type":"audio/wav","data":"<base64>"}` sends an in-memory recording to the server as a multipart `audio` part, with the device's DPoP token and chat permission. The recording can be at most 10 MiB and five minutes; the server checks the format and duration. The response is `{"text":"..."}`. Put the text in the composer for editing; never send it as a question automatically. The daemon keeps no recording. Refusals retain the server's code and sentence, including `no_credits`, `rate_limited`, and `transcription_failed`.
+
+### Complete chat history
+
+`{"cmd":"chat_history","query":"budget","before":null}` asks for a page
+from `GET /local_agent/chat_history`. It returns `items` (each with `chat`,
+`group`, `age`), `total` (all visible chats) and `next_cursor`. Pass that cursor
+as `before` for the next page. An empty batch with a cursor means search is
+still scanning older encrypted titles, not that there are no matches. Pages
+contain at most 50 matches; queries are limited to 200 characters. The desktop
+serializes requests and discards responses for earlier queries, views or
+organizations. An older server reports `unsupported`, without opening a
+browser or claiming the sidebar's limited list is complete.

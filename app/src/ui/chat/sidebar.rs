@@ -21,6 +21,7 @@ pub const SEARCH_ID: &str = "chat-search";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     NewChat,
+    History,
     Organization(Option<String>),
     Notification(cww::notifications::navigation::Target),
     Open(u64),
@@ -28,7 +29,7 @@ pub enum Event {
     Toggle,
     /// This computer's settings pages, from the sidebar's This computer.
     Page(crate::ui::Page),
-    /// A page of the web, in the browser: Chats, All projects, a pinned
+    /// A page of the web, in the browser: All projects, a pinned
     /// project, Settings.
     OpenUrl(String),
     /// Rename a chat, from its row's menu.
@@ -161,7 +162,7 @@ impl Sidebar<'_> {
             event = Some(Event::NewChat);
         }
         y += 38.0;
-        if let Some(url) = state.list.links.chats.clone() {
+        if state.list.links.chats.is_some() {
             y += 2.0;
             let row = Rect::from_min_max(
                 pos2(rect.left() + 8.0, y),
@@ -172,10 +173,10 @@ impl Sidebar<'_> {
                 row,
                 Icon::ChatsCircle,
                 "Chats",
-                false,
+                state.history.is_some(),
                 Id::new("chat-history"),
             ) {
-                event = Some(Event::OpenUrl(url));
+                event = Some(Event::History);
             }
             y += LINK;
         }

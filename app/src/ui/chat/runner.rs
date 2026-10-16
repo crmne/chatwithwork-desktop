@@ -164,6 +164,12 @@ impl Runner {
                     wake.send(Msg::Listed(chats.list()));
                 }),
             ),
+            Command::History(generation, query, before) => spawn(
+                "cww-chat-history",
+                Box::new(move || {
+                    wake.send(Msg::History(generation, chats.history(query, before)));
+                }),
+            ),
             Command::Workspace(generation) => spawn(
                 "cww-workspace",
                 Box::new(move || {

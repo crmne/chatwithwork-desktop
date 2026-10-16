@@ -265,6 +265,10 @@ pub enum ControlRequest {
         chat: String,
         pinned: bool,
     },
+    ChatHistory {
+        query: String,
+        before: Option<String>,
+    },
     ChatMove {
         chat: String,
         project: Option<u64>,

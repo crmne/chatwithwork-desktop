@@ -13,6 +13,7 @@ pub mod controls;
 pub mod conversation;
 pub mod dialogs;
 pub mod highlight;
+mod history;
 pub mod icons;
 mod instructions;
 pub mod logos;
@@ -357,7 +358,11 @@ impl ChatPage {
             }
         }
         let now = ctx.input(|i| i.time);
-        if self.state.ready() && self.state.open.is_none() && self.state.instructions.is_none() {
+        if self.state.ready()
+            && self.state.open.is_none()
+            && self.state.instructions.is_none()
+            && self.state.history.is_none()
+        {
             if self.state.start_loading.is_none()
                 && self.state.start_error.is_none()
                 && (self.state.start.is_none() || now >= self.workspace_refresh)
@@ -526,6 +531,13 @@ impl ChatPage {
             if let Some(chat) = outcome.open_chat {
                 self.sidebar_event(Some(sidebar::Event::Open(chat)), env, &mut action);
             }
+        } else if self.state.history.is_some() {
+            let (event, load) = history::show(ui, main, &mut self.state, &p, images);
+            if load {
+                let commands = self.state.load_history();
+                self.run(commands);
+            }
+            self.sidebar_event(event, env, &mut action);
         } else if self.state.moving.is_some() {
             let commands = project_move::show(ui, main, &mut self.state, &p, images);
             self.run(commands);
@@ -589,6 +601,7 @@ impl ChatPage {
         }
 
         if self.state.instructions.is_none()
+            && self.state.history.is_none()
             && self.state.moving.is_none()
             && let Some(chat) = self
                 .state
@@ -708,6 +721,7 @@ impl ChatPage {
                                 | sidebar::Event::Organization(_)
                                 | sidebar::Event::Notification(_)
                                 | sidebar::Event::Move(_)
+                                | sidebar::Event::History
                                 | sidebar::Event::Toggle
                         )
                     ) {
@@ -749,6 +763,7 @@ impl ChatPage {
                     | sidebar::Event::Organization(_)
                     | sidebar::Event::Notification(_)
                     | sidebar::Event::Move(_)
+                    | sidebar::Event::History
             )
         ) && let Some(page) = &mut self.state.instructions
         {
@@ -767,6 +782,11 @@ impl ChatPage {
                 let commands = self.state.new_chat();
                 self.run(commands);
                 self.focus_composer = true;
+            }
+            Some(sidebar::Event::History) => {
+                let commands = self.state.show_history();
+                self.run(commands);
+                self.drawer = false;
             }
             Some(sidebar::Event::OpenUrl(url)) => self.open_on_server(env, &url),
             Some(sidebar::Event::Page(page)) => *action = Some(Action::Settings(page)),

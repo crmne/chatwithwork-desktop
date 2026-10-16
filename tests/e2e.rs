@@ -444,6 +444,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
     };
     // Rails without the route: an HTML 404, not the API's JSON.
     let newer = path.starts_with("/local_agent/models")
+        || path.starts_with("/local_agent/chat_history")
         || path.starts_with("/local_agent/uploads")
         || path.starts_with("/local_agent/dictations")
         || path.ends_with("/retry")
@@ -455,6 +456,17 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
         return (404, Value::Null);
+    }
+    if let Some(query) = path.strip_prefix("/local_agent/chat_history?") {
+        let params: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(params.get("q").map(String::as_str), Some("budget & café"));
+        assert_eq!(params.get("before").map(String::as_str), Some("page+/="));
+        return (
+            200,
+            json!({"total": 205, "next_cursor": "next-page", "items": [{"chat": chat(7, "Budget", "idle"), "group": "Earlier", "age": "2 months ago"}]}),
+        );
     }
     let posted: Value = serde_json::from_str(body).unwrap_or_default();
     if let Some(model) = posted.get("model_id")
@@ -2423,6 +2435,15 @@ async fn relays_models_decisions_files_and_chat_actions() {
     let pinned = blocking(move || c.pin(7, true)).await.unwrap();
     assert_eq!(pinned.chats, vec![7]);
     let c = chats.clone();
+    let history = blocking(move || c.history("budget & café".into(), Some("page+/=".into())))
+        .await
+        .unwrap();
+    assert_eq!(history.total, 205);
+    assert_eq!(history.items[0].chat.number, 7);
+    assert_eq!(history.items[0].group, "Earlier");
+    assert_eq!(history.items[0].age, "2 months ago");
+    assert_eq!(history.next_cursor.as_deref(), Some("next-page"));
+    let c = chats.clone();
     assert!(
         blocking(move || c.pin(7, false))
             .await
@@ -2506,6 +2527,12 @@ async fn relays_models_decisions_files_and_chat_actions() {
 
     // An older server: a sentence for each, and chats without a model.
     server.state.lock().unwrap().old_api = true;
+    let c = chats.clone();
+    let old = blocking(move || c.history(String::new(), None))
+        .await
+        .unwrap_err();
+    assert_eq!(old.code, "unsupported");
+    assert!(old.message.contains("full chat history"));
     let c = chats.clone();
     let old = blocking(move || c.models()).await.unwrap_err();
     assert_eq!(old.code, "unsupported");

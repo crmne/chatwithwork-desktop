@@ -22,6 +22,7 @@ pub enum Command {
     CancelDictation,
     /// Read the list of chats.
     List,
+    History(u64, String, Option<String>),
     Workspace(u64),
     ServicePause(u64, cww::workspace::Service, bool),
     ComputerRemove(u64, u64),
@@ -81,6 +82,7 @@ pub enum Command {
 pub enum Msg {
     Dictation(u64, dictation::Update),
     Listed(Result<ChatList, Failure>),
+    History(u64, Result<cww::tui::chat::History, Failure>),
     Workspace(u64, Result<cww::workspace::NewChat, Failure>),
     Instructions(u64, Result<cww::workspace::InstructionPage, Failure>),
     Memory(u64, Result<cww::workspace::Memory, Failure>),
@@ -334,6 +336,9 @@ pub struct ChatState {
     next_key: u64,
     pub dialog: Option<Dialog>,
     pub moving: Option<MoveChat>,
+    pub history: Option<super::history::HistoryPage>,
+    /// At most one history request runs, even while the query/page changes.
+    history_request: Option<u64>,
     /// The chat whose row menu is open in the sidebar.
     pub menu: Option<u64>,
     /// The chat being renamed in the sidebar, and its title so far.
@@ -386,6 +391,8 @@ impl Default for ChatState {
             next_key: 1,
             dialog: None,
             moving: None,
+            history: None,
+            history_request: None,
             menu: None,
             renaming: None,
             deciding: None,
@@ -522,6 +529,7 @@ impl ChatState {
 
     /// Show a chat, read it, and follow it live.
     pub fn open_chat(&mut self, number: u64) -> Vec<Command> {
+        self.history = None;
         self.moving = None;
         self.instructions = None;
         self.connectors = None;
@@ -548,6 +556,7 @@ impl ChatState {
 
     /// An empty conversation: the first question starts the chat.
     pub fn new_chat(&mut self) -> Vec<Command> {
+        self.history = None;
         self.moving = None;
         self.start = None;
         self.start_error = None;
@@ -571,6 +580,33 @@ impl ChatState {
             commands.push(Command::Follow(None));
         }
         commands
+    }
+
+    pub fn show_history(&mut self) -> Vec<Command> {
+        let mut commands = self.new_chat();
+        self.history = Some(super::history::HistoryPage::default());
+        commands.extend(self.load_history());
+        commands
+    }
+
+    pub fn load_history(&mut self) -> Vec<Command> {
+        if self.history_request.is_some() || !self.ready() {
+            return vec![];
+        }
+        let Some(page) = &mut self.history else {
+            return vec![];
+        };
+        if page.loaded && page.next_cursor.is_none() {
+            return vec![];
+        }
+        page.error = None;
+        page.loading = true;
+        self.history_request = Some(page.generation);
+        vec![Command::History(
+            page.generation,
+            page.query.clone(),
+            page.next_cursor.clone(),
+        )]
     }
 
     /// What belongs to the chat that was open goes with it, as a page
@@ -786,7 +822,7 @@ impl ChatState {
     /// composer checks it, then uploaded.
     pub fn attach(&mut self, paths: Vec<PathBuf>) -> Vec<Command> {
         let mut commands = Vec::new();
-        if !self.ready() || self.locked_reason().is_some() {
+        if !self.ready() || self.locked_reason().is_some() || self.history.is_some() {
             return commands;
         }
         for path in paths {
@@ -868,10 +904,9 @@ impl ChatState {
         let Some(summary) = self.summary(chat).filter(|chat| chat.can(|can| can.r#move)) else {
             return Vec::new();
         };
-        self.moving = Some(MoveChat {
-            chat,
-            project: summary.project.as_ref().map(|project| project.id),
-        });
+        let project = summary.project.as_ref().map(|project| project.id);
+        self.history = None;
+        self.moving = Some(MoveChat { chat, project });
         self.notice = None;
         self.cancel_dictation()
     }
@@ -913,6 +948,14 @@ impl ChatState {
             .map(|t| &t.chat)
             .filter(|c| c.number == number)
             .or_else(|| self.list.chats.iter().find(|c| c.number == number))
+            .or_else(|| {
+                self.history
+                    .as_ref()?
+                    .items
+                    .iter()
+                    .map(|item| &item.chat)
+                    .find(|c| c.number == number)
+            })
     }
 
     /// Ask the owner to let this computer use their chats.
@@ -1030,6 +1073,56 @@ impl ChatState {
                                 Some("Finish signing in in your browser, then return here.".into());
                         }
                         Err(failure) => dialog.error = Some(failure.message),
+                    }
+                }
+            }
+            Msg::History(generation, result) => {
+                if self.history_request != Some(generation) {
+                    return vec![];
+                }
+                self.history_request = None;
+                let Some(page) = &mut self.history else {
+                    return vec![];
+                };
+                page.loading = false;
+                if page.generation != generation {
+                    return vec![];
+                }
+                match result {
+                    Ok(history) => {
+                        let previous = page.next_cursor.take();
+                        page.total = Some(history.total);
+                        page.loaded = true;
+                        for item in history.items {
+                            page.items.retain(|old| old.chat.number != item.chat.number);
+                            page.items.push(item);
+                        }
+                        if history.next_cursor.is_some() && history.next_cursor == previous {
+                            page.error = Some(
+                                "The chat search could not continue. Start the search again."
+                                    .into(),
+                            );
+                        } else {
+                            page.next_cursor = history.next_cursor;
+                            if page.items.is_empty() && page.next_cursor.is_some() {
+                                return self.load_history();
+                            }
+                        }
+                    }
+                    Err(failure) => {
+                        if matches!(
+                            failure.code.as_str(),
+                            "forbidden"
+                                | "invalid_token"
+                                | "revoked"
+                                | "chat_access_required"
+                                | "not_paired"
+                        ) {
+                            page.items.clear();
+                            page.total = None;
+                            page.next_cursor = None;
+                        }
+                        page.error = Some(failure.message);
                     }
                 }
             }
@@ -1278,6 +1371,9 @@ impl ChatState {
     /// A chat that's gone from the list: deleted, or out of sight now.
     /// Open, it closes, saying so.
     fn remove_chat(&mut self, number: u64) -> Vec<Command> {
+        if let Some(page) = &mut self.history {
+            page.remove(number);
+        }
         self.list.chats.retain(|c| c.number != number);
         if self.menu == Some(number) {
             self.menu = None;
@@ -1382,6 +1478,9 @@ impl ChatState {
                 commands
             }
             (ChatAction::Delete, _) => {
+                if let Some(page) = &mut self.history {
+                    page.remove(chat);
+                }
                 self.list.chats.retain(|c| c.number != chat);
                 if self.dialog == Some(Dialog::Delete { chat }) {
                     self.dialog = None;
@@ -1642,6 +1741,140 @@ pub fn accepts(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_serializes_searches_and_discards_a_superseded_result() {
+        use cww::tui::chat::{History, HistoryItem};
+        let mut state = ChatState {
+            access: Access::Ready,
+            ..Default::default()
+        };
+        let first = state.show_history();
+        let Command::History(generation, _, _) = first.last().unwrap() else {
+            panic!("history request");
+        };
+        let generation = *generation;
+        state.history.as_mut().unwrap().query = "new".into();
+        state.history.as_mut().unwrap().search(0.0);
+        assert!(
+            state.load_history().is_empty(),
+            "the previous request still owns the worker"
+        );
+        let stale = History {
+            total: 1,
+            items: vec![HistoryItem {
+                chat: summary(9, "idle"),
+                group: "Today".into(),
+                age: "now".into(),
+            }],
+            next_cursor: None,
+        };
+        state.update(Msg::History(generation, Ok(stale)));
+        assert!(state.history.as_ref().unwrap().items.is_empty());
+        let next = state.load_history();
+        let Command::History(generation, query, _) = next.last().unwrap() else {
+            panic!("latest query");
+        };
+        assert_eq!(query, "new");
+        let generation = *generation;
+        let continued = state.update(Msg::History(
+            generation,
+            Ok(History {
+                total: 205,
+                items: vec![],
+                next_cursor: Some("older".into()),
+            }),
+        ));
+        assert!(
+            matches!(&continued[..], [Command::History(_, query, Some(cursor))] if query == "new" && cursor == "older")
+        );
+        state.update(Msg::History(
+            generation,
+            Err(Failure::new("offline", "Try again")),
+        ));
+        assert_eq!(
+            state.history.as_ref().unwrap().error.as_deref(),
+            Some("Try again")
+        );
+        assert!(!state.load_history().is_empty());
+        state.new_chat();
+        state.update(Msg::History(generation, Ok(History::default())));
+        assert!(state.history.is_none(), "leaving cannot reopen the page");
+    }
+
+    #[test]
+    fn history_access_loss_discards_already_queued_page_rows() {
+        use cww::tui::chat::{History, HistoryItem};
+        let mut state = ChatState {
+            access: Access::Ready,
+            ..Default::default()
+        };
+        state.show_history();
+        let generation = state.history.as_ref().unwrap().generation;
+        state.update(Msg::ListLive(ListLive::Removed(205)));
+        state.update(Msg::History(
+            generation,
+            Ok(History {
+                total: 1,
+                items: vec![HistoryItem {
+                    chat: summary(205, "idle"),
+                    group: "Earlier".into(),
+                    age: "1 year ago".into(),
+                }],
+                next_cursor: None,
+            }),
+        ));
+        assert!(state.history.as_ref().unwrap().items.is_empty());
+        assert!(
+            !state.load_history().is_empty(),
+            "a fresh scoped page replaces the discarded result"
+        );
+    }
+
+    #[test]
+    fn history_rejects_cursor_cycles_and_forgets_refused_results() {
+        use cww::tui::chat::{History, HistoryItem};
+        let mut state = ChatState {
+            access: Access::Ready,
+            ..Default::default()
+        };
+        state.show_history();
+        let generation = state.history.as_ref().unwrap().generation;
+        let result = History {
+            total: 205,
+            items: vec![HistoryItem {
+                chat: summary(205, "idle"),
+                group: "Earlier".into(),
+                age: "1 year ago".into(),
+            }],
+            next_cursor: Some("same".into()),
+        };
+        state.update(Msg::History(generation, Ok(result.clone())));
+        assert_eq!(
+            state.summary(205).unwrap().number,
+            205,
+            "older rows support delete confirmation"
+        );
+        state.load_history();
+        assert!(
+            state
+                .update(Msg::History(generation, Ok(result)))
+                .is_empty()
+        );
+        assert!(state.history.as_ref().unwrap().error.is_some());
+        state.history.as_mut().unwrap().search(0.0);
+        state.load_history();
+        let generation = state.history.as_ref().unwrap().generation;
+        state.update(Msg::History(
+            generation,
+            Err(Failure::new("forbidden", "Access removed")),
+        ));
+        assert!(state.history.as_ref().unwrap().items.is_empty());
+        assert_eq!(
+            state.history.as_ref().unwrap().error.as_deref(),
+            Some("Access removed")
+        );
+    }
 
     fn summary(number: u64, state: &str) -> ChatSummary {
         ChatSummary {

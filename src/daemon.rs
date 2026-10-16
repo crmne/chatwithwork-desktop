@@ -1224,6 +1224,10 @@ impl ControlHandler for Daemon {
             ControlRequest::ChatPin { chat, pinned } => {
                 self.chat(move |client| client.pin(&chat, pinned)).await
             }
+            ControlRequest::ChatHistory { query, before } => {
+                self.chat(move |client| client.history(&query, before.as_deref()))
+                    .await
+            }
             ControlRequest::ChatMove { chat, project } => {
                 self.chat(move |client| client.move_to(&chat, project))
                     .await

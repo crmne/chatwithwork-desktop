@@ -817,6 +817,9 @@ fn notification_presence_requires_the_displayed_transcript_and_account() {
     });
     assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
     state.moving = None;
+    state.history = Some(Default::default());
+    assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
+    state.history = None;
     state.list.account.id.clear();
     assert!(super::visible_notification_chat(Page::Chat, true, Some(&state)).is_none());
 }

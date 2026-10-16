@@ -58,6 +58,20 @@ pub struct ChatSummary {
     pub can: Option<Can>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct History {
+    pub items: Vec<HistoryItem>,
+    pub total: u64,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HistoryItem {
+    pub chat: ChatSummary,
+    pub group: String,
+    pub age: String,
+}
+
 impl ChatSummary {
     pub fn processing(&self) -> bool {
         self.state == "processing"
@@ -1251,6 +1265,10 @@ impl Chats {
             pinned,
         })?;
         parse(response["pins"].clone())
+    }
+
+    pub fn history(&self, query: String, before: Option<String>) -> Result<History, Failure> {
+        parse(self.call(&ControlRequest::ChatHistory { query, before })?)
     }
 
     pub fn move_to(&self, chat: u64, project: Option<u64>) -> Result<ChatSummary, Failure> {

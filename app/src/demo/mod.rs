@@ -533,6 +533,7 @@ impl Demo {
             | "chat_rename"
             | "chat_delete"
             | "chat_pin"
+            | "chat_history"
             | "chat_move"
             | "chat_share"
             | "chat_unshare"
@@ -669,6 +670,23 @@ impl Demo {
         }
         let number = request["chat"].as_str().and_then(|c| c.parse::<u64>().ok());
         match cmd {
+            "chat_history" => {
+                let state = self.state.lock().expect("demo lock");
+                let query = request["query"].as_str().unwrap_or_default().to_lowercase();
+                let items: Vec<_> = state
+                    .listed
+                    .iter()
+                    .filter(|chat| {
+                        chat["title"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(&query)
+                    })
+                    .map(|chat| json!({"chat": chat, "group": "Today", "age": "about 1 hour ago"}))
+                    .collect();
+                json!({"ok": true, "total": state.listed.len(), "items": items, "next_cursor": null})
+            }
             "notification_preferences" => self
                 .state
                 .lock()

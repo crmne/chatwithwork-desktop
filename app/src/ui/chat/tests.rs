@@ -1044,13 +1044,10 @@ fn the_sidebar_shows_whats_pinned_as_the_web_does() {
     assert_eq!(pinned.len(), 2);
     pinned[1].click();
     fx.wait_for_request("chat", |r| r["chat"] == "4");
-    // Chats opens the web's page of every chat.
+    // Chats opens the native page of every chat.
     fx.harness.get_by_label("Chats").click();
-    fx.harness.run_steps(2);
-    assert_eq!(
-        OPENED.with(|o| o.borrow().clone()),
-        ["https://chatwithwork.com/northwind/chats"]
-    );
+    fx.wait_for_label("Search your chats");
+    assert!(OPENED.with(|o| o.borrow().is_empty()));
 }
 
 #[test]
@@ -2943,4 +2940,221 @@ fn chat_pins_and_project_moves_use_native_controls_and_explain_the_audience() {
             .is_some_and(|chat| chat.project.is_none())
     });
     assert!(fx.harness.state().chat_state().unwrap().moving.is_none());
+}
+
+#[test]
+fn chat_history_review_screens() {
+    let Ok(directory) = std::env::var("CWW_CHAT_HISTORY_EVIDENCE") else {
+        return;
+    };
+    std::fs::create_dir_all(&directory).unwrap();
+    for dark in [false, true] {
+        for (name, size) in [("wide", [1280.0, 900.0]), ("narrow", [390.0, 844.0])] {
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(egui_kittest::wgpu::WgpuTestRenderer::new()),
+                ..Default::default()
+            });
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().drawer = size[0] < 800.0;
+            fx.harness.run_steps(5);
+            if std::env::var_os("CWW_CHAT_HISTORY_AFTER").is_some() {
+                fx.harness.get_by_label("Chats").click();
+                fx.wait_for_label("Search your chats");
+                fx.wait_for_request("chat_history", |_| true);
+                fx.wait("history loaded for capture", |h| {
+                    h.state()
+                        .chat_ref()
+                        .unwrap()
+                        .state
+                        .history
+                        .as_ref()
+                        .is_some_and(|page| page.loaded)
+                });
+                let page = fx.chat().state.history.as_mut().unwrap();
+                page.items.truncate(5);
+                page.total = Some(5);
+                let titles = [
+                    "Q3 budget review",
+                    "Vendor contract renewal",
+                    "Weekly report for leadership",
+                    "Falcon launch checklist",
+                    "Competitor pricing notes",
+                ];
+                let groups = [
+                    "Today",
+                    "Yesterday",
+                    "Previous 7 days",
+                    "Previous 30 days",
+                    "Earlier",
+                ];
+                let ages = [
+                    "less than a minute ago",
+                    "1 day ago",
+                    "4 days ago",
+                    "15 days ago",
+                    "about 1 month ago",
+                ];
+                for (i, item) in page.items.iter_mut().enumerate() {
+                    item.chat.title = titles[i].into();
+                    item.chat.state = "idle".into();
+                    item.group = groups[i].into();
+                    item.age = ages[i].into();
+                }
+                fx.harness.run_steps(3);
+            }
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(2);
+            fx.harness
+                .render()
+                .unwrap()
+                .save(std::path::Path::new(&directory).join(format!(
+                    "history-{name}-{}.png",
+                    if dark { "dark" } else { "light" }
+                )))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn chat_history_search_open_and_delete_use_native_controls() {
+    let mut fx = fixture(Options::default());
+    fx.ready();
+    OPENED.with(|urls| urls.borrow_mut().clear());
+    fx.harness.get_by_label("Chats").click();
+    fx.wait("history loaded", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| page.loaded)
+    });
+    assert_eq!(fx.chat().state.history.as_ref().unwrap().items.len(), 10);
+    fx.chat().state.history.as_mut().unwrap().next_cursor = Some("next".into());
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Load more chats").click();
+    fx.wait_for_request("chat_history", |r| r["before"] == "next");
+    fx.wait("next page loaded", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| !page.loading)
+    });
+    assert_eq!(
+        fx.chat().state.history.as_ref().unwrap().items.len(),
+        10,
+        "updated rows do not duplicate"
+    );
+    assert!(
+        fx.chat()
+            .state
+            .attach(vec![std::path::PathBuf::from("synthetic.txt")])
+            .is_empty(),
+        "history has no attachment composer"
+    );
+    fx.chat().state.menu = Some(11);
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Move to project").click();
+    fx.wait_for_label("What they'll see");
+    assert!(fx.chat().state.history.is_none());
+    fx.harness.get_by_label("Chats").click();
+    fx.wait("history after move page", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| page.loaded)
+    });
+    assert!(fx.chat().state.open.is_none());
+    let field = fx.harness.get_by_label("Search your chats");
+    field.click();
+    field.type_text("Vendor contract");
+    fx.wait_for_request("chat_history", |r| r["query"] == "Vendor contract");
+    fx.wait("filtered history", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| page.loaded && page.items.len() == 1)
+    });
+    assert!(
+        !fx.server
+            .requests()
+            .iter()
+            .any(|r| r["cmd"] == "chat_delete")
+    );
+    fx.harness
+        .get_by_label("Delete Vendor contract renewal")
+        .click();
+    fx.wait_for_label("Are you sure?");
+    fx.harness.get_by_label("Cancel").click();
+    fx.harness.run_steps(3);
+    fx.harness
+        .query_all_by_label("Vendor contract renewal")
+        .last()
+        .unwrap()
+        .click();
+    fx.wait_for_request("chat", |r| r["chat"] == "11");
+    fx.caught_up();
+    assert!(fx.chat().state.history.is_none());
+    fx.harness.get_by_label("Chats").click();
+    fx.wait("history reopened", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| page.loaded)
+    });
+    fx.harness
+        .get_by_label("Delete Vendor contract renewal")
+        .click();
+    fx.wait_for_label("Are you sure?");
+    fx.harness.get_by_label("Delete").click();
+    fx.wait_for_request("chat_delete", |r| r["chat"] == "11");
+    fx.wait("chat removed from history", |h| {
+        h.state()
+            .chat_ref()
+            .unwrap()
+            .state
+            .history
+            .as_ref()
+            .is_some_and(|page| !page.items.iter().any(|item| item.chat.number == 11))
+    });
+    assert_eq!(fx.chat().state.history.as_ref().unwrap().total, Some(9));
+    OPENED.with(|urls| assert!(urls.borrow().is_empty(), "history never opens a browser"));
+}
+
+#[test]
+fn chat_history_keeps_unsaved_instructions_until_discarded() {
+    let mut fx = fixture(Options::default());
+    fx.wait_for_label("write your instructions");
+    fx.harness
+        .query_all_by_label("write your instructions")
+        .next()
+        .unwrap()
+        .click();
+    fx.wait_for_label("Use a template");
+    fx.harness.run_steps(8);
+    fx.harness.get_by_label("Use a template").click();
+    fx.harness.run_steps(3);
+    fx.harness.get_by_label("Chats").click();
+    fx.wait_for_label("Discard unsaved instructions?");
+    assert!(fx.chat().state.history.is_none());
+    fx.harness.get_by_label("Discard changes").click();
+    fx.wait_for_label("Search your chats");
+    assert!(fx.chat().state.instructions.is_none());
 }

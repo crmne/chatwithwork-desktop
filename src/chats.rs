@@ -633,6 +633,22 @@ impl ChatClient {
         )
     }
 
+    pub fn history(&self, query: &str, before: Option<&str>) -> Result<Value> {
+        let mut params = url::form_urlencoded::Serializer::new(String::new());
+        params.append_pair("q", query);
+        if let Some(before) = before {
+            params.append_pair("before", before);
+        }
+        newer(
+            self.call(
+                "GET",
+                &format!("local_agent/chat_history?{}", params.finish()),
+                Body::Empty,
+            ),
+            "can't show the full chat history from here yet",
+        )
+    }
+
     pub fn move_to(&self, chat: &str, project: Option<u64>) -> Result<Value> {
         let chat = chat_number(chat)?;
         let path = format!("local_agent/chats/{chat}/project");
