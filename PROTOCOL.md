@@ -582,7 +582,7 @@ Offered only while a shared folder allows commands (`allows_commands` in `roots`
 | `background` | boolean | Answer at once and leave it running. |
 | `dry_run` | boolean | Answer `{"dry_run": true, "path", "folder", "dir", "command", "network", "background", "limits": {"cpu_seconds", "memory_mb", "timeout_seconds", "output_chars"}}` and run nothing. |
 
-Without `background` it waits up to 120 seconds. While it waits, a request with a `progressToken` gets `notifications/progress` with `progress` the bytes printed so far and `message` its latest line. It answers:
+Without `background` it waits up to 15 seconds, under the server's 20-second wait for a call. While it waits, a request with a `progressToken` gets `notifications/progress` with `progress` the bytes printed so far and `message` its latest line. It answers:
 
 ```json
 { "path": "app:api", "folder": "App", "command": "bin/rails test", "network": false,

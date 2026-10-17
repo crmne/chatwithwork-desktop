@@ -20,7 +20,7 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 
 `roots` says which folders allow commands (`allows_commands`) and whether they may use the network. While one does, four more tools are offered:
 
-- `run` starts a command and waits up to two minutes for it, reporting what it prints as MCP progress notifications (bytes so far, and its latest line). It answers with the exit code and the end of each stream (20 000 characters by default); a longer command keeps running and the answer says so. `background: true` answers at once, for a server or a watcher. `dry_run: true` says where and how it would run, with the folder's network setting and the limits, for the approval card, and runs nothing.
+- `run` starts a command and waits up to 15 seconds for it (Chat with Work waits 20 for a tool call), reporting what it prints as MCP progress notifications (bytes so far, and its latest line). It answers with the exit code and the end of each stream (20 000 characters by default); a longer command keeps running and the answer says so. `background: true` answers at once, for a server or a watcher. `dry_run: true` says where and how it would run, with the folder's network setting and the limits, for the approval card, and runs nothing.
 - `run_status` and `run_output` follow a command left running: how it stands, and what it printed from an offset (the latest megabyte is kept).
 - `run_stop` stops one, and everything it started.
 

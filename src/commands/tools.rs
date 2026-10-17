@@ -20,8 +20,8 @@ use crate::reader::safe_fs::ToolPath;
 pub const COMMAND_TOOLS: [&str; 4] = ["run", "run_status", "run_output", "run_stop"];
 
 /// How long `run` waits for a command before answering that it's still
-/// running, and how often it reports what it printed meanwhile.
-pub const FOREGROUND_WAIT: Duration = Duration::from_secs(120);
+/// running: under the 20 seconds Chat with Work waits for a tool call.
+pub const FOREGROUND_WAIT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(250);
 /// Characters of output each progress report carries at most.
 const PROGRESS_CHARS: usize = 200;
@@ -327,7 +327,7 @@ pub fn definitions() -> Vec<(
              It runs in a sandbox of its own: it can change only that folder, reads the system \
              and the installed language toolchains, has no network unless the folder allows it \
              (`network` in `roots`), and has CPU, memory and time limits. `path` is the folder \
-             to start in, `<root_id>:` or `<root_id>:dir`. Waits up to two minutes and returns \
+             to start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns \
              the exit code and the end of its output; a longer command keeps running, and the \
              result says how to follow it. `background: true` returns at once. The person \
              approves every command.",
