@@ -1234,14 +1234,7 @@ impl Conversation<'_> {
                 .iter()
                 .enumerate()
                 .take(4)
-                .map(|(n, name)| {
-                    glyphs
-                        .get(n)
-                        .and_then(|g| g.as_deref())
-                        .and_then(Icon::named)
-                        .map(Face::Glyph)
-                        .unwrap_or_else(|| service_face(name, logos, n, steps))
-                })
+                .map(|(n, name)| service_face(name, logos, glyphs, n, steps))
                 .collect()
         };
         let avatar_w = if faces.is_empty() {
@@ -2120,15 +2113,31 @@ fn names_service(name: &str, steps: &[Step]) -> bool {
 }
 
 /// What an activity's avatar for its `n`th service shows: its logo, or the
-/// web's glyph where it has none (`laptop` for a computer,
-/// `plugs-connected` for a person's own MCP server). An older server sends
-/// no logos: the name's initial, then.
+/// glyph the server names where it has none (the app's own services', or
+/// `laptop` and `plugs-connected` from servers that send no drawing for a
+/// computer or a person's own MCP server). A logo wins over a glyph: newer
+/// servers send both for those two, the glyph only for older apps. An
+/// older server sends neither: the name's initial, then.
 fn service_face<'a>(
     name: &'a str,
     logos: &'a [Option<Asset>],
+    glyphs: &[Option<String>],
     n: usize,
     steps: &[Step],
 ) -> Face<'a> {
+    if let Some(Some(asset)) = logos.get(n) {
+        return Face::Logo {
+            asset: Some(asset),
+            name,
+        };
+    }
+    if let Some(icon) = glyphs
+        .get(n)
+        .and_then(|g| g.as_deref())
+        .and_then(Icon::named)
+    {
+        return Face::Glyph(icon);
+    }
     match logos.get(n) {
         Some(Some(asset)) => Face::Logo {
             asset: Some(asset),
@@ -2174,5 +2183,53 @@ fn step_icon(step: &Step) -> Icon {
         Icon::Desktop
     } else {
         Icon::Plug
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asset(path: &str) -> Asset {
+        Asset {
+            path: path.into(),
+            monochrome: false,
+        }
+    }
+
+    /// Newer servers send their drawing of a computer and of someone's own
+    /// MCP servers, with the old glyph for older apps: the drawing wins.
+    #[test]
+    fn a_computers_drawing_wins_over_its_glyph() {
+        let logos = vec![
+            Some(asset("/assets/marketing/computer-mark-1.svg")),
+            Some(asset("/assets/marketing/servers-mark-1.svg")),
+        ];
+        let glyphs = vec![
+            Some("laptop".to_string()),
+            Some("plugs-connected".to_string()),
+        ];
+        for (n, logo) in logos.iter().enumerate() {
+            match service_face("chalk", &logos, &glyphs, n, &[]) {
+                Face::Logo { asset: Some(a), .. } => assert_eq!(Some(a), logo.as_ref()),
+                face => panic!("expected the drawing, got {face:?}"),
+            }
+        }
+    }
+
+    /// Without a logo, the glyph the server names; from a server that names
+    /// none, the laptop.
+    #[test]
+    fn a_service_without_a_logo_shows_its_glyph() {
+        let logos = vec![None, None];
+        let glyphs = vec![Some("terminal-window".to_string()), None];
+        assert!(matches!(
+            service_face("Code", &logos, &glyphs, 0, &[]),
+            Face::Glyph(Icon::TerminalWindow)
+        ));
+        assert!(matches!(
+            service_face("chalk", &logos, &glyphs, 1, &[]),
+            Face::Glyph(Icon::Laptop)
+        ));
     }
 }
