@@ -337,6 +337,9 @@ enabled = true        # Landlock on Linux, Seatbelt on macOS
 
 [tui]
 mouse = true          # clicks and the wheel in cww tui; false leaves the mouse to the terminal
+
+[desktop]
+# reduce_motion = true  # no fading in of streamed text; unset follows the system's setting
 ```
 
 Run `cww reload` after editing the file. The `cww roots` commands reload the daemon for you.

@@ -551,6 +551,7 @@ impl StartLayout {
             caret: false,
             time: 0.0,
             id: Id::new("start-instructions"),
+            fresh: None,
         };
         if let Some(Clicked::Link(layer)) = prose.centered_text(
             &mut child,

@@ -13,6 +13,7 @@ mod connectors;
 pub mod controls;
 pub mod conversation;
 pub mod dialogs;
+pub mod fresh;
 pub mod highlight;
 mod history;
 pub mod icons;
@@ -130,6 +131,9 @@ pub struct ChatPage {
     /// The commands this computer runs, from its own daemon.
     runs: runs::Runs,
     commands_socket: Option<std::path::PathBuf>,
+    /// The system (or the config) asks for less motion: streamed text
+    /// shows at once instead of fading in.
+    reduced_motion: bool,
 }
 
 /// How often to read the list again while a chat in it is being answered
@@ -289,7 +293,18 @@ impl ChatPage {
             data_dir,
             runs: runs::Runs::default(),
             commands_socket: None,
+            reduced_motion: false,
         }
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced: bool) {
+        self.reduced_motion = reduced;
+    }
+
+    /// Streamed text is fading in.
+    #[cfg(test)]
+    pub fn fading(&self) -> bool {
+        self.conversation.fading()
     }
 
     /// Follow the commands running on this computer, on its own daemon at
@@ -1635,6 +1650,7 @@ impl ChatPage {
                     images,
                     time,
                     still: self.still,
+                    reduced_motion: self.reduced_motion,
                 }
                 .show(&mut col, &self.state, &mut self.conversation);
                 events = found;

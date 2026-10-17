@@ -13,6 +13,7 @@ mod chrome;
 mod dictation;
 mod folders;
 mod general;
+mod motion;
 mod notifications;
 mod organizations;
 mod privacy;
@@ -687,9 +688,11 @@ impl SettingsApp {
         self.shared.notification_endpoint(socket.clone());
         let choices = self.organizations.choices(self.shared.status().as_ref());
         let data_dir = self.shared.paths.daemon.data_dir.clone();
-        let page = self
-            .chat
-            .get_or_insert_with(|| chat::ChatPage::new(&socket, data_dir));
+        let page = self.chat.get_or_insert_with(|| {
+            let mut page = chat::ChatPage::new(&socket, data_dir);
+            page.set_reduced_motion(motion::reduced(&self.shared.paths.daemon));
+            page
+        });
         page.follow_commands(self.shared.paths.socket_path());
         if self.page == Page::Models && page.state().ready() {
             page.open_model_preferences();

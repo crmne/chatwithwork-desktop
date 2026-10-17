@@ -33,6 +33,24 @@ pub struct Config {
     pub index: IndexConfig,
     pub sandbox: SandboxConfig,
     pub tui: TuiConfig,
+    #[serde(skip_serializing_if = "DesktopConfig::is_default")]
+    pub desktop: DesktopConfig,
+}
+
+/// The desktop app's own settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DesktopConfig {
+    /// Reduce motion (no fading in of streamed text): `true` or `false`
+    /// over the system's accessibility setting, which applies when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reduce_motion: Option<bool>,
+}
+
+impl DesktopConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `cww tui`'s own settings.

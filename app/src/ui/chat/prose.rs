@@ -33,6 +33,8 @@ pub struct Prose<'a> {
     pub caret: bool,
     pub time: f64,
     pub id: Id,
+    /// Fades in the text a stream just added (`fresh.rs`).
+    pub fresh: Option<&'a super::fresh::Pass<'a>>,
 }
 
 /// Margins above and below a block, in points, which collapse with their
@@ -62,6 +64,15 @@ fn heading_type(level: u8) -> Type {
 }
 
 impl Prose<'_> {
+    /// `galley` with the characters that just arrived faded, counted in
+    /// the order the answer paints them.
+    fn fade(&self, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+        match self.fresh {
+            Some(pass) => pass.apply(galley),
+            None => galley,
+        }
+    }
+
     /// Draw `blocks` one under another, filling the width of `ui`.
     pub fn show(&self, ui: &mut Ui, blocks: &[Block]) -> Option<Clicked> {
         self.blocks(ui, blocks, self.caret, Container::Root)
@@ -248,7 +259,7 @@ impl Prose<'_> {
         let width = ui.available_width();
         let (mut job, runs) = self.inline_job(ui.painter(), inlines, ty, color, width);
         job.halign = align;
-        let galley = ui.painter().layout_job(job);
+        let galley = self.fade(ui.painter().layout_job(job));
         // Selectable with the mouse, as text on a web page is: drag to
         // select (across paragraphs too), and copy with the shortcut.
         let (rect, response) =
@@ -637,7 +648,8 @@ impl Prose<'_> {
             .show(&mut code_ui, |ui| {
                 let (r, _) =
                     ui.allocate_exact_size(galley.size() + vec2(32.0, 32.0), Sense::hover());
-                ui.painter().galley(r.min + vec2(16.0, 16.0), galley, p.ink);
+                ui.painter()
+                    .galley(r.min + vec2(16.0, 16.0), self.fade(galley), p.ink);
             });
         clicked
     }
@@ -730,7 +742,7 @@ impl Prose<'_> {
                 if let (Some(found), _) = self.decorate(ui, origin, &galley, &runs) {
                     clicked = Some(found);
                 }
-                ui.painter().galley(origin, galley, color);
+                ui.painter().galley(origin, self.fade(galley), color);
                 x += l + w + r;
             }
             if let Some(line) = line {

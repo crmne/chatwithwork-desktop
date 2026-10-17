@@ -191,6 +191,7 @@ impl Cards<'_> {
                             caret: false,
                             time: ui.input(|i| i.time),
                             id: id.with("preview-body"),
+                            fresh: None,
                         }
                         .show(&mut body, &blocks);
                         match clicked {

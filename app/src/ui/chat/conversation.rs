@@ -65,9 +65,17 @@ pub struct ConversationView {
     /// The latest question, by key, and where its message starts on
     /// screen, as last drawn: the page pins it near the top on sending.
     pub latest_user: Option<(String, f32)>,
+    /// How each answer's text arrived, for fading in what's new.
+    fresh: HashMap<u64, super::fresh::Fresh>,
 }
 
 impl ConversationView {
+    /// Some answer's text is still fading in.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn fading(&self) -> bool {
+        self.fresh.values().any(super::fresh::Fresh::fading)
+    }
+
     /// A different chat: nothing carries over.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -103,6 +111,8 @@ pub struct Conversation<'a> {
     pub time: f64,
     /// Everything at rest, for snapshots.
     pub still: bool,
+    /// The system asks for less motion: nothing rises or fades in.
+    pub reduced_motion: bool,
 }
 
 /// One thing to draw, in order.
@@ -283,7 +293,7 @@ impl Conversation<'_> {
                 Item::Cards(_) => "cards".into(),
                 Item::Waiting(_) => "waiting".into(),
             };
-            let rise = if self.still {
+            let rise = if self.still || self.reduced_motion {
                 1.0
             } else {
                 view.rise(key.clone(), self.time)
@@ -359,6 +369,7 @@ impl Conversation<'_> {
                             sources,
                             Some(i) == latest,
                             caret,
+                            state.streamed.get(id).is_some(),
                             can,
                             view,
                             &mut events,
@@ -378,6 +389,7 @@ impl Conversation<'_> {
                         &[],
                         Some(i) == latest,
                         caret,
+                        true,
                         Can::default(),
                         view,
                         &mut events,
@@ -463,6 +475,7 @@ impl Conversation<'_> {
             let height = child.min_rect().height() - 6.0 * (1.0 - eased);
             ui.allocate_exact_size(vec2(width, height.max(0.0)), Sense::hover());
         }
+        animating |= view.fresh.values().any(super::fresh::Fresh::fading);
         (events, animating)
     }
 
@@ -771,6 +784,7 @@ impl Conversation<'_> {
         sources: &[Source],
         latest: bool,
         caret: bool,
+        live: bool,
         can: Can,
         view: &mut ConversationView,
         events: &mut Vec<Event>,
@@ -779,6 +793,18 @@ impl Conversation<'_> {
         let width = ui.available_width();
         let top = ui.cursor().top();
         ui.add_space(12.0);
+        // Text that streams in fades in; text already there when the
+        // answer is first seen doesn't.
+        let fades = !self.still && !self.reduced_motion;
+        let known = view.fresh.get(&id).cloned();
+        let fresh = known.clone().unwrap_or_else(|| {
+            if live && fades {
+                super::fresh::Fresh::default()
+            } else {
+                super::fresh::Fresh::settled(usize::MAX)
+            }
+        });
+        let pass = super::fresh::Pass::new(&fresh, self.time);
         let prose = Prose {
             palette: p,
             images: self.images,
@@ -786,6 +812,7 @@ impl Conversation<'_> {
             caret,
             time: self.time,
             id: Id::new(("answer", id)),
+            fresh: fades.then_some(&pass),
         };
         let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing, vec2(0.0, 0.0));
         match prose.show(ui, blocks) {
@@ -799,6 +826,16 @@ impl Conversation<'_> {
             None => {}
         }
         ui.spacing_mut().item_spacing = spacing;
+        let shown = pass.shown();
+        let mut fresh = match known {
+            Some(known) => known,
+            None if live && fades => super::fresh::Fresh::default(),
+            None => super::fresh::Fresh::settled(shown),
+        };
+        if fades {
+            fresh.painted(shown, self.time);
+        }
+        view.fresh.insert(id, fresh);
         // The footer: actions, and the sources.
         ui.add_space(8.0);
         let (footer, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
@@ -1362,6 +1399,7 @@ impl Conversation<'_> {
                         caret: false,
                         time: self.time,
                         id: egui_id.with(("code", n)),
+                        fresh: None,
                     }
                     .show(&mut log, &blocks);
                     if let Some(Clicked::Copy(text)) = clicked {

@@ -5039,3 +5039,29 @@ fn commands_render_like_the_web() {
         }
     }
 }
+
+/// Streamed answer text fades in as it arrives, and under reduced motion
+/// shows at once.
+#[test]
+fn streamed_text_fades_in_unless_motion_is_reduced() {
+    for reduced in [false, true] {
+        let mut fx = fixture(Options::default());
+        fx.wait_for_label("Q3 budget review");
+        fx.chat().set_reduced_motion(reduced);
+        fx.chat().open(12);
+        fx.wait_for_label("Q3 spending came in at €1.28M");
+        let mut faded = fx.chat().fading();
+        fx.server.hold_streams(false);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while fx.chat().state().working() && Instant::now() < deadline {
+            fx.harness.step();
+            faded |= fx.chat().fading();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(faded, !reduced, "reduced motion: {reduced}");
+        // Once settled, nothing fades again.
+        std::thread::sleep(Duration::from_millis(450));
+        fx.harness.run_steps(3);
+        assert!(!fx.chat().fading());
+    }
+}

@@ -89,6 +89,64 @@ pub fn prefers_dark() -> Option<bool> {
     }
 }
 
+/// Whether the person asked the system for less motion: Reduce motion on
+/// macOS, "Show animations in Windows" off, and GNOME's animations off (or
+/// KDE's animation speed at instant) on Linux. `None` where it can't tell.
+pub fn prefers_reduced_motion() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWorkspace;
+        Some(NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion())
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+        };
+        let mut animate: windows_sys::core::BOOL = 1;
+        // SAFETY: the action writes one BOOL to the pointer it's given.
+        let ok = unsafe {
+            SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut animate).cast(), 0)
+        };
+        (ok != 0).then_some(animate == 0)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let read = |program: &str, args: &[&str]| {
+            std::process::Command::new(program)
+                .args(args)
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        };
+        if let Some(animations) = read(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "enable-animations"],
+        ) {
+            return Some(animations == "false");
+        }
+        read(
+            "kreadconfig6",
+            &[
+                "--file",
+                "kdeglobals",
+                "--group",
+                "KDE",
+                "--key",
+                "AnimationDurationFactor",
+            ],
+        )
+        .filter(|factor| !factor.is_empty())
+        .map(|factor| factor.parse::<f32>().is_ok_and(|f| f == 0.0))
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
 /// One face of the system UI font: a file, and for variable fonts the axis
 /// values to use (optical size, weight).
 pub struct UiFont {
