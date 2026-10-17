@@ -216,6 +216,8 @@ mod tests {
             path: base,
             follow_symlinks: false,
             writable: false,
+            commands: false,
+            network: false,
         })
         .unwrap();
         let deny = Arc::new(DenyList::new(Vec::<String>::new()).unwrap());

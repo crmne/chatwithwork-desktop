@@ -114,6 +114,10 @@ crossterm = "0.29"
 # Safe resolution (openat2, O_NOFOLLOW, F_GETPATH), peer credentials, umask.
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process", "system", "alloc"] }
+# Commands run in a folder (`run`) go in a sandbox of their own, one per
+# run: Bubblewrap on Linux, Seatbelt on macOS. Carmine's fork adds CPU time
+# and memory limits.
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "21dad14168287bfdbe304266ab30bdbf78b44c32" }
 
 # The kernel sandbox for the daemon on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -45,6 +45,12 @@ pub struct RootInfo {
     /// The user allowed changes in this folder.
     #[serde(default)]
     pub writable: bool,
+    /// The user allowed commands here (`run`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allows_commands: bool,
+    /// Those commands may use the network.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network: bool,
     /// `pending`, `indexing`, `ready`, `error` or `disabled`.
     pub index: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +206,8 @@ impl Reader {
                     label: root.label.clone(),
                     available,
                     writable: root.writable,
+                    allows_commands: cfg!(unix) && root.runs_commands(),
+                    network: cfg!(unix) && root.runs_commands() && root.network,
                     index: match (state.index_enabled, s.map(|s| s.state)) {
                         (false, _) => "disabled".into(),
                         (true, Some(IndexState::Ready)) => "ready".into(),

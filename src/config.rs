@@ -92,6 +92,23 @@ pub struct Root {
     /// this computer's apps, never by the server.
     #[serde(default)]
     pub writable: bool,
+    /// Allow running commands here (`run`), each approved in Chat with
+    /// Work, in a sandbox of its own that can change only this folder. Only
+    /// where changes are allowed, and only ever turned on here or from this
+    /// computer's apps, never by the server.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commands: bool,
+    /// Let those commands use the network (installing packages, fetching
+    /// dependencies). Off by default: commands run without a network.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network: bool,
+}
+
+impl Root {
+    /// Commands may run here: changes and commands are both allowed.
+    pub fn runs_commands(&self) -> bool {
+        self.writable && self.commands
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -142,6 +159,17 @@ pub struct Limits {
     pub max_change_file_bytes: u64,
     /// Most files and folders one move or delete of a folder may carry.
     pub max_change_entries: usize,
+    /// CPU time each process a command starts may use, in seconds.
+    pub command_cpu_seconds: u64,
+    /// Memory each process a command starts may allocate, in megabytes.
+    pub command_memory_mb: u64,
+    /// How long a command may run, in seconds, before it's stopped.
+    pub command_timeout_seconds: u64,
+    /// Commands running at once, across all chats.
+    pub commands_running: usize,
+    /// Characters of each of a command's streams (output and errors) its
+    /// result keeps, from the end.
+    pub command_output_chars: usize,
 }
 
 impl Default for Limits {
@@ -163,6 +191,11 @@ impl Default for Limits {
             change_bytes_per_hour: 50 * 1024 * 1024,
             max_change_file_bytes: 10 * 1024 * 1024,
             max_change_entries: 1_000,
+            command_cpu_seconds: 600,
+            command_memory_mb: 4_096,
+            command_timeout_seconds: 1_800,
+            commands_running: 4,
+            command_output_chars: 20_000,
         }
     }
 }
@@ -230,6 +263,8 @@ mod tests {
             path: "/tmp/docs".into(),
             follow_symlinks: false,
             writable: true,
+            commands: false,
+            network: false,
         });
         config.deny.extra.push("*.secret".into());
         config.proxy = Some("http://proxy.example:3128".into());

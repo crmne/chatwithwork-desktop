@@ -948,6 +948,8 @@ mod tests {
             path: root_path,
             follow_symlinks: follow,
             writable: false,
+            commands: false,
+            network: false,
         })
         .unwrap();
         Fixture {

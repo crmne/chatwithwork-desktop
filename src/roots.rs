@@ -118,6 +118,8 @@ pub fn add_root(config: &mut Config, paths: &Paths, new: NewRoot<'_>) -> Result<
         path,
         follow_symlinks: new.follow_symlinks,
         writable: new.writable,
+        commands: false,
+        network: false,
     };
     config.roots.push(root.clone());
     Ok(root)
@@ -149,6 +151,38 @@ pub fn set_writable(
         );
     }
     root.writable = writable;
+    if !writable {
+        // Commands change files too: they stop with changes.
+        root.commands = false;
+        root.network = false;
+    }
+    Ok(root.clone())
+}
+
+/// Allow commands in a shared folder (`run`), or stop them, and say
+/// whether they may use the network. Only where changes are allowed: a
+/// command can change anything in its folder.
+pub fn set_commands(
+    config: &mut Config,
+    which: &str,
+    commands: bool,
+    network: bool,
+) -> Result<Root> {
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    if commands && !root.writable {
+        bail!(
+            "{} doesn't allow changes. Allow changes there first (`cww roots allow-changes {}`): \
+             a command can change anything in its folder",
+            root.label,
+            root.id
+        );
+    }
+    if commands && cfg!(windows) {
+        bail!("commands can't run on Windows yet: it has no sandbox for them");
+    }
+    root.commands = commands;
+    root.network = commands && network;
     Ok(root.clone())
 }
 
@@ -347,6 +381,8 @@ mod tests {
             path: "/x".into(),
             follow_symlinks: false,
             writable: false,
+            commands: false,
+            network: false,
         });
         assert_eq!(new_id(&config, "Work docs"), "work-docs-2");
         assert_eq!(new_id(&config, "文档"), "root");
@@ -480,6 +516,8 @@ mod tests {
             path: home,
             follow_symlinks: false,
             writable: false,
+            commands: false,
+            network: false,
         });
         let err = set_writable(&mut config, "home", true, false).unwrap_err();
         assert!(err.to_string().contains("--i-know"), "{err}");

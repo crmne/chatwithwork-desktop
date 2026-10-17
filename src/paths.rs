@@ -109,6 +109,12 @@ impl Paths {
         self.data_dir.join("index")
     }
 
+    /// Each running command's own home and temporary folder, removed when
+    /// it ends.
+    pub fn runs_dir(&self) -> PathBuf {
+        self.data_dir.join("runs")
+    }
+
     pub fn audit_file(&self) -> PathBuf {
         self.state_dir.join("audit.jsonl")
     }

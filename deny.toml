@@ -101,6 +101,7 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # until upstream releases the fixes) and fastframe's text rendering.
 allow-git = [
     "https://github.com/crmne/egui",
+    "https://github.com/crmne/microsoft-mxc",
     "https://github.com/crmne/fastframe",
     "https://github.com/crmne/winit",
 ]

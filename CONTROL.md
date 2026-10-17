@@ -221,6 +221,16 @@ Allows changes in a shared folder (`writable: true`), or makes it read-only agai
 
 Answers with the updated `root` and writes a `root_changes_allowed` or `root_changes_stopped` audit entry. With the sandbox on, the daemon restarts under rules that give exactly the folders that allow changes (and their trash) write rights, and reconnects within a second; without it, it reconnects so the server lists the tools again. `cww roots allow-changes <root> [--i-know]` and `cww roots deny-changes <root>` do the same from the command line.
 
+### `roots_commands`
+
+```json
+{"cmd": "roots_commands", "root": "app", "commands": true, "network": false}
+```
+
+Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on Windows. While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
+
+Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
+
 ### `suggested_roots`
 
 ```json

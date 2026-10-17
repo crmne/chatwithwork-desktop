@@ -47,6 +47,8 @@ fn fixture_with(limits: Limits) -> Fixture {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable,
+        commands: false,
+        network: false,
     };
     let mut config = Config {
         roots: vec![
@@ -686,6 +688,8 @@ fn refuses_folders_that_hold_a_shared_folder() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable: true,
+        commands: false,
+        network: false,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs), root("inner", &inner)],
@@ -719,6 +723,8 @@ fn folders_shared_read_only_stay_read_only_inside_writable_ones() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable,
+        commands: false,
+        network: false,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs, true), root("private", &inner, false)],
@@ -818,6 +824,8 @@ fn moves_across_filesystems_by_copying() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable: true,
+        commands: false,
+        network: false,
     };
     fs::write(f.docs.join("sub/a.md"), "a").unwrap();
     let mut config = Config {
@@ -962,6 +970,8 @@ fn folders_shared_read_only_stay_read_only_whatever_name_reaches_them() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable,
+        commands: false,
+        network: false,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs, true), root("private", &inner, false)],

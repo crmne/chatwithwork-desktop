@@ -362,7 +362,7 @@ Arguments: none (`{}`).
 }
 ```
 
-`writable` is true when the user allowed changes in the folder; the change tools only work there. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
+`writable` is true when the user allowed changes in the folder; the change tools only work there. `allows_commands` is there, true, when it also allows commands (section 8.15), and `network` when they may use the network. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
 
 ### 8.4 `search`
 
@@ -568,6 +568,31 @@ Moves it to the system trash, where the user can restore it. Effect `trashed`; `
 | `dry_run` | boolean | |
 
 Effect `created`, or `replaced`. `exists` without `replace`.
+
+### 8.15 Commands
+
+Offered only while a shared folder allows commands (`allows_commands` in `roots`, only where `writable` too), which the user turns on on this computer, never the server. See [docs/commands.md](docs/commands.md) for the sandbox each command runs in.
+
+`run` (`destructiveHint: true`, `openWorldHint: true`):
+
+| Argument | Type | Notes |
+|---|---|---|
+| `command` | string, required | One line of shell, run with `sh -c`, at most 8 000 characters. |
+| `path` | string, required | The folder it starts in: `<root_id>:` or `<root_id>:dir`. `not_writable` where commands aren't allowed. |
+| `background` | boolean | Answer at once and leave it running. |
+| `dry_run` | boolean | Answer `{"dry_run": true, "path", "folder", "dir", "command", "network", "background", "limits": {"cpu_seconds", "memory_mb", "timeout_seconds", "output_chars"}}` and run nothing. |
+
+Without `background` it waits up to 120 seconds. While it waits, a request with a `progressToken` gets `notifications/progress` with `progress` the bytes printed so far and `message` its latest line. It answers:
+
+```json
+{ "path": "app:api", "folder": "App", "command": "bin/rails test", "network": false,
+  "id": "3f9a0c1d2e4b", "state": "exited", "exit_code": 1, "duration_ms": 8120, "output_bytes": 5120,
+  "stdout": "...", "stderr": "...", "stdout_cut": 0, "stderr_cut": 0 }
+```
+
+`state` is `running`, `exited` (with `exit_code`; a process ended by a signal, its CPU limit included, is -1), `timed_out`, `stopped`, or `failed` (the sandbox couldn't start it, with `error`). `stdout` and `stderr` are the end of each stream, `*_cut` the characters left out before it. A command still running has a `note` saying how to follow it. `rate_limited` when 4 commands already run.
+
+`run_status` (`{"run": id}`, read-only) answers `{"status": {...}, "stdout", "stderr", "stdout_cut", "stderr_cut"}`. `run_output` (`{"run": id, "offset": 0, "max_chars": 16000}`, read-only) answers `{"id", "offset", "next_offset", "skipped", "text", "done"}`: both streams as they came, from a byte offset, at most 32 000 characters; `skipped` is what's no longer kept (the latest megabyte is). `run_stop` (`{"run": id}`, a write) stops it and everything it started, and answers as `run_status` once it has. An unknown handle is `not_found`; commands are forgotten when the daemon restarts.
 
 ## 9. Errors
 

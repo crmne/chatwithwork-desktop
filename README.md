@@ -265,6 +265,15 @@ In folders where you allow changes, and only while at least one folder does:
 
 Chat with Work asks before each change; "Allow for the rest of this chat" can cover writes, never a replace, a move over a file, or a delete. Programs, scripts that run when opened, shortcuts and Office files with macros are never made, no file gets an execute bit, and version control internals, shell startup files, autostart folders and editor task settings are never changed.
 
+In folders where you also allow commands (`cww roots allow-commands <root>`, or the folder's switch in the app or the terminal UI), and only on Linux and macOS:
+
+| Tool | What it does |
+|---|---|
+| `run` | Runs one line of shell in the folder, like `bin/rails test`, in a sandbox of its own that can change only that folder, without the network unless you allow it, with CPU, memory and time limits. Its output comes as it's printed; a long command keeps running. |
+| `run_status`, `run_output`, `run_stop` | Follow a command left running, read what it printed, or stop it. |
+
+Chat with Work asks before every command. See [docs/commands.md](docs/commands.md).
+
 Paths always look like `work-docs:plans/q3.pdf`.
 
 ## Performance
@@ -400,6 +409,7 @@ The rule behind the design: **every control that must hold against a compromised
 
 - **Anything inside a shared folder that isn't on the deny list can be read.** Share narrow folders. A secret stored in `notes.txt` is readable.
 - **In a folder that allows changes, a compromised server can change files without your approval** (see above): recoverable from the trash, within the budgets, and logged, but changed.
+- **In a folder that allows commands, an approved command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)).
 - **Text that runs later can be written.** cww writes no programs and sets no execute bit, and the never-changed list keeps out the files that run on their own (startup files, autostart, editor and hook settings). But build files and scripts are ordinary text people ask to have edited, and stay changeable: a changed `Makefile`, `package.json` script, `build.rs`, test, or shell script runs when you build, test or run the project yourself, and changed source code runs when you run the program. Settings of programs that live outside the home folder's dot files (`~/Library/Application Support` on macOS, `AppData` on Windows) are only out of reach because those folders are too broad to share without `--i-know`. Read the diff before you build or run something a change touched.
 - **Results do reach Chat with Work and the model provider.** "Private" means your files and the index stay on your computer, and only the snippets and chunks needed for an answer leave it. Once they leave, the server's retention and sharing rules apply.
 - **A malicious file could exploit a parser** (PDF, Office). Extraction runs with size caps and panic isolation, inside the kernel sandbox, which keeps it to the shared folders. The sandboxed daemon can still use the network, so an exploit could send what it can read to someone else; a separate reader process without network access is planned, and the `reader` module is structured for that split.

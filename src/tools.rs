@@ -11,7 +11,9 @@
 //! something, and run in the writer (see `crate::writer`). Every call
 //! passes, in order: pause check, rate limit, argument validation, then the
 //! reader or the writer (path parsing, root lookup, deny list, safe open),
-//! and is appended to the audit log whatever the outcome.
+//! and is appended to the audit log whatever the outcome. Folders that also
+//! allow commands add `run`, `run_status`, `run_output` and `run_stop`
+//! (see `crate::commands`).
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -22,7 +24,8 @@ use rmcp::model::{
     CompleteRequestParams, CompleteResult, ContentBlock, Implementation, JsonObject,
     ListPromptsRequestMethod, ListPromptsResult, ListResourceTemplatesRequestMethod,
     ListResourceTemplatesResult, ListResourcesRequestMethod, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
+    PaginatedRequestParams, ProgressNotificationParam, ServerCapabilities, ServerConfig, Tool,
+    ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -31,6 +34,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::audit::{AuditEntry, AuditLog, Decision};
+use crate::commands::tools::{COMMAND_TOOLS, CommandTools, Progress};
 use crate::error::{ErrorCode, ToolError};
 use crate::limits::Limiter;
 use crate::reader::{
@@ -72,6 +76,7 @@ pub struct LocalFiles {
 }
 
 struct Inner {
+    commands: Option<CommandTools>,
     reader: Arc<Reader>,
     writer: Arc<Writer>,
     limiter: Arc<Limiter>,
@@ -91,6 +96,7 @@ impl LocalFiles {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                commands: None,
                 reader,
                 writer,
                 limiter,
@@ -101,6 +107,21 @@ impl LocalFiles {
         }
     }
 
+    /// Offer the command tools too, for the folders `commands` names.
+    pub fn with_commands(self, commands: CommandTools) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                commands: commands.offered().then_some(commands),
+                ..inner
+            }),
+        }
+    }
+
+    fn commands(&self) -> Option<&CommandTools> {
+        self.inner.commands.as_ref()
+    }
+
     /// Run one tool call. Returns `None` for an unknown tool name.
     pub async fn call(
         &self,
@@ -109,8 +130,23 @@ impl LocalFiles {
         chat_id: Option<String>,
         request_id: String,
     ) -> Option<CallToolResult> {
+        self.call_with_progress(name, args, chat_id, request_id, None)
+            .await
+    }
+
+    /// As [`call`](Self::call), with `progress` hearing a running command's
+    /// output.
+    pub async fn call_with_progress(
+        &self,
+        name: &str,
+        args: Option<JsonObject>,
+        chat_id: Option<String>,
+        request_id: String,
+        progress: Option<Progress>,
+    ) -> Option<CallToolResult> {
         let known = READ_TOOLS.contains(&name)
-            || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled());
+            || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
+            || (COMMAND_TOOLS.contains(&name) && self.commands().is_some());
         if !known {
             let mut entry = AuditEntry::event("tool");
             entry.tool = Some(
@@ -153,7 +189,9 @@ impl LocalFiles {
             .map(|s| s.chars().take(256).collect());
 
         let started = std::time::Instant::now();
-        let outcome = self.run(name, args, chat_id.as_deref().unwrap_or("")).await;
+        let outcome = self
+            .run(name, args, chat_id.as_deref().unwrap_or(""), progress)
+            .await;
         let result = match outcome {
             Ok(output) => {
                 if let Output::Change(change) = &output {
@@ -164,6 +202,17 @@ impl LocalFiles {
                         entry.path = change.from.clone();
                         entry.to = Some(change.path.clone());
                     }
+                }
+                if let Output::Command(_, detail) = &output {
+                    // What the activity log says: a command ran (or was
+                    // checked), or was stopped, and how it ended.
+                    let dry_run = entry.dry_run == Some(true);
+                    entry.effect = match name {
+                        "run" if !dry_run => Some("ran".into()),
+                        "run_stop" => Some("stopped".into()),
+                        _ => None,
+                    };
+                    entry.detail = detail.clone();
                 }
                 let (result, bytes, results) = output.into_result(self.budget());
                 entry.decision = Some(Decision::Allowed);
@@ -193,7 +242,13 @@ impl LocalFiles {
             .saturating_sub(ENVELOPE_HEADROOM)
     }
 
-    async fn run(&self, name: &str, args: Value, chat: &str) -> Result<Output, ToolError> {
+    async fn run(
+        &self,
+        name: &str,
+        args: Value,
+        chat: &str,
+        progress: Option<Progress>,
+    ) -> Result<Output, ToolError> {
         if self.inner.paused.load(Ordering::SeqCst) {
             return Err(ToolError::new(
                 ErrorCode::Paused,
@@ -254,13 +309,24 @@ impl LocalFiles {
                 }
                 Ok(Output::Change(result))
             }
+            command if COMMAND_TOOLS.contains(&command) => {
+                let Some(commands) = self.commands() else {
+                    unreachable!("checked against the tool names")
+                };
+                let (value, detail) = commands.call(command, args, progress).await?;
+                Ok(Output::Command(value, detail))
+            }
             _ => unreachable!("checked against the tool names"),
         }
     }
 
     /// The tools offered right now.
     pub fn tools(&self) -> Vec<Tool> {
-        tools(self.inner.writer.enabled())
+        let mut all = tools(self.inner.writer.enabled());
+        if self.commands().is_some() {
+            all.extend(command_tools());
+        }
+        all
     }
 }
 
@@ -291,6 +357,8 @@ enum Output {
     List(ListResponse, usize),
     Read(ReadResponse),
     Change(ChangeResult),
+    /// A command tool's result, and what the audit log says of it.
+    Command(Value, Option<String>),
 }
 
 impl Output {
@@ -325,6 +393,10 @@ impl Output {
             }
             Output::Change(resp) => {
                 let (r, b) = success(&resp);
+                (r, b, None)
+            }
+            Output::Command(value, _) => {
+                let (r, b) = success(&value);
                 (r, b, None)
             }
         }
@@ -639,6 +711,26 @@ pub fn change_tools() -> Vec<Tool> {
     ]
 }
 
+/// The command tools: `run` and `run_stop` change things (`run` anything
+/// in its folder, and it may reach the network), `run_status` and
+/// `run_output` only read.
+pub fn command_tools() -> Vec<Tool> {
+    crate::commands::tools::definitions()
+        .into_iter()
+        .map(|(name, title, description, input, kind)| match kind {
+            "read" => tool(name, title, description, input),
+            "stop" => change_tool(name, title, description, input, false, true, None),
+            _ => {
+                let mut run = change_tool(name, title, description, input, true, false, None);
+                if let Some(annotations) = run.annotations.as_mut() {
+                    annotations.open_world_hint = Some(true);
+                }
+                run
+            }
+        })
+        .collect()
+}
+
 /// The tools to offer: the read-only four, then the change tools when
 /// `changes` (a shared folder allows them).
 pub fn tools(changes: bool) -> Vec<Tool> {
@@ -725,6 +817,15 @@ impl ServerHandler for LocalFiles {
             "Read-only access to folders the user shared from their computer. Call `roots` \
              first. Paths are always `<root_id>:relative/path`; absolute paths are refused."
         };
+        let instructions = if self.commands().is_some() {
+            format!(
+                "{instructions} Folders with `allows_commands: true` also run commands (`run`), \
+                 each in a sandbox that can change only that folder; `run_status`, `run_output` \
+                 and `run_stop` follow one left running."
+            )
+        } else {
+            instructions.to_string()
+        };
         let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(instructions);
         info.server_info = Implementation::new("cww", env!("CARGO_PKG_VERSION"));
@@ -795,8 +896,35 @@ impl ServerHandler for LocalFiles {
             Ok(other) => other.to_string(),
             Err(_) => String::new(),
         };
+        let progress = context.meta.get_progress_token().map(|token| {
+            // Reports go out in order, one at a time, without holding up
+            // the command.
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, String)>();
+            let peer = context.peer.clone();
+            tokio::spawn(async move {
+                while let Some((bytes, line)) = rx.recv().await {
+                    let mut param = ProgressNotificationParam::new(token.clone(), bytes as f64);
+                    if !line.is_empty() {
+                        param = param.with_message(line);
+                    }
+                    if peer.notify_progress(param).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let report: Progress = Arc::new(move |bytes, line| {
+                let _ = tx.send((bytes, line));
+            });
+            report
+        });
         match self
-            .call(&request.name, request.arguments, chat_id, request_id)
+            .call_with_progress(
+                &request.name,
+                request.arguments,
+                chat_id,
+                request_id,
+                progress,
+            )
             .await
         {
             Some(result) => Ok(result.into()),

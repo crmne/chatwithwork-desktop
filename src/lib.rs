@@ -10,6 +10,7 @@ pub mod audit;
 pub mod auth;
 pub mod browser;
 pub mod chats;
+pub mod commands;
 pub mod config;
 pub mod control;
 pub mod daemon;

@@ -107,6 +107,14 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         i_know: bool,
     },
+    /// Allow commands in a shared folder that allows changes (`run`), or
+    /// stop them, and whether they may use the network.
+    RootsCommands {
+        root: String,
+        commands: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        network: bool,
+    },
     /// Stop sharing a folder, by ID, label or path.
     RootsRemove {
         root: String,

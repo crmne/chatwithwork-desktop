@@ -30,6 +30,8 @@ fn only_shared_folders_are_readable() {
             path: shared.clone(),
             follow_symlinks: false,
             writable: false,
+            commands: false,
+            network: false,
         }],
         secret_store: Some("file".into()),
         ..Config::default()
@@ -99,6 +101,8 @@ fn only_folders_that_allow_changes_are_writable() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable,
+        commands: false,
+        network: false,
     };
     Config {
         roots: vec![root("docs", &docs, true), root("ro", &ro, false)],

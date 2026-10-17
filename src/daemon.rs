@@ -41,6 +41,8 @@ struct OrganizationContext {
 
 struct Daemon {
     organization: Option<OrganizationContext>,
+    /// Where `run` starts commands.
+    runner: crate::commands::Runner,
     paths: Paths,
     config: Mutex<Config>,
     reader: Arc<Reader>,
@@ -140,6 +142,12 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         .worker
         .then(crate::notification_delivery::Inherited::take)
         .transpose()?;
+    // The supervisor's channel for commands, taken before confinement.
+    #[cfg(unix)]
+    let run_channel = options
+        .worker
+        .then(crate::commands::channel::inherited)
+        .flatten();
     let notification_helper = (!options.worker)
         .then(crate::notifications::helper::installed_helper)
         .flatten();
@@ -175,8 +183,23 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
                 shutdown.child_token(),
             )
         });
+        #[cfg(unix)]
+        let runner = match run_channel {
+            Some(fd) => crate::commands::channel::Client::new(fd)
+                .map(crate::commands::Runner::Supervisor)
+                .unwrap_or_else(|e| {
+                    crate::commands::Runner::Off(format!("no channel to run commands: {e}"))
+                }),
+            None if options.worker => {
+                crate::commands::Runner::Off("this daemon's supervisor doesn't run commands".into())
+            }
+            None => crate::commands::Runner::local(&paths),
+        };
+        #[cfg(not(unix))]
+        let runner = crate::commands::Runner::local(&paths);
         let result =
-            run_with_notifications(paths, shutdown.clone(), true, notifications, None).await;
+            run_with_notifications(paths, shutdown.clone(), true, notifications, None, runner)
+                .await;
         shutdown.cancel();
         if let Some(task) = profiles {
             let _ = task.await;
@@ -255,6 +278,31 @@ fn confine(config: &Config, paths: &Paths) {
     }
 }
 
+/// The folders that allow commands, and whether they may use the network.
+fn command_roots(config: &Config) -> Vec<(String, String, bool)> {
+    config
+        .roots
+        .iter()
+        .filter(|r| r.runs_commands())
+        .map(|r| (r.id.clone(), r.label.clone(), r.network))
+        .collect()
+}
+
+/// The command tools for `config`'s folders.
+fn command_tools(
+    config: &Config,
+    runner: &crate::commands::Runner,
+) -> crate::commands::tools::CommandTools {
+    crate::commands::tools::CommandTools {
+        runner: runner.clone(),
+        roots: command_roots(config)
+            .into_iter()
+            .map(|(id, label, network)| crate::commands::tools::CommandRoot { id, label, network })
+            .collect(),
+        limits: crate::commands::Limits::from_config(&config.limits),
+    }
+}
+
 /// The folders that allow changes.
 fn writable_roots(config: &Config) -> Vec<PathBuf> {
     config
@@ -278,13 +326,40 @@ fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
         let profiles = organizations::spawn(paths.clone(), helper.clone(), parent_shutdown.child_token());
         let mut notifications = crate::notification_delivery::spawn(helper, parent_shutdown.child_token());
         loop {
+            // Each worker's commands, stopped when it ends.
+            #[cfg(unix)]
+            let runs = crate::commands::Runs::new(paths.clone());
             let mut command = tokio::process::Command::new(&exe);
             command.args(["daemon", "run", "--worker"]);
+            // Commands the worker runs start here, outside its sandbox,
+            // each in one of their own (`commands::channel`).
+            #[cfg(unix)]
+            let run_channel = match crate::commands::channel::Pair::new() {
+                Ok(pair) => {
+                    command.env(crate::commands::channel::ENV, pair.worker_fd().to_string());
+                    Some(pair)
+                }
+                Err(e) => {
+                    tracing::warn!("no channel for commands: {e}");
+                    None
+                }
+            };
             command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
             if let Some(log) = &options.log_file {
                 command.arg("--log-file").arg(log);
             }
             let mut child = command.spawn().context("starting the daemon")?;
+            #[cfg(unix)]
+            if let Some(pair) = run_channel {
+                // The worker has its end now; this process keeps only its
+                // own, so the channel closes when the worker goes.
+                let crate::commands::channel::Pair { supervisor, worker } = pair;
+                drop(worker);
+                let (runs, paths) = (runs.clone(), paths.clone());
+                let _ = std::thread::Builder::new()
+                    .name("cww-runs".into())
+                    .spawn(move || crate::commands::channel::serve(supervisor, runs, paths));
+            }
             let child_input = child.stdin.take().context("opening private notification input")?;
             let child_output = child.stdout.take().context("opening private notification output")?;
             let worker_shutdown = CancellationToken::new();
@@ -322,6 +397,9 @@ fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
                 if !relay_finished { let _ = (&mut relay).await; }
                 result
             };
+            // Nothing a worker started outlives it.
+            #[cfg(unix)]
+            runs.stop_all_and_wait(Duration::from_secs(5));
             if stopping || status.code() != Some(crate::sandbox::RESTART_CODE) {
                 parent_shutdown.cancel();
                 let _ = notifications.task.await;
@@ -340,7 +418,8 @@ pub async fn run(paths: Paths, shutdown: CancellationToken, handle_signals: bool
     // Embedders and tests opt in explicitly to a native helper. Merely
     // constructing a daemon must not open OS notification connections.
     let notifications = crate::notification_delivery::spawn(None, shutdown.child_token());
-    run_with_notifications(paths, shutdown, handle_signals, notifications, None).await
+    let runner = crate::commands::Runner::local(&paths);
+    run_with_notifications(paths, shutdown, handle_signals, notifications, None, runner).await
 }
 
 /// Run an independent chat control socket without any file RPC capability.
@@ -363,6 +442,7 @@ pub async fn run_organization(
             profile,
             proxy,
         }),
+        crate::commands::Runner::Off("an organization's chats run no commands".into()),
     )
     .await
 }
@@ -373,6 +453,7 @@ async fn run_with_notifications(
     handle_signals: bool,
     notifications: crate::notification_delivery::Endpoint,
     organization: Option<OrganizationContext>,
+    runner: crate::commands::Runner,
 ) -> Result<()> {
     #[cfg(unix)]
     {
@@ -415,6 +496,7 @@ async fn run_with_notifications(
     ));
     let daemon = Arc::new(Daemon {
         organization,
+        runner,
         limiter,
         writer,
         paused: Arc::new(AtomicBool::new(config.paused)),
@@ -457,6 +539,8 @@ async fn run_with_notifications(
 
     daemon.supervise(&shutdown).await;
 
+    let runner = daemon.runner.clone();
+    let _ = tokio::task::spawn_blocking(move || runner.stop_all()).await;
     daemon.audit.append(&AuditEntry::event("stopped"));
     Ok(())
 }
@@ -517,6 +601,7 @@ impl Daemon {
             let token = shutdown.child_token();
             *self.tunnel_token.lock().await = token.clone();
             let max_message_bytes = self.config.lock().await.limits.max_message_bytes;
+            let commands = command_tools(&*self.config.lock().await, &self.runner);
             let files = LocalFiles::new(
                 Arc::clone(&self.reader),
                 Arc::clone(&self.writer),
@@ -524,7 +609,8 @@ impl Daemon {
                 Arc::clone(&self.audit),
                 Arc::clone(&self.paused),
                 max_message_bytes,
-            );
+            )
+            .with_commands(commands);
             let proxy_setting = self.config.lock().await.proxy.clone();
             let tunnel = crate::proxy::for_server(proxy_setting.as_deref(), &credentials.server)
                 .and_then(|proxy| {
@@ -619,9 +705,12 @@ impl Daemon {
         let pairing_changed = config.server != new.server
             || config.secret_store != new.secret_store
             || config.proxy != new.proxy
-            || writable_roots(&config) != writable_roots(&new);
+            || writable_roots(&config) != writable_roots(&new)
+            || command_roots(&config) != command_roots(&new);
         *config = new;
         drop(config);
+        // Runs in folders that no longer allow commands stop now.
+        self.runner.prune().await;
         if pairing_changed {
             self.tunnel_token.lock().await.cancel();
         }
@@ -685,6 +774,28 @@ impl Daemon {
             "root_changes_stopped"
         });
         entry.detail = Some(format!("{} ({})", root.id, root.label));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
+    async fn set_commands(&self, which: String, commands: bool, network: bool) -> Result<Value> {
+        let root = self
+            .edit_config(move |config, _| {
+                crate::roots::set_commands(config, &which, commands, network)
+            })
+            .await?;
+        let mut entry = AuditEntry::event(if commands {
+            "root_commands_allowed"
+        } else {
+            "root_commands_stopped"
+        });
+        entry.detail = Some(format!(
+            "{} ({}){}",
+            root.id,
+            root.label,
+            if root.network { ", with network" } else { "" }
+        ));
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
@@ -969,6 +1080,7 @@ impl ControlHandler for Daemon {
                 ControlRequest::RootsAdd { .. }
                     | ControlRequest::RootsRemove { .. }
                     | ControlRequest::RootsWritable { .. }
+                    | ControlRequest::RootsCommands { .. }
                     | ControlRequest::RootsLabel { .. }
                     | ControlRequest::Pause
                     | ControlRequest::Resume
@@ -1037,6 +1149,11 @@ impl ControlHandler for Daemon {
                 writable,
                 i_know,
             } => self.set_writable(root, writable, i_know).await,
+            ControlRequest::RootsCommands {
+                root,
+                commands,
+                network,
+            } => self.set_commands(root, commands, network).await,
             ControlRequest::AuditTail { lines } => {
                 let path = self.audit.path().to_path_buf();
                 let n = lines.unwrap_or(50).min(1000);

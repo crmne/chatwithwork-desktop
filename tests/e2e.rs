@@ -1099,6 +1099,8 @@ fn pair(fixture: &Fixture, server: &FakeServer) {
             path: fixture.base.join("work/docs"),
             follow_symlinks: false,
             writable: false,
+            commands: false,
+            network: false,
         }],
         ..Config::default()
     };
@@ -3549,6 +3551,8 @@ fn pair_for_changes(fx: &Fixture, server: &FakeServer, writable: bool, limits: O
         path: ro,
         follow_symlinks: false,
         writable: false,
+        commands: false,
+        network: false,
     });
     if let Some(limits) = limits {
         config.limits = limits;
@@ -4839,4 +4843,261 @@ async fn organization_cli_login_reports_the_chat_grant_without_repairing_folders
     );
     assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), config);
     assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), secrets);
+}
+
+/// Bubblewrap needs `bwrap` and unprivileged user namespaces; machines
+/// without them skip the tests that run commands.
+#[cfg(target_os = "linux")]
+fn command_sandbox_works() -> bool {
+    std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--unshare-user", "true"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// A `tools/call` with a progress token: the result, and every progress
+/// notification that came before it.
+#[cfg(target_os = "linux")]
+async fn call_with_progress(s: &mut Session, tool: &str, arguments: Value) -> (Value, Vec<Value>) {
+    s.next_id += 1;
+    let id = s.next_id;
+    let params = json!({
+        "name": tool,
+        "arguments": arguments,
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": { "name": "chatwithwork", "version": "test" },
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "com.chatwithwork/chatId": "chat-7",
+            "progressToken": "run-1",
+        }
+    });
+    s.send_raw(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params }))
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut progress = Vec::new();
+    loop {
+        let text = tokio::time::timeout_at(deadline.into(), next_text(&mut s.ws))
+            .await
+            .expect("response in time")
+            .expect("socket open");
+        let frame: Value = serde_json::from_str(&text).unwrap();
+        let message: Value = serde_json::from_str(frame["data"].as_str().unwrap()).unwrap();
+        if message["method"] == "notifications/progress" {
+            progress.push(message["params"].clone());
+        } else if message["id"] == json!(id) {
+            return (message["result"].clone(), progress);
+        }
+    }
+}
+
+/// Commands over the wire: offered only where a folder allows them, run in
+/// their folder with their output as progress, and followed and stopped
+/// when left running.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runs_commands_over_the_wire() {
+    if !command_sandbox_works() {
+        return;
+    }
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.save(&fx.paths).unwrap();
+    let docs = fx.base.join("work/docs");
+
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let tools = s.request("tools/list", json!({})).await;
+    let names = tool_names(&tools);
+    for name in ["run", "run_status", "run_output", "run_stop"] {
+        assert!(names.contains(&name.to_string()), "{names:?}");
+    }
+    let tool = |name: &str| {
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(tool("run")["annotations"]["destructiveHint"], true);
+    assert_eq!(tool("run")["annotations"]["openWorldHint"], true);
+    assert_eq!(tool("run_output")["annotations"]["readOnlyHint"], true);
+    assert_eq!(tool("run_stop")["annotations"]["destructiveHint"], false);
+
+    let roots = s.call("roots", json!({})).await;
+    let roots = &roots["structuredContent"]["roots"];
+    assert_eq!(roots[0]["allows_commands"], true);
+    assert!(roots[1].get("allows_commands").is_none(), "{roots}");
+
+    // Only where commands are allowed.
+    let refused = s
+        .call("run", json!({ "command": "ls", "path": "ro:" }))
+        .await;
+    assert_eq!(error_code(&refused), "not_writable");
+
+    // A dry run says what would run, and runs nothing.
+    let preview = s
+        .call(
+            "run",
+            json!({ "command": "touch ran.txt", "path": "docs:plans", "dry_run": true }),
+        )
+        .await;
+    assert_eq!(preview["structuredContent"]["folder"], "Work docs");
+    assert_eq!(preview["structuredContent"]["network"], false);
+    assert!(!docs.join("plans/ran.txt").exists());
+
+    // A command runs in its folder, its output comes as progress, and the
+    // result says how it ended.
+    let (result, progress) = call_with_progress(
+        &mut s,
+        "run",
+        json!({
+            "command": "for i in 1 2 3; do echo line$i; sleep 0.4; done; echo made > made.txt; echo warn >&2; exit 4",
+            "path": "docs:plans",
+        }),
+    )
+    .await;
+    let run = &result["structuredContent"];
+    assert_eq!(run["state"], "exited", "{result}");
+    assert_eq!(run["exit_code"], 4);
+    assert_eq!(run["stdout"], "line1\nline2\nline3\n");
+    assert_eq!(run["stderr"], "warn\n");
+    assert_eq!(
+        std::fs::read_to_string(docs.join("plans/made.txt")).unwrap(),
+        "made\n"
+    );
+    assert!(!progress.is_empty(), "no progress");
+    assert!(
+        progress
+            .iter()
+            .any(|p| p["message"].as_str().is_some_and(|m| m.starts_with("line"))),
+        "{progress:?}"
+    );
+
+    // Left running, it's followed and stopped by its handle.
+    let started = s
+        .call(
+            "run",
+            json!({ "command": "echo serving; sleep 60", "path": "docs:", "background": true }),
+        )
+        .await;
+    let handle = started["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(started["structuredContent"]["state"], "running");
+    assert!(
+        started["structuredContent"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("run_stop")
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = s.call("run_output", json!({ "run": handle })).await;
+        if output["structuredContent"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("serving")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{output}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let status = s.call("run_status", json!({ "run": handle })).await;
+    assert_eq!(status["structuredContent"]["status"]["state"], "running");
+    let stopped = s.call("run_stop", json!({ "run": handle })).await;
+    assert_eq!(
+        stopped["structuredContent"]["status"]["state"], "stopped",
+        "{stopped}"
+    );
+    let unknown = s.call("run_status", json!({ "run": "0123456789ab" })).await;
+    assert_eq!(error_code(&unknown), "not_found");
+
+    // The audit log says what ran and how it ended.
+    let audit = std::fs::read_to_string(fx.paths.audit_file()).unwrap();
+    assert!(audit.contains("exit 4 · for i in 1 2 3"), "{audit}");
+
+    // Turning commands off takes the tools away.
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = false;
+    config.save(&fx.paths).unwrap();
+    control(&fx.paths, ControlRequest::Reload).await;
+    let mut s = connect(&mut server).await;
+    let names = tool_names(&s.request("tools/list", json!({})).await);
+    assert!(!names.contains(&"run".to_string()), "{names:?}");
+
+    shutdown.cancel();
+    daemon.await.unwrap().unwrap();
+}
+
+/// The real thing: `cww daemon run` supervising a confined worker, which
+/// can't execute anything in a shared folder itself, asks the supervisor
+/// to run the command in a sandbox of its own.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_confined_worker_runs_commands_through_its_supervisor() {
+    if !command_sandbox_works() {
+        return;
+    }
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.save(&fx.paths).unwrap();
+    let docs = fx.base.join("work/docs");
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+        .args(["daemon", "run"])
+        .env("CWW_HOME", fx.base.join("cww"))
+        .env("CWW_SECRET_STORE", "file")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut s = connect(&mut server).await;
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    assert_eq!(status["sandbox"]["state"], "enforced", "{status}");
+    let result = s
+        .call("run", json!({ "command": "pwd; echo made > made.txt; cat notes.md | head -1", "path": "docs:" }))
+        .await;
+    let run = &result["structuredContent"];
+    assert_eq!(run["exit_code"], 0, "{result}");
+    assert_eq!(run["stdout"], format!("{}\n# Notes\n", docs.display()));
+    assert_eq!(
+        std::fs::read_to_string(docs.join("made.txt")).unwrap(),
+        "made\n"
+    );
+    // A background run stops with the daemon.
+    let started = s
+        .call("run", json!({ "command": "sleep 60; echo late > late.txt", "path": "docs:", "background": true }))
+        .await;
+    assert_eq!(
+        started["structuredContent"]["state"], "running",
+        "{started}"
+    );
+    let pid = rustix::process::Pid::from_raw(child.id().unwrap() as i32).unwrap();
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
+    let exit = tokio::time::timeout(Duration::from_secs(15), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(exit.success(), "{exit}");
+    let leftover = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 60; echo late"])
+        .output()
+        .unwrap();
+    assert!(leftover.stdout.is_empty(), "a command outlived the daemon");
 }

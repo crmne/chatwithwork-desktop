@@ -94,6 +94,9 @@ pub(super) fn spawn(
                             false,
                             notifications,
                             Some(context),
+                            crate::commands::Runner::Off(
+                                "an organization's chats run no commands".into(),
+                            ),
                         )
                         .await
                     }

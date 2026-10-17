@@ -145,6 +145,17 @@ enum RootsCommand {
     },
     /// Make a shared folder read-only again.
     DenyChanges { root: String },
+    /// Let Chat with Work run commands in a shared folder that allows
+    /// changes (`bin/rails test`, `npm run build`), each approved in Chat
+    /// with Work and run in a sandbox that can change only that folder.
+    AllowCommands {
+        root: String,
+        /// Let those commands use the network (installing packages).
+        #[arg(long)]
+        network: bool,
+    },
+    /// Stop running commands in a shared folder.
+    DenyCommands { root: String },
 }
 
 #[derive(Subcommand)]
@@ -453,13 +464,14 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             }
             for root in &config.roots {
                 println!(
-                    "{:<24} {:<24} {:<10} {}",
+                    "{:<24} {:<24} {:<12} {}",
                     root.id,
                     root.label,
-                    if root.writable {
-                        "changes"
-                    } else {
-                        "read-only"
+                    match (root.writable, root.runs_commands(), root.network) {
+                        (true, true, true) => "commands+net",
+                        (true, true, false) => "commands",
+                        (true, false, _) => "changes",
+                        (false, _, _) => "read-only",
                     },
                     root.path.display()
                 );
@@ -480,6 +492,32 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         }
         RootsCommand::DenyChanges { root } => {
             allow_changes(paths, &mut config, &root, false, false)?
+        }
+        RootsCommand::AllowCommands { root, network } => {
+            let root = cww::roots::set_commands(&mut config, &root, true, network)?;
+            config.save(paths)?;
+            println!(
+                "Chat with Work can now run commands in {} ({}), {}. Each command asks you first \
+                 in Chat with Work and runs in a sandbox that can change only this folder.",
+                root.label,
+                root.path.display(),
+                if root.network {
+                    "with the network"
+                } else {
+                    "without the network"
+                }
+            );
+            notify_daemon(paths, "");
+        }
+        RootsCommand::DenyCommands { root } => {
+            let root = cww::roots::set_commands(&mut config, &root, false, false)?;
+            config.save(paths)?;
+            println!(
+                "{} ({}) runs no commands now.",
+                root.label,
+                root.path.display()
+            );
+            notify_daemon(paths, "");
         }
     }
     Ok(())
