@@ -255,9 +255,15 @@ impl CommandTools {
 
 /// How a run stands, for the audit log: "exit 0 · make test".
 fn ended(status: &Status, command: &str) -> String {
-    let state = match (status.state.as_str(), status.exit_code) {
-        ("exited", Some(code)) => format!("exit {code}"),
-        (state, _) => state.replace('_', " "),
+    let state = match (
+        status.limit.as_deref(),
+        status.state.as_str(),
+        status.exit_code,
+    ) {
+        (Some("cpu_time"), ..) => "CPU limit".to_string(),
+        (Some("processes"), ..) => "process limit".to_string(),
+        (_, "exited", Some(code)) => format!("exit {code}"),
+        (_, state, _) => state.replace('_', " "),
     };
     let command: String = command.chars().take(400).collect();
     if command.is_empty() {
@@ -402,8 +408,14 @@ mod tests {
             duration_ms: 1,
             output_bytes: 0,
             error: None,
+            limit: None,
         };
         assert_eq!(ended(&status("exited", Some(0)), "make"), "exit 0 · make");
+        let at_limit = Status {
+            limit: Some("processes".into()),
+            ..status("stopped", None)
+        };
+        assert_eq!(ended(&at_limit, "make"), "process limit · make");
         assert_eq!(
             ended(&status("timed_out", None), "make"),
             "timed out · make"

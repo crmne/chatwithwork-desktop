@@ -115,6 +115,23 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         network: bool,
     },
+    /// The commands this computer ran for Chat with Work (`run`): those
+    /// running and the latest to end, with each one's command line, folder
+    /// and state. Only for this computer's own windows.
+    Commands,
+    /// What one command printed, both streams as they came, from a byte
+    /// offset: at most `max` bytes (default and most 64 KiB).
+    CommandOutput {
+        run: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<usize>,
+    },
+    /// Stop one command and everything it started.
+    CommandStop {
+        run: String,
+    },
     /// Stop sharing a folder, by ID, label or path.
     RootsRemove {
         root: String,

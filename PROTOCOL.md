@@ -580,7 +580,7 @@ Offered only while a shared folder allows commands (`allows_commands` in `roots`
 | `command` | string, required | One line of shell, run with `sh -c`, at most 8 000 characters. |
 | `path` | string, required | The folder it starts in: `<root_id>:` or `<root_id>:dir`. `not_writable` where commands aren't allowed. |
 | `background` | boolean | Answer at once and leave it running. |
-| `dry_run` | boolean | Answer `{"dry_run": true, "path", "folder", "dir", "command", "network", "background", "limits": {"cpu_seconds", "memory_mb", "timeout_seconds", "output_chars"}}` and run nothing. |
+| `dry_run` | boolean | Answer `{"dry_run": true, "path", "folder", "dir", "command", "network", "background", "limits": {"cpu_seconds", "memory_mb", "timeout_seconds", "processes", "output_chars"}}` and run nothing. |
 
 Without `background` it waits up to 15 seconds, under the server's 20-second wait for a call. While it waits, a request with a `progressToken` gets `notifications/progress` with `progress` the bytes printed so far and `message` its latest line. It answers:
 
@@ -590,7 +590,7 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
   "stdout": "...", "stderr": "...", "stdout_cut": 0, "stderr_cut": 0 }
 ```
 
-`state` is `running`, `exited` (with `exit_code`; a process ended by a signal, its CPU limit included, is -1), `timed_out`, `stopped`, or `failed` (the sandbox couldn't start it, with `error`). `stdout` and `stderr` are the end of each stream, `*_cut` the characters left out before it. A command still running has a `note` saying how to follow it. `rate_limited` when 4 commands already run.
+`state` is `running`, `exited` (with `exit_code`; a command ended by a signal exits with 128 plus the signal, as a shell reports it), `timed_out`, `stopped`, or `failed` (the sandbox couldn't start it, with `error`). `limit` is there when a limit ended it: `cpu_time` (it `exited`, killed at its CPU limit) or `processes` (`stopped`: it had more processes at once than `limits.processes`, checked a few times a second, on Linux only so far). `stdout` and `stderr` are the end of each stream, `*_cut` the characters left out before it. A command still running has a `note` saying how to follow it. `rate_limited` when 4 commands already run, `paused` while the computer is paused. Pausing the computer, or its revocation, stops the commands running.
 
 `run_status` (`{"run": id}`, read-only) answers `{"status": {...}, "stdout", "stderr", "stdout_cut", "stderr_cut"}`. `run_output` (`{"run": id, "offset": 0, "max_chars": 16000}`, read-only) answers `{"id", "offset", "next_offset", "skipped", "text", "done"}`: both streams as they came, from a byte offset, at most 32 000 characters; `skipped` is what's no longer kept (the latest megabyte is). `run_stop` (`{"run": id}`, a write) stops it and everything it started, and answers as `run_status` once it has. An unknown handle is `not_found`; commands are forgotten when the daemon restarts.
 

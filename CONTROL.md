@@ -123,7 +123,7 @@ There is no authentication beyond this: any process running as the user can driv
 {"ok": true, "paused": true}
 ```
 
-While paused, every tool call from Chat with Work is refused with the `paused` error. The state is saved in `config.toml` and survives restarts. `resume` answers `{"ok": true, "paused": false}`.
+While paused, every tool call from Chat with Work is refused with the `paused` error, and the commands running in shared folders (`commands`) are stopped. The state is saved in `config.toml` and survives restarts. `resume` answers `{"ok": true, "paused": false}`.
 
 ### `reload`
 
@@ -230,6 +230,33 @@ Answers with the updated `root` and writes a `root_changes_allowed` or `root_cha
 Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on Windows. While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
+
+### `commands`, `command_output` and `command_stop`
+
+```json
+{"cmd": "commands"}
+```
+
+```json
+{"ok": true, "commands": [
+  {"id": "3f9a0c1d2e4b", "state": "running", "exit_code": null, "duration_ms": 8120, "output_bytes": 5120, "error": null,
+   "root": "app", "folder": "App", "dir": "api", "command": "bin/rails test", "network": false, "started_at": 1792217040}
+]}
+```
+
+The commands Chat with Work ran on this computer with `run` (PROTOCOL.md section 8.15): those running first, then the latest to end (the last 32 are kept until the daemon restarts). Each has its status as `run_status` gives it (`state` `running`, `exited`, `timed_out`, `stopped` or `failed`; `limit`, `cpu_time` or `processes`, when a limit ended it), the folder by ID and label, the folder inside it it started in, its command line, whether it had the network, and when it started (Unix seconds). An empty list where commands can't run (Windows, an organization's own daemon). For this computer's windows only: the server never gets this list.
+
+```json
+{"cmd": "command_output", "run": "3f9a0c1d2e4b", "offset": 0}
+```
+
+What it printed, both streams as they came, from a byte `offset`, as `run_output` answers it: `{"ok": true, "id", "offset", "next_offset", "skipped", "text", "done"}`, at most `max` bytes (default and most 64 KiB). `not_found` for a command no longer kept.
+
+```json
+{"cmd": "command_stop", "run": "3f9a0c1d2e4b"}
+```
+
+Stops it and everything it started, and answers with its status; it says `stopped` once it has. Writes a `command_stopped` audit entry with the run's ID.
 
 ### `suggested_roots`
 
@@ -525,8 +552,8 @@ The daemon never polls to produce events, and a client that waits on a subscript
 | Field | Present | Meaning |
 |---|---|---|
 | `ts` | always | RFC 3339, UTC. |
-| `event` | always | `tool` for a tool call. Daemon events: `started`, `stopped`, `connected`, `disconnected`, `revoked`, `paused`, `resumed`, `reloaded`, `root_added`, `root_removed`, `root_labeled`, `root_changes_allowed`, `root_changes_stopped`, `shutdown_requested`, `restarting` (to fit the sandbox to a new set of folders). |
-| `tool` | tool calls | `roots`, `search`, `list`, `read`, a change tool (`create`, `write`, `edit`, `mkdir`, `move`, `delete`, `create_document`), or an unknown name the server tried. |
+| `event` | always | `tool` for a tool call. Daemon events: `started`, `stopped`, `connected`, `disconnected`, `revoked`, `paused`, `resumed`, `reloaded`, `root_added`, `root_removed`, `root_labeled`, `root_changes_allowed`, `root_changes_stopped`, `root_commands_allowed`, `root_commands_stopped`, `command_stopped` (from `command_stop`), `shutdown_requested`, `restarting` (to fit the sandbox to a new set of folders). |
+| `tool` | tool calls | `roots`, `search`, `list`, `read`, a change tool (`create`, `write`, `edit`, `mkdir`, `move`, `delete`, `create_document`), a command tool (`run`, `run_status`, `run_output`, `run_stop`), or an unknown name the server tried. |
 | `decision` | tool calls | `allowed`, `denied` or `error`. |
 | `path`, `query` | when given | The tool path (`root:relative`; the source, for `move`) or search query, truncated. |
 | `to` | moves | Where a `move` went. |

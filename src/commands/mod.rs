@@ -18,6 +18,7 @@
 #[cfg(unix)]
 pub mod channel;
 mod channel_call;
+pub mod follow;
 mod plan;
 #[cfg(unix)]
 mod run;
@@ -70,6 +71,9 @@ pub struct Limits {
     pub cpu_seconds: u64,
     pub memory_mb: u64,
     pub timeout_seconds: u64,
+    /// Processes at once, itself included.
+    #[serde(default)]
+    pub processes: u32,
     pub output_chars: usize,
 }
 
@@ -79,6 +83,7 @@ impl Limits {
             cpu_seconds: limits.command_cpu_seconds,
             memory_mb: limits.command_memory_mb,
             timeout_seconds: limits.command_timeout_seconds,
+            processes: limits.command_processes,
             output_chars: limits.command_output_chars,
         }
     }
@@ -100,6 +105,10 @@ pub struct Status {
     pub output_bytes: u64,
     /// Why it `failed`.
     pub error: Option<String>,
+    /// The limit that ended it: `cpu_time` (it `exited` with -1) or
+    /// `processes` (it was `stopped`). Its wall clock is `timed_out`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<String>,
 }
 
 impl Status {
@@ -135,6 +144,24 @@ pub struct Finished {
     pub stderr_cut: usize,
 }
 
+/// A run as this computer's own windows list it: what runs where, and how
+/// it stands. Only over the control socket, never to the server, which has
+/// its own record of what it asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Summary {
+    #[serde(flatten)]
+    pub status: Status,
+    /// The folder, by ID, and where in it.
+    pub root: String,
+    #[serde(default)]
+    pub dir: String,
+    pub command: String,
+    #[serde(default)]
+    pub network: bool,
+    /// When it started, in seconds since the Unix epoch.
+    pub started_at: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stream {
     Out,
@@ -154,9 +181,15 @@ enum State {
 /// and the callers.
 struct Cell {
     id: String,
-    /// The folder it runs in, by ID.
+    /// The folder it runs in, by ID, where in it, and what.
     root: String,
+    dir: String,
+    command: String,
+    network: bool,
     started: Instant,
+    started_at: u64,
+    /// The limit that ended it, set by its thread.
+    limit: Option<&'static str>,
     ended: Option<Instant>,
     state: State,
     stop: bool,
@@ -173,11 +206,19 @@ struct Cell {
 }
 
 impl Cell {
-    fn new(id: String, root: String, limits: &Limits) -> Self {
+    fn new(plan: &Plan, root: String, dir: String) -> Self {
+        let limits = &plan.limits;
         Self {
-            id,
+            id: plan.id.clone(),
             root,
+            dir,
+            command: plan.command.clone(),
+            network: plan.network,
             started: Instant::now(),
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            limit: None,
             ended: None,
             state: State::Running,
             stop: false,
@@ -236,6 +277,18 @@ impl Cell {
             duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
             output_bytes: self.total,
             error,
+            limit: self.limit.map(String::from),
+        }
+    }
+
+    fn summary(&self) -> Summary {
+        Summary {
+            status: self.status(),
+            root: self.root.clone(),
+            dir: self.dir.clone(),
+            command: self.command.clone(),
+            network: self.network,
+            started_at: self.started_at,
         }
     }
 
@@ -338,6 +391,12 @@ impl Runs {
     /// Start `request` as `config` allows it, checked here, and return its
     /// status at once.
     pub fn start(&self, config: &Config, request: &Request) -> Result<Status, RunError> {
+        if config.paused {
+            return Err(RunError::new(
+                "paused",
+                "this computer is paused; resume it to run commands",
+            ));
+        }
         let running = self.running();
         if running >= config.limits.commands_running {
             return Err(RunError::new(
@@ -350,9 +409,9 @@ impl Runs {
         let id = new_id();
         let plan = plan(config, &self.paths, request, &id)?;
         let cell = Arc::new(Mutex::new(Cell::new(
-            id.clone(),
+            &plan,
             request.root.clone(),
-            &plan.limits,
+            request.dir.clone(),
         )));
         {
             let mut inner = lock(&self.inner);
@@ -446,19 +505,35 @@ impl Runs {
         }
     }
 
-    /// Stop the runs in folders that no longer allow commands.
+    /// Stop the runs in folders that no longer allow commands, and all of
+    /// them while the computer is paused.
     pub fn stop_outside(&self, config: &Config) {
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             let mut cell = lock(&cell);
-            let allowed = config
-                .roots
-                .iter()
-                .any(|r| r.id == cell.root && r.runs_commands());
+            let allowed = !config.paused
+                && config
+                    .roots
+                    .iter()
+                    .any(|r| r.id == cell.root && r.runs_commands());
             if cell.state == State::Running && !allowed {
                 cell.stop = true;
             }
         }
+    }
+
+    /// Every run kept, running ones first, then the latest to start.
+    pub fn list(&self) -> Vec<Summary> {
+        let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
+        let mut list: Vec<(Instant, Summary)> = cells
+            .iter()
+            .map(|c| {
+                let cell = lock(c);
+                (cell.started, cell.summary())
+            })
+            .collect();
+        list.sort_by(|(a, x), (b, y)| y.status.running().cmp(&x.status.running()).then(b.cmp(a)));
+        list.into_iter().map(|(_, s)| s).collect()
     }
 
     pub fn running(&self) -> usize {
@@ -569,9 +644,24 @@ impl Runner {
         )
     }
 
-    /// Folders changed: stop the runs where commands aren't allowed now.
+    /// Folders changed, or the computer was paused: stop the runs where
+    /// commands aren't allowed now.
     pub async fn prune(&self) {
         let _ = self.call(channel_call::Call::Prune).await;
+    }
+
+    /// Every run kept, for this computer's own windows; none where
+    /// commands can't run.
+    pub async fn list(&self) -> Result<Vec<Summary>, RunError> {
+        if matches!(self, Self::Off(_)) {
+            return Ok(Vec::new());
+        }
+        parse(self.call(channel_call::Call::List).await?)
+    }
+
+    /// The device was revoked: stop every run, without waiting.
+    pub async fn stop_everything(&self) {
+        let _ = self.call(channel_call::Call::StopAll).await;
     }
 
     /// Stop everything this daemon started, and wait a moment for it to

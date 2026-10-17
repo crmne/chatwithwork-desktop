@@ -29,6 +29,10 @@ pub enum Call {
     },
     /// Folders changed: stop runs where commands aren't allowed anymore.
     Prune,
+    /// The runs kept, for this computer's own windows.
+    List,
+    /// The device was revoked: stop every run.
+    StopAll,
 }
 
 /// Answer one call, as the supervisor does.
@@ -63,6 +67,11 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
         }
         Call::Prune => {
             runs.stop_outside(&config()?);
+            serde_json::Value::Null
+        }
+        Call::List => to_value(runs.list()),
+        Call::StopAll => {
+            runs.stop_all();
             serde_json::Value::Null
         }
     };

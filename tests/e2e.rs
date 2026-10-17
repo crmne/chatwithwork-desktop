@@ -5024,6 +5024,111 @@ async fn runs_commands_over_the_wire() {
     let unknown = s.call("run_status", json!({ "run": "0123456789ab" })).await;
     assert_eq!(error_code(&unknown), "not_found");
 
+    // This computer's own windows list them, follow one and stop it.
+    let started = s
+        .call(
+            "run",
+            json!({ "command": "echo watching; sleep 60", "path": "docs:", "background": true }),
+        )
+        .await;
+    let watcher = started["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let listed = control(&fx.paths, ControlRequest::Commands).await;
+    let first = &listed["commands"][0];
+    assert_eq!(first["id"], watcher.as_str(), "{listed}");
+    assert_eq!(first["state"], "running");
+    assert_eq!(first["command"], "echo watching; sleep 60");
+    assert_eq!(first["root"], "docs");
+    assert!(first["folder"].is_string(), "{listed}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = control(
+            &fx.paths,
+            ControlRequest::CommandOutput {
+                run: watcher.clone(),
+                offset: 0,
+                max: None,
+            },
+        )
+        .await;
+        if output["text"].as_str().unwrap_or("").contains("watching") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{output}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // The windows' follower sees it and what it printed, and stops it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let follow = cww::commands::follow::Follow::spawn(fx.paths.socket_path(), move |s| {
+        let _ = tx.send(s);
+    });
+    follow.focus(Some(watcher.clone()));
+    let seen = tokio::task::spawn_blocking(move || {
+        loop {
+            let snapshot = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            if snapshot
+                .printed
+                .as_ref()
+                .is_some_and(|p| p.text.contains("watching"))
+            {
+                return snapshot;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        seen.commands
+            .iter()
+            .any(|c| c.id() == watcher && c.running())
+    );
+    let stopper = watcher.clone();
+    tokio::task::spawn_blocking(move || follow.stop_run(&stopper))
+        .await
+        .unwrap()
+        .unwrap();
+    let status = s.call("run_status", json!({ "run": watcher })).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut state = status["structuredContent"]["status"]["state"].clone();
+    while state == "running" && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let status = s.call("run_status", json!({ "run": watcher })).await;
+        state = status["structuredContent"]["status"]["state"].clone();
+    }
+    assert_eq!(state, "stopped");
+
+    // Pausing the computer stops what runs.
+    let started = s
+        .call(
+            "run",
+            json!({ "command": "sleep 60", "path": "docs:", "background": true }),
+        )
+        .await;
+    let sleeper = started["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    control(&fx.paths, ControlRequest::Pause).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = control(&fx.paths, ControlRequest::Commands).await;
+        let entry = listed["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == sleeper.as_str())
+            .cloned()
+            .unwrap();
+        if entry["state"] == "stopped" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{listed}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    control(&fx.paths, ControlRequest::Resume).await;
+
     // The audit log says what ran and how it ended.
     let audit = std::fs::read_to_string(fx.paths.audit_file()).unwrap();
     assert!(audit.contains("exit 4 · for i in 1 2 3"), "{audit}");
@@ -5087,6 +5192,13 @@ async fn a_confined_worker_runs_commands_through_its_supervisor() {
     assert_eq!(
         started["structuredContent"]["state"], "running",
         "{started}"
+    );
+    // The supervisor keeps the runs; the worker lists them for the windows.
+    let listed = control(&fx.paths, ControlRequest::Commands).await;
+    assert_eq!(listed["commands"][0]["state"], "running", "{listed}");
+    assert_eq!(
+        listed["commands"][0]["command"],
+        "sleep 60; echo late > late.txt"
     );
     let pid = rustix::process::Pid::from_raw(child.id().unwrap() as i32).unwrap();
     rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();

@@ -317,17 +317,114 @@ fn too_many_running_commands_wait_their_turn() {
 }
 
 #[test]
+fn a_paused_computer_runs_nothing_and_stops_what_runs() {
+    let mut fx = fixture(true);
+    fx.config.paused = true;
+    assert_eq!(
+        fx.runs
+            .start(&fx.config, &request("true"))
+            .unwrap_err()
+            .code,
+        "paused"
+    );
+    if !sandbox_works() {
+        return;
+    }
+    fx.config.paused = false;
+    let running = fx.runs.start(&fx.config, &request("sleep 30")).unwrap();
+    fx.config.paused = true;
+    fx.runs.stop_outside(&fx.config);
+    assert_eq!(wait(&fx.runs, &running.id).status.state, "stopped");
+}
+
+#[test]
+fn the_list_says_what_runs_where_running_first() {
+    if !sandbox_works() {
+        return;
+    }
+    let fx = fixture(true);
+    let done = fx.runs.start(&fx.config, &request("true")).unwrap();
+    wait(&fx.runs, &done.id);
+    let req = Request {
+        dir: "src".into(),
+        ..request("sleep 30")
+    };
+    let running = fx.runs.start(&fx.config, &req).unwrap();
+    let list = fx.runs.list();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].status.id, running.id);
+    assert_eq!(list[0].command, "sleep 30");
+    assert_eq!(list[0].dir, "src");
+    assert_eq!(list[0].root, "project");
+    assert!(list[0].started_at > 0);
+    assert_eq!(list[1].status.state, "exited");
+    fx.runs.stop_all();
+    wait(&fx.runs, &running.id);
+}
+
+#[test]
+fn a_command_is_stopped_at_its_process_limit() {
+    if !sandbox_works() || !cfg!(target_os = "linux") {
+        return;
+    }
+    let mut fx = fixture(true);
+    fx.config.limits.command_processes = 4;
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &request("for i in 1 2 3 4 5 6 7 8 9 10; do sleep 20 & done; wait"),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.state, "stopped");
+    assert_eq!(done.status.limit.as_deref(), Some("processes"));
+    assert!(done.status.duration_ms < 10_000);
+
+    fx.config.limits.command_processes = 64;
+    let status = fx
+        .runs
+        .start(&fx.config, &request("sleep 0.3 & sleep 0.3 & wait"))
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.state, "exited");
+    assert_eq!(done.status.limit, None);
+}
+
+#[test]
+fn a_command_that_spins_ends_at_its_cpu_limit() {
+    if !sandbox_works() {
+        return;
+    }
+    let mut fx = fixture(true);
+    fx.config.limits.command_cpu_seconds = 1;
+    let status = fx
+        .runs
+        .start(&fx.config, &request("while :; do :; done"))
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.state, "exited", "{done:?}");
+    assert_eq!(done.status.limit.as_deref(), Some("cpu_time"), "{done:?}");
+}
+
+#[test]
 fn utf8_is_never_cut_in_the_middle_of_a_character() {
-    let mut cell = Cell::new(
-        "0".into(),
-        "r".into(),
-        &Limits {
+    let plan = Plan {
+        id: "0".into(),
+        command: "true".into(),
+        folder: "/".into(),
+        cwd: "/".into(),
+        network: false,
+        limits: Limits {
             cpu_seconds: 1,
             memory_mb: 1,
             timeout_seconds: 1,
+            processes: 1,
             output_chars: 2,
         },
-    );
+        home: "/".into(),
+    };
+    let mut cell = Cell::new(&plan, "r".into(), String::new());
     cell.append(Stream::Out, "héllo".as_bytes());
     let piece = cell.output(0, 2);
     assert_eq!(piece.text, "h");

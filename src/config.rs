@@ -165,6 +165,9 @@ pub struct Limits {
     pub command_memory_mb: u64,
     /// How long a command may run, in seconds, before it's stopped.
     pub command_timeout_seconds: u64,
+    /// Processes a command may have at once, itself included, before it's
+    /// stopped. Checked by the daemon on Linux; MXC can't hold it there.
+    pub command_processes: u32,
     /// Commands running at once, across all chats.
     pub commands_running: usize,
     /// Characters of each of a command's streams (output and errors) its
@@ -194,6 +197,7 @@ impl Default for Limits {
             command_cpu_seconds: 600,
             command_memory_mb: 4_096,
             command_timeout_seconds: 1_800,
+            command_processes: 256,
             commands_running: 4,
             command_output_chars: 20_000,
         }

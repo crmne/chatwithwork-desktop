@@ -10,7 +10,9 @@ The daemon itself can't run anything in a shared folder: its sandbox never gives
 - It **writes** only its folder, and a home and temporary folder of its own (`<data>/runs/<id>`, removed when it ends).
 - It has **no network**, unless the folder allows it ("Commands use the network"). Without it, the system resolver's socket is hidden too.
 - It gets a **clean environment**: `PATH` from the toolchains above and the system, `HOME` and `TMPDIR` in its own folder, `LANG=C.UTF-8`, `TERM=dumb`, and what the toolchains need to find themselves (`MISE_DATA_DIR`, `RUSTUP_HOME`, ...). Never the daemon's variables or tokens. mise trusts the folder's own `mise.toml`.
-- It has **limits**: CPU time and memory for each process it starts (600 CPU seconds and 4 GB by default), a wall clock (30 minutes), low priority, and at most 4 commands at once. They're `command_cpu_seconds`, `command_memory_mb`, `command_timeout_seconds` and `commands_running` under `[limits]` in `config.toml`.
+- It has **limits**: CPU time and memory for each process it starts (600 CPU seconds and 4 GB by default), at most 256 processes at once, a wall clock (30 minutes), low priority, and at most 4 commands at once. They're `command_cpu_seconds`, `command_memory_mb`, `command_processes`, `command_timeout_seconds` and `commands_running` under `[limits]` in `config.toml`. MXC enforces CPU time and memory (rlimits) and the clock; it limits processes only on Windows, so on Linux whoever runs the command counts the sandbox's processes in `/proc` four times a second and stops it past the limit. A run ended by a limit says which (`limit`: `cpu_time` or `processes`).
+
+Commands stop when the computer is paused (and none start until it's resumed), and when Chat with Work revokes it.
 
 The worker names the folder by its ID and the working folder by a path relative to it, never an absolute path. The supervisor reads `config.toml` again for every command, checks that the folder allows commands, and resolves the working folder itself, refusing one that leads outside. A folder that stops allowing commands stops the commands running in it; a worker that ends (to restart under new rules, or because the daemon stops) stops all of its own, and the supervisor waits for them before it goes on.
 
@@ -31,7 +33,7 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 - **A command can change or delete anything in its folder**, and nothing in the trash brings that back: approve each one knowing that. Version control is the undo.
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
 - **Toolchain settings are readable**: mise's config can hold environment variables.
-- **No limit on the number of processes on Linux and macOS.** MXC enforces it only on Windows; CPU and memory are limited per process, so a fork bomb is held back by the time limit and the pid namespace, not by a count.
+- **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet: CPU time is limited per process, and the wall clock ends the rest.
 - **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Linux it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why.
 - **The systemd unit's own limits apply to commands.** The supervisor runs under `cww daemon install`'s unit, whose `MemoryDenyWriteExecute`, system call filter and `ProtectSystem=strict` carry over to everything it starts: JIT runtimes (Node, the JVM) may fail there until the unit is relaxed for them.
 
@@ -39,4 +41,4 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 
 - macOS: Seatbelt runs come from MXC, but haven't been tried on a Mac here.
 - Windows: off, until it has a sandbox for the daemon.
-- A list of background commands under the composer, and live output in the step, need the server to send them in the chat API.
+- Live output inside the chat's step: the step shows the result when the call answers, and the server would have to pass progress through the chat API for more.

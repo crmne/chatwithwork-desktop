@@ -279,6 +279,11 @@ fn confine(config: &Config, paths: &Paths) {
 }
 
 /// The folders that allow commands, and whether they may use the network.
+/// A command call the runner refused, as the control channel says it.
+fn command_refusal(e: crate::commands::RunError) -> anyhow::Error {
+    Refusal::new(&e.code, e.message).into()
+}
+
 fn command_roots(config: &Config) -> Vec<(String, String, bool)> {
     config
         .roots
@@ -652,6 +657,8 @@ impl Daemon {
                 }
             };
             if tunnel.run(token).await == TunnelExit::Revoked {
+                // Nothing runs for a device that's gone.
+                self.runner.stop_everything().await;
                 self.wait_for_reload(shutdown).await;
             }
         }
@@ -919,6 +926,10 @@ impl Daemon {
         })
         .await?;
         self.config.lock().await.paused = paused;
+        // Commands stop with the computer.
+        if paused {
+            self.runner.prune().await;
+        }
         self.audit.append(&AuditEntry::event(if paused {
             "paused"
         } else {
@@ -926,6 +937,26 @@ impl Daemon {
         }));
         self.changes.bump();
         Ok(())
+    }
+
+    /// The commands this computer ran, each with its folder's label.
+    async fn commands_json(&self) -> Result<Value> {
+        let list = self.runner.list().await.map_err(command_refusal)?;
+        let config = self.config.lock().await.clone();
+        let commands: Vec<Value> = list
+            .into_iter()
+            .map(|summary| {
+                let folder = config
+                    .roots
+                    .iter()
+                    .find(|r| r.id == summary.root)
+                    .map_or_else(|| summary.root.clone(), |r| r.label.clone());
+                let mut value = serde_json::to_value(&summary).unwrap_or_default();
+                value["folder"] = Value::String(folder);
+                value
+            })
+            .collect();
+        Ok(json!({ "commands": commands }))
     }
 
     async fn status_json(&self) -> Value {
@@ -1154,6 +1185,23 @@ impl ControlHandler for Daemon {
                 commands,
                 network,
             } => self.set_commands(root, commands, network).await,
+            ControlRequest::Commands => self.commands_json().await,
+            ControlRequest::CommandOutput { run, offset, max } => {
+                let max = max.unwrap_or(crate::commands::MAX_OUTPUT_CHUNK);
+                let output = self
+                    .runner
+                    .output(&run, offset, max)
+                    .await
+                    .map_err(command_refusal)?;
+                Ok(serde_json::to_value(output)?)
+            }
+            ControlRequest::CommandStop { run } => {
+                let status = self.runner.stop(&run).await.map_err(command_refusal)?;
+                let mut entry = AuditEntry::event("command_stopped");
+                entry.detail = Some(format!("run {}", status.id));
+                self.audit.append(&entry);
+                Ok(serde_json::to_value(status)?)
+            }
             ControlRequest::AuditTail { lines } => {
                 let path = self.audit.path().to_path_buf();
                 let n = lines.unwrap_or(50).min(1000);
