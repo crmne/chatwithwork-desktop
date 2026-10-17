@@ -50,6 +50,10 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
             return State::Failed(e.message);
         }
     };
+    if let Some(e) = sandbox.refuses(plan) {
+        tracing::info!(run = %plan.id, code = %e.code, "the sandbox refused a command");
+        return State::Failed(e.message);
+    }
     let home = crate::paths::home_dir().ok();
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {

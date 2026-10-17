@@ -20,8 +20,8 @@ Bubblewrap needs unprivileged user namespaces. Some Linux computers block them: 
 
 The same rules hold, with these differences:
 
-- **The network, when allowed, is this computer's network**, its loopback included: a command can reach servers running here (a database, a development server, other programs listening on `localhost`) and accept connections. Landlock can't tell one address from another, so it's all or nothing. Bubblewrap gives a command a network of its own instead, without this computer's loopback, and needs `slirp4netns` for it; Landlock doesn't.
-- **It can change the metadata of files it can't read.** Landlock decides who reads, writes and runs files, not who changes their permissions or timestamps: a command can `chmod` or `touch` any file your user owns, even outside its folder (a private key made readable to other users of this computer, say), and can see whether a path exists. It can't read or change what's in them.
+- **No network.** Landlock can't tell one address from another, so it could only give a command this computer's whole network, its local servers (a database, a development server, anything listening on `localhost`) and connections in included. So in a folder that allows the network, a command fails at once and says so: turn the network off for that folder, or allow unprivileged user namespaces so Bubblewrap can give it a network of its own.
+- **No metadata changes by name.** Landlock decides who reads, writes and runs files, not who changes their permissions, owner or timestamps, so MXC refuses those changes by path (`Operation not permitted`), even in the folder: `chmod +x script.sh` fails, and so does `touch` of a file the command may only read. Changes through a file it opened still work, so `touch` of a file in the folder, or a new one, works, and programs that set a file's mode when they create it (compilers, `install`) work too. A command can still see whether a path outside its folder exists.
 - **No private `/dev/shm`**, so POSIX semaphores, and Python's `multiprocessing` locks with them, fail with `Permission denied`.
 - A toolchain inside the shared folder (sharing the home folder, with `~/.cargo/bin` in it) is writable like the rest of the folder, rather than read-only inside it.
 
@@ -49,8 +49,7 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
 - **Toolchain settings are readable**: mise's config can hold environment variables.
 - **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet: CPU time is limited per process, and the wall clock ends the rest.
-- **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) it includes this computer's loopback.
-- **On Landlock, a command can change the permissions and timestamps of any file your user owns** ([Landlock](#landlock)).
+- **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) there's no network at all.
 - **The systemd unit's own limits apply to commands.** The supervisor runs under `cww daemon install`'s unit, whose `MemoryDenyWriteExecute`, system call filter and `ProtectSystem=strict` carry over to everything it starts: JIT runtimes (Node, the JVM) may fail there until the unit is relaxed for them.
 
 ## Not built yet

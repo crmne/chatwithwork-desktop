@@ -69,6 +69,24 @@ impl Sandbox {
         }
     }
 
+    /// Why `plan` can't run in this sandbox, if it can't. Landlock runs a
+    /// command in this computer's network and can't tell one address from
+    /// another, so it could only allow all of it, this computer's loopback
+    /// (its local servers) and connections in included. Bubblewrap gives a
+    /// command a network of its own instead.
+    pub fn refuses(self, plan: &Plan) -> Option<RunError> {
+        (self == Self::Landlock && plan.network).then(|| {
+            RunError::new(
+                "network_unavailable",
+                "this folder allows commands the network, which this computer can't give them \
+                 safely: Bubblewrap can't create a sandbox here, and Landlock, used instead, \
+                 could only give the whole network, its local servers included. Turn the \
+                 network off for this folder, or allow unprivileged user namespaces for \
+                 Bubblewrap",
+            )
+        })
+    }
+
     /// Processes in a run's tree, its first one included, that are the
     /// sandbox's rather than the command's. Bubblewrap starts the command
     /// under itself and its init; on Landlock the command's shell is the
@@ -352,7 +370,8 @@ impl Plan {
     ///
     /// On Linux it asks for `process`, MXC's own choice, which is Bubblewrap
     /// or, where Bubblewrap can't run, Landlock; `sandbox` says which this
-    /// computer gets, for what the two hold differently.
+    /// computer gets, for what the two hold differently. A run with the
+    /// network never gets here on Landlock ([`Sandbox::refuses`]).
     pub fn request_json(&self, home: Option<&Path>, sandbox: Sandbox) -> String {
         let mut found = toolchains(home);
         if sandbox == Sandbox::Landlock {
@@ -395,7 +414,7 @@ impl Plan {
                 "readonlyPaths": found.read,
                 "deniedPaths": denied,
             },
-            "network": network(self.network, sandbox),
+            "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
             "resources": {
                 "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
                 "memoryMb": self.limits.memory_mb,
@@ -414,22 +433,5 @@ impl Plan {
             document["containment"] = "process".into();
         }
         document.to_string()
-    }
-}
-
-/// The network a run gets. Bubblewrap gives it a network of its own,
-/// reached through slirp4netns, with no way in and not this computer's
-/// loopback. Landlock runs it in this computer's network and can't tell
-/// one address from another, so it allows all of it or nothing: allowed,
-/// that's this computer's loopback (its local servers) and connections in
-/// too, which MXC needs said outright.
-fn network(allowed: bool, sandbox: Sandbox) -> serde_json::Value {
-    match (allowed, sandbox) {
-        (false, _) => json!({ "egress": { "default": "deny" } }),
-        (true, Sandbox::Landlock) => json!({
-            "egress": { "default": "allow" },
-            "ingress": { "default": "allow", "hostLoopback": "allow" },
-        }),
-        (true, _) => json!({ "egress": { "default": "allow" } }),
     }
 }

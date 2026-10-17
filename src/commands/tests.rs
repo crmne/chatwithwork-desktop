@@ -183,22 +183,26 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
 }
 
 #[test]
-fn on_landlock_the_network_is_all_or_nothing() {
+fn landlock_refuses_commands_the_network() {
     let mut fx = fixture(true);
     let paths = Paths::under(Path::new("/x/cww"));
-    let request_for = |config: &Config| -> serde_json::Value {
-        let plan = plan(config, &paths, &request("make"), "0123456789ab").unwrap();
-        serde_json::from_str(&plan.request_json(None, Sandbox::Landlock)).unwrap()
-    };
-    let json = request_for(&fx.config);
+    let offline = plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
+    assert_eq!(Sandbox::Landlock.refuses(&offline), None);
+    let json: serde_json::Value =
+        serde_json::from_str(&offline.request_json(None, Sandbox::Landlock)).unwrap();
     assert_eq!(json["containment"], "process");
     assert_eq!(json["network"]["egress"]["default"], "deny");
     assert!(json["network"].get("ingress").is_none());
     fx.config.roots[0].network = true;
-    let json = request_for(&fx.config);
-    assert_eq!(json["network"]["egress"]["default"], "allow");
-    assert_eq!(json["network"]["ingress"]["default"], "allow");
-    assert_eq!(json["network"]["ingress"]["hostLoopback"], "allow");
+    let online = plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
+    let refused = Sandbox::Landlock.refuses(&online).unwrap();
+    assert_eq!(refused.code, "network_unavailable");
+    assert!(
+        refused.message.contains("Turn the network off"),
+        "{refused:?}"
+    );
+    assert_eq!(Sandbox::Bubblewrap.refuses(&online), None);
+    assert_eq!(Sandbox::Seatbelt.refuses(&online), None);
 }
 
 #[test]
@@ -271,13 +275,24 @@ fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
     std::fs::write(&outside, "keep\n").unwrap();
     // SAFETY: tests set this before any run reads the environment.
     unsafe { std::env::set_var("CWW_SECRET_FOR_TEST", "leak") };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let command = format!(
-        "echo changed > {} 2>/dev/null; echo \"secret=$CWW_SECRET_FOR_TEST\"; echo \"home=$HOME\"; touch \"$HOME/ok\" && echo home-writable",
+        "echo changed > {0} 2>/dev/null; chmod 644 {0} 2>/dev/null; echo \"secret=$CWW_SECRET_FOR_TEST\"; echo \"home=$HOME\"; touch \"$HOME/ok\" && echo home-writable",
         outside.display()
     );
     let status = fx.runs.start(&fx.config, &request(&command)).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&outside).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "its mode changed");
+    }
     assert!(done.stdout.contains("secret=\n"), "{done:?}");
     assert!(done.stdout.contains("home-writable"), "{done:?}");
     assert!(done.stdout.contains("home=/"), "{done:?}");
@@ -310,13 +325,19 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
         assert_eq!(done.stdout.trim(), "lo", "{done:?}");
     }
     assert_ne!(reaches_this_computers_loopback(&fx, &fx.config), Some(true));
-    // Bubblewrap's network needs slirp4netns; Landlock's is this computer's,
-    // its loopback included.
+    // Landlock could only give it this computer's whole network, so a
+    // folder that allows the network runs nothing there.
     if on_landlock() {
         fx.config.roots[0].network = true;
-        assert_ne!(
-            reaches_this_computers_loopback(&fx, &fx.config),
-            Some(false)
+        let status = fx.runs.start(&fx.config, &request("true")).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.state, "failed", "{done:?}");
+        assert!(
+            done.status
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Turn the network off")),
+            "{done:?}"
         );
     }
 }

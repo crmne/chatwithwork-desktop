@@ -118,7 +118,7 @@ rustix = { version = "1.1", features = ["fs", "process", "system", "alloc"] }
 # run: Bubblewrap on Linux, or Landlock where Bubblewrap can't create its
 # namespaces, and Seatbelt on macOS. Carmine's fork adds CPU time and memory
 # limits and the Landlock backend.
-mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "b39a69ca8af93ba4979d3b8c5349892fcc10ceee" }
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "d57b0d1aa3a2d552001fa54ef4ac4baaa733c26d" }
 
 # The kernel sandbox for the daemon on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
