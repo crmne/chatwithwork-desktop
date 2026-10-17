@@ -18,6 +18,7 @@ mod history;
 pub mod markdown;
 mod organizations;
 mod pages;
+mod running;
 pub mod streaming;
 pub mod theme;
 pub mod ui;
@@ -46,6 +47,7 @@ use time::{OffsetDateTime, UtcOffset};
 use self::app::{Acted, App, ChatAction, ChatCommand, ChatMsg, Effect, Msg};
 use self::chat::Chats;
 use self::theme::Theme;
+use crate::commands::follow::Follow;
 use crate::config::Config;
 use crate::control::Closer;
 use crate::notification_presence::Presence;
@@ -97,12 +99,22 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     let presence = Presence::new(chat_paths.socket_path());
     let _organization =
         profile.map(|profile| organizations::Watcher::spawn(paths.clone(), profile, tx.clone()));
+    // Commands run in the computer's own daemon, whichever organization's
+    // chats are open.
+    let commands = {
+        let tx = tx.clone();
+        Arc::new(Follow::spawn(paths.socket_path(), move |snapshot| {
+            let _ = tx.send(Msg::Commands(snapshot));
+        }))
+    };
     let link = daemon::Link::spawn(paths, tx.clone());
     let out = Outputs {
         link,
         chats,
         history: history_file,
         presence,
+        commands,
+        tx: tx.clone(),
     };
 
     let effects = app.start();
@@ -178,6 +190,8 @@ struct Outputs {
     chats: ChatRunner,
     history: PathBuf,
     presence: Presence,
+    commands: Arc<Follow>,
+    tx: Sender<Msg>,
 }
 
 impl Outputs {
@@ -192,6 +206,13 @@ impl Outputs {
                 Effect::Chat(command) => self.chats.run(command),
                 Effect::Copy(text) => copy(&text),
                 Effect::Redraw => redraw = true,
+                Effect::FollowCommand(run) => self.commands.focus(run),
+                Effect::StopCommand(run) => {
+                    let (commands, tx) = (self.commands.clone(), self.tx.clone());
+                    thread::spawn(move || {
+                        let _ = tx.send(Msg::CommandStopped(commands.stop_run(&run)));
+                    });
+                }
                 Effect::Remember(entry) => {
                     if let Err(e) = history::append(&self.history, &entry) {
                         tracing::debug!("keeping the question: {e:#}");

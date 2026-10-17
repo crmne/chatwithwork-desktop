@@ -213,6 +213,7 @@ Typing `/` lists the commands and narrows them as you type; `↑` `↓` select, 
 | `/retry`, `/branch`, `/rename [title]`, `/delete` | Answer the last question again, continue the chat in a new one, rename it, or delete it (after asking), where Chat with Work allows it |
 | `/share-chat`, `/unshare-chat` | Make a public link to the chat and copy it, or stop sharing it |
 | `/steps` | Show or hide every tool step |
+| `/commands` | Follow or stop the commands Chat with Work runs on this computer (shown while any ran) |
 | `/settings` | Open the settings |
 | `/folders`, `/share [path]`, `/unshare [folder]` | Show your shared folders, share one, or stop sharing one (after asking) |
 | `/pause`, `/resume-sharing` | Refuse Chat with Work's requests for now, or answer them again |

@@ -28,6 +28,10 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 
 `run` is annotated destructive and open-world, so Chat with Work asks every time; `run_stop` is a plain write; the other two only read. Each call is in the activity log with how it ended and the command line ("exit 0 · bin/rails test"). That log stays on this computer.
 
+## On this computer
+
+The desktop app's chat page and `cww tui` list the commands running here (and the last few to end) under the conversation, from the daemon itself ([CONTROL.md, `commands`](../CONTROL.md#commands-command_output-and-command_stop)), never from the server: each with its command line, folder, how long it has run and how it ended. In the app, a line over the composer says what runs, where and for how long, with Stop and Show output, which lists them with what the chosen one prints as it prints it (escape sequences and progress-bar redraws cleaned out). In the terminal, the same line sits over the composer, and `/commands` opens the list: ↑↓ choose, `s` stops, Esc closes. Stopping is written to the activity log (`command_stopped`).
+
 ## What it doesn't protect against
 
 - **A command can change or delete anything in its folder**, and nothing in the trash brings that back: approve each one knowing that. Version control is the undo.
@@ -41,4 +45,4 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 
 - macOS: Seatbelt runs come from MXC, but haven't been tried on a Mac here.
 - Windows: off, until it has a sandbox for the daemon.
-- Live output inside the chat's step: the step shows the result when the call answers, and the server would have to pass progress through the chat API for more.
+- Live output inside the chat's step: the step shows the result when the call answers, and the server would have to pass progress through the chat API for more. Until then this computer's windows show it themselves (below).

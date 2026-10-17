@@ -23,6 +23,7 @@ pub enum Cmd {
     ShareChat,
     UnshareChat,
     Steps,
+    Commands,
     Settings,
     Folders,
     Share,
@@ -198,6 +199,14 @@ pub const COMMANDS: &[Command] = &[
         "",
         false,
         "Show or hide every tool step",
+    ),
+    command(
+        Cmd::Commands,
+        "commands",
+        &["runs"],
+        "",
+        false,
+        "Follow or stop the commands running here",
     ),
     command(
         Cmd::Settings,

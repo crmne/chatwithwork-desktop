@@ -313,6 +313,11 @@ pub enum Modal {
     Help {
         scroll: usize,
     },
+    /// The commands this computer runs for Chat with Work, with what the
+    /// chosen one prints.
+    Commands {
+        selected: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +498,10 @@ pub enum Effect {
     Redraw,
     /// Keep a question in the history file.
     Remember(String),
+    /// Follow what this command prints, or none.
+    FollowCommand(Option<String>),
+    /// Stop a command running on this computer.
+    StopCommand(String),
     Quit,
 }
 
@@ -578,6 +587,10 @@ pub enum Msg {
     Resize,
     Daemon(DaemonMsg),
     OrganizationStatus(Result<Box<DaemonStatus>, String>),
+    /// The commands running here, and what the chosen one printed.
+    Commands(crate::commands::follow::Snapshot),
+    /// A command was asked to stop, or couldn't be.
+    CommandStopped(Result<(), String>),
     Chat(ChatMsg),
     /// Production worker replies are tied to the pairing that requested them.
     ScopedChat {
@@ -1305,6 +1318,8 @@ pub struct App {
     /// Effects to run after the message at hand, such as reading what a
     /// page shows when it opens.
     later: Vec<Effect>,
+    /// The commands this computer runs for Chat with Work.
+    pub commands: crate::commands::follow::Snapshot,
 }
 
 impl App {
@@ -1335,6 +1350,7 @@ impl App {
             quit_armed: false,
             hits: Hits::default(),
             later: Vec::new(),
+            commands: crate::commands::follow::Snapshot::default(),
         }
     }
 
@@ -1412,6 +1428,21 @@ impl App {
             Msg::Resize => Vec::new(),
             Msg::Daemon(msg) => self.daemon_msg(msg),
             Msg::OrganizationStatus(status) => self.organization_status(status),
+            Msg::Commands(snapshot) => {
+                self.commands = snapshot;
+                Vec::new()
+            }
+            Msg::CommandStopped(Ok(())) => {
+                self.notice(super::theme::Signal::Idle, "Stopping the command…");
+                Vec::new()
+            }
+            Msg::CommandStopped(Err(why)) => {
+                self.notice(
+                    super::theme::Signal::Negative,
+                    &format!("Couldn't stop the command: {why}"),
+                );
+                Vec::new()
+            }
             Msg::Chat(msg) => self.chat_msg(msg),
             Msg::ScopedChat {
                 generation,
@@ -1849,6 +1880,53 @@ impl App {
         Vec::new()
     }
 
+    /// Open the commands, on the first running (or the latest).
+    pub fn open_commands(&mut self) -> Vec<Effect> {
+        let selected = self.commands.commands.first().map(|c| c.id().to_string());
+        self.modal = Some(Modal::Commands {
+            selected: selected.clone(),
+        });
+        vec![Effect::FollowCommand(selected)]
+    }
+
+    fn commands_key(&mut self, selected: Option<String>, key: KeyEvent) -> Vec<Effect> {
+        let list = &self.commands.commands;
+        let at = selected
+            .as_deref()
+            .and_then(|id| list.iter().position(|c| c.id() == id));
+        let choose = |at: usize| list.get(at).map(|c| c.id().to_string());
+        let moved = match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                return vec![Effect::FollowCommand(None)];
+            }
+            KeyCode::Up | KeyCode::Char('k') => Some(choose(at.map_or(0, |i| i.saturating_sub(1)))),
+            KeyCode::Down | KeyCode::Char('j') => Some(choose(
+                at.map_or(0, |i| (i + 1).min(list.len().saturating_sub(1))),
+            )),
+            KeyCode::Char('s') => {
+                let running = at.and_then(|i| list.get(i)).filter(|c| c.running());
+                let effects = running
+                    .map(|c| vec![Effect::StopCommand(c.id().to_string())])
+                    .unwrap_or_default();
+                self.modal = Some(Modal::Commands { selected });
+                return effects;
+            }
+            _ => None,
+        };
+        match moved {
+            Some(choice) if choice != selected => {
+                self.modal = Some(Modal::Commands {
+                    selected: choice.clone(),
+                });
+                vec![Effect::FollowCommand(choice)]
+            }
+            _ => {
+                self.modal = Some(Modal::Commands { selected });
+                Vec::new()
+            }
+        }
+    }
+
     fn modal_key(&mut self, modal: Modal, key: KeyEvent) -> Vec<Effect> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match modal {
@@ -1961,6 +2039,7 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
                 _ => self.modal = Some(Modal::ConfirmLogout),
             },
+            Modal::Commands { selected } => return self.commands_key(selected, key),
             Modal::Help { scroll } => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.modal = Some(Modal::Help {
@@ -2170,6 +2249,7 @@ impl App {
             Cmd::Pause => self.daemon.paused() == Some(false),
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
+            Cmd::Commands => !self.commands.commands.is_empty(),
             _ => true,
         }
     }
@@ -2372,6 +2452,7 @@ impl App {
                 return self.chat_action(cmd, args);
             }
             Cmd::Steps => self.chat.show_steps = !self.chat.show_steps,
+            Cmd::Commands => return self.open_commands(),
             Cmd::Folders => self.settings(Page::Folders),
             Cmd::Settings => self.settings(self.attention_page()),
             Cmd::Share if args.is_empty() => {

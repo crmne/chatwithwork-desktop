@@ -4932,3 +4932,110 @@ fn native_people_review_screens() {
         }
     }
 }
+
+fn command(id: &str, line: &str, state: &str, exit_code: Option<i32>, ms: u64) -> Value {
+    serde_json::json!({
+        "id": id, "state": state, "exit_code": exit_code, "duration_ms": ms,
+        "output_bytes": 120, "error": null, "root": "app", "folder": "App",
+        "dir": "api", "command": line, "network": false, "started_at": 1_792_217_040u64,
+    })
+}
+
+fn run_sample_commands(server: &demo::Server) {
+    server.run_commands(vec![
+        (
+            command("aaaaaaaaaaaa", "bin/rails test", "running", None, 42_000),
+            "Running 214 tests in parallel using 8 processes\n\
+             Run options: --seed 41207\n\n# Running:\n\n\
+             \u{1b}[32m..................................................\u{1b}[0m\n\
+             ..........F.........\n",
+        ),
+        (
+            command("bbbbbbbbbbbb", "npm run build", "exited", Some(0), 8_100),
+            "vite v7.1.4 building for production...\n✓ 412 modules transformed.\nbuilt in 8.10s\n",
+        ),
+        (
+            command("cccccccccccc", "bin/rubocop", "exited", Some(1), 3_400),
+            "app/models/chat.rb:12:5: C: Layout/IndentationWidth\n",
+        ),
+    ]);
+}
+
+/// A command Chat with Work runs on this computer shows over the composer
+/// with what it is and where; Show output lists them all with what the
+/// chosen one prints, and Stop stops it, through the daemon here.
+#[test]
+fn commands_running_here_show_over_the_composer() {
+    let mut fx = fixture(Options::default());
+    run_sample_commands(&fx.server);
+    fx.ready();
+    fx.chat().open(11);
+    fx.wait_for_label("bin/rails test · App › api · 42s");
+    fx.harness.get_by_label("Show output").click();
+    fx.wait_for_request("command_output", |r| r["run"] == "aaaaaaaaaaaa");
+    fx.wait_for_label("..........F.........");
+    assert!(
+        fx.harness
+            .query_all_by_label_contains("\u{1b}")
+            .next()
+            .is_none(),
+        "escape sequences never reach the page"
+    );
+    fx.harness.get_by_label("Stop").click();
+    fx.wait_for_request("command_stop", |r| r["run"] == "aaaaaaaaaaaa");
+    fx.harness.get_by_label("npm run build").click();
+    fx.wait_for_request("command_output", |r| r["run"] == "bbbbbbbbbbbb");
+    fx.wait_for_label("built in 8.10s");
+    fx.harness.get_by_label("Hide commands").click();
+    fx.harness.run_steps(2);
+    assert!(fx.harness.query_by_label("Hide commands").is_none());
+}
+
+/// The commands line and the panel, light and dark, against the snapshots
+/// (compared on Linux, where they were made).
+#[test]
+fn commands_render_like_the_web() {
+    for dark in [false, true] {
+        for (name, open) in [("chat-command-running", false), ("chat-commands", true)] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                eprintln!("no wgpu adapter here: skipping the snapshots");
+                return;
+            };
+            let size = [1280.0, 820.0];
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            run_sample_commands(&fx.server);
+            fx.ready();
+            fx.chat().set_still(true);
+            fx.chat().open(11);
+            fx.wait("the transcript", |h| {
+                h.state()
+                    .chat_state()
+                    .is_some_and(|s| s.transcript.is_some())
+            });
+            fx.wait_for_label("bin/rails test · App › api · 42s");
+            if open {
+                fx.harness.get_by_label("Show output").click();
+                fx.wait_for_label("..........F.........");
+            }
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            let theme = if dark { "dark" } else { "light" };
+            let image = fx.harness.render().expect("rendering");
+            let options = egui_kittest::SnapshotOptions::new()
+                .threshold(2.0)
+                .max_failed_pixels(((size[0] * size[1]) * 0.01) as usize);
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(&image, format!("{name}-{theme}"), &options);
+            } else {
+                assert!(image.width() > 0);
+            }
+        }
+    }
+}

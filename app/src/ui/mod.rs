@@ -690,6 +690,7 @@ impl SettingsApp {
         let page = self
             .chat
             .get_or_insert_with(|| chat::ChatPage::new(&socket, data_dir));
+        page.follow_commands(self.shared.paths.socket_path());
         if self.page == Page::Models && page.state().ready() {
             page.open_model_preferences();
             self.restore_chat = None;

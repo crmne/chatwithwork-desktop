@@ -256,7 +256,7 @@ What it printed, both streams as they came, from a byte `offset`, as `run_output
 {"cmd": "command_stop", "run": "3f9a0c1d2e4b"}
 ```
 
-Stops it and everything it started, and answers with its status; it says `stopped` once it has. Writes a `command_stopped` audit entry with the run's ID.
+Stops it and everything it started, and answers with its status; it says `stopped` once it has. Writes a `command_stopped` audit entry with the run's ID. The desktop app's chat page and `cww tui` follow these with `cww::commands::follow::Follow`, often while a command runs and every few seconds otherwise.
 
 ### `suggested_roots`
 

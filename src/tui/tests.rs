@@ -19,6 +19,8 @@ use super::commands::Cmd;
 use super::theme::{Depth, Signal, Theme};
 use super::ui::render;
 use crate::audit::{AuditEntry, Decision};
+use crate::commands::follow::{Listed, Printed, Snapshot};
+use crate::commands::{Status as RunStatus, Summary};
 
 const NOW: OffsetDateTime = datetime!(2026-09-25 08:20:00 UTC);
 
@@ -3759,4 +3761,92 @@ fn organization_terminal_review_screens() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- commands
+
+fn listed(id: &str, command: &str, state: &str, exit_code: Option<i32>) -> Listed {
+    Listed {
+        summary: Summary {
+            status: RunStatus {
+                id: id.into(),
+                state: state.into(),
+                exit_code,
+                duration_ms: 42_000,
+                output_bytes: 120,
+                error: None,
+                limit: None,
+            },
+            root: "app".into(),
+            dir: "api".into(),
+            command: command.into(),
+            network: false,
+            started_at: 1_792_217_040,
+        },
+        folder: "App".into(),
+    }
+}
+
+fn commands_running(app: &mut App) {
+    app.update(Msg::Commands(Snapshot {
+        commands: vec![
+            listed("aaaaaaaaaaaa", "bin/rails test", "running", None),
+            listed("bbbbbbbbbbbb", "npm run build", "exited", Some(0)),
+            listed("cccccccccccc", "make lint", "exited", Some(2)),
+        ],
+        printed: None,
+    }));
+}
+
+/// A command running here shows over the composer, and `/commands` lists
+/// them with what the chosen one prints, and stops it.
+#[test]
+fn snapshot_commands_running_and_followed() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    commands_running(&mut app);
+    assert_snapshot("chat_command_running", &app);
+    type_text(&mut app, "/commands");
+    assert!(
+        app.update(key(KeyCode::Enter))
+            .contains(&Effect::FollowCommand(Some("aaaaaaaaaaaa".into())))
+    );
+    let mut snapshot = app.commands.clone();
+    snapshot.printed = Some(Printed {
+        id: "aaaaaaaaaaaa".into(),
+        text: "Running 214 tests in parallel\n\u{1b}[32m..........\u{1b}[0m\n\
+               10%\r60%\r100%\nFinished in 8.1s\n"
+            .into(),
+        cut: 0,
+        done: false,
+    });
+    app.update(Msg::Commands(snapshot));
+    assert_snapshot("chat_commands_dialog", &app);
+    assert_eq!(
+        app.update(char('s')),
+        vec![Effect::StopCommand("aaaaaaaaaaaa".into())]
+    );
+    assert_eq!(
+        app.update(key(KeyCode::Down)),
+        vec![Effect::FollowCommand(Some("bbbbbbbbbbbb".into()))]
+    );
+    assert!(
+        app.update(char('s')).is_empty(),
+        "it ended: nothing to stop"
+    );
+    assert_eq!(
+        app.update(key(KeyCode::Esc)),
+        vec![Effect::FollowCommand(None)]
+    );
+    assert_eq!(app.modal, None);
+}
+
+#[test]
+fn commands_is_offered_only_when_something_ran() {
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    type_text(&mut app, "/comm");
+    assert!(app.menu().iter().all(|c| c.name != "commands"));
+    commands_running(&mut app);
+    assert!(app.menu().iter().any(|c| c.name == "commands"));
 }

@@ -23,7 +23,7 @@ pub fn project(id: u64, name: &str, icon: &str) -> Value {
     chats::project(id, name, icon, false, false)
 }
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -76,6 +76,9 @@ struct State {
     notification_permission: String,
     instructions: Vec<Value>,
     memory: Value,
+    /// The commands this computer runs (`commands`), and what each printed.
+    commands: Vec<Value>,
+    printed: HashMap<String, String>,
 }
 
 struct Demo {
@@ -186,6 +189,24 @@ impl Server {
         self.demo.sync_list();
     }
 
+    /// Commands run on this computer: each a `commands` entry, with what
+    /// it printed.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn run_commands(&self, commands: Vec<(Value, &str)>) {
+        self.demo.change(|s| {
+            s.printed = commands
+                .iter()
+                .map(|(c, text)| {
+                    (
+                        c["id"].as_str().unwrap_or_default().to_string(),
+                        text.to_string(),
+                    )
+                })
+                .collect();
+            s.commands = commands.into_iter().map(|(c, _)| c).collect();
+        });
+    }
+
     /// The credits move elsewhere: the list's header says so.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn spend(&self, left: u64) {
@@ -284,6 +305,8 @@ fn fresh() -> State {
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
+        commands: Vec::new(),
+        printed: HashMap::new(),
     }
 }
 
@@ -410,6 +433,8 @@ fn sample() -> State {
         notification_permission: "unknown".into(),
         instructions: chats::instructions(),
         memory: json!({ "enabled": true, "entries": [{ "id": 1, "body": "Prefers short answers", "date": "October 16, 2026", "chat": 12 }] }),
+        commands: Vec::new(),
+        printed: HashMap::new(),
     }
 }
 
@@ -455,7 +480,8 @@ impl Demo {
 
     fn answer(self: &Arc<Self>, request: &Value) -> Value {
         let cmd = request["cmd"].as_str().unwrap_or_default();
-        if cmd != "status" {
+        // The command list is read every few seconds.
+        if cmd != "status" && cmd != "commands" {
             self.state
                 .lock()
                 .expect("demo lock")
@@ -526,6 +552,43 @@ impl Demo {
                     );
                 });
                 json!({ "ok": true })
+            }
+            "commands" => {
+                json!({ "ok": true, "commands": self.state.lock().expect("demo lock").commands })
+            }
+            "command_output" => {
+                let state = self.state.lock().expect("demo lock");
+                let run = request["run"].as_str().unwrap_or_default();
+                let Some(text) = state.printed.get(run) else {
+                    return json!({ "ok": false, "code": "not_found", "error": "no such command" });
+                };
+                let offset = request["offset"].as_u64().unwrap_or(0) as usize;
+                let rest = text.get(offset.min(text.len())..).unwrap_or_default();
+                let running = state
+                    .commands
+                    .iter()
+                    .any(|c| c["id"] == json!(run) && c["state"] == json!("running"));
+                json!({ "ok": true, "id": run, "offset": offset, "next_offset": offset + rest.len(),
+                        "skipped": 0, "text": rest, "done": !running })
+            }
+            "command_stop" => {
+                let run = request["run"].as_str().unwrap_or_default().to_string();
+                let mut stopped = Value::Null;
+                self.change(|s| {
+                    for c in &mut s.commands {
+                        if c["id"] == json!(run) {
+                            c["state"] = json!("stopped");
+                            stopped = c.clone();
+                        }
+                    }
+                    Self::event(s, "command_stopped");
+                });
+                if stopped.is_null() {
+                    json!({ "ok": false, "code": "not_found", "error": "no such command" })
+                } else {
+                    stopped["ok"] = json!(true);
+                    stopped
+                }
             }
             "roots_commands" => {
                 let which = request["root"].as_str().unwrap_or_default().to_string();

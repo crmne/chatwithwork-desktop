@@ -278,6 +278,73 @@ fn trim(shown: &mut Printed) {
     shown.text.drain(..start);
 }
 
+/// How long it has run: "8s", "3:05", "1:02:03".
+pub fn elapsed(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}:{:02}", secs / 60, secs % 60),
+        _ => format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60),
+    }
+}
+
+/// A command line on one line.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Output as a window may draw it: no escape sequences or control
+/// characters (a program's colors, or a cursor move that would break the
+/// screen), tabs as spaces, and a carriage return keeping what came after
+/// it, as a progress bar means.
+pub fn clean(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut line_start = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => {
+                // CSI: ESC [ ... final byte; OSC: ESC ] ... BEL or ESC \.
+                match chars.peek() {
+                    Some('[') => {
+                        chars.next();
+                        for c in chars.by_ref() {
+                            if ('@'..='~').contains(&c) {
+                                break;
+                            }
+                        }
+                    }
+                    Some(']') => {
+                        chars.next();
+                        while let Some(c) = chars.next() {
+                            if c == '\u{7}' {
+                                break;
+                            }
+                            if c == '\u{1b}' {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        chars.next();
+                    }
+                }
+            }
+            '\n' => {
+                out.push('\n');
+                line_start = out.len();
+            }
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\r' => out.truncate(line_start),
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +414,21 @@ mod tests {
         assert!(snapshot.commands.is_empty());
         assert!(snapshot.printed.unwrap().done);
         assert!(follow.stop_run("0123456789ab").is_err());
+    }
+
+    #[test]
+    fn output_loses_escapes_and_keeps_the_last_redraw() {
+        assert_eq!(clean("\u{1b}[32mok\u{1b}[0m\n"), "ok\n");
+        assert_eq!(clean("10%\r50%\r100%\ndone\n"), "100%\ndone\n");
+        assert_eq!(clean("a\tb\r\n"), "a    b\n");
+        assert_eq!(clean("\u{1b}]0;title\u{7}x"), "x");
+        assert_eq!(clean("bell\u{7}"), "bell");
+    }
+
+    #[test]
+    fn durations_read_as_a_clock() {
+        assert_eq!(elapsed(8_400), "8s");
+        assert_eq!(elapsed(185_000), "3:05");
+        assert_eq!(elapsed(3_723_000), "1:02:03");
     }
 }

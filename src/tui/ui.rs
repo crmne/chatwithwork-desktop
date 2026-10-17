@@ -535,7 +535,13 @@ fn main_pane(
     let view = composer_view(app, theme, area.width.saturating_sub(6) as usize, now);
     let most = (area.height / 2).max(3);
     let composer_height = (view.lines.len() as u16 + 2).clamp(3, most);
-    let notice = notice_lines(app, area.width.saturating_sub(4) as usize, theme);
+    let mut notice = notice_lines(app, area.width.saturating_sub(4) as usize, theme);
+    if notice.is_empty()
+        && let Some(line) =
+            super::running::running_line(app, area.width.saturating_sub(4) as usize, theme)
+    {
+        notice.push(line);
+    }
     // No title over the chat, as on the web: the header only holds the
     // status word, while something needs attention.
     let organization = app.organization_name().filter(|_| frame.area().width < 64);
@@ -2381,6 +2387,7 @@ fn modal_hints(modal: &Modal) -> Vec<(&'static str, &'static str)> {
         Modal::ConfirmDelete { .. } => vec![("y", "delete it"), ("n", "keep it")],
         Modal::ConfirmLogout => vec![("y", "disconnect"), ("n", "keep it")],
         Modal::Help { .. } => vec![("↑↓", "scroll"), ("any other key", "close")],
+        Modal::Commands { .. } => vec![("↑↓", "choose"), ("s", "stop it"), ("esc", "close")],
     }
 }
 
@@ -2397,7 +2404,13 @@ pub(super) fn key_hints(keys: &[(&'static str, &'static str)], theme: &Theme) ->
 }
 
 fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Theme) {
-    let width = area.width.saturating_sub(4).min(68);
+    // What a command prints needs the room.
+    let widest = if matches!(modal, Modal::Commands { .. }) {
+        100
+    } else {
+        68
+    };
+    let width = area.width.saturating_sub(4).min(widest);
     let text_width = width.saturating_sub(4) as usize;
     let (title, lines) = match modal {
         Modal::AddRoot { input } => {
@@ -2553,6 +2566,14 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
                 .map(|l| Line::styled(l, theme.muted())),
             );
             ("DISCONNECT", lines)
+        }
+        Modal::Commands { selected } => {
+            // Room for the borders, the blank line and the hints.
+            let room = (area.height as usize).saturating_sub(6).max(4);
+            (
+                "COMMANDS ON THIS COMPUTER",
+                super::running::dialog_lines(app, selected.as_deref(), text_width, room, theme),
+            )
         }
         Modal::Help { scroll } => {
             let all = help_lines(app, theme);

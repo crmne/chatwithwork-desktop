@@ -28,6 +28,7 @@ mod project_move;
 mod projects;
 pub mod prose;
 pub mod runner;
+mod runs;
 mod schedules;
 mod settings;
 pub mod sidebar;
@@ -126,6 +127,9 @@ pub struct ChatPage {
     /// come from and are kept.
     socket: std::path::PathBuf,
     data_dir: std::path::PathBuf,
+    /// The commands this computer runs, from its own daemon.
+    runs: runs::Runs,
+    commands_socket: Option<std::path::PathBuf>,
 }
 
 /// How often to read the list again while a chat in it is being answered
@@ -283,7 +287,15 @@ impl ChatPage {
             organizations: Vec::new(),
             socket: socket.to_path_buf(),
             data_dir,
+            runs: runs::Runs::default(),
+            commands_socket: None,
         }
+    }
+
+    /// Follow the commands running on this computer, on its own daemon at
+    /// `socket`, whichever organization's chats are open.
+    pub fn follow_commands(&mut self, socket: std::path::PathBuf) {
+        self.commands_socket = Some(socket);
     }
 
     /// Hold every animation still, for snapshots.
@@ -446,6 +458,13 @@ impl ChatPage {
     pub fn show(&mut self, ui: &mut Ui, env: &Env) -> Option<Action> {
         let ctx = ui.ctx().clone();
         self.runner.attach(&ctx);
+        if let Some(socket) = self.commands_socket.clone() {
+            self.runs.follow(socket, &ctx);
+        }
+        self.runs.poll();
+        if let Some(why) = self.runs.take_failure() {
+            self.state.notice = Some(format!("Couldn't stop the command. {why}"));
+        }
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
@@ -1633,7 +1652,7 @@ impl ChatPage {
                 }
                 let height = col.min_rect().height();
                 ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-                ui.add_space(176.0);
+                ui.add_space(176.0 + self.runs.height());
                 // The web's scroll controller: a new question (asked here or
                 // elsewhere), and the latest one when a chat opens, scrolls
                 // to 24 under the top, and the answer writes itself in under
@@ -1755,8 +1774,17 @@ impl ChatPage {
             .fixed_pos(rect.min)
             .show(&ctx, |ui| {
                 ui.allocate_rect(rect, Sense::hover());
+                let runs = self.runs.height();
+                if runs > 0.0 {
+                    ui.allocate_rect(
+                        Rect::from_min_max(pos2(rect.left(), rect.top() - runs), rect.right_top()),
+                        Sense::hover(),
+                    );
+                    animating |= self.runs.show(ui, rect, p, images, time) && !self.still;
+                }
                 event = composer.show(ui, rect, &mut self.state.input, images, p, focus);
-                jump = self.scroll_button(ui, rect, near_bottom, p, images, time);
+                let above = Rect::from_min_max(pos2(rect.left(), rect.top() - runs), rect.max);
+                jump = self.scroll_button(ui, above, near_bottom, p, images, time);
             });
         if jump {
             self.scroll_to_bottom = 3;

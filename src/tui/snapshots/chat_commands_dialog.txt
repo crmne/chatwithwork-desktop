@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │                    What did we budget for Q3, and who signed it
+                               │                    off?
+  + New chat                   │
+  / Search chats               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+                               │
+  RECENT                       │  The Q3 budget is €40k, signed off by Ada on 12 September.
+   Q3 budget                   │
+  ╭ COMMANDS ON THIS COMPUTER ───────────────────────────────────────────────────────────────────╮
+  │ › ● bin/rails test                                                                       42s │
+  │   ○ npm run build                                                                     exit 0 │
+  │   ○ make lint                                                                         exit 2 │
+  │                                                                                              │
+  │ $ bin/rails test                                                                             │
+  │ App › api · running                                                                          │
+  │                                                                                              │
+  │ Running 214 tests in parallel                                                                │
+  │ ..........                                                                                   │
+  │ 100%                                                                                         │
+  │ Finished in 8.1s                                                                             │
+  │                                                                                              │
+  │ ↑↓ choose   s stop it   esc close                                                            │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+                               │
+                               │
+                               │
+                               │
+  PINNED                  all  │  ● Running bin/rails test in App › api · 42s            /commands
+   Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
+                               │ │ ❯ Reply to Chat with Work                                      │
+  C  Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯
