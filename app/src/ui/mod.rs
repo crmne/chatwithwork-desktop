@@ -339,6 +339,8 @@ struct FoldersState {
     confirm_remove: Option<String>,
     /// The folder whose "Allow changes" is waiting for a yes.
     confirm_changes: Option<String>,
+    /// The folder whose "Run commands" is waiting for a yes.
+    confirm_commands: Option<String>,
     busy: Option<String>,
     error: Option<String>,
     note: Option<String>,
@@ -1156,6 +1158,19 @@ impl SettingsApp {
             Done::Writable(
                 client
                     .set_writable(&id, writable)
+                    .map_err(|e| e.to_string()),
+            )
+        });
+    }
+
+    fn set_commands(&mut self, ctx: &egui::Context, id: String, commands: bool, network: bool) {
+        self.folders.busy = Some(id.clone());
+        self.folders.error = None;
+        let client = self.shared.client.clone();
+        self.jobs.spawn(ctx, move || {
+            Done::Writable(
+                client
+                    .set_commands(&id, commands, network)
                     .map_err(|e| e.to_string()),
             )
         });

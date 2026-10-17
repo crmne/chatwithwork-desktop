@@ -85,6 +85,10 @@ pub struct RootState {
     pub local_path: String,
     /// The user allowed changes in it.
     pub writable: bool,
+    /// The user allowed commands in it (`run`).
+    pub allows_commands: bool,
+    /// Those commands may use the network.
+    pub network: bool,
 }
 
 impl Default for RootState {
@@ -97,6 +101,8 @@ impl Default for RootState {
             indexed_files: 0,
             local_path: String::new(),
             writable: false,
+            allows_commands: false,
+            network: false,
         }
     }
 }
@@ -281,6 +287,11 @@ pub enum Modal {
         id: String,
         label: String,
     },
+    /// Allow commands in a shared folder: say what that means first.
+    ConfirmCommands {
+        id: String,
+        label: String,
+    },
     /// A new label for a shared folder.
     RenameRoot {
         id: String,
@@ -331,6 +342,13 @@ pub enum DaemonCommand {
     SetWritable {
         id: String,
         writable: bool,
+    },
+    /// Allow commands in a shared folder, or stop them, and whether they
+    /// may use the network.
+    SetCommands {
+        id: String,
+        commands: bool,
+        network: bool,
     },
     /// Look for the daemon again now.
     Retry,
@@ -1654,6 +1672,8 @@ impl App {
             (Page::Folders, KeyCode::Down | KeyCode::Char('j')) => self.move_root(1),
             (Page::Folders, KeyCode::Char('r')) => self.rename_root(),
             (Page::Folders, KeyCode::Char('w')) => return Some(self.toggle_changes()),
+            (Page::Folders, KeyCode::Char('m')) => return Some(self.toggle_commands()),
+            (Page::Folders, KeyCode::Char('i')) => return Some(self.toggle_network()),
             (Page::Folders, KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete) => {
                 self.confirm_remove()
             }
@@ -1692,6 +1712,61 @@ impl App {
         if len > 0 {
             self.selected_root = self.selected_root.saturating_add_signed(delta).min(len - 1);
         }
+    }
+
+    /// `m` on a shared folder that allows changes: allow commands in it
+    /// (after saying what that means), or stop them at once.
+    fn toggle_commands(&mut self) -> Vec<Effect> {
+        let Some(root) = self.daemon.roots().get(self.selected_root).cloned() else {
+            self.notice(super::theme::Signal::Idle, "Nothing is shared.");
+            return Vec::new();
+        };
+        if !root.writable {
+            self.notice(
+                super::theme::Signal::Idle,
+                &format!(
+                    "Allow changes in {} first (w): a command can change anything there.",
+                    root.label
+                ),
+            );
+            return Vec::new();
+        }
+        if root.allows_commands {
+            self.notice(
+                super::theme::Signal::Idle,
+                &format!("Stopping commands in {}…", root.label),
+            );
+            return vec![Effect::Daemon(DaemonCommand::SetCommands {
+                id: root.id,
+                commands: false,
+                network: false,
+            })];
+        }
+        self.modal = Some(Modal::ConfirmCommands {
+            id: root.id,
+            label: root.label,
+        });
+        Vec::new()
+    }
+
+    /// `i` on a folder that allows commands: let them use the network, or
+    /// not.
+    fn toggle_network(&mut self) -> Vec<Effect> {
+        let Some(root) = self.daemon.roots().get(self.selected_root).cloned() else {
+            return Vec::new();
+        };
+        if !root.allows_commands {
+            self.notice(
+                super::theme::Signal::Idle,
+                &format!("{} runs no commands (m to allow them).", root.label),
+            );
+            return Vec::new();
+        }
+        vec![Effect::Daemon(DaemonCommand::SetCommands {
+            id: root.id,
+            commands: true,
+            network: !root.network,
+        })]
     }
 
     /// `w` on a shared folder: allow changes in it (after saying what that
@@ -1846,6 +1921,21 @@ impl App {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
                 _ => self.modal = Some(Modal::ConfirmChanges { id, label }),
+            },
+            Modal::ConfirmCommands { id, label } => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.notice(
+                        super::theme::Signal::Idle,
+                        &format!("Allowing commands in {label}…"),
+                    );
+                    return vec![Effect::Daemon(DaemonCommand::SetCommands {
+                        id,
+                        commands: true,
+                        network: false,
+                    })];
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
+                _ => self.modal = Some(Modal::ConfirmCommands { id, label }),
             },
             Modal::ConfirmBroad { path, reason } => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => return self.add_root(path, None, true),

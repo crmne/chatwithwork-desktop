@@ -167,6 +167,10 @@ with a terminal glyph. Preview images used by the model are excluded by the
 server. The server sends tool output and download paths only to the person
 allowed to see the full result.
 
+A command a computer would run (`run`, [commands.md](commands.md)) shows as a
+shell code block in its approval card, with the rows the server sends (folder,
+network, limits).
+
 Local file approvals show the folder label and relative path, the proposed text
 or colored diff, before/after replacements, a Word document’s Markdown, or
 workbook sheets. A preview that could not be checked displays the computer’s

@@ -124,6 +124,16 @@ impl Client {
         .map(drop)
     }
 
+    /// Allow commands in a folder that allows changes, or stop them.
+    pub fn set_commands(&self, id: &str, commands: bool, network: bool) -> Result<()> {
+        self.request(&ControlRequest::RootsCommands {
+            root: id.into(),
+            commands,
+            network,
+        })
+        .map(drop)
+    }
+
     pub fn label_root(&self, id: &str, label: &str) -> Result<()> {
         self.request(&ControlRequest::RootsLabel {
             root: id.into(),

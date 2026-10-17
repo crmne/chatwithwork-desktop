@@ -428,6 +428,99 @@ fn allowing_changes_asks_first_and_stopping_does_not() {
 }
 
 #[test]
+fn running_commands_asks_first_only_where_changes_are_allowed() {
+    let mut fx = fixture(Scenario::Sample, Some(Page::Folders));
+    fx.wait_for_label("Indexed · 1,532 files");
+    // Only Work projects allows changes, so only it offers commands.
+    let commands = fx
+        .harness
+        .get_all_by_role_and_label(egui::accesskit::Role::CheckBox, "Run commands")
+        .count();
+    assert_eq!(commands, 1);
+    fx.harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Run commands")
+        .click();
+    fx.harness.run_steps(3);
+    assert!(!fx.changes().iter().any(|r| r["cmd"] == "roots_commands"));
+    fx.harness
+        .get_by_label_contains("Let Chat with Work run commands in “Work projects”?");
+    fx.harness.get_by_label("Allow Commands").click();
+    let allowed = fx.wait_for_request("roots_commands");
+    assert_eq!(allowed["root"], "work-projects");
+    assert_eq!(allowed["commands"], true);
+    assert!(allowed.get("network").is_none(), "{allowed}");
+
+    // The network is a second switch, without a question.
+    fx.wait("the network switch", |h| {
+        h.query_all_by_label("Commands use the network")
+            .next()
+            .is_some()
+            && !h.state().folders_busy()
+    });
+    fx.harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commands use the network")
+        .click();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests: Vec<Value> = fx
+            .changes()
+            .into_iter()
+            .filter(|r| r["cmd"] == "roots_commands")
+            .collect();
+        if requests.len() == 2 {
+            assert_eq!(requests[1]["network"], true);
+            break;
+        }
+        assert!(Instant::now() < deadline, "{requests:?}");
+        fx.harness.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn renders_the_command_switches() {
+    for dark in [false, true] {
+        let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+        else {
+            return;
+        };
+        let mut fx = fixture_rendered(
+            Scenario::Sample,
+            Some(Page::Folders),
+            [840.0, 700.0],
+            dark,
+            Some(renderer),
+        );
+        fx.wait_for_label("Indexed · 1,532 files");
+        fx.harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Run commands")
+            .click();
+        fx.harness.run_steps(3);
+        fx.harness.get_by_label("Allow Commands").click();
+        fx.wait_for_request("roots_commands");
+        fx.wait("the network switch", |h| {
+            h.query_all_by_label("Commands use the network")
+                .next()
+                .is_some()
+                && !h.state().folders_busy()
+        });
+        fx.harness.event(egui::Event::PointerGone);
+        fx.harness.run_steps(8);
+        let image = fx.harness.render().expect("GPU rendering");
+        let theme = if dark { "dark" } else { "light" };
+        if cfg!(target_os = "linux") {
+            egui_kittest::image_snapshot_options(
+                &image,
+                format!("folders-commands-{theme}"),
+                &egui_kittest::SnapshotOptions::new()
+                    .threshold(2.0)
+                    .max_failed_pixels(1000),
+            );
+        }
+    }
+}
+
+#[test]
 fn the_deny_list_and_the_activity_log_are_shown() {
     let mut fx = fixture(Scenario::Sample, Some(Page::Privacy));
     fx.wait_for_label(".ssh");

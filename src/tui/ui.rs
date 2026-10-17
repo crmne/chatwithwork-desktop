@@ -2327,6 +2327,9 @@ fn change_outcome(entry: &AuditEntry) -> Option<String> {
         "moved" => "moved",
         "trashed" => "in the trash",
         "unchanged" => "already there",
+        // A command: how it ended and what it was, "exit 0 · make test".
+        "ran" => return entry.detail.clone().or(Some("ran".into())),
+        "stopped" => "stopped",
         other => other,
     };
     Some({
@@ -2373,6 +2376,7 @@ fn modal_hints(modal: &Modal) -> Vec<(&'static str, &'static str)> {
         Modal::RenameRoot { .. } => vec![("enter", "rename"), ("esc", "cancel")],
         Modal::ConfirmRemove { .. } => vec![("y", "stop sharing"), ("n", "keep it")],
         Modal::ConfirmChanges { .. } => vec![("y", "allow changes"), ("n", "keep it read-only")],
+        Modal::ConfirmCommands { .. } => vec![("y", "allow commands"), ("n", "run none")],
         Modal::ConfirmBroad { .. } => vec![("y", "share anyway"), ("n", "cancel")],
         Modal::ConfirmDelete { .. } => vec![("y", "delete it"), ("n", "keep it")],
         Modal::ConfirmLogout => vec![("y", "disconnect"), ("n", "keep it")],
@@ -2482,6 +2486,25 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
                 .map(|l| Line::styled(l, theme.muted())),
             );
             ("ALLOW CHANGES", lines)
+        }
+        Modal::ConfirmCommands { label, .. } => {
+            let mut lines = vec![Line::styled(
+                format!("Run commands in {label}?"),
+                theme.strong(),
+            )];
+            lines.push(Line::raw(""));
+            lines.extend(
+                wrap(
+                    "Chat with Work could then run commands here, like tests or a build. It \
+                     asks you before each one. A command runs in a sandbox that can change or \
+                     delete anything in this folder and nothing outside it, without the network \
+                     unless you allow it (i).",
+                    text_width,
+                )
+                .into_iter()
+                .map(|l| Line::styled(l, theme.muted())),
+            );
+            ("RUN COMMANDS", lines)
         }
         Modal::ConfirmBroad { path, reason } => {
             let mut lines = vec![Line::styled(
@@ -2622,6 +2645,8 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
             vec![
                 ("r", "rename the selected folder"),
                 ("w", "allow or stop changes in the selected folder"),
+                ("m", "allow or stop commands in the selected folder"),
+                ("i", "let its commands use the network, or not"),
                 ("d", "stop sharing the selected folder"),
             ],
         ),

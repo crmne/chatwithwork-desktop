@@ -228,7 +228,11 @@ fn folders(
             width,
         );
         let id = format!(" · {}:", root.id);
-        let (access, access_style) = if root.writable {
+        let (access, access_style) = if root.allows_commands && root.network {
+            ("Commands, network", theme.signal_ink(Signal::Attention))
+        } else if root.allows_commands {
+            ("Commands allowed", theme.signal_ink(Signal::Attention))
+        } else if root.writable {
             ("Changes allowed", theme.signal_ink(Signal::Attention))
         } else {
             ("Read-only", theme.faint())
@@ -259,20 +263,25 @@ fn folders(
             theme.faint(),
         ));
     }
-    let changes = if roots[selected].writable {
-        "make read-only"
+    let changes = "allow changes";
+    // Commands only where changes are allowed; there, `w` is short.
+    let hints: &[(&str, &str)] = if roots[selected].writable {
+        &[
+            ("a", "share"),
+            ("r", "rename"),
+            ("w", "read-only"),
+            ("m", "commands"),
+            ("d", "stop sharing"),
+        ]
     } else {
-        "allow changes"
-    };
-    after.push(key_hints(
         &[
             ("a", "share a folder"),
             ("r", "rename"),
             ("w", changes),
             ("d", "stop sharing"),
-        ],
-        theme,
-    ));
+        ]
+    };
+    after.push(key_hints(hints, theme));
     draw(frame, below(area, y - area.y), after);
 }
 

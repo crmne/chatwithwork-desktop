@@ -301,6 +301,8 @@ fn root(id: &str, label: &str, index: &str, files: u64) -> RootState {
         indexed_files: files,
         local_path: format!("/home/carmine/{label}"),
         writable: false,
+        allows_commands: false,
+        network: false,
     }
 }
 
@@ -809,6 +811,63 @@ fn allowing_changes_asks_first() {
         })]
     );
     assert_eq!(app.modal, None, "read-only needs no question");
+}
+
+/// `m` asks before allowing commands, only where changes are allowed, and
+/// `i` switches their network at once.
+#[test]
+fn allowing_commands_asks_first() {
+    let mut app = app();
+    running(
+        &mut app,
+        status(
+            "connected",
+            vec![root("work-docs", "Work docs", "ready", 1532)],
+        ),
+    );
+    app.update(char(','));
+    assert!(app.update(char('m')).is_empty());
+    assert_eq!(app.modal, None, "read-only folders run nothing");
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("Allow changes in Work docs first")
+    );
+    let mut writable = root("work-docs", "Work docs", "ready", 1532);
+    writable.writable = true;
+    running(&mut app, status("connected", vec![writable.clone()]));
+    assert!(app.update(char('m')).is_empty());
+    assert_snapshot("allow_commands_dialog", &app);
+    assert!(app.update(char('n')).is_empty());
+    app.update(char('m'));
+    assert_eq!(
+        app.update(char('y')),
+        vec![Effect::Daemon(DaemonCommand::SetCommands {
+            id: "work-docs".into(),
+            commands: true,
+            network: false,
+        })]
+    );
+    writable.allows_commands = true;
+    running(&mut app, status("connected", vec![writable]));
+    assert_eq!(
+        app.update(char('i')),
+        vec![Effect::Daemon(DaemonCommand::SetCommands {
+            id: "work-docs".into(),
+            commands: true,
+            network: true,
+        })]
+    );
+    assert_eq!(
+        app.update(char('m')),
+        vec![Effect::Daemon(DaemonCommand::SetCommands {
+            id: "work-docs".into(),
+            commands: false,
+            network: false,
+        })]
+    );
 }
 
 #[test]

@@ -527,6 +527,28 @@ impl Demo {
                 });
                 json!({ "ok": true })
             }
+            "roots_commands" => {
+                let which = request["root"].as_str().unwrap_or_default().to_string();
+                let commands = request["commands"].as_bool().unwrap_or(false);
+                let network = commands && request["network"].as_bool().unwrap_or(false);
+                self.change(|s| {
+                    for r in s.status["roots"].as_array_mut().expect("roots") {
+                        if r["id"] == json!(which) {
+                            r["allows_commands"] = json!(commands);
+                            r["network"] = json!(network);
+                        }
+                    }
+                    Self::event(
+                        s,
+                        if commands {
+                            "root_commands_allowed"
+                        } else {
+                            "root_commands_stopped"
+                        },
+                    );
+                });
+                json!({ "ok": true })
+            }
             "roots_remove" | "roots_label" => {
                 let which = request["root"].as_str().unwrap_or_default().to_string();
                 let label = request["label"].as_str().map(str::to_string);

@@ -185,6 +185,90 @@ impl SettingsApp {
             }
         }
 
+        // Run commands: only where changes are allowed. On asks first; off,
+        // and the network either way, are at once.
+        let commanding = self.folders.confirm_commands.as_deref() == Some(root.id.as_str());
+        if root.writable && cfg!(unix) {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!busy && !commanding, |ui| {
+                    let mut on = root.allows_commands || commanding;
+                    let toggled = widgets::switch(ui, &theme, &mut on, "Run commands");
+                    if toggled.changed() {
+                        if on {
+                            self.folders.confirm_commands = Some(root.id.clone());
+                            self.folders.confirm_remove = None;
+                        } else {
+                            self.set_commands(ui.ctx(), root.id.clone(), false, false);
+                        }
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Run commands").color(theme.palette.text));
+                    ui.add_space(-4.0);
+                    ui.add(
+                        egui::Label::new(theme.small(if root.allows_commands {
+                            "Chat with Work can run commands here, like tests or a build, each \
+                             after you approve it, in a sandbox that can change only this folder."
+                        } else {
+                            "Turn on to let Chat with Work run commands here, like tests or a \
+                             build, each after you approve it."
+                        }))
+                        .wrap(),
+                    );
+                });
+            });
+            if root.allows_commands {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(!busy, |ui| {
+                        let mut on = root.network;
+                        let toggled =
+                            widgets::switch(ui, &theme, &mut on, "Commands use the network");
+                        if toggled.changed() {
+                            self.set_commands(ui.ctx(), root.id.clone(), true, on);
+                        }
+                    });
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Commands use the network").color(theme.palette.text),
+                        );
+                        ui.add_space(-4.0);
+                        ui.add(
+                            egui::Label::new(theme.small(if root.network {
+                                "Commands here can reach the internet, to install packages or \
+                                 fetch dependencies."
+                            } else {
+                                "Commands here run without a network."
+                            }))
+                            .wrap(),
+                        );
+                    });
+                });
+            }
+        }
+        if commanding {
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(RichText::new(format!(
+                    "Let Chat with Work run commands in “{}”? It asks you in Chat with Work \
+                     before each one. A command can change or delete anything in this folder, \
+                     and nothing outside it.",
+                    root.label
+                )))
+                .wrap(),
+            );
+            let (cancel, confirm) = ui
+                .horizontal(|ui| widgets::dialog_buttons(ui, &theme, "Allow Commands", false))
+                .inner;
+            if cancel {
+                self.folders.confirm_commands = None;
+            } else if confirm {
+                self.folders.confirm_commands = None;
+                self.set_commands(ui.ctx(), root.id.clone(), true, false);
+            }
+        }
+
         if renaming {
             let mut save = false;
             let mut cancel = false;

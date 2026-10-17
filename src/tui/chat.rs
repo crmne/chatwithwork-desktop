@@ -757,6 +757,10 @@ pub enum PreviewBody {
     Sheets {
         sheets: Vec<PreviewSheet>,
     },
+    /// A command `run` would run, as one line of shell.
+    Command {
+        command: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -796,6 +800,7 @@ impl PreviewBody {
             Self::Diff { lines } => fenced("diff", &lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")),
             Self::Replace { old_text, new_text } => format!("**Replace**\n\n{}\n\n**With**\n\n{}", fenced("text", old_text), fenced("text", new_text)),
             Self::Document { markdown } => markdown.clone(),
+            Self::Command { command } => fenced("sh", command),
             Self::Sheets { sheets } => sheets.iter().map(|sheet| {
                 let columns = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
                 let mut text = format!("### {}\n\n", markdown_cell(&sheet.name));
@@ -2081,6 +2086,10 @@ mod preview_tests {
             (
                 json!({"kind":"sheets","sheets":[{"name":"Empty","header":true,"rows":[]}]}),
                 "### Empty",
+            ),
+            (
+                json!({"kind":"command","command":"bin/rails test"}),
+                "```sh\nbin/rails test\n```",
             ),
             (json!({"kind":"future"}), "Review this change on the web"),
         ] {

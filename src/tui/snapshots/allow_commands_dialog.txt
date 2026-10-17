@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │  Shared folders
+                               │
+  ← Chats                  esc │  Chat with Work can search and read the files in these folders,
+                               │  and nothing else on this computer. It changes files only in
+  SETTINGS                     │  folders where you allow it.
+ ▌ Shared folders              │
+   Always private              │  ▌● Work docs                               Indexed · 1,532 files
+   Activity                    │     /home/carmine/Work docs · work-docs:          Changes allowed
+   Account                     │
+   General                     │  a share   r rename   w read-only   m commands   d stop sharing
+                ╭ RUN COMMANDS ────────────────────────────────────────────────────╮
+                │ Run commands in Work docs?                                       │
+                │                                                                  │
+                │ Chat with Work could then run commands here, like tests or a     │
+                │ build. It asks you before each one. A command runs in a sandbox  │
+                │ that can change or delete anything in this folder and nothing    │
+                │ outside it, without the network unless you allow it (i).         │
+                │                                                                  │
+                │ y allow commands   n run none                                    │
+                ╰──────────────────────────────────────────────────────────────────╯
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+  Settings                     │

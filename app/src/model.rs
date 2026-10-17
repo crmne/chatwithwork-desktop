@@ -49,6 +49,10 @@ pub struct RootStatus {
     pub local_path: Option<PathBuf>,
     /// The user allowed changes in it.
     pub writable: bool,
+    /// The user allowed commands in it (`run`).
+    pub allows_commands: bool,
+    /// Those commands may use the network.
+    pub network: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -285,7 +289,7 @@ pub fn describe_tool(entry: &AuditEntry) -> String {
             .query
             .as_deref()
             .map(|q| format!("“{}”", ellipsize(q, 40))),
-        "roots" => None,
+        "roots" | "run_status" | "run_output" | "run_stop" => None,
         _ => entry.path.as_deref().map(|p| ellipsize(p, 48)),
     };
     if entry.dry_run == Some(true) {
@@ -310,6 +314,10 @@ pub fn describe_tool(entry: &AuditEntry) -> String {
         ("create" | "create_document", None) => "create",
         ("mkdir", None) => "make the folder",
         ("delete", None) => "delete",
+        ("run", Some("ran")) => "ran a command in",
+        ("run", None) => "a command in",
+        ("run_stop", _) => "stopped a command",
+        ("run_status" | "run_output", _) => "checked a command",
         (other, _) => other,
     };
     let mut text = match target {

@@ -200,6 +200,8 @@ fn offline(paths: &Paths, error: Option<String>) -> DaemonMsg {
             indexed_files: 0,
             local_path: r.path.display().to_string(),
             writable: r.writable,
+            allows_commands: r.runs_commands(),
+            network: r.runs_commands() && r.network,
         })
         .collect();
     let suggestion = crate::paths::documents_dir().map(|path| Suggestion {
@@ -395,6 +397,39 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
             }
             let mut config = Config::load(paths)?;
             let root = crate::roots::set_writable(&mut config, id, *writable, false)?;
+            config.save(paths)?;
+            Ok((
+                format!("{} Saved for when the daemon starts.", done(&root.label)),
+                true,
+            ))
+        }
+        DaemonCommand::SetCommands {
+            id,
+            commands,
+            network,
+        } => {
+            let request = ControlRequest::RootsCommands {
+                root: id.clone(),
+                commands: *commands,
+                network: *network,
+            };
+            let done = |label: &str| match (*commands, *network) {
+                (true, true) => format!("Commands in {label} can use the network now."),
+                (true, false) => format!(
+                    "Chat with Work can run commands in {label} now, each after you approve it \
+                     there, without the network."
+                ),
+                (false, _) => format!("{label} runs no commands now."),
+            };
+            if let Some(v) = control::request(&socket, request)? {
+                let label = v["root"]["label"]
+                    .as_str()
+                    .unwrap_or(id.as_str())
+                    .to_string();
+                return Ok((done(&label), false));
+            }
+            let mut config = Config::load(paths)?;
+            let root = crate::roots::set_commands(&mut config, id, *commands, *network)?;
             config.save(paths)?;
             Ok((
                 format!("{} Saved for when the daemon starts.", done(&root.label)),
