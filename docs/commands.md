@@ -4,15 +4,26 @@ Status: **built on Linux, untested on macOS, off on Windows.** In a shared folde
 
 ## Where a command runs
 
-The daemon itself can't run anything in a shared folder: its sandbox never gives a shared folder the right to execute (`sandbox.rs`), and on Linux Landlock also forbids the mounts a sandbox for a command needs. So the confined worker asks the process above it, the supervisor, which isn't confined, to start the command in a sandbox of its own, made for that one run with [MXC](https://github.com/crmne/microsoft-mxc) (Bubblewrap on Linux, Seatbelt on macOS):
+The daemon itself can't run anything in a shared folder: its sandbox never gives a shared folder the right to execute (`sandbox.rs`), and on Linux Landlock also forbids the mounts a sandbox for a command needs. So the confined worker asks the process above it, the supervisor, which isn't confined, to start the command in a sandbox of its own, made for that one run with [MXC](https://github.com/crmne/microsoft-mxc) (Bubblewrap on Linux, Seatbelt on macOS; see [Landlock](#landlock) for Linux computers where Bubblewrap can't run):
 
 - It **reads** the system (`/usr`, `/bin`, `/etc` and the rest of what Bubblewrap binds by default) and the language toolchains that exist here: mise (`~/.local/share/mise`, its config in `~/.config/mise`), rbenv, pyenv, rustup, `~/.cargo/bin` (never the rest of Cargo's home, which holds registry credentials), Volta, Bun, Deno, `~/.local/bin`, Nix, Homebrew, `/usr/local` and `/opt`. Never the rest of your home folder: no `~/.ssh`, no browser profiles, no other projects.
 - It **writes** only its folder, and a home and temporary folder of its own (`<data>/runs/<id>`, removed when it ends).
-- It has **no network**, unless the folder allows it ("Commands use the network"). Without it, the system resolver's socket is hidden too.
+- It has **no network**, unless the folder allows it ("Commands use the network"). Without it, the system resolver's socket is hidden too. On Landlock it can't open a network socket at all.
 - It gets a **clean environment**: `PATH` from the toolchains above and the system, `HOME` and `TMPDIR` in its own folder, `LANG=C.UTF-8`, `TERM=dumb`, and what the toolchains need to find themselves (`MISE_DATA_DIR`, `RUSTUP_HOME`, ...). Never the daemon's variables or tokens. mise trusts the folder's own `mise.toml`.
 - It has **limits**: CPU time and memory for each process it starts (600 CPU seconds and 4 GB by default), at most 256 processes at once, a wall clock (30 minutes), low priority, and at most 4 commands at once. They're `command_cpu_seconds`, `command_memory_mb`, `command_processes`, `command_timeout_seconds` and `commands_running` under `[limits]` in `config.toml`. MXC enforces CPU time and memory (rlimits) and the clock; it limits processes only on Windows, so on Linux whoever runs the command counts the sandbox's processes in `/proc` four times a second and stops it past the limit. A run ended by a limit says which (`limit`: `cpu_time` or `processes`).
 
 Commands stop when the computer is paused (and none start until it's resumed), and when Chat with Work revokes it.
+
+### Landlock
+
+Bubblewrap needs unprivileged user namespaces. Some Linux computers block them: Ubuntu 23.10 and later restrict them with AppArmor, `user.max_user_namespaces` can be 0, and containers filter them. There a command runs on Landlock instead, the kernel's own sandbox, which needs no namespaces, from Linux 6.2. Every run asks MXC for its own choice (`process`), which is Bubblewrap where it can create a sandbox and Landlock otherwise, and the supervisor checks first which one this computer gets. Where neither can run, the command fails at once and says why each can't (Bubblewrap blocked, Landlock missing or older than its ABI 3).
+
+The same rules hold, with these differences:
+
+- **The network, when allowed, is this computer's network**, its loopback included: a command can reach servers running here (a database, a development server, other programs listening on `localhost`) and accept connections. Landlock can't tell one address from another, so it's all or nothing. Bubblewrap gives a command a network of its own instead, without this computer's loopback, and needs `slirp4netns` for it; Landlock doesn't.
+- **It can change the metadata of files it can't read.** Landlock decides who reads, writes and runs files, not who changes their permissions or timestamps: a command can `chmod` or `touch` any file your user owns, even outside its folder (a private key made readable to other users of this computer, say), and can see whether a path exists. It can't read or change what's in them.
+- **No private `/dev/shm`**, so POSIX semaphores, and Python's `multiprocessing` locks with them, fail with `Permission denied`.
+- A toolchain inside the shared folder (sharing the home folder, with `~/.cargo/bin` in it) is writable like the rest of the folder, rather than read-only inside it.
 
 The worker names the folder by its ID and the working folder by a path relative to it, never an absolute path. The supervisor reads `config.toml` again for every command, checks that the folder allows commands, and resolves the working folder itself, refusing one that leads outside. A folder that stops allowing commands stops the commands running in it; a worker that ends (to restart under new rules, or because the daemon stops) stops all of its own, and the supervisor waits for them before it goes on.
 
@@ -38,7 +49,8 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
 - **Toolchain settings are readable**: mise's config can hold environment variables.
 - **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet: CPU time is limited per process, and the wall clock ends the rest.
-- **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Linux it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why.
+- **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) it includes this computer's loopback.
+- **On Landlock, a command can change the permissions and timestamps of any file your user owns** ([Landlock](#landlock)).
 - **The systemd unit's own limits apply to commands.** The supervisor runs under `cww daemon install`'s unit, whose `MemoryDenyWriteExecute`, system call filter and `ProtectSystem=strict` carry over to everything it starts: JIT runtimes (Node, the JVM) may fail there until the unit is relaxed for them.
 
 ## Not built yet

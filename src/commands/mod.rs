@@ -3,8 +3,8 @@
 //! The confined worker can't execute anything in a shared folder, by design
 //! (`sandbox.rs`). So it asks the unconfined process above it (the
 //! supervisor, see [`channel`]) to start each command in a sandbox of its
-//! own, built for that one run with MXC: Bubblewrap on Linux, Seatbelt on
-//! macOS. The run reads the system and the language toolchains, writes only
+//! own, built for that one run with MXC: Bubblewrap on Linux (Landlock where
+//! Bubblewrap can't create its namespaces), Seatbelt on macOS. The run reads the system and the language toolchains, writes only
 //! its folder and a home of its own, has no network unless the folder
 //! allows it, gets a clean environment, and has CPU time, memory and
 //! wall-clock limits. Whoever starts it checks the folder again from the
@@ -32,7 +32,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-pub use plan::{Plan, Request, plan};
+pub use plan::{Plan, Request, Sandbox, plan};
 
 use crate::config::Config;
 use crate::paths::Paths;

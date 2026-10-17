@@ -115,9 +115,10 @@ crossterm = "0.29"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process", "system", "alloc"] }
 # Commands run in a folder (`run`) go in a sandbox of their own, one per
-# run: Bubblewrap on Linux, Seatbelt on macOS. Carmine's fork adds CPU time
-# and memory limits.
-mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "21dad14168287bfdbe304266ab30bdbf78b44c32" }
+# run: Bubblewrap on Linux, or Landlock where Bubblewrap can't create its
+# namespaces, and Seatbelt on macOS. Carmine's fork adds CPU time and memory
+# limits and the Landlock backend.
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "b39a69ca8af93ba4979d3b8c5349892fcc10ceee" }
 
 # The kernel sandbox for the daemon on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]

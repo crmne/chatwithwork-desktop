@@ -21,6 +21,66 @@ pub struct Request {
     pub command: String,
 }
 
+/// The sandbox MXC runs a command in on this computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sandbox {
+    /// Linux, where unprivileged user namespaces work.
+    Bubblewrap,
+    /// Linux, where they're blocked (Ubuntu's AppArmor restriction, a
+    /// container, `user.max_user_namespaces` at 0): MXC falls back to
+    /// Landlock and a seccomp filter, from Linux 6.2.
+    Landlock,
+    /// macOS.
+    Seatbelt,
+}
+
+impl Sandbox {
+    /// What this computer can run commands in, or why nothing. Asked for
+    /// every run, as MXC does, so allowing namespaces later takes effect.
+    pub fn for_host() -> Result<Self, RunError> {
+        #[cfg(target_os = "linux")]
+        {
+            use mxc_sdk::bwrap_common::bwrap_version::probe_bwrap;
+            use mxc_sdk::landlock_common::abi;
+            let bubblewrap = match probe_bwrap() {
+                Ok(_) => return Ok(Self::Bubblewrap),
+                Err(e) => e,
+            };
+            abi::probe().map(|_| Self::Landlock).map_err(|landlock| {
+                RunError::new(
+                    "unavailable",
+                    format!(
+                        "commands can't run on this computer. Bubblewrap can't: {bubblewrap} \
+                         Landlock can't either: {landlock}"
+                    ),
+                )
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self::Seatbelt)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Err(RunError::new(
+                "unavailable",
+                "commands can't run on this system yet",
+            ))
+        }
+    }
+
+    /// Processes in a run's tree, its first one included, that are the
+    /// sandbox's rather than the command's. Bubblewrap starts the command
+    /// under itself and its init; on Landlock the command's shell is the
+    /// first process.
+    pub fn own_processes(self) -> usize {
+        match self {
+            Self::Bubblewrap => 3,
+            Self::Landlock | Self::Seatbelt => 0,
+        }
+    }
+}
+
 /// A run, checked: everything its sandbox is built from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
@@ -286,10 +346,24 @@ impl Plan {
         env
     }
 
-    /// The 1.1.0-alpha MXC request for this run: the contract that carries
-    /// resource limits (`resources`), which the typed API doesn't yet.
-    pub fn request_json(&self, home: Option<&Path>) -> String {
-        let found = toolchains(home);
+    /// The 1.1.0-alpha MXC request for this run in `sandbox`: the contract
+    /// that carries resource limits (`resources`), which the typed API
+    /// doesn't yet.
+    ///
+    /// On Linux it asks for `process`, MXC's own choice, which is Bubblewrap
+    /// or, where Bubblewrap can't run, Landlock; `sandbox` says which this
+    /// computer gets, for what the two hold differently.
+    pub fn request_json(&self, home: Option<&Path>, sandbox: Sandbox) -> String {
+        let mut found = toolchains(home);
+        if sandbox == Sandbox::Landlock {
+            // Landlock can't take write access back below a folder it
+            // grants, so it refuses a read-only path there. The run may
+            // write those already.
+            found.read.retain(|path| {
+                let path = Path::new(path);
+                !path.starts_with(&self.folder) && !path.starts_with(&self.home)
+            });
+        }
         let mut denied: Vec<String> = Vec::new();
         if !self.network {
             denied.extend(
@@ -321,14 +395,14 @@ impl Plan {
                 "readonlyPaths": found.read,
                 "deniedPaths": denied,
             },
-            "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
+            "network": network(self.network, sandbox),
             "resources": {
                 "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
                 "memoryMb": self.limits.memory_mb,
                 "priority": "low",
             },
         });
-        if cfg!(target_os = "macos") {
+        if sandbox == Sandbox::Seatbelt {
             document["containment"] = "seatbelt".into();
             document["seatbelt"] = json!({
                 "guiAccess": false,
@@ -337,8 +411,25 @@ impl Plan {
                 "extraMachLookups": [],
             });
         } else {
-            document["containment"] = "bubblewrap".into();
+            document["containment"] = "process".into();
         }
         document.to_string()
+    }
+}
+
+/// The network a run gets. Bubblewrap gives it a network of its own,
+/// reached through slirp4netns, with no way in and not this computer's
+/// loopback. Landlock runs it in this computer's network and can't tell
+/// one address from another, so it allows all of it or nothing: allowed,
+/// that's this computer's loopback (its local servers) and connections in
+/// too, which MXC needs said outright.
+fn network(allowed: bool, sandbox: Sandbox) -> serde_json::Value {
+    match (allowed, sandbox) {
+        (false, _) => json!({ "egress": { "default": "deny" } }),
+        (true, Sandbox::Landlock) => json!({
+            "egress": { "default": "allow" },
+            "ingress": { "default": "allow", "hostLoopback": "allow" },
+        }),
+        (true, _) => json!({ "egress": { "default": "allow" } }),
     }
 }

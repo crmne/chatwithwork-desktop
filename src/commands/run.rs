@@ -5,7 +5,7 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{Cell, Plan, State, Stream, lock};
+use super::{Cell, Plan, Sandbox, State, Stream, lock};
 
 /// How often the thread checks for the end, a stop and the clock.
 const POLL: Duration = Duration::from_millis(50);
@@ -14,10 +14,6 @@ const POLL: Duration = Duration::from_millis(50);
 const DRAIN: Duration = Duration::from_secs(1);
 /// How often its processes are counted, on Linux.
 const COUNT_EVERY: u32 = 5;
-/// Processes of the sandbox's own (Bubblewrap and its init) that don't
-/// count against the command's limit.
-#[cfg(target_os = "linux")]
-const SANDBOX_PROCESSES: usize = 2;
 
 pub(super) fn spawn(
     plan: Plan,
@@ -47,13 +43,20 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if let Err(e) = make_home(plan) {
         return State::Failed(format!("couldn't make its home folder: {e}"));
     }
+    let sandbox = match Sandbox::for_host() {
+        Ok(sandbox) => sandbox,
+        Err(e) => {
+            tracing::warn!(run = %plan.id, "no sandbox for commands on this computer");
+            return State::Failed(e.message);
+        }
+    };
     let home = crate::paths::home_dir().ok();
-    let request = plan.request_json(home.as_deref());
+    let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
         Ok(process) => process,
         Err(e) => {
-            tracing::warn!(run = %plan.id, "the command sandbox didn't start");
-            return State::Failed(format!("the sandbox couldn't start it: {e}"));
+            tracing::warn!(run = %plan.id, code = %e.code, "the command sandbox didn't start");
+            return State::Failed(refusal(&e));
         }
     };
     let readers: Vec<_> = [
@@ -82,7 +85,7 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     let state = loop {
         polls = polls.wrapping_add(1);
         if polls.is_multiple_of(COUNT_EVERY)
-            && too_many_processes(process.id(), plan.limits.processes)
+            && too_many_processes(process.id(), plan.limits.processes, sandbox)
         {
             tracing::info!(run = %plan.id, "a command reached its process limit");
             lock(cell).limit = Some("processes");
@@ -106,9 +109,11 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
                 break State::Exited(code);
             }
             Ok(None) => std::thread::sleep(POLL),
+            // Bubblewrap that couldn't set the sandbox up, before the
+            // command started: why is on its stderr.
             Err(e) => {
                 let _ = process.kill();
-                break State::Failed(format!("lost track of it: {e}"));
+                break State::Failed(format!("the sandbox failed: {e}"));
             }
         }
     };
@@ -136,17 +141,31 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     state
 }
 
-/// Whether the sandbox started from `root` holds more than `limit`
-/// processes. MXC limits processes only on Windows, so on Linux the daemon
-/// counts them itself, from `/proc`, a few times a second. A limit of 0
-/// means none.
+/// Why MXC didn't start a run, for the person who asked for it.
+fn refusal(e: &mxc_sdk::v1::Error) -> String {
+    use mxc_sdk::v1::ErrorCode;
+    match e.code {
+        ErrorCode::BackendUnavailable | ErrorCode::UnsupportedContainment => {
+            format!("commands can't run on this computer: {}", e.message)
+        }
+        ErrorCode::PolicyValidation => {
+            format!("the sandbox can't hold this folder's rules: {}", e.message)
+        }
+        _ => format!("the sandbox couldn't start it: {}", e.message),
+    }
+}
+
+/// Whether the sandbox started from `root` holds more than `limit` of the
+/// command's processes. MXC limits processes only on Windows, so on Linux
+/// the daemon counts them itself, from `/proc`, a few times a second. A
+/// limit of 0 means none.
 #[cfg(target_os = "linux")]
-fn too_many_processes(root: u32, limit: u32) -> bool {
-    limit > 0 && descendants(root, &parents()) > limit as usize + SANDBOX_PROCESSES
+fn too_many_processes(root: u32, limit: u32, sandbox: Sandbox) -> bool {
+    limit > 0 && descendants(root, &parents()) + 1 > limit as usize + sandbox.own_processes()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn too_many_processes(_root: u32, _limit: u32) -> bool {
+fn too_many_processes(_root: u32, _limit: u32, _sandbox: Sandbox) -> bool {
     false
 }
 
@@ -216,6 +235,20 @@ mod tests {
         assert_eq!(parent_in_stat("42 (sh) S 7 42 42 0"), Some(7));
         assert_eq!(parent_in_stat("43 (a) b) (c) R 42 1"), Some(42));
         assert_eq!(parent_in_stat("nonsense"), None);
+    }
+
+    #[test]
+    fn refusals_say_whether_the_computer_or_the_folder_is_the_problem() {
+        use mxc_sdk::v1::{Error, ErrorCode};
+        let abi = Error::new(ErrorCode::BackendUnavailable, "Landlock ABI 2 is too old");
+        assert_eq!(
+            refusal(&abi),
+            "commands can't run on this computer: Landlock ABI 2 is too old"
+        );
+        let network = Error::new(ErrorCode::PolicyValidation, "Landlock: no rules");
+        assert!(refusal(&network).starts_with("the sandbox can't hold this folder's rules"));
+        let other = Error::new(ErrorCode::BackendError, "spawn failed");
+        assert!(refusal(&other).starts_with("the sandbox couldn't start it"));
     }
 
     #[test]

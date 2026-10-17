@@ -4,15 +4,33 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::config::{Config, Root};
 
-/// Bubblewrap needs `bwrap` and unprivileged user namespaces; machines
-/// without them skip the tests that run something.
+/// The tests that run something run on Linux, where Bubblewrap or Landlock
+/// works. Run them again under
+/// `bwrap --dev-bind / / --unshare-user --disable-userns --` to try Landlock.
 fn sandbox_works() -> bool {
-    std::process::Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--unshare-user", "true"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    cfg!(target_os = "linux") && Sandbox::for_host().is_ok()
+}
+
+fn on_landlock() -> bool {
+    Sandbox::for_host() == Ok(Sandbox::Landlock)
+}
+
+/// Whether a run with `config` reaches a server on this computer's
+/// loopback. `None` without bash, which dials it.
+fn reaches_this_computers_loopback(fx: &Fixture, config: &Config) -> Option<bool> {
+    let bash = std::process::Command::new("bash")
+        .args(["-c", "true"])
+        .status();
+    if !bash.is_ok_and(|s| s.success()) {
+        return None;
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dial = format!("bash -c 'echo hi > /dev/tcp/127.0.0.1/{port}'");
+    let status = fx.runs.start(config, &request(&dial)).unwrap();
+    wait(&fx.runs, &status.id);
+    Some(listener.accept().is_ok())
 }
 
 struct Fixture {
@@ -128,8 +146,11 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
     let fx = fixture(true);
     let paths = Paths::under(Path::new("/x/cww"));
     let plan = plan(&fx.config, &paths, &request("make test"), "0123456789ab").unwrap();
-    let json: serde_json::Value = serde_json::from_str(&plan.request_json(None)).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.request_json(None, Sandbox::Bubblewrap)).unwrap();
+    assert_eq!(json["containment"], "process");
     assert_eq!(json["network"]["egress"]["default"], "deny");
+    assert!(json["network"].get("ingress").is_none());
     assert_eq!(json["process"]["commandLine"], "make test");
     let writable = json["filesystem"]["readwritePaths"].as_array().unwrap();
     assert_eq!(writable.len(), 2);
@@ -155,8 +176,61 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
     let mut fx = fx;
     fx.config.roots[0].network = true;
     let plan = super::plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
-    let json: serde_json::Value = serde_json::from_str(&plan.request_json(None)).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.request_json(None, Sandbox::Bubblewrap)).unwrap();
     assert_eq!(json["network"]["egress"]["default"], "allow");
+    assert!(json["network"].get("ingress").is_none());
+}
+
+#[test]
+fn on_landlock_the_network_is_all_or_nothing() {
+    let mut fx = fixture(true);
+    let paths = Paths::under(Path::new("/x/cww"));
+    let request_for = |config: &Config| -> serde_json::Value {
+        let plan = plan(config, &paths, &request("make"), "0123456789ab").unwrap();
+        serde_json::from_str(&plan.request_json(None, Sandbox::Landlock)).unwrap()
+    };
+    let json = request_for(&fx.config);
+    assert_eq!(json["containment"], "process");
+    assert_eq!(json["network"]["egress"]["default"], "deny");
+    assert!(json["network"].get("ingress").is_none());
+    fx.config.roots[0].network = true;
+    let json = request_for(&fx.config);
+    assert_eq!(json["network"]["egress"]["default"], "allow");
+    assert_eq!(json["network"]["ingress"]["default"], "allow");
+    assert_eq!(json["network"]["ingress"]["hostLoopback"], "allow");
+}
+
+#[test]
+fn on_landlock_toolchains_inside_the_folder_are_left_to_it() {
+    let fx = fixture(true);
+    // A home folder that is the shared folder, with a toolchain in it.
+    std::fs::create_dir_all(fx.folder.join(".cargo/bin")).unwrap();
+    let paths = Paths::under(Path::new("/x/cww"));
+    let plan = plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
+    let readonly = |sandbox| -> Vec<serde_json::Value> {
+        let json: serde_json::Value =
+            serde_json::from_str(&plan.request_json(Some(&fx.folder), sandbox)).unwrap();
+        json["filesystem"]["readonlyPaths"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let cargo = fx.folder.join(".cargo/bin").canonicalize().unwrap();
+    let cargo = serde_json::Value::from(cargo.to_string_lossy().into_owned());
+    assert!(readonly(Sandbox::Bubblewrap).contains(&cargo));
+    assert!(!readonly(Sandbox::Landlock).contains(&cargo));
+}
+
+#[test]
+fn seatbelt_is_named() {
+    let fx = fixture(true);
+    let paths = Paths::under(Path::new("/x/cww"));
+    let plan = plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.request_json(None, Sandbox::Seatbelt)).unwrap();
+    assert_eq!(json["containment"], "seatbelt");
+    assert_eq!(json["seatbelt"]["guiAccess"], false);
 }
 
 #[test]
@@ -222,17 +296,29 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
     if !sandbox_works() {
         return;
     }
-    let fx = fixture(true);
-    // Only the loopback interface, and it's down: nothing to reach.
-    let status = fx
-        .runs
-        .start(
-            &fx.config,
-            &request("tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '"),
-        )
-        .unwrap();
-    let done = wait(&fx.runs, &status.id);
-    assert_eq!(done.stdout.trim(), "lo", "{done:?}");
+    let mut fx = fixture(true);
+    if !on_landlock() {
+        // Only the loopback interface, and it's down: nothing to reach.
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request("tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '"),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.stdout.trim(), "lo", "{done:?}");
+    }
+    assert_ne!(reaches_this_computers_loopback(&fx, &fx.config), Some(true));
+    // Bubblewrap's network needs slirp4netns; Landlock's is this computer's,
+    // its loopback included.
+    if on_landlock() {
+        fx.config.roots[0].network = true;
+        assert_ne!(
+            reaches_this_computers_loopback(&fx, &fx.config),
+            Some(false)
+        );
+    }
 }
 
 #[test]
