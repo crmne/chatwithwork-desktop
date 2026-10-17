@@ -165,6 +165,36 @@ impl Server {
         self.demo.sync_list();
     }
 
+    /// A message queued in chat `number` by someone else in its project,
+    /// as the web's composer queues it while the answer runs.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn queue_elsewhere(
+        &self,
+        number: u64,
+        author: &str,
+        content: &str,
+        steer: bool,
+        files: u64,
+    ) {
+        self.demo.change(|s| {
+            let id = s.next_id;
+            s.next_id += 10;
+            if let Some(chat) = s
+                .chats
+                .iter_mut()
+                .find(|c| c.summary["number"] == json!(number))
+            {
+                let mut queued = json!({ "id": id, "content": content, "steer": steer,
+                                         "queued_at": ago(0), "author": author });
+                if files > 0 {
+                    queued["attachments"] = json!(files);
+                }
+                chat.queued.push(queued);
+            }
+        });
+        self.demo.changed(number);
+    }
+
     /// Change a chat as someone elsewhere would: a new title, say.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn edit_elsewhere(&self, number: u64, edit: impl FnOnce(&mut Value)) {
@@ -670,7 +700,8 @@ impl Demo {
             | "connector_handoff"
             | "notification_preferences"
             | "notification_preferences_update"
-            | "notification_browser_link" => {
+            | "notification_browser_link"
+            | "chat_unqueue" => {
                 let answer = self.chat_request(cmd, request);
                 self.sync_list();
                 answer
@@ -1010,6 +1041,7 @@ impl Demo {
                         "entries": chat.entries,
                         "approvals": chat.approvals,
                         "questions": chat.questions,
+                        "queued": chat.queued,
                     }),
                     None => json!({ "ok": false, "code": "not_found", "error": "No such chat" }),
                 }
@@ -1176,7 +1208,24 @@ impl Demo {
                         return json!({ "ok": false, "code": "not_found", "error": "No such chat" });
                     };
                     if chat.summary["state"] == "processing" {
-                        return json!({ "ok": false, "code": "chat_busy", "error": "An answer is being written in this chat." });
+                        let Some(steer) = request["steer"].as_bool() else {
+                            return json!({ "ok": false, "code": "chat_busy", "error": "An answer is being written in this chat." });
+                        };
+                        // The server checks files before they go, so they
+                        // wait for the answer to finish.
+                        if !attachments.is_empty() {
+                            return json!({ "ok": false, "code": "attachment_refused",
+                                           "error": "Files can go once this answer finishes, so they can be checked first. Send them then." });
+                        }
+                        let queued = json!({
+                            "id": id, "content": text, "steer": steer, "queued_at": ago(0),
+                            "unqueue_path": format!("/local_agent/chats/{number}/queued_messages/{id}"),
+                        });
+                        chat.queued.push(queued.clone());
+                        let summary = chat.summary.clone();
+                        drop(state);
+                        self.changed(number);
+                        return json!({ "ok": true, "chat": summary, "queued": queued });
                     }
                     let mut entry = json!({ "kind": "user", "id": id, "content": text });
                     if !attachments.is_empty() {
@@ -1199,6 +1248,34 @@ impl Demo {
                     self.stream(number, chats::canned_stream(id + 1, id + 2));
                 }
                 json!({ "ok": true, "chat": summary })
+            }
+            "chat_unqueue" => {
+                let queued = request["queued"]
+                    .as_str()
+                    .and_then(|q| q.parse::<u64>().ok());
+                let taken = {
+                    let mut state = self.state.lock().expect("demo lock");
+                    state
+                        .chats
+                        .iter_mut()
+                        .find(|c| Some(c.summary["number"].as_u64().unwrap_or(0)) == number)
+                        .and_then(|chat| {
+                            let at = chat.queued.iter().position(|q| {
+                                q["id"].as_u64() == queued && !q["unqueue_path"].is_null()
+                            })?;
+                            Some(chat.queued.remove(at))
+                        })
+                        .is_some()
+                };
+                match number {
+                    Some(number) if taken => {
+                        self.changed(number);
+                        json!({ "ok": true })
+                    }
+                    _ => {
+                        json!({ "ok": false, "code": "not_found", "error": "That message isn't queued any more." })
+                    }
+                }
             }
             "chat_cancel" => {
                 let Some(number) = number else {
@@ -1687,6 +1764,24 @@ impl Demo {
                     if let Some(c) = s.chats.iter_mut().find(|c| c.summary["number"] == json!(chat)) {
                         c.summary["state"] = json!("idle");
                         c.summary["updated_at"] = json!(ago(0));
+                        // The answer took the messages that steer it before
+                        // it finished; the others wait for the next question.
+                        let (steered, waiting): (Vec<Value>, Vec<Value>) =
+                            std::mem::take(&mut c.queued)
+                                .into_iter()
+                                .partition(|q| q["steer"] == json!(true));
+                        c.queued = waiting;
+                        let at = c
+                            .entries
+                            .iter()
+                            .position(|e| e["id"] == json!(id))
+                            .unwrap_or(c.entries.len());
+                        for (n, q) in steered.into_iter().enumerate() {
+                            c.entries.insert(
+                                at + n,
+                                json!({ "kind": "user", "id": q["id"], "content": q["content"] }),
+                            );
+                        }
                         match c.entries.iter_mut().find(|e| e["id"] == json!(id)) {
                             Some(entry) => entry["content"] = json!(content),
                             None => c.entries.push(json!({ "kind": "assistant", "id": id, "content": content, "sources": [] })),

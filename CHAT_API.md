@@ -27,6 +27,8 @@ The layout follows the desktop app's chat page. The sidebar has "New chat", the 
 
 Slash commands, listed as you type `/`, do what the web's buttons and menus do: `/model` picks from the models your plan offers (each with its rate, and the reason when one can't be used now), `/project` starts the next chat in a project, `/attach` sends a file with the next question, and `/retry`, `/branch`, `/rename`, `/delete` and `/share-chat` act on the open chat where the server's `can` allows them. Questions keep their history between runs, and the composer takes several lines.
 
+While an answer is written, the composer stays open, as on the web: Enter sends a message the answer takes at its next step, and Alt-Enter one that waits for it to end and becomes the next question. They wait after the conversation as quiet dashed bubbles on the right, tagged "Queued" or "After this answer", under the sender's name when someone else in a project chat sent them; Alt-Up (or `/unqueue`, or a click on the ✕) takes your latest back into the composer. Stopping the answer leaves them waiting, and the next question takes them in first. The model and web search stay as they are until the answer ends. A server from before the queue still says the chat is busy.
+
 When an answer stops for you, the chat asks right there, in place of the web's cards: approve or deny a change (with what to do instead), or fill in a connected service's question and send or decline it. Only the person who drove that turn decides; others see whose answer the chat waits for.
 
 Files are read by the TUI, not the daemon: the daemon is sandboxed to the shared folders, so the TUI sends a file's bytes over the control socket and the daemon uploads them, once, when you attach it.

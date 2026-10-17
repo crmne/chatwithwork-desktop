@@ -14,6 +14,7 @@ pub enum Cmd {
     Download,
     Dictate,
     Detach,
+    Unqueue,
     Copy,
     Open,
     Retry,
@@ -141,6 +142,14 @@ pub const COMMANDS: &[Command] = &[
         "",
         false,
         "Remove the attached files",
+    ),
+    command(
+        Cmd::Unqueue,
+        "unqueue",
+        &[],
+        "",
+        false,
+        "Take back your latest queued message (alt-↑)",
     ),
     command(Cmd::Copy, "copy", &[], "", false, "Copy the last answer"),
     command(

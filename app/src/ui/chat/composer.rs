@@ -4,7 +4,9 @@
 //! written. Locked, it dims and says why, with the way out. Files picked
 //! for the question show as chips in the field, as Lexxy draws them
 //! (`lexxy.css`), and the model picker sits beside send
-//! (`chats/_model_picker`).
+//! (`chats/_model_picker`). While an answer runs, what's typed still goes:
+//! send joins the answer and the clock sends after it (`queue.css`), beside
+//! stop, and the model and web search wait for the answer to end.
 
 use egui::text::{CCursor, CCursorRange};
 use egui::{Color32, Id, Key, Rect, Sense, Ui, pos2, vec2};
@@ -41,6 +43,10 @@ pub struct Composer<'a> {
     /// An answer is being written: the edge flows and send becomes stop.
     pub working: bool,
     pub stopping: bool,
+    /// An answer runs, so what's sent waits in its queue.
+    pub queues: bool,
+    /// A queued message this person can take back (Alt+Up).
+    pub can_unqueue: bool,
     pub sending: bool,
     /// Whether what's typed can go now.
     pub can_send: bool,
@@ -59,7 +65,12 @@ pub struct Composer<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Dictate,
+    /// Send what's typed; while an answer runs, it joins that answer.
     Send,
+    /// While an answer runs, send what's typed after it (Alt+Enter).
+    SendLater,
+    /// Take back the newest message this person queued (Alt+Up).
+    Unqueue,
     Stop,
     /// The locked composer's way out.
     Action,
@@ -328,6 +339,16 @@ impl Composer<'_> {
                 .clamp(scale::BODY.line_height, MAX_LINES * scale::BODY.line_height)
         };
         let field = Rect::from_min_size(field.min, vec2(field.width(), lines_height));
+        // While an answer runs, Alt+Enter sends after it, as on the web.
+        if focused
+            && self.queues
+            && self.can_send
+            && ui.input_mut(|i| {
+                !i.modifiers.shift && i.consume_key(egui::Modifiers::ALT, Key::Enter)
+            })
+        {
+            event = Some(Event::SendLater);
+        }
         // Enter sends; Shift+Enter starts a new line, as on the web.
         let enter = focused
             && !locked
@@ -338,6 +359,13 @@ impl Composer<'_> {
             });
         if enter && self.can_send {
             event = Some(Event::Send);
+        }
+        if focused
+            && self.can_unqueue
+            && input.is_empty()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, Key::ArrowUp))
+        {
+            event = Some(Event::Unqueue);
         }
         let placeholder = egui::RichText::new(self.placeholder)
             .font(scale::BODY.font_id())
@@ -573,13 +601,13 @@ impl Composer<'_> {
                 hover_color: p.ink,
                 wash: 7.0,
                 radius: control_radius,
-                enabled: web.enabled && !locked,
+                enabled: web.enabled && !locked && !self.queues,
             }
             .show(ui, id.with("web-search"), button, images, p);
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::WidgetType::Checkbox,
-                    web.enabled && !locked,
+                    web.enabled && !locked && !self.queues,
                     web.on,
                     "Search the web",
                 )
@@ -597,6 +625,17 @@ impl Composer<'_> {
         {
             event = Some(e);
         }
+        // While an answer runs and something's typed: send now and send
+        // after this answer, beside stop.
+        let mut buttons_left = send_rect.left();
+        if self.queues && self.can_send && !locked {
+            let now = send_rect.translate(vec2(-(control + 6.0), 0.0));
+            let later = now.translate(vec2(-(control + 6.0), 0.0));
+            if let Some(e) = self.queue_buttons(ui, id, now, later, control_radius, images, p) {
+                event = Some(e);
+            }
+            buttons_left = later.left();
+        }
         if let Some(e) = self.picker(
             ui,
             id.with("model"),
@@ -610,7 +649,7 @@ impl Composer<'_> {
                         },
                     bar_center - 16.0,
                 ),
-                pos2(send_rect.left() - 6.0, bar_center + 16.0),
+                pos2(buttons_left - 6.0, bar_center + 16.0),
             ),
             images,
             p,
@@ -852,7 +891,8 @@ impl Composer<'_> {
         if self.models.is_empty() {
             return None;
         }
-        let locked = self.locked.is_some();
+        // The answer keeps its model while it runs.
+        let locked = self.locked.is_some() || self.queues;
         let ty = scale::SMALLER;
         let label = paint::layout(
             ui.painter(),
@@ -1114,6 +1154,63 @@ impl Composer<'_> {
         (picked, rect)
     }
 
+    /// `.chat-prompt__queue`: send now (`btn-subtle`, joins the answer)
+    /// and the clock (send after this answer), shown while an answer runs
+    /// and there's something to send.
+    #[allow(clippy::too_many_arguments)]
+    fn queue_buttons(
+        &self,
+        ui: &mut Ui,
+        id: Id,
+        now: Rect,
+        later: Rect,
+        radius: f32,
+        images: &Images,
+        p: &Palette,
+    ) -> Option<Event> {
+        let mut event = None;
+        let later_tip = format!("Send after this answer · {}", alt_enter());
+        let response = widgets::IconButton {
+            icon: Icon::Clock,
+            icon_size: 16.0,
+            label: "Send after this answer",
+            tooltip: Some(&later_tip),
+            color: p.ink_muted,
+            hover_color: p.ink,
+            wash: 7.0,
+            radius,
+            enabled: true,
+        }
+        .show(ui, id.with("later"), later, images, p);
+        if response.clicked() {
+            event = Some(Event::SendLater);
+        }
+        let response = ui.interact(now, id.with("now"), Sense::click());
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Send now"));
+        let t = widgets::hover(ui, id.with("now"), response.hovered(), tokens::FAST);
+        let pressed = if response.is_pointer_button_down_on() {
+            0.5
+        } else {
+            0.0
+        };
+        let rect = now.translate(vec2(0.0, pressed));
+        ui.painter()
+            .rect_filled(rect, radius, p.ink_wash(7.0 + 5.0 * t));
+        images.icon_at(ui.painter(), rect.center(), 16.0, Icon::ArrowUp, p.ink);
+        if response.has_focus() {
+            widgets::focus_ring(ui, rect, radius, p);
+        }
+        widgets::tooltip(ui, &response, "Send now · joins this answer", p, true);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            event = Some(Event::Send);
+        }
+        event
+    }
+
     fn send_button(
         &self,
         ui: &mut Ui,
@@ -1259,6 +1356,15 @@ fn desaturate(color: Color32, amount: f32) -> Color32 {
         + 0.0722 * f32::from(color.b());
     let mix = |c: u8| (l + (f32::from(c) - l) * amount).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgba_premultiplied(mix(color.r()), mix(color.g()), mix(color.b()), color.a())
+}
+
+/// Alt+Enter, as the platform writes it.
+pub fn alt_enter() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌥↩"
+    } else {
+        "Alt+Enter"
+    }
 }
 
 /// "Ctrl", or "⌘" on a Mac, for shortcut hints.

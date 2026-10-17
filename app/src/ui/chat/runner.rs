@@ -275,9 +275,29 @@ impl Runner {
             Command::Send(ask) => spawn(
                 "cww-chat-send",
                 Box::new(move || {
-                    wake.send(Msg::Sent {
-                        chat: ask.chat,
-                        result: chats.ask(&ask),
+                    let result = chats.ask(&ask);
+                    // Sent while an answer runs: it went into the queue.
+                    wake.send(match (ask.steer, ask.chat) {
+                        (Some(_), Some(chat)) => Msg::Queued {
+                            chat,
+                            text: ask.text,
+                            result,
+                        },
+                        _ => Msg::Sent {
+                            chat: ask.chat,
+                            result,
+                        },
+                    });
+                }),
+            ),
+            Command::Unqueue { chat, queued } => spawn(
+                "cww-chat-unqueue",
+                Box::new(move || {
+                    let result = chats.unqueue(chat, queued.id);
+                    wake.send(Msg::Unqueued {
+                        chat,
+                        queued,
+                        result,
                     });
                 }),
             ),

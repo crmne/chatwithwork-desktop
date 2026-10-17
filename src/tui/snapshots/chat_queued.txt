@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │                    What did we budget for Q3, and who signed it
+                               │                    off?
+  + New chat                   │
+  / Search chats               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+                               │
+  RECENT                       │  The Q3 budget is €40k, signed off by Ada on 12 September.
+   ● Q3 budget                 │
+   Launch plan for Falcon      │  • Marketing: €18k
+   Onboarding checklist        │  • Engineering: €22k
+   Vendor contracts            │
+   Hiring plan                 │  Details are in the plan[1].
+                               │
+                               │  SOURCES
+                               │  [1] Q3 plan.pdf  https://drive.google.com/file/d/q3
+                               │
+                               │  ⠋ Thinking
+                               │
+                               │                                                         Queued  ✕
+                               │                                               ╭╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮
+                               │                                               ┆ Use the EU file ┆
+                               │                                               ╰╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯
+                               │
+                               │                                            Ada  After this answer
+                               │                                  ╭╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮
+                               │                                  ┆ Check the Berlin numbers too ┆
+                               │                                  ┆ + 2 files                    ┆
+  PINNED                  all  │                                  ╰╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯
+   Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
+                               │ │ ❯ Add to this answer, or queue what's next           esc stops │
+  C  Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

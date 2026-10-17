@@ -1441,6 +1441,7 @@ fn budget_transcript(state: &str) -> Transcript {
         locked_reason: None,
         approvals: vec![],
         questions: vec![],
+        queued: vec![],
         entries: vec![
             Entry::User {
                 id: 1,
@@ -3849,4 +3850,199 @@ fn commands_is_offered_only_when_something_ran() {
     assert!(app.menu().iter().all(|c| c.name != "commands"));
     commands_running(&mut app);
     assert!(app.menu().iter().any(|c| c.name == "commands"));
+}
+
+// ------------------------------------------------------- queued messages
+
+fn alt(code: KeyCode) -> Msg {
+    Msg::Key(KeyEvent::new(code, KeyModifiers::ALT))
+}
+
+fn queued(id: u64, content: &str, steer: bool, mine: bool) -> super::chat::Queued {
+    super::chat::Queued {
+        id,
+        content: content.into(),
+        steer,
+        queued_at: "2026-09-25T08:19:00Z".into(),
+        author: (!mine).then(|| "Ada".into()),
+        attachments: None,
+        unqueue_path: mine.then(|| format!("/local_agent/chats/42/queued_messages/{id}")),
+    }
+}
+
+/// The budget chat, open, with an answer running and `queue` waiting.
+fn budget_answering(app: &mut App, queue: Vec<super::chat::Queued>) {
+    open_budget(app);
+    let mut transcript = budget_transcript("processing");
+    transcript.queued = queue;
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(transcript),
+    }));
+}
+
+#[test]
+fn the_composer_queues_while_an_answer_runs() {
+    let mut app = app();
+    budget_answering(&mut app, vec![]);
+    assert!(app.chat.working() && app.chat.queues());
+    assert!(render_to_string(&app, 100, 30).contains("Add to this answer, or queue what's next"));
+
+    // Enter steers the answer, without the model or web search.
+    type_text(&mut app, "Use the EU file");
+    assert!(render_to_string(&app, 100, 30).contains("alt-enter sends after it"));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![
+            Effect::Remember("Use the EU file".into()),
+            Effect::Chat(ChatCommand::Queue {
+                chat: 42,
+                text: "Use the EU file".into(),
+                steer: true,
+                attachments: vec![],
+            })
+        ]
+    );
+    assert!(app.chat.input.is_empty() && !app.chat.sending);
+    assert!(render_to_string(&app, 100, 30).contains("Queued"));
+
+    // Alt-Enter waits for the answer to end.
+    type_text(&mut app, "And Q4?");
+    let effects = app.update(alt(KeyCode::Enter));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Queue {
+        chat: 42,
+        text: "And Q4?".into(),
+        steer: false,
+        attachments: vec![],
+    })));
+    assert!(render_to_string(&app, 100, 30).contains("After this answer"));
+
+    // A refusal gives the message back; the chat is read again.
+    let effects = app.update(Msg::Chat(ChatMsg::Queued {
+        chat: 42,
+        text: "And Q4?".into(),
+        result: Err(Failure::new("chat_busy", super::chat::NO_QUEUE)),
+    }));
+    assert_eq!(effects, vec![Effect::Chat(ChatCommand::Open(42))]);
+    assert_eq!(app.chat.input, "And Q4?");
+    assert_eq!(app.chat.pending_queued.len(), 1);
+
+    // The queue shows it, so the one on its way goes.
+    let mut transcript = budget_transcript("processing");
+    transcript.queued = vec![queued(9, "Use the EU file", true, true)];
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(transcript),
+    }));
+    assert!(app.chat.pending_queued.is_empty());
+
+    // The model and web search stay as they are while it runs.
+    app.chat.input.clear();
+    assert!(app.run_command(Cmd::Model, "").is_empty());
+    assert!(app.chat.picker.is_none());
+}
+
+#[test]
+fn snapshot_chat_queued() {
+    let mut app = app();
+    let mut theirs = queued(10, "Check the Berlin numbers too", false, false);
+    theirs.attachments = Some(2);
+    budget_answering(
+        &mut app,
+        vec![queued(9, "Use the EU file", true, true), theirs],
+    );
+    assert_snapshot("chat_queued", &app);
+}
+
+#[test]
+fn queued_messages_wait_for_the_next_question_once_the_answer_stops() {
+    let mut app = app();
+    open_budget(&mut app);
+    let mut transcript = budget_transcript("idle");
+    transcript.queued = vec![queued(9, "Use the EU file", true, true)];
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(transcript),
+    }));
+    assert!(!app.chat.queues());
+    let screen = render_to_string(&app, 100, 30);
+    assert!(
+        screen.contains("Waiting. These go out with the next question."),
+        "{screen}"
+    );
+    // Asking now is an ordinary question, which takes them in first.
+    type_text(&mut app, "Go on");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Chat(ChatCommand::Send { .. }))),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn alt_up_and_the_x_take_back_your_latest_queued_message() {
+    let mut app = app();
+    budget_answering(
+        &mut app,
+        vec![
+            queued(9, "Use the EU file", true, true),
+            queued(10, "Not mine", true, false),
+            queued(11, "And Q4?", false, true),
+        ],
+    );
+    // Only your own: the newest of them.
+    let effects = app.update(alt(KeyCode::Up));
+    assert_eq!(
+        effects,
+        vec![Effect::Chat(ChatCommand::Unqueue {
+            chat: 42,
+            queued: queued(11, "And Q4?", false, true),
+        })]
+    );
+    assert!(app.update(alt(KeyCode::Up)).is_empty(), "once at a time");
+
+    // Taken back: its words come back to the composer, to edit.
+    let effects = app.update(Msg::Chat(ChatMsg::Unqueued {
+        chat: 42,
+        queued: queued(11, "And Q4?", false, true),
+        result: Ok(()),
+    }));
+    assert_eq!(effects, vec![Effect::Chat(ChatCommand::Open(42))]);
+    assert_eq!(app.chat.input, "And Q4?");
+    let queue = &app.chat.transcript.as_ref().unwrap().queued;
+    assert_eq!(queue.iter().map(|q| q.id).collect::<Vec<_>>(), [9, 10]);
+
+    // The x above your own message takes it back too; others' have none.
+    app.chat.input.clear();
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok({
+            let mut t = budget_transcript("processing");
+            t.queued = vec![
+                queued(9, "Use the EU file", true, true),
+                queued(10, "Not mine", true, false),
+            ];
+            t
+        }),
+    }));
+    let screen = render_to_string(&app, 100, 30);
+    assert_eq!(screen.matches('✕').count(), 1, "{screen}");
+    let (x, y) = find(&app, "✕");
+    assert_eq!(
+        click(&mut app, x, y),
+        vec![Effect::Chat(ChatCommand::Unqueue {
+            chat: 42,
+            queued: queued(9, "Use the EU file", true, true),
+        })]
+    );
+    // One the answer took meanwhile is gone already.
+    app.update(Msg::Chat(ChatMsg::Unqueued {
+        chat: 42,
+        queued: queued(9, "Use the EU file", true, true),
+        result: Err(Failure::new("not_found", "Not found")),
+    }));
+    assert!(app.chat.input.is_empty());
+    assert_eq!(app.chat.unqueueing, None);
 }

@@ -303,6 +303,34 @@ pub struct Question {
     pub web_search: Option<bool>,
     /// Files uploaded with [`ChatClient::upload`], by `signed_id`.
     pub attachments: Vec<String>,
+    /// While an answer runs, the message waits in the chat's queue: `true`
+    /// steers that answer, `false` waits for it to end. Absent, the server
+    /// steers.
+    pub steer: Option<bool>,
+}
+
+impl Question {
+    /// The JSON body the server takes for this question.
+    fn body(&self) -> Value {
+        let mut body = json!({ "content": self.text });
+        if let Some(model) = &self.model {
+            body["model_id"] = json!(model);
+        }
+        if let Some(on) = self.web_search {
+            body["web_search"] = json!(on);
+        }
+        if !self.attachments.is_empty() {
+            body["attachments"] = json!(self.attachments);
+        }
+        if self.chat.is_some() {
+            if let Some(steer) = self.steer {
+                body["steer"] = json!(steer);
+            }
+        } else if let Some(project) = self.project {
+            body["project_id"] = json!(project);
+        }
+        body
+    }
 }
 
 /// A file to upload, as a client read it.
@@ -627,16 +655,7 @@ impl ChatClient {
     }
 
     pub fn send(&self, question: &Question) -> Result<Value> {
-        let mut body = json!({ "content": question.text });
-        if let Some(model) = &question.model {
-            body["model_id"] = json!(model);
-        }
-        if let Some(on) = question.web_search {
-            body["web_search"] = json!(on);
-        }
-        if !question.attachments.is_empty() {
-            body["attachments"] = json!(question.attachments);
-        }
+        let body = question.body();
         match &question.chat {
             Some(chat) => {
                 let chat = chat_number(chat)?;
@@ -646,13 +665,23 @@ impl ChatClient {
                     Body::Json(&body),
                 )
             }
-            None => {
-                if let Some(project) = question.project {
-                    body["project_id"] = json!(project);
-                }
-                self.call("POST", "local_agent/chats", Body::Json(&body))
-            }
+            None => self.call("POST", "local_agent/chats", Body::Json(&body)),
         }
+    }
+
+    /// Take back a message waiting in the chat's queue while an answer
+    /// runs. `not_found` once the answer took it, `forbidden` for someone
+    /// else's.
+    pub fn unqueue(&self, chat: &str, queued: &str) -> Result<Value> {
+        let (chat, queued) = (chat_number(chat)?, queued_id(queued)?);
+        newer(
+            self.call(
+                "DELETE",
+                &format!("local_agent/chats/{chat}/queued_messages/{queued}"),
+                Body::Empty,
+            ),
+            "can't take queued messages back yet",
+        )
     }
 
     pub fn cancel(&self, chat: &str) -> Result<Value> {
@@ -1053,6 +1082,11 @@ pub fn message_id(id: &str) -> Result<&str, Refusal> {
     digits(id, "message")
 }
 
+/// A queued message's ID. Checked before it goes into a path.
+pub fn queued_id(id: &str) -> Result<&str, Refusal> {
+    digits(id, "queued message")
+}
+
 fn digits<'a>(id: &'a str, what: &str) -> Result<&'a str, Refusal> {
     if !id.is_empty() && id.len() <= 18 && id.bytes().all(|b| b.is_ascii_digit()) {
         Ok(id)
@@ -1146,10 +1180,42 @@ mod tests {
     fn tool_call_and_message_ids_are_digits_only() {
         assert_eq!(tool_call_id("12").unwrap(), "12");
         assert_eq!(message_id("3").unwrap(), "3");
+        assert_eq!(queued_id("9").unwrap(), "9");
         for bad in ["", "1/2", "../approval", "12?x"] {
             assert!(tool_call_id(bad).is_err(), "{bad:?}");
             assert!(message_id(bad).is_err(), "{bad:?}");
+            assert!(queued_id(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_message_while_an_answer_runs_says_whether_it_steers() {
+        let question = |chat: Option<&str>, steer| Question {
+            chat: chat.map(str::to_string),
+            text: "Use the EU file".into(),
+            project: Some(3),
+            model: None,
+            web_search: None,
+            attachments: vec![],
+            steer,
+        };
+        assert_eq!(
+            question(Some("42"), Some(false)).body(),
+            json!({ "content": "Use the EU file", "steer": false })
+        );
+        assert_eq!(
+            question(Some("42"), Some(true)).body(),
+            json!({ "content": "Use the EU file", "steer": true })
+        );
+        // Without a choice the server steers; a new chat has nothing to steer.
+        assert_eq!(
+            question(Some("42"), None).body(),
+            json!({ "content": "Use the EU file" })
+        );
+        assert_eq!(
+            question(None, Some(false)).body(),
+            json!({ "content": "Use the EU file", "project_id": 3 })
+        );
     }
 
     #[test]

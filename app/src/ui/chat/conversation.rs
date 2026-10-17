@@ -1,7 +1,8 @@
 //! The conversation (`conversation.css`, `activity.css`): your questions as
 //! bubbles on the right, the tool work folded into one live line, the
 //! answers in Markdown with their sources, notices, and "Thinking" while
-//! nothing else says what's happening. Each thing rises in as it appears.
+//! nothing else says what's happening, then the messages queued while an
+//! answer runs (`queue.css`). Each thing rises in as it appears.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -9,7 +10,7 @@ use std::sync::Arc;
 
 use egui::{Id, Pos2, Rect, Sense, Ui, UiBuilder, pos2, vec2};
 
-use cww::tui::chat::{Asset, Attachment, Can, Entry, Link, Plan, Source, Step};
+use cww::tui::chat::{Asset, Attachment, Can, Entry, Link, Plan, QUEUE_WAITING, Source, Step};
 
 use super::cards::{Card, CardEvent, CardInputs, Cards};
 use super::composer::file_icon;
@@ -45,6 +46,8 @@ pub enum Event {
     Share,
     /// Settle a step the answer stopped at.
     Decide(Decision),
+    /// Take back a queued message, by its ID.
+    Unqueue(u64),
 }
 
 /// What the conversation remembers between frames.
@@ -126,6 +129,8 @@ enum Item<'a> {
     Cards(Vec<Card<'a>>),
     /// "Waiting for your approval. Review"
     Waiting(String),
+    /// Messages sent while an answer runs, until it takes them.
+    Queue,
 }
 
 impl Conversation<'_> {
@@ -252,6 +257,9 @@ impl Conversation<'_> {
             };
             items.push(Item::Waiting(text));
         }
+        if !state.queued().is_empty() || !state.pending_queued.is_empty() {
+            items.push(Item::Queue);
+        }
         let can = state.open_summary().and_then(|c| c.can).unwrap_or_default();
         let cards_ui = Cards {
             palette: self.palette,
@@ -292,6 +300,7 @@ impl Conversation<'_> {
                 Item::Thinking => "thinking".into(),
                 Item::Cards(_) => "cards".into(),
                 Item::Waiting(_) => "waiting".into(),
+                Item::Queue => "queue".into(),
             };
             let rise = if self.still || self.reduced_motion {
                 1.0
@@ -471,6 +480,7 @@ impl Conversation<'_> {
                         child.ctx().request_repaint();
                     }
                 }
+                Item::Queue => self.queue(&mut child, state, &mut events),
             }
             let height = child.min_rect().height() - 6.0 * (1.0 - eased);
             ui.allocate_exact_size(vec2(width, height.max(0.0)), Sense::hover());
@@ -1823,6 +1833,204 @@ impl Conversation<'_> {
         clicked
     }
 
+    /// `.queue`: the messages waiting for the answer, oldest first, as
+    /// quiet dashed bubbles on the right, with "Waiting. These go out with
+    /// the next question." above them once nothing answers.
+    fn queue(&self, ui: &mut Ui, state: &ChatState, events: &mut Vec<Event>) {
+        let p = self.palette;
+        let width = ui.available_width();
+        ui.add_space(12.0);
+        if !state.working() && !state.queued().is_empty() {
+            let galley = paint::layout(
+                ui.painter(),
+                paint::job(QUEUE_WAITING, scale::SMALLER, p.ink_faint, width),
+            );
+            let (row, _) = ui.allocate_exact_size(vec2(width, galley.size().y), Sense::hover());
+            let rect = Rect::from_min_size(
+                pos2(row.right() - galley.size().x, row.top()),
+                galley.size(),
+            );
+            widgets::label(ui, rect, QUEUE_WAITING);
+            ui.painter().galley(rect.min, galley, p.ink_faint);
+            ui.add_space(8.0);
+        }
+        for queued in state.queued() {
+            let unqueue = queued.unqueueable() && state.unqueueing != Some(queued.id);
+            let files = queued.attachments.unwrap_or(0);
+            if self.queued(
+                ui,
+                Id::new(("queued", queued.id)),
+                QueuedBubble {
+                    text: &queued.content,
+                    author: queued.author.as_deref(),
+                    tag: queued.tag(),
+                    files,
+                    unqueue,
+                },
+            ) {
+                events.push(Event::Unqueue(queued.id));
+            }
+        }
+        // Sent, and not in the queue yet.
+        for (n, pending) in state.pending_queued.iter().enumerate() {
+            self.queued(
+                ui,
+                Id::new(("queued-pending", n)),
+                QueuedBubble {
+                    text: &pending.text,
+                    author: None,
+                    tag: if pending.steer {
+                        "Queued"
+                    } else {
+                        "After this answer"
+                    },
+                    files: pending.attachments.len() as u64,
+                    unqueue: false,
+                },
+            );
+        }
+        ui.add_space(4.0);
+    }
+
+    /// One `.queue__item`: who sent it, its `.tag`, and the dashed bubble
+    /// with the text, its files and the sender's x. True when the x was
+    /// clicked.
+    fn queued(&self, ui: &mut Ui, id: Id, item: QueuedBubble) -> bool {
+        let p = self.palette;
+        let width = ui.available_width();
+        let max = (width * 0.85).min(576.0);
+        // `.queue__meta`: the sender's name and the tag, right-aligned.
+        let tag_ty = scale::CHIP;
+        let tag = paint::layout(
+            ui.painter(),
+            paint::job(item.tag, tag_ty, p.ink_muted, f32::INFINITY),
+        );
+        let author = item.author.map(|a| {
+            paint::layout(
+                ui.painter(),
+                paint::job(a, scale::MICRO, p.ink_faint, max * 0.6),
+            )
+        });
+        let tag_size = tag.size() + vec2(12.0, 4.0);
+        let (meta, _) = ui.allocate_exact_size(vec2(width, tag_size.y), Sense::hover());
+        let tag_rect = Rect::from_min_size(pos2(meta.right() - tag_size.x, meta.top()), tag_size);
+        let painter = ui.painter();
+        painter.rect_stroke(
+            tag_rect.shrink(0.5),
+            tokens::RADIUS_TAG,
+            egui::Stroke::new(1.0, p.line),
+            egui::StrokeKind::Middle,
+        );
+        painter.galley(tag_rect.min + vec2(6.0, 2.0), tag, p.ink_muted);
+        let mut label = item.tag.to_string();
+        if let Some(author) = author {
+            let pos = pos2(
+                tag_rect.left() - 8.0 - author.size().x,
+                meta.center().y - author.size().y / 2.0,
+            );
+            painter.galley(pos, author, p.ink_faint);
+            label = format!("{}, {label}", item.author.unwrap_or_default());
+        }
+        ui.add_space(5.0);
+
+        // `.queue__bubble`: dashed and quiet, it isn't in the conversation yet.
+        let x_room = if item.unqueue { 4.0 + 24.0 + 6.0 } else { 6.0 };
+        let text_width = (max - 16.0 - 10.0 - x_room).max(40.0);
+        let text = (!item.text.trim().is_empty()).then(|| {
+            paint::layout(
+                ui.painter(),
+                paint::job(item.text.trim_end(), scale::BODY, p.ink_muted, text_width),
+            )
+        });
+        let files_label = (item.files > 0).then(|| {
+            format!(
+                "{} {}",
+                item.files,
+                if item.files == 1 { "file" } else { "files" }
+            )
+        });
+        let files = files_label.as_ref().map(|f| {
+            paint::layout(
+                ui.painter(),
+                paint::job(f, scale::MICRO, p.ink_faint, f32::INFINITY),
+            )
+        });
+        let text_size = text.as_ref().map_or(vec2(0.0, 0.0), |g| g.size());
+        let files_size = files
+            .as_ref()
+            .map_or(vec2(0.0, 0.0), |g| g.size() + vec2(18.0, 8.0));
+        let content = vec2(
+            text_size.x.max(files_size.x),
+            text_size.y + files_size.y + if text.is_some() { 4.0 } else { 0.0 },
+        );
+        let size = vec2(
+            16.0 + content.x + 10.0 + x_room,
+            8.0 + content.y.max(24.0) + 8.0,
+        );
+        let (row, _) = ui.allocate_exact_size(vec2(width, size.y), Sense::hover());
+        let bubble = Rect::from_min_size(pos2(row.right() - size.x, row.top()), size);
+        let painter = ui.painter();
+        let outline = paint::rounded_outline(
+            bubble.shrink(0.5),
+            [13.5, 13.5, tokens::RADIUS_TAG - 0.5, 13.5],
+            10,
+        );
+        let mut closed = outline.clone();
+        closed.push(outline[0]);
+        painter.add(egui::Shape::dashed_line(
+            &closed,
+            egui::Stroke::new(1.0, p.line_strong),
+            4.0,
+            3.0,
+        ));
+        let mut y = bubble.top() + 8.0 + if text.is_some() { 2.0 } else { 0.0 };
+        if let Some(galley) = text {
+            painter.galley(pos2(bubble.left() + 16.0, y), galley, p.ink_muted);
+            y += text_size.y + 4.0;
+        }
+        if let Some(galley) = files {
+            self.images.icon_at(
+                painter,
+                pos2(bubble.left() + 16.0 + 7.0, y + 4.0 + galley.size().y / 2.0),
+                14.0,
+                Icon::Paperclip,
+                p.ink_faint,
+            );
+            painter.galley(
+                pos2(bubble.left() + 16.0 + 18.0, y + 4.0),
+                galley,
+                p.ink_faint,
+            );
+        }
+        if let Some(files) = &files_label {
+            label = format!("{label}, {files}");
+        }
+        widgets::label(ui, bubble, &format!("{label}: {}", item.text.trim()));
+        let mut clicked = false;
+        if item.unqueue {
+            // `.queue__unqueue`: the sender's ghost x.
+            let button = Rect::from_min_size(
+                pos2(bubble.right() - 6.0 - 24.0, bubble.top() + 8.0),
+                vec2(24.0, 24.0),
+            );
+            clicked = widgets::IconButton {
+                icon: Icon::X,
+                icon_size: 14.0,
+                label: "Unqueue this message",
+                tooltip: Some("Unqueue"),
+                color: p.ink_faint,
+                hover_color: p.ink,
+                wash: 7.0,
+                radius: tokens::RADIUS_TAG,
+                enabled: true,
+            }
+            .show(ui, id.with("unqueue"), button, self.images, p)
+            .clicked();
+        }
+        ui.add_space(8.0);
+        clicked
+    }
+
     /// `.thinking`; `--waiting` (a free answer waiting for its turn) says
     /// so without the shimmer.
     fn thinking(&self, ui: &mut Ui, label: &str, stopping: bool, waiting: bool) {
@@ -1852,6 +2060,15 @@ impl Conversation<'_> {
             paint::shimmer(painter, pos, &galley, p.ink_faint, self.time);
         }
     }
+}
+
+/// What one queued message shows.
+struct QueuedBubble<'a> {
+    text: &'a str,
+    author: Option<&'a str>,
+    tag: &'a str,
+    files: u64,
+    unqueue: bool,
 }
 
 fn card_event(event: CardEvent) -> Event {

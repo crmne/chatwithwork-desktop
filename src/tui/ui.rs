@@ -11,7 +11,7 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use time::OffsetDateTime;
@@ -1175,6 +1175,7 @@ fn transcript(
         }
         lines.push(Line::from(spans));
     }
+    queue_lines(&mut lines, &mut marks, app, width, theme);
     waiting_lines(&mut lines, &mut marks, app, width, theme);
     if let Some(error) = &pane.error {
         lines.extend(notice_line(error, Signal::Negative, width, theme));
@@ -1183,6 +1184,130 @@ fn transcript(
         lines.pop();
     }
     (lines, marks, question)
+}
+
+/// Messages sent while an answer runs, after the conversation as the web
+/// shows them: right-aligned like questions, in quiet dashed bubbles, each
+/// under who sent it (when someone else did), its tag and, for its sender,
+/// the x that takes it back.
+fn queue_lines(
+    lines: &mut Vec<Line<'static>>,
+    marks: &mut Vec<(usize, Hit)>,
+    app: &App,
+    width: usize,
+    theme: &Theme,
+) {
+    let pane = &app.chat;
+    let transcript = pane
+        .transcript
+        .as_ref()
+        .filter(|t| Some(t.chat.number) == pane.open);
+    let queued = transcript.map_or(&[][..], |t| &t.queued[..]);
+    if queued.is_empty() && pane.pending_queued.is_empty() {
+        return;
+    }
+    if lines.last().is_some_and(|l| l.width() > 0) {
+        lines.push(Line::raw(""));
+    }
+    if let Some(note) = transcript.and_then(|t| t.queue_note()) {
+        lines.push(Line::styled(note, theme.faint()).alignment(Alignment::Right));
+        lines.push(Line::raw(""));
+    }
+    for item in queued {
+        let unqueue = item.unqueueable() && pane.unqueueing != Some(item.id);
+        if unqueue {
+            marks.push((lines.len(), Hit::Unqueue(item.id)));
+        }
+        queued_bubble(
+            lines,
+            QueuedView {
+                text: &item.content,
+                author: item.author.as_deref(),
+                tag: item.tag(),
+                files: item.attachments.unwrap_or(0),
+                unqueue,
+            },
+            width,
+            theme,
+        );
+    }
+    // Sent, and not in the queue yet.
+    for pending in &pane.pending_queued {
+        queued_bubble(
+            lines,
+            QueuedView {
+                text: &pending.text,
+                author: None,
+                tag: if pending.steer {
+                    "Queued"
+                } else {
+                    "After this answer"
+                },
+                files: pending.attachments.len() as u64,
+                unqueue: false,
+            },
+            width,
+            theme,
+        );
+    }
+}
+
+struct QueuedView<'a> {
+    text: &'a str,
+    author: Option<&'a str>,
+    tag: &'a str,
+    files: u64,
+    unqueue: bool,
+}
+
+fn queued_bubble(lines: &mut Vec<Line<'static>>, item: QueuedView, width: usize, theme: &Theme) {
+    let most = (width * 3 / 4).clamp(16, width);
+    let mut body: Vec<(String, Style)> = Vec::new();
+    if !item.text.trim().is_empty() {
+        body.extend(
+            wrap(item.text.trim(), most.saturating_sub(4))
+                .into_iter()
+                .map(|l| (l, theme.muted())),
+        );
+    }
+    if item.files > 0 {
+        body.push((format!("+ {}", files(item.files)), theme.faint()));
+    }
+    let inner = body
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    let indent = " ".repeat(width.saturating_sub(inner + 4));
+    let mut meta = Vec::new();
+    if let Some(author) = item.author {
+        meta.push(Span::styled(format!("{author}  "), theme.micro()));
+    }
+    meta.push(Span::styled(item.tag.to_string(), theme.muted()));
+    if item.unqueue {
+        meta.push(Span::styled("  ✕", theme.faint()));
+    }
+    lines.push(Line::from(meta).alignment(Alignment::Right));
+    let edge = theme.line();
+    let rule = "╌".repeat(inner + 2);
+    lines.push(Line::from(vec![
+        Span::raw(indent.clone()),
+        Span::styled(format!("╭{rule}╮"), edge),
+    ]));
+    for (text, style) in body {
+        let pad = inner - text.chars().count();
+        lines.push(Line::from(vec![
+            Span::raw(indent.clone()),
+            Span::styled("┆ ", edge),
+            Span::styled(format!("{text}{}", " ".repeat(pad)), style),
+            Span::styled(" ┆", edge),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::raw(indent),
+        Span::styled(format!("╰{rule}╯"), edge),
+    ]));
+    lines.push(Line::raw(""));
 }
 
 /// The files sent with a question, under its bubble.
@@ -1832,6 +1957,13 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
                 ]));
             }
             view.cursor = focused.then_some(((col + 2) as u16, (row - first) as u16));
+            // While an answer runs, the web's two send buttons, as keys.
+            if pane.queues() {
+                let hint = "enter joins this answer · alt-enter sends after it · esc stops";
+                view.lines.push(
+                    Line::styled(ellipsize(hint, room), theme.faint()).alignment(Alignment::Right),
+                );
+            }
         }
         (Access::Ready, None) => {
             let editing = pane.form.editing.and_then(|i| {
@@ -1849,6 +1981,8 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
                 "Answer above: ↑ ↓ and enter".into()
             } else if pane.working() && pane.stopping {
                 "Stopping…".into()
+            } else if pane.queues() {
+                "Add to this answer, or queue what's next".into()
             } else if pane.working() {
                 "Writing…  esc stops".into()
             } else if pane.open.is_some() {
@@ -1862,10 +1996,15 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
                 Span::styled(ellipsize(&text, room), theme.faint()),
             ];
             // The one hint, as the desktop app's composer has its own.
-            let hint = "/ for commands";
+            let hint = if pane.queues() && !pane.stopping {
+                "esc stops"
+            } else {
+                "/ for commands"
+            };
             let used = text.chars().count() + 2;
-            if !pane.working() && focused && used + hint.len() + 4 <= width {
-                spans.push(Span::raw(" ".repeat(width - used - hint.len())));
+            let shown = !pane.working() || (pane.queues() && !pane.stopping);
+            if shown && focused && used + hint.chars().count() + 4 <= width {
+                spans.push(Span::raw(" ".repeat(width - used - hint.chars().count())));
                 spans.push(Span::styled(hint, theme.faint()));
             }
             view.lines.push(Line::from(spans));
@@ -2636,11 +2775,13 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
         groups.push((
             "COMPOSER",
             vec![
-                ("enter", "send"),
+                ("enter", "send; while an answer runs, it joins the answer"),
+                ("alt-enter", "while an answer runs, send after it"),
+                ("alt-↑", "take back your latest queued message"),
                 ("/", "commands"),
                 (
                     "shift-enter",
-                    "a new line (also alt-enter, ctrl-j, or \\ then enter)",
+                    "a new line (also ctrl-j, \\ then enter, or alt-enter when idle)",
                 ),
                 ("↑ ↓", "earlier questions"),
                 ("ctrl-a ctrl-e", "start and end of the line"),

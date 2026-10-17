@@ -1275,6 +1275,7 @@ impl ControlHandler for Daemon {
                 model,
                 web_search,
                 attachments,
+                steer,
             } => {
                 self.send_question(Question {
                     chat,
@@ -1283,8 +1284,13 @@ impl ControlHandler for Daemon {
                     model,
                     web_search,
                     attachments,
+                    steer,
                 })
                 .await
+            }
+            ControlRequest::ChatUnqueue { chat, queued } => {
+                self.chat(move |client| client.unqueue(&chat, &queued))
+                    .await
             }
             ControlRequest::Models => self.chat(|client| client.models()).await,
             ControlRequest::Templates { request } => {

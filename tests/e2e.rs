@@ -471,6 +471,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || path.ends_with("/pin")
         || path.ends_with("/project")
         || path.ends_with("/input")
+        || path.contains("/queued_messages/")
         || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
         return (404, Value::Null);
@@ -865,6 +866,26 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             st.questions
                 .push(body["content"].as_str().unwrap_or_default().to_string());
             (201, json!({ "chat": chat(8, "Chat #8", "processing") }))
+        }
+        ("POST", "/local_agent/chats/7/messages") if !posted["steer"].is_null() => {
+            if old_api {
+                return (
+                    409,
+                    json!({ "error": "chat_busy", "error_description": "An answer is being written." }),
+                );
+            }
+            st.decisions
+                .push(format!("queue 7 {} {}", posted["content"], posted["steer"]));
+            (
+                202,
+                json!({ "chat": chat(7, "Q3 budget", "processing"), "queued": {
+                    "id": 9, "content": posted["content"], "steer": posted["steer"],
+                    "queued_at": "2026-10-17T13:21:20Z", "unqueue_path": "/local_agent/chats/7/queued_messages/9" } }),
+            )
+        }
+        ("DELETE", "/local_agent/chats/7/queued_messages/9") => {
+            st.decisions.push("unqueue 7 9".into());
+            (204, Value::Null)
         }
         ("POST", "/local_agent/chats/7/messages") => {
             let body: Value = serde_json::from_str(body).unwrap_or_default();
@@ -2879,6 +2900,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
             model: Some("3".into()),
             web_search: Some(false),
             attachments: vec!["signed-1".into()],
+            steer: None,
         })
     })
     .await
@@ -3060,6 +3082,25 @@ async fn relays_models_decisions_files_and_chat_actions() {
     blocking(move || c.answer(7, 32, None)).await.unwrap();
     let c = chats.clone();
     blocking(move || c.decline(7, 32)).await.unwrap();
+
+    // While an answer runs: a message after it, and taking one back; one
+    // the answer took already is gone.
+    let c = chats.clone();
+    blocking(move || {
+        c.ask(&Ask {
+            chat: Some(7),
+            text: "And Q4?".into(),
+            steer: Some(false),
+            ..Ask::default()
+        })
+    })
+    .await
+    .unwrap();
+    let c = chats.clone();
+    blocking(move || c.unqueue(7, 9)).await.unwrap();
+    let c = chats.clone();
+    let taken = blocking(move || c.unqueue(7, 10)).await.unwrap_err();
+    assert_eq!(taken.code, "not_found");
     let c = chats.clone();
     blocking(move || c.delete(7)).await.unwrap();
     assert_eq!(
@@ -3079,6 +3120,8 @@ async fn relays_models_decisions_files_and_chat_actions() {
             "answer 7 32 {\"days\":\"30\",\"environment\":\"production\"}",
             "answer 7 32 null",
             "decline 7 32",
+            "queue 7 \"And Q4?\" false",
+            "unqueue 7 9",
             "delete 7",
         ]
     );
@@ -3138,6 +3181,25 @@ async fn relays_models_decisions_files_and_chat_actions() {
     let old = blocking(move || c.retry(7, None)).await.unwrap_err();
     assert_eq!(old.code, "unsupported");
     assert!(old.message.contains("can't retry"), "{}", old.message);
+    // A message while an answer runs: a server from before the queue
+    // still says the chat is busy, and why it can't wait.
+    let c = chats.clone();
+    let busy = blocking(move || {
+        c.ask(&Ask {
+            chat: Some(7),
+            text: "And Q4?".into(),
+            steer: Some(true),
+            ..Ask::default()
+        })
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(busy.code, "chat_busy");
+    assert!(busy.message.contains("can't queue"), "{}", busy.message);
+    let c = chats.clone();
+    let old = blocking(move || c.unqueue(7, 9)).await.unwrap_err();
+    assert_eq!(old.code, "unsupported");
+    assert!(old.message.contains("queued messages"), "{}", old.message);
     let c = chats.clone();
     let list = blocking(move || c.list()).await.unwrap();
     assert_eq!(list.chats[0].model, None);

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use cww::tui::chat::{
     AccessRequest, Ask, ChatList, ChatSummary, Entry, Failure, Field, ListLive, Live, Models,
-    Question, Shared, Transcript, Uploaded,
+    Question, Queued, Shared, Transcript, Uploaded,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +54,14 @@ pub enum Command {
     Follow(Option<u64>),
     /// Keep the list of chats current, starting over, or stop.
     FollowList(bool),
-    /// Ask in a chat, or in a new one.
+    /// Ask in a chat, or in a new one. While an answer runs (`steer` set),
+    /// the message waits in the chat's queue.
     Send(Ask),
+    /// Take back a queued message this person sent.
+    Unqueue {
+        chat: u64,
+        queued: Queued,
+    },
     Cancel(u64),
     /// Read the models the composer's picker offers.
     Models,
@@ -113,6 +119,17 @@ pub enum Msg {
     Sent {
         chat: Option<u64>,
         result: Result<ChatSummary, Failure>,
+    },
+    /// A message sent while an answer runs went into the queue, or didn't.
+    Queued {
+        chat: u64,
+        text: String,
+        result: Result<ChatSummary, Failure>,
+    },
+    Unqueued {
+        chat: u64,
+        queued: Queued,
+        result: Result<(), Failure>,
     },
     Cancelled(Result<(), Failure>),
     Access(Result<AccessRequest, Failure>),
@@ -272,6 +289,15 @@ pub struct Attached {
     pub icon: Option<cww::tui::chat::Asset>,
 }
 
+/// A message sent while an answer runs, on its way to the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingQueued {
+    pub text: String,
+    pub steer: bool,
+    /// Its files, back to the composer if the server won't take them.
+    pub attachments: Vec<Attached>,
+}
+
 /// A dialog over the page, as the web opens one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
@@ -333,6 +359,11 @@ pub struct ChatState {
     pub progress: Option<String>,
     /// The question just sent, until the chat shows it.
     pub pending_question: Option<String>,
+    /// Messages sent while the answer runs, until the chat's queue (or its
+    /// conversation) shows them.
+    pub pending_queued: Vec<PendingQueued>,
+    /// A queued message being taken back.
+    pub unqueueing: Option<u64>,
     pub input: String,
     pub dictation: dictation::State,
     /// Current native editor selection, in characters, for dictation insertion.
@@ -400,6 +431,8 @@ impl Default for ChatState {
             streamed: cww::tui::streaming::Answers::default(),
             progress: None,
             pending_question: None,
+            pending_queued: Vec::new(),
+            unqueueing: None,
             input: String::new(),
             dictation: dictation::State::default(),
             dictation_cursor: None,
@@ -491,6 +524,32 @@ impl ChatState {
     /// An answer is on its way in the open chat.
     pub fn working(&self) -> bool {
         self.sending || self.open_summary().is_some_and(ChatSummary::processing)
+    }
+
+    /// An answer runs in the open chat, so what's sent now waits in its
+    /// queue: Send steers the answer, the clock waits for it to end.
+    pub fn queues(&self) -> bool {
+        !self.sending
+            && self.open.is_some()
+            && self.open_summary().is_some_and(ChatSummary::processing)
+    }
+
+    /// The open chat's queue, oldest first.
+    pub fn queued(&self) -> &[Queued] {
+        self.transcript
+            .as_ref()
+            .filter(|t| Some(t.chat.number) == self.open)
+            .map_or(&[], |t| &t.queued)
+    }
+
+    /// The newest queued message this person can take back, unless it's
+    /// being taken back already.
+    pub fn last_unqueueable(&self) -> Option<&Queued> {
+        self.queued()
+            .iter()
+            .rev()
+            .find(|q| q.unqueueable())
+            .filter(|q| self.unqueueing != Some(q.id))
     }
 
     /// Why a question can't be asked right now, as the composer says it.
@@ -764,6 +823,8 @@ impl ChatState {
     /// What belongs to the chat that was open goes with it, as a page
     /// change does on the web.
     fn leave_chat(&mut self) {
+        self.pending_queued.clear();
+        self.unqueueing = None;
         self.web_search = None;
         self.attachments.clear();
         self.dialog = None;
@@ -774,7 +835,7 @@ impl ChatState {
     pub fn can_send(&self) -> Result<(), &'static str> {
         if !self.ready() {
             Err("Chats aren't available")
-        } else if self.working() {
+        } else if self.working() && !self.queues() {
             Err("Wait for the answer, or stop it")
         } else if self.locked_reason().is_some() {
             Err("Locked")
@@ -788,7 +849,18 @@ impl ChatState {
     }
 
     /// Send what's typed, with the model picked and the files attached.
+    /// While an answer runs, it steers that answer.
     pub fn send(&mut self) -> Vec<Command> {
+        self.send_as(true)
+    }
+
+    /// While an answer runs, send what's typed after it ends; otherwise
+    /// the same as [`Self::send`].
+    pub fn send_later(&mut self) -> Vec<Command> {
+        self.send_as(false)
+    }
+
+    fn send_as(&mut self, steer: bool) -> Vec<Command> {
         if self.can_send().is_err() {
             return Vec::new();
         }
@@ -797,6 +869,27 @@ impl ChatState {
         self.input.clear();
         self.error = None;
         self.notice = None;
+        if self.queues() {
+            // The answer keeps its model and web search while it runs.
+            let attachments = std::mem::take(&mut self.attachments);
+            let signed = attachments
+                .iter()
+                .filter_map(|a| a.signed_id.clone())
+                .collect();
+            self.pending_queued.push(PendingQueued {
+                text: text.clone(),
+                steer,
+                attachments,
+            });
+            commands.push(Command::Send(Ask {
+                chat: self.open,
+                text,
+                attachments: signed,
+                steer: Some(steer),
+                ..Ask::default()
+            }));
+            return commands;
+        }
         self.sending = true;
         self.pending_question = Some(text.clone());
         let attachments = std::mem::take(&mut self.attachments)
@@ -810,8 +903,25 @@ impl ChatState {
             model: self.model_for_question(),
             web_search: self.web_search_control().map(|c| c.on),
             attachments,
+            steer: None,
         }));
         commands
+    }
+
+    /// Take back a queued message this person sent, by its ID.
+    pub fn unqueue(&mut self, id: u64) -> Vec<Command> {
+        let queued = self
+            .queued()
+            .iter()
+            .find(|q| q.id == id && q.unqueueable())
+            .cloned();
+        match (self.open, queued) {
+            (Some(chat), Some(queued)) if self.unqueueing.is_none() => {
+                self.unqueueing = Some(queued.id);
+                vec![Command::Unqueue { chat, queued }]
+            }
+            _ => Vec::new(),
+        }
     }
 
     pub fn dictate(&mut self) -> Vec<Command> {
@@ -941,6 +1051,10 @@ impl ChatState {
     }
 
     pub fn toggle_web_search(&mut self) {
+        // The answer keeps its web search while it runs.
+        if self.queues() {
+            return;
+        }
         if let Some(control) = self.web_search_control().filter(|c| c.enabled) {
             self.web_search = Some(!control.on);
         }
@@ -949,6 +1063,10 @@ impl ChatState {
     /// Pick a model for the next question here. One that can't be used now
     /// says why instead.
     pub fn pick_model(&mut self, id: &str) {
+        // The answer keeps its model while it runs.
+        if self.queues() {
+            return;
+        }
         let ModelList::Ready(models) = &self.models else {
             return;
         };
@@ -1471,6 +1589,59 @@ impl ChatState {
                     }
                 }
             }
+            Msg::Queued { chat, text, result } => {
+                let at = self.pending_queued.iter().position(|p| p.text == text);
+                match result {
+                    Ok(summary) => {
+                        let number = summary.number;
+                        self.update_summary(summary);
+                        return self.refresh(number);
+                    }
+                    Err(failure) => {
+                        // Give the message and its files back, to try again.
+                        if let Some(pending) = at.map(|at| self.pending_queued.remove(at))
+                            && self.open == Some(chat)
+                        {
+                            if self.input.is_empty() {
+                                self.input = pending.text;
+                            }
+                            if self.attachments.is_empty() {
+                                self.attachments = pending.attachments;
+                            }
+                        }
+                        if is_access_failure(&failure) {
+                            self.failure(failure);
+                        } else {
+                            self.notice = Some(failure.message);
+                        }
+                        // An answer that ended meanwhile: catch up.
+                        return self.refresh(chat);
+                    }
+                }
+            }
+            Msg::Unqueued {
+                chat,
+                queued,
+                result,
+            } => {
+                if self.unqueueing == Some(queued.id) {
+                    self.unqueueing = None;
+                }
+                match result {
+                    Ok(()) => {
+                        if let Some(transcript) =
+                            self.transcript.as_mut().filter(|t| t.chat.number == chat)
+                        {
+                            transcript.queued.retain(|q| q.id != queued.id);
+                        }
+                    }
+                    // The answer took it meanwhile: the chat shows it.
+                    Err(failure) if failure.code == "not_found" => {}
+                    Err(failure) if is_access_failure(&failure) => self.failure(failure),
+                    Err(failure) => self.notice = Some(failure.message),
+                }
+                return self.refresh(chat);
+            }
             Msg::Models(Ok(models)) => self.models = ModelList::Ready(models),
             // Chats go on with their models; only the choice is missing.
             Msg::Models(Err(_)) => self.models = ModelList::Unavailable,
@@ -1859,6 +2030,15 @@ impl ChatState {
         if self.pending_question.as_deref().map(str::trim) == asked {
             self.pending_question = None;
         }
+        // Queued messages, once the queue or the conversation has them.
+        self.pending_queued.retain(|pending| {
+            let text = pending.text.trim();
+            !transcript.queued.iter().any(|q| q.content.trim() == text)
+                && !transcript
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, Entry::User { content, .. } if content.trim() == text))
+        });
         if let Some(listed) = self
             .list
             .chats
@@ -3153,5 +3333,154 @@ mod tests {
             result: Err(Failure::new("offline", "Try again")),
         });
         assert_eq!(state.list.pins.chats, vec![3]);
+    }
+
+    fn queued(id: u64, content: &str, steer: bool, mine: bool) -> Queued {
+        Queued {
+            id,
+            content: content.into(),
+            steer,
+            queued_at: "2026-10-17T13:21:20Z".into(),
+            author: (!mine).then(|| "Ada".into()),
+            attachments: None,
+            unqueue_path: mine.then(|| format!("/local_agent/chats/2/queued_messages/{id}")),
+        }
+    }
+
+    /// Chat 2 open, its answer running, with `queue` waiting.
+    fn answering(queue: Vec<Queued>) -> ChatState {
+        let mut state = ready();
+        state.open_chat(2);
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "processing"),
+                queued: queue,
+                ..Transcript::default()
+            }),
+        });
+        state
+    }
+
+    #[test]
+    fn the_composer_queues_while_an_answer_runs() {
+        let mut state = answering(vec![]);
+        assert!(state.working() && state.queues());
+        assert_eq!(state.can_send(), Err("Type a question"));
+        state.input = " Use the EU file ".into();
+        assert_eq!(state.can_send(), Ok(()));
+        // Send steers the answer, without the model or web search.
+        state.model = Some(ModelChoice {
+            chat: Some(2),
+            id: "7".into(),
+        });
+        assert_eq!(
+            state.send(),
+            vec![Command::Send(Ask {
+                chat: Some(2),
+                text: "Use the EU file".into(),
+                steer: Some(true),
+                ..Ask::default()
+            })]
+        );
+        assert!(!state.sending && state.input.is_empty());
+        assert_eq!(state.pending_queued.len(), 1);
+        // The clock waits for the answer to end.
+        state.input = "And Q4?".into();
+        let [Command::Send(ask)] = &state.send_later()[..] else {
+            panic!("one send")
+        };
+        assert_eq!((ask.steer, ask.text.as_str()), (Some(false), "And Q4?"));
+        // An older server still refuses: the message comes back.
+        let commands = state.update(Msg::Queued {
+            chat: 2,
+            text: "And Q4?".into(),
+            result: Err(Failure::new("chat_busy", cww::tui::chat::NO_QUEUE)),
+        });
+        assert_eq!(commands, vec![Command::Open(2)]);
+        assert_eq!(state.input, "And Q4?");
+        assert_eq!(state.notice.as_deref(), Some(cww::tui::chat::NO_QUEUE));
+        // The queue shows the other, so the one on its way goes.
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "processing"),
+                queued: vec![queued(9, "Use the EU file", true, true)],
+                ..Transcript::default()
+            }),
+        });
+        assert!(state.pending_queued.is_empty());
+        // The model and web search wait for the answer.
+        state.pick_model("8");
+        assert_eq!(state.model.as_ref().map(|m| m.id.as_str()), Some("7"));
+    }
+
+    #[test]
+    fn files_refused_while_an_answer_runs_come_back() {
+        let mut state = answering(vec![]);
+        state.attachments.push(Attached {
+            key: 1,
+            path: "notes.txt".into(),
+            name: "notes.txt".into(),
+            size: 8,
+            content_type: "text/plain".into(),
+            signed_id: Some("signed-1".into()),
+            icon: None,
+        });
+        let [Command::Send(ask)] = &state.send()[..] else {
+            panic!("one send")
+        };
+        assert_eq!(ask.attachments, ["signed-1"]);
+        assert!(state.attachments.is_empty());
+        let refusal =
+            "Files can go once this answer finishes, so they can be checked first. Send them then.";
+        state.update(Msg::Queued {
+            chat: 2,
+            text: String::new(),
+            result: Err(Failure::new("attachment_refused", refusal)),
+        });
+        assert_eq!(state.attachments.len(), 1);
+        assert_eq!(state.notice.as_deref(), Some(refusal));
+    }
+
+    #[test]
+    fn only_your_own_queued_messages_are_taken_back() {
+        let mut state = answering(vec![
+            queued(9, "Use the EU file", true, true),
+            queued(10, "Not mine", false, false),
+        ]);
+        assert_eq!(state.last_unqueueable().map(|q| q.id), Some(9));
+        assert!(state.unqueue(10).is_empty(), "someone else's");
+        assert_eq!(
+            state.unqueue(9),
+            vec![Command::Unqueue {
+                chat: 2,
+                queued: queued(9, "Use the EU file", true, true),
+            }]
+        );
+        assert!(state.unqueue(9).is_empty(), "once");
+        assert_eq!(state.last_unqueueable(), None);
+        let commands = state.update(Msg::Unqueued {
+            chat: 2,
+            queued: queued(9, "Use the EU file", true, true),
+            result: Ok(()),
+        });
+        assert_eq!(commands, vec![Command::Open(2)]);
+        assert_eq!(state.queued().len(), 1);
+        assert_eq!(state.unqueueing, None);
+        // Once the answer stops, they wait for the next question.
+        state.update(Msg::Shown {
+            chat: 2,
+            result: Ok(Transcript {
+                chat: summary(2, "idle"),
+                queued: vec![queued(10, "Not mine", false, false)],
+                ..Transcript::default()
+            }),
+        });
+        assert!(!state.queues());
+        assert_eq!(
+            state.transcript.as_ref().and_then(Transcript::queue_note),
+            Some(cww::tui::chat::QUEUE_WAITING)
+        );
     }
 }

@@ -5065,3 +5065,122 @@ fn streamed_text_fades_in_unless_motion_is_reduced() {
         assert!(!fx.chat().fading());
     }
 }
+
+/// Chat 12, its answer held while it runs, with one message queued from
+/// here and one someone else sent after this answer, with files.
+fn show_queue(fx: &mut Fixture) {
+    fx.ready();
+    fx.chat().open(12);
+    fx.wait_for_label("Q3 spending came in at €1.28M");
+    fx.caught_up();
+    fx.wait("the answer running", |h| {
+        h.state().chat_state().is_some_and(|s| s.queues())
+    });
+    let field = fx
+        .harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput);
+    field.focus();
+    field.type_text("Use the EU file");
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Send now").click();
+    fx.wait_for_request("chat_send", |r| r["steer"] == true);
+    fx.server
+        .queue_elsewhere(12, "Dana", "Check the Berlin numbers too", false, 2);
+    fx.wait_for_label("Dana, After this answer, 2 files");
+    fx.wait_for_label("Queued: Use the EU file");
+}
+
+#[test]
+fn messages_queue_while_an_answer_runs_and_are_taken_back() {
+    let mut fx = fixture(Options::default());
+    show_queue(&mut fx);
+    let sent = fx.wait_for_request("chat_send", |r| r["steer"] == true);
+    assert_eq!(sent["chat"], "12");
+    assert_eq!(sent["text"], "Use the EU file");
+    assert!(sent.get("model").is_none() && sent.get("web_search").is_none());
+    assert!(fx.chat().state().working(), "stop is still there");
+    fx.harness.get_by_label("Stop response");
+
+    // Alt+Enter sends after this answer.
+    let field = fx
+        .harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput);
+    field.focus();
+    field.type_text("Then draft the note");
+    fx.harness.run_steps(2);
+    fx.harness.get_by_label("Send after this answer");
+    fx.harness
+        .key_press_modifiers(egui::Modifiers::ALT, egui::Key::Enter);
+    let later = fx.wait_for_request("chat_send", |r| r["steer"] == false);
+    assert_eq!(later["text"], "Then draft the note");
+    fx.wait_for_label("After this answer: Then draft the note");
+
+    // Only your own have the x; it takes them back.
+    assert_eq!(
+        fx.harness
+            .query_all_by_label("Unqueue this message")
+            .count(),
+        2
+    );
+    fx.harness
+        .query_all_by_label("Unqueue this message")
+        .next()
+        .unwrap()
+        .click();
+    let unqueued = fx.wait_for_request("chat_unqueue", |_| true);
+    assert_eq!(unqueued["chat"], "12");
+    fx.wait("the message taken back", |h| {
+        h.query_all_by_label_contains("Queued: Use the EU file")
+            .next()
+            .is_none()
+    });
+
+    // Once the answer finishes, steering messages are in the
+    // conversation and the rest wait for the next question.
+    fx.server.finish(12, 123, "Q3 spending came in at €1.28M.");
+    fx.wait_for_label("Waiting. These go out with the next question.");
+    fx.harness.get_by_label_contains("Dana, After this answer");
+}
+
+/// The queue rendered offscreen, light and dark, against the snapshots.
+#[test]
+fn renders_queued_messages() {
+    for dark in [false, true] {
+        for (name, size) in [
+            ("chat-queued", [1280.0, 820.0]),
+            ("chat-queued-narrow", [760.0, 820.0]),
+        ] {
+            let Ok(renderer) = std::panic::catch_unwind(egui_kittest::wgpu::WgpuTestRenderer::new)
+            else {
+                eprintln!("no wgpu adapter here: skipping the snapshots");
+                return;
+            };
+            let mut fx = fixture(Options {
+                size,
+                dark,
+                renderer: Some(renderer),
+                ..Options::default()
+            });
+            fx.chat().set_still(true);
+            fx.chat().set_greeting(4);
+            show_queue(&mut fx);
+            // Something typed: send now and send after this answer show.
+            fx.chat().state_mut().input = "And the travel budget?".into();
+            fx.logos();
+            fx.harness.event(egui::Event::PointerGone);
+            fx.harness.run_steps(12);
+            fx.harness.get_by_label("Send after this answer");
+            let image = fx.harness.render().expect("GPU rendering");
+            let theme = if dark { "dark" } else { "light" };
+            if cfg!(target_os = "linux") {
+                egui_kittest::image_snapshot_options(
+                    &image,
+                    format!("{name}-{theme}"),
+                    &egui_kittest::SnapshotOptions::new()
+                        .threshold(2.0)
+                        .max_failed_pixels(1000),
+                );
+            }
+        }
+    }
+}

@@ -14,7 +14,7 @@ use time::{OffsetDateTime, UtcOffset};
 
 use super::chat::{
     AccessRequest, Approval, ChatList, ChatSummary, Entry, Failure, ListLive, Live, Model, Models,
-    Project, Shared, Transcript, Uploaded,
+    Project, Queued, Shared, Transcript, Uploaded,
 };
 use super::commands::{self, Cmd, Command};
 use super::composer::{Composer, History};
@@ -424,6 +424,20 @@ pub enum ChatCommand {
         attachments: Vec<String>,
     },
     Cancel(u64),
+    /// While an answer runs: a message that steers it, or waits for it to
+    /// end (`steer: false`).
+    Queue {
+        chat: u64,
+        text: String,
+        steer: bool,
+        /// Uploaded files, by `signed_id`.
+        attachments: Vec<String>,
+    },
+    /// Take back a queued message this person sent.
+    Unqueue {
+        chat: u64,
+        queued: Queued,
+    },
     /// The models to pick from.
     Models,
     /// Approve a change the answer stopped at.
@@ -541,6 +555,17 @@ pub enum ChatMsg {
         result: Result<ChatSummary, Failure>,
     },
     Cancelled(Result<(), Failure>),
+    /// A message sent while an answer runs went into the queue, or didn't.
+    Queued {
+        chat: u64,
+        text: String,
+        result: Result<ChatSummary, Failure>,
+    },
+    Unqueued {
+        chat: u64,
+        queued: Queued,
+        result: Result<(), Failure>,
+    },
     Access(Result<AccessRequest, Failure>),
     Live {
         chat: u64,
@@ -657,6 +682,11 @@ pub struct ChatPane {
     pub progress: Option<String>,
     /// The question just sent, until the chat shows it.
     pub pending_question: Option<String>,
+    /// Messages sent while the answer runs, until the chat's queue (or its
+    /// conversation) shows them.
+    pub pending_queued: Vec<PendingQueued>,
+    /// A queued message being taken back.
+    pub unqueueing: Option<u64>,
     pub input: Composer,
     pub dictation: dictation::State,
     /// Questions asked before, for Up and Down.
@@ -719,6 +749,8 @@ impl Default for ChatPane {
             streamed: super::streaming::Answers::default(),
             progress: None,
             pending_question: None,
+            pending_queued: Vec::new(),
+            unqueueing: None,
             input: Composer::default(),
             dictation: dictation::State::default(),
             history: History::default(),
@@ -784,6 +816,15 @@ pub struct ModelChoice {
     pub chat: Option<u64>,
     pub id: String,
     pub name: String,
+}
+
+/// A message sent while an answer runs, on its way to the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingQueued {
+    pub text: String,
+    pub steer: bool,
+    /// Its files, back to the composer if the server won't take them.
+    pub attachments: Vec<Attached>,
 }
 
 /// A file for the next question.
@@ -930,6 +971,8 @@ pub enum Hit {
     Choice(usize),
     /// A row of a question's form.
     Ask(usize),
+    /// The x above a queued message this person sent.
+    Unqueue(u64),
     Link(String),
     Transcript,
     Log,
@@ -1124,6 +1167,24 @@ impl ChatPane {
     /// An answer is on its way in the open chat.
     pub fn working(&self) -> bool {
         self.sending || self.open_summary().is_some_and(ChatSummary::processing)
+    }
+
+    /// An answer runs in the open chat, so what's sent now waits in its
+    /// queue: Enter steers the answer, Alt-Enter waits for it to end.
+    pub fn queues(&self) -> bool {
+        !self.sending
+            && self.open.is_some()
+            && self.open_summary().is_some_and(ChatSummary::processing)
+    }
+
+    /// The newest queued message this person can take back, unless it's
+    /// being taken back already.
+    pub fn last_unqueueable(&self) -> Option<&Queued> {
+        self.transcript
+            .as_ref()
+            .filter(|t| Some(t.chat.number) == self.open)
+            .and_then(Transcript::last_unqueueable)
+            .filter(|q| self.unqueueing != Some(q.id))
     }
 
     /// The change this person can decide now in the open chat.
@@ -2117,6 +2178,7 @@ impl App {
         let reason = self.chat.reason;
         let editing = self.chat.form.editing.is_some();
         let stop = self.chat.working() && !self.chat.stopping;
+        let queues = self.chat.queues();
         let input = &mut self.chat.input;
         let before = input.text().to_string();
         match key.code {
@@ -2141,6 +2203,12 @@ impl App {
             KeyCode::Esc => self.focus = Focus::Chats,
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
+            // While an answer runs, Alt-Enter sends after it, as on the web.
+            KeyCode::Enter if alt && !shift && queues && !reason && !editing => {
+                return self.submit(false);
+            }
+            // Take back the newest message this person queued.
+            KeyCode::Up if alt => return self.unqueue_last(),
             // A new line: Shift-Enter where the terminal tells it apart,
             // Alt-Enter and Ctrl-J everywhere.
             KeyCode::Enter if shift || alt => input.insert('\n'),
@@ -2157,7 +2225,7 @@ impl App {
                 self.save_field();
                 return Vec::new();
             }
-            KeyCode::Enter => return self.submit(),
+            KeyCode::Enter => return self.submit(true),
             KeyCode::Up => {
                 if !input.up() {
                     if let Some(earlier) = self.chat.history.back(input.text()) {
@@ -2244,6 +2312,7 @@ impl App {
             Cmd::UnshareChat => open.is_some_and(|c| c.share.is_some()),
             Cmd::Copy | Cmd::Open => open.is_some(),
             Cmd::Detach => !self.chat.attachments.is_empty(),
+            Cmd::Unqueue => self.chat.last_unqueueable().is_some(),
             Cmd::Login => self.can_pair(),
             Cmd::Logout => self.daemon.server().is_some(),
             Cmd::Pause => self.daemon.paused() == Some(false),
@@ -2294,8 +2363,9 @@ impl App {
         effects
     }
 
-    /// Enter: run a command, or ask.
-    fn submit(&mut self) -> Vec<Effect> {
+    /// Enter: run a command, or ask. While an answer runs, the message
+    /// steers it, or with `steer` false waits for it to end.
+    fn submit(&mut self, steer: bool) -> Vec<Effect> {
         let raw = self.chat.input.text().trim().to_string();
         if raw.is_empty() {
             return Vec::new();
@@ -2303,7 +2373,7 @@ impl App {
         let Some((name, args)) = commands::parse(&raw) else {
             // `//` asks something that starts with a slash.
             let text = raw.strip_prefix('/').unwrap_or(&raw).to_string();
-            return self.send(text, raw);
+            return self.send(text, raw, steer);
         };
         let Some(command) = commands::find(name) else {
             self.notice(
@@ -2357,7 +2427,15 @@ impl App {
             self.notice(Signal::Attention, "Chats aren't available here right now.");
             return Vec::new();
         }
+        if matches!(cmd, Cmd::Model | Cmd::Web) && self.chat.queues() {
+            self.notice(
+                Signal::Idle,
+                "The answer keeps its model and web search while it runs. Change them once it finishes.",
+            );
+            return Vec::new();
+        }
         match cmd {
+            Cmd::Unqueue => return self.unqueue_last(),
             Cmd::New => {
                 self.chat.project = None;
                 self.chat.filter = None;
@@ -3129,10 +3207,11 @@ impl App {
         form.row = i + 1;
     }
 
-    fn send(&mut self, text: String, entered: String) -> Vec<Effect> {
+    fn send(&mut self, text: String, entered: String, steer: bool) -> Vec<Effect> {
         use super::theme::Signal;
         let files = !self.chat.attachments.is_empty();
-        if (text.is_empty() && !files) || !self.chat.ready() || self.chat.working() {
+        let queues = self.chat.queues();
+        if (text.is_empty() && !files) || !self.chat.ready() || (self.chat.working() && !queues) {
             return Vec::new();
         }
         if let Some(reason) = self.chat.locked_reason().map(str::to_string) {
@@ -3146,6 +3225,32 @@ impl App {
                 &format!("Wait a moment: {name} is still uploading."),
             );
             return Vec::new();
+        }
+        if queues && let Some(chat) = self.chat.open {
+            // The answer keeps its model and web search while it runs.
+            let mut effects = self.remember(&entered);
+            effects.extend(self.cancel_dictation());
+            self.chat.input.clear();
+            self.typed();
+            self.chat.error = None;
+            self.chat.scroll = 0;
+            let attachments = std::mem::take(&mut self.chat.attachments);
+            let signed = attachments
+                .iter()
+                .filter_map(|a| a.uploaded.as_ref().map(|(id, _)| id.clone()))
+                .collect();
+            self.chat.pending_queued.push(PendingQueued {
+                text: text.clone(),
+                steer,
+                attachments,
+            });
+            effects.push(Effect::Chat(ChatCommand::Queue {
+                chat,
+                text,
+                steer,
+                attachments: signed,
+            }));
+            return effects;
         }
         let mut effects = self.remember(&entered);
         effects.extend(self.cancel_dictation());
@@ -3179,6 +3284,29 @@ impl App {
             attachments,
         }));
         effects
+    }
+
+    /// Alt-Up or `/unqueue`: take back the newest message this person
+    /// queued. Its words come back to an empty composer, to edit.
+    fn unqueue_last(&mut self) -> Vec<Effect> {
+        match (self.chat.open, self.chat.last_unqueueable().cloned()) {
+            (Some(chat), Some(queued)) => self.unqueue(chat, queued),
+            _ => {
+                self.notice(
+                    super::theme::Signal::Idle,
+                    "You have no queued message to take back.",
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    fn unqueue(&mut self, chat: u64, queued: Queued) -> Vec<Effect> {
+        if self.chat.unqueueing.is_some() || !queued.unqueueable() {
+            return Vec::new();
+        }
+        self.chat.unqueueing = Some(queued.id);
+        vec![Effect::Chat(ChatCommand::Unqueue { chat, queued })]
     }
 
     fn paste(&mut self, text: &str) {
@@ -3232,7 +3360,9 @@ impl App {
             return Vec::new();
         }
         match self.hits.at(event.column, event.row).cloned() {
-            Some(Hit::Transcript | Hit::Choice(_) | Hit::Ask(_) | Hit::Link(_)) => {
+            Some(
+                Hit::Transcript | Hit::Choice(_) | Hit::Ask(_) | Hit::Unqueue(_) | Hit::Link(_),
+            ) => {
                 self.scroll_transcript(-delta * 3);
             }
             Some(Hit::Log) => self.scroll_log(-delta * 3),
@@ -3329,6 +3459,17 @@ impl App {
                     }
                 }
             }
+            Hit::Unqueue(id) => {
+                let queued = self
+                    .chat
+                    .transcript
+                    .as_ref()
+                    .and_then(|t| t.queued.iter().find(|q| q.id == id))
+                    .cloned();
+                if let (Some(chat), Some(queued)) = (self.chat.open, queued) {
+                    return self.unqueue(chat, queued);
+                }
+            }
             // A link the answer shows: only web pages open.
             Hit::Link(url) if url.starts_with("https://") || url.starts_with("http://") => {
                 return vec![Effect::Chat(ChatCommand::OpenUrl(url))];
@@ -3409,6 +3550,8 @@ impl App {
         chat.streamed.clear();
         chat.progress = None;
         chat.pending_question = None;
+        chat.pending_queued.clear();
+        chat.unqueueing = None;
         chat.error = None;
         chat.scroll = 0;
         chat.pinned = false;
@@ -3440,6 +3583,8 @@ impl App {
         chat.streamed.clear();
         chat.progress = None;
         chat.pending_question = None;
+        chat.pending_queued.clear();
+        chat.unqueueing = None;
         chat.error = None;
         chat.scroll = 0;
         chat.pinned = false;
@@ -4009,6 +4154,73 @@ impl App {
                     }
                 }
             }
+            ChatMsg::Queued { chat, text, result } => {
+                let at = self.chat.pending_queued.iter().position(|p| p.text == text);
+                match result {
+                    Ok(summary) => {
+                        let number = summary.number;
+                        self.chat.upsert_chat(summary);
+                        return self.refresh_chat(number);
+                    }
+                    Err(failure) => {
+                        // Give the message and its files back, to try again.
+                        if let Some(pending) = at.map(|at| self.chat.pending_queued.remove(at))
+                            && self.chat.open == Some(chat)
+                        {
+                            if self.chat.input.is_empty() {
+                                self.chat.input.set(pending.text);
+                            }
+                            if self.chat.attachments.is_empty() {
+                                self.chat.attachments = pending.attachments;
+                            }
+                        }
+                        if is_access_failure(&failure) {
+                            self.chat_failure(failure);
+                        } else {
+                            self.notice(Signal::Negative, &failure.message);
+                        }
+                        // An answer that ended meanwhile: catch up.
+                        return self.refresh_chat(chat);
+                    }
+                }
+            }
+            ChatMsg::Unqueued {
+                chat,
+                queued,
+                result,
+            } => {
+                if self.chat.unqueueing == Some(queued.id) {
+                    self.chat.unqueueing = None;
+                }
+                match result {
+                    Ok(()) => {
+                        if let Some(transcript) = self
+                            .chat
+                            .transcript
+                            .as_mut()
+                            .filter(|t| t.chat.number == chat)
+                        {
+                            transcript.queued.retain(|q| q.id != queued.id);
+                        }
+                        if self.chat.open == Some(chat) && self.chat.input.is_empty() {
+                            self.chat.input.set(queued.content);
+                            self.typed();
+                            self.notice(
+                                Signal::Idle,
+                                "Took it back. It's in the composer to edit.",
+                            );
+                        } else {
+                            self.notice(Signal::Idle, "Took back your queued message.");
+                        }
+                    }
+                    Err(failure) if failure.code == "not_found" => {
+                        self.notice(Signal::Idle, "The answer already took that message.");
+                    }
+                    Err(failure) if is_access_failure(&failure) => self.chat_failure(failure),
+                    Err(failure) => self.notice(Signal::Negative, &failure.message),
+                }
+                return self.refresh_chat(chat);
+            }
             ChatMsg::Cancelled(Ok(())) => {}
             ChatMsg::Cancelled(Err(failure)) => {
                 self.chat.stopping = false;
@@ -4356,6 +4568,15 @@ impl App {
         if chat.pending_question.as_deref().map(str::trim) == asked {
             chat.pending_question = None;
         }
+        // Queued messages, once the queue or the conversation has them.
+        chat.pending_queued.retain(|pending| {
+            let text = pending.text.trim();
+            !transcript.queued.iter().any(|q| q.content.trim() == text)
+                && !transcript
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, Entry::User { content, .. } if content.trim() == text))
+        });
         if let Some(listed) = chat
             .list
             .chats

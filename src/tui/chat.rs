@@ -583,7 +583,50 @@ pub struct Transcript {
     pub approvals: Vec<Approval>,
     /// Questions the tools' servers asked, until each is answered.
     pub questions: Vec<Question>,
+    /// Messages sent while an answer runs, oldest first, until the answer
+    /// takes them (then they're `user` entries) or they're taken back.
+    /// Servers from before the queue send none.
+    pub queued: Vec<Queued>,
 }
+
+/// A message waiting in the chat's queue, as the web's pending bubble
+/// shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Queued {
+    pub id: u64,
+    pub content: String,
+    /// Steers the running answer ("Queued"); otherwise it waits for the
+    /// answer to end ("After this answer").
+    pub steer: bool,
+    /// RFC 3339.
+    pub queued_at: String,
+    /// Who sent it, when it's someone else in a project chat.
+    pub author: Option<String>,
+    /// How many files go with it.
+    pub attachments: Option<u64>,
+    /// Only for its sender: where to take it back.
+    pub unqueue_path: Option<String>,
+}
+
+impl Queued {
+    /// The tag the web shows above it.
+    pub fn tag(&self) -> &'static str {
+        if self.steer {
+            "Queued"
+        } else {
+            "After this answer"
+        }
+    }
+
+    /// This person sent it, so they can take it back.
+    pub fn unqueueable(&self) -> bool {
+        self.unqueue_path.is_some()
+    }
+}
+
+/// What the web says above the queue once the answer stopped.
+pub const QUEUE_WAITING: &str = "Waiting. These go out with the next question.";
 
 impl Transcript {
     pub fn downloads(&self) -> Vec<&Attachment> {
@@ -606,6 +649,17 @@ impl Transcript {
     /// The first question this person can answer, if any.
     pub fn next_question(&self) -> Option<&Question> {
         self.questions.iter().find(|q| q.decidable)
+    }
+
+    /// The newest queued message this person can take back.
+    pub fn last_unqueueable(&self) -> Option<&Queued> {
+        self.queued.iter().rev().find(|q| q.unqueueable())
+    }
+
+    /// The note above the queue: the queue waits for the next question
+    /// once nothing is answering.
+    pub fn queue_note(&self) -> Option<&'static str> {
+        (!self.queued.is_empty() && !self.chat.processing()).then_some(QUEUE_WAITING)
     }
 }
 
@@ -901,7 +955,14 @@ pub struct Ask {
     pub web_search: Option<bool>,
     /// Files from [`Chats::upload`], by `signed_id`.
     pub attachments: Vec<String>,
+    /// While an answer runs: `true` steers it, `false` waits for it to end.
+    /// `None` for a question asked while nothing runs.
+    pub steer: Option<bool>,
 }
+
+/// What an older server answers a message sent while an answer runs.
+pub const NO_QUEUE: &str =
+    "This Chat with Work server can't queue messages yet. Send it once this answer finishes.";
 
 /// The largest file a question can carry.
 pub const MAX_UPLOAD_BYTES: u64 = crate::chats::MAX_UPLOAD_BYTES as u64;
@@ -1180,15 +1241,35 @@ impl Chats {
     /// Ask with a model, a project or files. `model_unavailable` means the
     /// model can't be used (any more).
     pub fn ask(&self, ask: &Ask) -> Result<ChatSummary, Failure> {
-        let response = self.call(&ControlRequest::ChatSend {
-            chat: ask.chat.map(|c| c.to_string()),
-            text: ask.text.clone(),
-            project: ask.project,
-            model: ask.model.clone(),
-            web_search: ask.web_search,
-            attachments: ask.attachments.clone(),
-        })?;
+        let response = self
+            .call(&ControlRequest::ChatSend {
+                chat: ask.chat.map(|c| c.to_string()),
+                text: ask.text.clone(),
+                project: ask.project,
+                model: ask.model.clone(),
+                web_search: ask.web_search,
+                attachments: ask.attachments.clone(),
+                steer: ask.steer,
+            })
+            .map_err(|failure| {
+                // A server from before the queue still refuses while busy.
+                if failure.code == "chat_busy" && ask.steer.is_some() {
+                    Failure::new("chat_busy", NO_QUEUE)
+                } else {
+                    failure
+                }
+            })?;
         parse(response["chat"].clone())
+    }
+
+    /// Take back a message waiting in the chat's queue. `not_found` once
+    /// the answer took it (it's a message now) or it was taken back.
+    pub fn unqueue(&self, chat: u64, queued: u64) -> Result<(), Failure> {
+        self.call(&ControlRequest::ChatUnqueue {
+            chat: chat.to_string(),
+            queued: queued.to_string(),
+        })
+        .map(|_| ())
     }
 
     /// The models to pick from. `unsupported` means a server without the
@@ -1718,6 +1799,42 @@ mod tests {
             matches!(&transcript.entries[1], Entry::Activity { pending: true, steps, .. } if steps.len() == 1)
         );
         assert_eq!(transcript.entries[4], Entry::Unknown);
+        // A server from before the queue sends none.
+        assert!(transcript.queued.is_empty());
+        assert_eq!(transcript.queue_note(), None);
+    }
+
+    #[test]
+    fn parses_the_queue_and_who_can_take_each_back() {
+        let mut transcript: Transcript = serde_json::from_value(json!({
+            "chat": { "number": 42, "state": "processing" },
+            "entries": [],
+            "queued": [
+                { "id": 9, "content": "Use the EU file", "steer": true, "queued_at": "2026-10-17T13:21:20Z",
+                  "unqueue_path": "/local_agent/chats/42/queued_messages/9" },
+                { "id": 10, "content": "And Q4?", "steer": false, "queued_at": "2026-10-17T13:21:30Z",
+                  "author": "Ada", "attachments": 2 }
+            ]
+        }))
+        .unwrap();
+        let [mine, theirs] = &transcript.queued[..] else {
+            panic!("two queued: {:?}", transcript.queued);
+        };
+        assert_eq!((mine.tag(), mine.unqueueable()), ("Queued", true));
+        assert_eq!(mine.author, None);
+        assert_eq!(
+            (theirs.tag(), theirs.unqueueable()),
+            ("After this answer", false)
+        );
+        assert_eq!(
+            (theirs.author.as_deref(), theirs.attachments),
+            (Some("Ada"), Some(2))
+        );
+        assert_eq!(transcript.last_unqueueable().map(|q| q.id), Some(9));
+        // While the answer runs, no note; once it stopped, they wait.
+        assert_eq!(transcript.queue_note(), None);
+        transcript.chat.state = "idle".into();
+        assert_eq!(transcript.queue_note(), Some(QUEUE_WAITING));
     }
 
     #[test]

@@ -26,5 +26,5 @@
                                │
   PINNED                  all  │
    Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
-                               │ │ ❯ Writing…  esc stops                                          │
+                               │ │ ❯ Add to this answer, or queue what's next           esc stops │
   C  Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

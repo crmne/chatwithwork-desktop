@@ -229,6 +229,15 @@ pub enum ControlRequest {
         /// Files from `chat_upload`, by `signed_id`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
+        /// While an answer runs: `true` steers it, `false` waits for it to
+        /// end. Absent, the server steers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steer: Option<bool>,
+    },
+    /// Take back a message waiting in `chat`'s queue, by its ID.
+    ChatUnqueue {
+        chat: String,
+        queued: String,
     },
     /// The models a question can be asked with, and the owner's default.
     Models,
@@ -1055,6 +1064,7 @@ mod tests {
                 model: None,
                 web_search: None,
                 attachments: vec![],
+                steer: None,
             })
             .unwrap(),
             r#"{"cmd":"chat_send","text":"hi"}"#
@@ -1087,8 +1097,28 @@ mod tests {
                     model: Some("7".into()),
                     web_search: None,
                     attachments: vec!["abc".into()],
+                    steer: None,
                 },
                 r#"{"cmd":"chat_send","chat":"42","text":"hi","model":"7","attachments":["abc"]}"#,
+            ),
+            (
+                ControlRequest::ChatSend {
+                    chat: Some("42".into()),
+                    text: "And Q4?".into(),
+                    project: None,
+                    model: None,
+                    web_search: None,
+                    attachments: vec![],
+                    steer: Some(false),
+                },
+                r#"{"cmd":"chat_send","chat":"42","text":"And Q4?","steer":false}"#,
+            ),
+            (
+                ControlRequest::ChatUnqueue {
+                    chat: "42".into(),
+                    queued: "9".into(),
+                },
+                r#"{"cmd":"chat_unqueue","chat":"42","queued":"9"}"#,
             ),
             (
                 ControlRequest::ChatApprove {

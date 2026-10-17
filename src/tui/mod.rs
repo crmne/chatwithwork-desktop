@@ -370,6 +370,7 @@ impl ChatRunner {
                         model,
                         web_search,
                         attachments,
+                        steer: None,
                     };
                     send(ChatMsg::Sent {
                         chat,
@@ -450,6 +451,34 @@ impl ChatRunner {
             }
             ChatCommand::Cancel(chat) => {
                 thread::spawn(move || send(ChatMsg::Cancelled(chats.cancel(chat))));
+            }
+            ChatCommand::Queue {
+                chat,
+                text,
+                steer,
+                attachments,
+            } => {
+                thread::spawn(move || {
+                    let ask = chat::Ask {
+                        chat: Some(chat),
+                        text: text.clone(),
+                        attachments,
+                        steer: Some(steer),
+                        ..chat::Ask::default()
+                    };
+                    let result = chats.ask(&ask);
+                    send(ChatMsg::Queued { chat, text, result });
+                });
+            }
+            ChatCommand::Unqueue { chat, queued } => {
+                thread::spawn(move || {
+                    let result = chats.unqueue(chat, queued.id);
+                    send(ChatMsg::Unqueued {
+                        chat,
+                        queued,
+                        result,
+                    });
+                });
             }
             ChatCommand::RequestAccess => {
                 let generation = self.access_wait.fetch_add(1, Ordering::SeqCst) + 1;

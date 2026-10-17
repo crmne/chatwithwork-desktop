@@ -327,12 +327,14 @@ fn attachment(filename: &str, byte_size: u64, content_type: &str) -> Value {
             "icon": file_icon(content_type) })
 }
 
-/// A chat: its summary, its transcript's entries, and what it waits for.
+/// A chat: its summary, its transcript's entries, what it waits for, and
+/// the messages sent while its answer runs.
 pub struct Chat {
     pub summary: Value,
     pub entries: Vec<Value>,
     pub approvals: Vec<Value>,
     pub questions: Vec<Value>,
+    pub queued: Vec<Value>,
 }
 
 impl Chat {
@@ -342,6 +344,7 @@ impl Chat {
             entries,
             approvals: Vec::new(),
             questions: Vec::new(),
+            queued: Vec::new(),
         }
     }
 }
@@ -349,6 +352,7 @@ impl Chat {
 pub fn sample() -> Vec<Chat> {
     vec![
         Chat {
+            queued: Vec::new(),
             summary: summary(12, "Q3 budget review", "processing", ago(60)),
             approvals: Vec::new(),
             questions: Vec::new(),
@@ -370,6 +374,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: {
                 let mut chat = summary(11, "Vendor contract renewal", "idle", ago(120));
                 chat["share"] = json!({ "url": SHARE_URL, "expires_at": expires() });
@@ -413,6 +418,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(5, "Announce the Falcon launch", "idle", ago(30 * 60)),
             entries: vec![
                 user(51, "Post the launch note to #launch in Slack."),
@@ -439,6 +445,7 @@ pub fn sample() -> Vec<Chat> {
             questions: Vec::new(),
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(4, "Weekly report for leadership", "idle", ago(90 * 60)),
             entries: vec![
                 user(41, "Build this week's leadership report in Notion."),
@@ -469,6 +476,7 @@ pub fn sample() -> Vec<Chat> {
             })],
         },
         Chat {
+            queued: Vec::new(),
             summary: in_project(
                 summary(10, "Falcon launch checklist", "idle", days_ago(1)),
                 (7, "Falcon"),
@@ -495,6 +503,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(3, "Linear issues for Falcon", "idle", days_ago(1)),
             entries: vec![
                 user(31, "Which Falcon issues are still open in Linear?"),
@@ -514,6 +523,7 @@ pub fn sample() -> Vec<Chat> {
             })],
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(9, "Onboarding plan for new hires", "error", days_ago(1)),
             approvals: Vec::new(),
             questions: Vec::new(),
@@ -526,6 +536,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(8, "Competitor pricing notes", "idle", days_ago(3)),
             approvals: Vec::new(),
             questions: Vec::new(),
@@ -548,6 +559,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: summary(7, "Weekly sync summary", "idle", days_ago(6)),
             approvals: Vec::new(),
             questions: Vec::new(),
@@ -566,6 +578,7 @@ pub fn sample() -> Vec<Chat> {
             ],
         },
         Chat {
+            queued: Vec::new(),
             summary: in_project(
                 summary(6, "Hiring pipeline status", "idle", days_ago(12)),
                 (8, "People"),

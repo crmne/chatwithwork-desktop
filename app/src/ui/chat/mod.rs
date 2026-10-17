@@ -1535,6 +1535,16 @@ impl ChatPage {
                 let commands = self.state.send();
                 self.run(commands);
             }
+            Some(composer::Event::SendLater) => {
+                let commands = self.state.send_later();
+                self.run(commands);
+            }
+            Some(composer::Event::Unqueue) => {
+                if let Some(id) = self.state.last_unqueueable().map(|q| q.id) {
+                    let commands = self.state.unqueue(id);
+                    self.run(commands);
+                }
+            }
             Some(composer::Event::Stop) => {
                 let commands = self.state.stop();
                 self.run(commands);
@@ -1564,7 +1574,9 @@ impl ChatPage {
         Composer {
             dictation: self.state.dictation.clone(),
             web_search: self.state.web_search_control(),
-            placeholder: if self.state.open.is_some() {
+            placeholder: if self.state.queues() {
+                "Add to this answer, or queue what's next"
+            } else if self.state.open.is_some() {
                 "Reply to Chat with Work"
             } else {
                 "Ask anything…"
@@ -1573,6 +1585,8 @@ impl ChatPage {
             action: notice_free.and_then(|(_, a)| a),
             working: self.state.working(),
             stopping: self.state.stopping,
+            queues: self.state.queues(),
+            can_unqueue: self.state.last_unqueueable().is_some(),
             sending: self.state.sending,
             can_send: self.state.can_send().is_ok(),
             time,
@@ -1731,6 +1745,10 @@ impl ChatPage {
         for event in events {
             match event {
                 conversation::Event::OpenUrl(url) => super::open_url(&url),
+                conversation::Event::Unqueue(id) => {
+                    let commands = self.state.unqueue(id);
+                    self.run(commands);
+                }
                 conversation::Event::OpenChat => self.open_chat_in_browser(env),
                 conversation::Event::Copy(text) => ctx.copy_text(text),
                 conversation::Event::CopyAnswer(text) => {
