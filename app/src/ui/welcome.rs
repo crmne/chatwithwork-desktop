@@ -124,6 +124,14 @@ impl SettingsApp {
             },
         );
 
+        // 4. Crash reports, asked here rather than over the page.
+        let answered = self.crash_reports.consent.enabled.is_some();
+        if cww::crash_reports::available() {
+            step(ui, &theme, 4, "Crash reports", answered, |ui| {
+                self.welcome_crash_reports(ui);
+            });
+        }
+
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             widgets::switch(ui, &theme, &mut self.welcome_autostart, "Start at login");

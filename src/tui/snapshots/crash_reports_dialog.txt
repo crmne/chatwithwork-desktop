@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │
+                               │
+  Loading…                     │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                ╭ CRASH REPORTS ───────────────────────────────────────────────────╮
+                │ Send crash reports to the Chat with Work team?                   │
+                │                                                                  │
+                │ When the Local Agent crashes, send where in its code it          │
+                │ happened, its version and your operating system to the Chat with │
+                │ Work team. Never your files, chats, names or tokens.             │
+                │                                                                  │
+                │ Change it any time in settings, General, or with crash_reports   │
+                │ in config.toml.                                                  │
+                │                                                                  │
+                │ y send crash reports   n don't send                              │
+                ╰──────────────────────────────────────────────────────────────────╯
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │ ╭────────────────────────────────────────────────────────────────╮
+                               │ │ ❯ Loading your chats…                                          │
+  Settings                     │ ╰────────────────────────────────────────────────────────────────╯

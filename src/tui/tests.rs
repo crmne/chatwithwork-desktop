@@ -486,6 +486,75 @@ fn snapshot_connected_with_roots() {
 }
 
 #[test]
+fn snapshot_crash_reports_question() {
+    let mut app = app().with_crash_reports(crate::crash_reports::Consent::default());
+    running(
+        &mut app,
+        status(
+            "connected",
+            vec![root("work-docs", "Work docs", "ready", 1532)],
+        ),
+    );
+    assert_eq!(app.modal, Some(Modal::CrashReports));
+    assert_snapshot("crash_reports_dialog", &app);
+}
+
+#[test]
+fn crash_reports_are_asked_once_and_switched_on_the_general_page() {
+    use crate::crash_reports::Consent;
+    // Already chosen, or set in the environment: nothing to ask.
+    for enabled in [Some(true), Some(false)] {
+        let app = app().with_crash_reports(Consent {
+            enabled,
+            from_env: false,
+        });
+        assert_eq!(app.modal, None);
+    }
+    let mut app = app().with_crash_reports(Consent::default());
+    assert_eq!(app.modal, Some(Modal::CrashReports));
+    // Other keys leave the question open.
+    assert!(app.update(char('x')).is_empty());
+    assert_eq!(app.modal, Some(Modal::CrashReports));
+    assert_eq!(app.update(char('y')), vec![Effect::CrashReports(true)]);
+    assert_eq!(app.modal, None);
+    assert!(app.crash_reports.sends());
+
+    let mut declined = self::app().with_crash_reports(Consent::default());
+    assert_eq!(
+        declined.update(key(KeyCode::Esc)),
+        vec![Effect::CrashReports(false)]
+    );
+    assert_eq!(declined.crash_reports.enabled, Some(false));
+
+    // The General page switches it either way.
+    app.view = View::Settings(Page::General);
+    assert_eq!(app.update(char('e')), vec![Effect::CrashReports(false)]);
+    assert_eq!(app.update(char('e')), vec![Effect::CrashReports(true)]);
+    // Elsewhere, e is not the switch.
+    app.view = View::Settings(Page::Privacy);
+    assert!(!app.update(char('e')).contains(&Effect::CrashReports(false)));
+    // CWW_CRASH_REPORTS decides, and the page says so.
+    let mut env = self::app().with_crash_reports(Consent {
+        enabled: Some(true),
+        from_env: true,
+    });
+    env.view = View::Settings(Page::General);
+    assert!(env.update(char('e')).is_empty());
+    let screen = render_to_string(&env, 100, 30);
+    assert!(screen.contains("set by CWW_CRASH_REPORTS"), "{screen}");
+
+    // A setting that couldn't be saved says so.
+    app.update(Msg::CrashReportsNotSaved("read-only file system".into()));
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|n| n.text.contains("read-only file system")),
+        "{:?}",
+        app.notice
+    );
+}
+
+#[test]
 fn snapshot_settings_account_and_general() {
     let mut app = app();
     chats_ready(&mut app);

@@ -681,6 +681,31 @@ fn general(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Some(false) => vec![Span::styled("Answering Chat with Work", theme.ink())],
     };
     lines.push(field("Sharing", sharing, theme));
+    let reports = match (app.crash_reports.sends(), app.crash_reports.from_env) {
+        (true, from_env) => vec![
+            Span::styled("On", theme.ink()),
+            Span::styled(
+                if from_env {
+                    " · set by CWW_CRASH_REPORTS"
+                } else {
+                    ""
+                },
+                theme.faint(),
+            ),
+        ],
+        (false, from_env) => vec![
+            Span::styled("Off", theme.ink()),
+            Span::styled(
+                if from_env {
+                    " · set by CWW_CRASH_REPORTS"
+                } else {
+                    ""
+                },
+                theme.faint(),
+            ),
+        ],
+    };
+    lines.push(field("Crash reports", reports, theme));
     let (config, audit) = app.daemon.files();
     let room = (area.width.min(COLUMN) as usize).saturating_sub(LABEL);
     for (label, path) in [("Configuration", config), ("Activity log", audit)] {
@@ -718,6 +743,16 @@ fn general(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     if matches!(app.daemon, Daemon::NotRunning(_)) {
         keys.push(("s", "start the daemon"));
+    }
+    if !app.crash_reports.from_env {
+        keys.push((
+            "e",
+            if app.crash_reports.sends() {
+                "stop crash reports"
+            } else {
+                "send crash reports"
+            },
+        ));
     }
     keys.push(("r", "look again"));
     lines.push(key_hints(&keys, theme));

@@ -235,7 +235,7 @@ The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 
 
 ## Desktop app
 
-`cww-app` is a menu bar (macOS), notification area (Windows) or tray (Linux) app for the same daemon. It shows whether Chat with Work can reach this computer, pauses and resumes sharing, and has a window for your Chat with Work chats, drawn as the web draws them (models, attached files, approvals, and retry, branch, rename, delete and share included), and for shared folders, the deny list, the activity log, pairing, notification preferences, and start at login. On first run it starts the agent, pairs, and offers to share your Documents folder, and it shares nothing until you say so. The welcome page is centered. A saved Custom title bar preference defaults to system decorations on Linux and an integrated header on Windows and macOS. Closing the window keeps the tray app and agent running. The Notifications page edits the same organization preferences as the website and offers explicit permission and browser-link controls.
+`cww-app` is a menu bar (macOS), notification area (Windows) or tray (Linux) app for the same daemon. It shows whether Chat with Work can reach this computer, pauses and resumes sharing, and has a window for your Chat with Work chats, drawn as the web draws them (models, attached files, approvals, and retry, branch, rename, delete and share included), and for shared folders, the deny list, the activity log, pairing, notification preferences, and start at login. On first run it starts the agent, pairs, offers to share your Documents folder, and asks whether to send [crash reports](#crash-reports), and it shares nothing until you say so. The welcome page is centered. A saved Custom title bar preference defaults to system decorations on Linux and an integrated header on Windows and macOS. Closing the window keeps the tray app and agent running. The Notifications page edits the same organization preferences as the website and offers explicit permission and browser-link controls.
 
 ```sh
 cargo run --release -p cww-app
@@ -302,6 +302,7 @@ Everything lives in `~/.config/cww/config.toml`. The server can't change any of 
 ```toml
 paused = false
 proxy = "http://proxy.example:3128"  # optional; see "Behind a proxy"
+crash_reports = false                # see "Crash reports"; unset until you choose
 
 [[roots]]
 id = "work-docs"
@@ -351,6 +352,7 @@ Run `cww reload` after editing the file. The `cww roots` commands reload the dae
 | `~/.local/share/cww/index/` | The search index (`0700`) |
 | `~/.local/share/cww/chat-assets/` | The logos and file-type icons the desktop app's chats show, as the paired server sent them, kept so each is fetched once (`0700`, files `0600`) |
 | `~/.local/state/cww/audit.jsonl` | The audit log (`0600`, rotated at 10 MB, never uploaded) |
+| `~/.local/state/cww/crash-reports.json` | When crash reports were sent in the last hour, for their limits (`0600`; only with crash reports on) |
 | `~/.local/state/cww/history` | The questions and commands typed in `cww tui`, for `↑` (`0600`, never uploaded) |
 | `$XDG_RUNTIME_DIR/cww/cww.sock` | The control socket for the CLI (`0600`) |
 | `~/.local/share/Trash` (`$XDG_DATA_HOME/Trash`) | Where changes put old versions and deleted files on Linux: the desktop's own trash, or `.Trash-$uid` at the top of another filesystem. `~/.Trash` (or a volume's `.Trashes`) on macOS, the Recycle Bin on Windows. |
@@ -381,6 +383,28 @@ Proxy:      http://alice:***@proxy.example:3128 (from config)
 ```
 
 `cww` doesn't read the proxy settings of macOS or Windows (System Settings, PAC files, WPAD); copy the proxy's address into `config.toml`. A proxy that inspects TLS needs its CA in the operating system's trust store, as described under [Pairing](#pairing).
+
+## Crash reports
+
+Crash reports are off until you turn them on. The desktop app asks once, on its welcome page or the first time its window opens, and `cww tui` asks the first time it starts. Change your answer under General in either, or in `config.toml`:
+
+```toml
+crash_reports = true   # or false; the apps ask while it's unset
+```
+
+`CWW_CRASH_REPORTS=1` or `CWW_CRASH_REPORTS=0` in the environment overrides the file, for the daemon, the CLI and both apps. The daemon and the CLI never ask; they follow the setting. Every running part of the Local Agent reads it again when it crashes, so a change applies at once.
+
+When it's on and the Local Agent panics (a crash in its Rust code), it sends one report to our own error tracker, a Bugsink server we run at `errors.paolino.me` in Germany, with no third party involved. A report holds:
+
+- where in the source code it panicked (file, line and column);
+- the panic's message, but only text written in the source code, or the start of one of Rust's own messages such as "index out of bounds", never text formed while it ran;
+- the release (`cww@` and the version), whether it is a development build, which part crashed (`daemon`, `tui`, `cli` or `app`), and your operating system's name, kernel version and architecture.
+
+It never holds your user or computer name, the command line, environment variables, your configuration, file names or contents, chats, or tokens, and paths in it start at `~` instead of your home folder. Native crashes (a segfault in a library) aren't reported yet.
+
+A report is sent from a thread of its own while the crashed process waits up to five seconds, through the proxy you set (see [Behind a proxy](#behind-a-proxy)). At most five reports of the same crash and thirty in all go out an hour, even across restarts, and thirty per run. The terminal says whether it was sent.
+
+Builds made with `CWW_CRASH_REPORTS_DSN=""` (see [PACKAGING.md](PACKAGING.md)) can't send reports and never ask.
 
 ## Threat model
 

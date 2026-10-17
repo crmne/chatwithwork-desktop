@@ -309,6 +309,8 @@ pub enum Modal {
     },
     /// `/logout`: forgetting the pairing.
     ConfirmLogout,
+    /// The first run: send crash reports or not.
+    CrashReports,
     /// Keys and commands, scrolled down by `scroll` lines.
     Help {
         scroll: usize,
@@ -516,6 +518,8 @@ pub enum Effect {
     FollowCommand(Option<String>),
     /// Stop a command running on this computer.
     StopCommand(String),
+    /// Save the crash report choice in config.toml.
+    CrashReports(bool),
     Quit,
 }
 
@@ -616,6 +620,8 @@ pub enum Msg {
     Commands(crate::commands::follow::Snapshot),
     /// A command was asked to stop, or couldn't be.
     CommandStopped(Result<(), String>),
+    /// The crash report choice couldn't be saved.
+    CrashReportsNotSaved(String),
     Chat(ChatMsg),
     /// Production worker replies are tied to the pairing that requested them.
     ScopedChat {
@@ -1381,6 +1387,8 @@ pub struct App {
     later: Vec<Effect>,
     /// The commands this computer runs for Chat with Work.
     pub commands: crate::commands::follow::Snapshot,
+    /// Whether crash reports are sent, as the General page shows it.
+    pub crash_reports: crate::crash_reports::Consent,
 }
 
 impl App {
@@ -1412,7 +1420,18 @@ impl App {
             hits: Hits::default(),
             later: Vec::new(),
             commands: crate::commands::follow::Snapshot::default(),
+            crash_reports: crate::crash_reports::Consent::default(),
         }
+    }
+
+    /// With the crash report choice, asking for it first if nobody has
+    /// made one.
+    pub fn with_crash_reports(mut self, consent: crate::crash_reports::Consent) -> Self {
+        if consent.undecided() {
+            self.modal = Some(Modal::CrashReports);
+        }
+        self.crash_reports = consent;
+        self
     }
 
     /// With the questions asked in earlier runs, for Up.
@@ -1501,6 +1520,13 @@ impl App {
                 self.notice(
                     super::theme::Signal::Negative,
                     &format!("Couldn't stop the command: {why}"),
+                );
+                Vec::new()
+            }
+            Msg::CrashReportsNotSaved(why) => {
+                self.notice(
+                    super::theme::Signal::Negative,
+                    &format!("Couldn't save the crash report setting: {why}"),
                 );
                 Vec::new()
             }
@@ -1691,6 +1717,11 @@ impl App {
                 return vec![Effect::Daemon(DaemonCommand::InstallService)];
             }
             KeyCode::Char('p') => return self.toggle_pause(),
+            KeyCode::Char('e')
+                if self.view == View::Settings(Page::General) && !self.crash_reports.from_env =>
+            {
+                return self.set_crash_reports(!self.crash_reports.sends());
+            }
             KeyCode::Char('a') => {
                 self.modal = Some(Modal::AddRoot {
                     input: self.default_folder(),
@@ -2091,6 +2122,13 @@ impl App {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}
                 _ => self.modal = Some(Modal::ConfirmDelete { chat, title }),
+            },
+            Modal::CrashReports => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => return self.set_crash_reports(true),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    return self.set_crash_reports(false);
+                }
+                _ => self.modal = Some(Modal::CrashReports),
             },
             Modal::ConfirmLogout => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -3732,6 +3770,19 @@ impl App {
                 .saturating_add_signed(delta)
                 .min(self.audit.len().saturating_sub(1));
         }
+    }
+
+    fn set_crash_reports(&mut self, on: bool) -> Vec<Effect> {
+        self.crash_reports.enabled = Some(on);
+        self.notice(
+            super::theme::Signal::Idle,
+            if on {
+                "Crash reports are on. Change this in settings, General."
+            } else {
+                "Crash reports are off. Change this in settings, General."
+            },
+        );
+        vec![Effect::CrashReports(on)]
     }
 
     fn toggle_pause(&mut self) -> Vec<Effect> {

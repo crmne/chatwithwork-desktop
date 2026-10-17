@@ -76,6 +76,8 @@ impl SettingsApp {
                     }
                 },
             );
+            row_separator(ui, &theme);
+            self.crash_reports_row(ui);
         });
         if let Some(error) = self.general.error.clone() {
             ui.add_space(6.0);

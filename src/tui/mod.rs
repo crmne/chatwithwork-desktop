@@ -79,7 +79,9 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     if let Some(profile) = &profile {
         app = app.with_organization(profile.account.id.clone());
     }
-    let mouse = Config::load(&paths).map_or(true, |c| c.tui.mouse);
+    let config = Config::load(&paths).ok();
+    let mouse = config.as_ref().is_none_or(|c| c.tui.mouse);
+    app = app.with_crash_reports(crate::crash_reports::Consent::read(config.as_ref()));
 
     let (tx, rx) = mpsc::channel();
     let mut terminal = ratatui::init();
@@ -107,9 +109,10 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
             let _ = tx.send(Msg::Commands(snapshot));
         }))
     };
-    let link = daemon::Link::spawn(paths, tx.clone());
+    let link = daemon::Link::spawn(paths.clone(), tx.clone());
     let out = Outputs {
         link,
+        paths,
         chats,
         history: history_file,
         presence,
@@ -191,6 +194,7 @@ struct Outputs {
     history: PathBuf,
     presence: Presence,
     commands: Arc<Follow>,
+    paths: Paths,
     tx: Sender<Msg>,
 }
 
@@ -212,6 +216,11 @@ impl Outputs {
                     thread::spawn(move || {
                         let _ = tx.send(Msg::CommandStopped(commands.stop_run(&run)));
                     });
+                }
+                Effect::CrashReports(on) => {
+                    if let Err(e) = crate::crash_reports::set(&self.paths, on) {
+                        let _ = self.tx.send(Msg::CrashReportsNotSaved(format!("{e:#}")));
+                    }
                 }
                 Effect::Remember(entry) => {
                     if let Err(e) = history::append(&self.history, &entry) {

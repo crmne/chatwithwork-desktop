@@ -38,6 +38,10 @@ Each app download carries `cww` beside the GUI (inside the bundle on macOS), so 
 | `packaging/release-notes/vX.Y.Z.md` | Required for a stable tag. |
 | `flake.nix` | The Nix package (Linux and macOS) and a dev shell. |
 
+## Crash reports
+
+The Local Agent's opt-in crash reports (README, "Crash reports") go to the `cww-local-agent` project on our Bugsink server. Its address is compiled in from `src/crash_reports.rs`. Set `CWW_CRASH_REPORTS_DSN` at build time to send them somewhere else, or to an empty value to build a Local Agent that can't send them and never asks. Release builds need nothing set.
+
 ## Releasing
 
 1. Bump `version` in `Cargo.toml` and `app/Cargo.toml` (they move together) and run `mbx build` so `Cargo.lock` follows.

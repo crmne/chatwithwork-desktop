@@ -53,6 +53,11 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 fn main() {
+    // Crash reports, only where the person turned them on (config.toml's
+    // crash_reports or CWW_CRASH_REPORTS). Starts no thread.
+    if let Ok(paths) = cww::paths::Paths::from_env() {
+        cww::crash_reports::install(cww::crash_reports::Component::App, &paths);
+    }
     // The supervisor owns this pipe-only helper even while every window is
     // closed. macOS notification callbacks require the process's main loop.
     if std::env::args().skip(1).eq(["--notification-broker"]) {

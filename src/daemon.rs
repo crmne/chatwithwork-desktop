@@ -130,6 +130,7 @@ pub struct Foreground {
 /// supervises a confined worker instead of running the daemon itself.
 pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     crate::logging::init(options.log_file.as_deref())?;
+    crate::crash_reports::install(crate::crash_reports::Component::Daemon, &paths);
     let config = Config::load(&paths)?;
     let sandboxed = options.sandbox
         && config.sandbox.enabled

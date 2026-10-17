@@ -2525,6 +2525,7 @@ fn modal_hints(modal: &Modal) -> Vec<(&'static str, &'static str)> {
         Modal::ConfirmBroad { .. } => vec![("y", "share anyway"), ("n", "cancel")],
         Modal::ConfirmDelete { .. } => vec![("y", "delete it"), ("n", "keep it")],
         Modal::ConfirmLogout => vec![("y", "disconnect"), ("n", "keep it")],
+        Modal::CrashReports => vec![("y", "send crash reports"), ("n", "don't send")],
         Modal::Help { .. } => vec![("↑↓", "scroll"), ("any other key", "close")],
         Modal::Commands { .. } => vec![("↑↓", "choose"), ("s", "stop it"), ("esc", "close")],
     }
@@ -2690,6 +2691,29 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
                 .map(|l| Line::styled(l, theme.muted())),
             );
             ("DELETE CHAT", lines)
+        }
+        Modal::CrashReports => {
+            let mut lines = vec![Line::styled(
+                "Send crash reports to the Chat with Work team?",
+                theme.strong(),
+            )];
+            lines.push(Line::raw(""));
+            lines.extend(
+                wrap(crate::crash_reports::ABOUT, text_width)
+                    .into_iter()
+                    .map(|l| Line::styled(l, theme.muted())),
+            );
+            lines.push(Line::raw(""));
+            lines.extend(
+                wrap(
+                    "Change it any time in settings, General, or with crash_reports in \
+                     config.toml.",
+                    text_width,
+                )
+                .into_iter()
+                .map(|l| Line::styled(l, theme.muted())),
+            );
+            ("CRASH REPORTS", lines)
         }
         Modal::ConfirmLogout => {
             let mut lines = vec![Line::styled("Disconnect this computer?", theme.strong())];

@@ -13,6 +13,7 @@ pub mod chats;
 pub mod commands;
 pub mod config;
 pub mod control;
+pub mod crash_reports;
 pub mod daemon;
 pub mod dictation;
 pub mod error;

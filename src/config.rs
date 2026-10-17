@@ -26,6 +26,13 @@ pub struct Config {
     /// connection. Overrides `HTTPS_PROXY` and the other proxy variables,
     /// which services don't inherit from a shell. See `crate::proxy`.
     pub proxy: Option<String>,
+    /// Send a report to the Chat with Work team when the Local Agent
+    /// crashes: where in its code, its version and the operating system,
+    /// never files, chats, names or tokens. Off until set; the desktop app
+    /// and `cww tui` ask once. `CWW_CRASH_REPORTS=1` or `0` overrides it.
+    /// See `crate::crash_reports`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crash_reports: Option<bool>,
     /// Folders shared with the server. Nothing outside them is readable.
     pub roots: Vec<Root>,
     pub deny: DenyConfig,

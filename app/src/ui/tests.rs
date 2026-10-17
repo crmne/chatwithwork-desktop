@@ -249,6 +249,81 @@ fn renders_notification_preferences_at_wide_and_narrow_sizes() {
     }
 }
 
+fn crash_reports_setting(fx: &Fixture) -> Option<bool> {
+    cww::config::Config::load(&fx.server.paths.daemon)
+        .unwrap()
+        .crash_reports
+}
+
+#[test]
+fn crash_reports_are_asked_once_over_any_page() {
+    let mut fx = fixture(Scenario::Sample, Some(Page::Folders));
+    if std::env::var_os(cww::crash_reports::ENV).is_some() {
+        return;
+    }
+    fx.harness.state_mut().ask_crash_reports();
+    fx.wait_for_label(super::crash_reports::QUESTION);
+    assert_eq!(crash_reports_setting(&fx), None, "nothing chosen yet");
+    fx.harness.get_by_label("Don't Send").click();
+    fx.harness.run_steps(4);
+    assert_eq!(crash_reports_setting(&fx), Some(false));
+    assert!(
+        fx.harness
+            .query_by_label_contains(super::crash_reports::QUESTION)
+            .is_none(),
+        "answered once"
+    );
+    // A window opened later doesn't ask again.
+    let reopened = SettingsApp::new(
+        Arc::clone(&fx.harness.state().shared),
+        fx.harness.state().theme,
+    );
+    assert!(!reopened.crash_reports.consent.undecided());
+    assert_eq!(fx.changes().len(), 0, "the daemon isn't asked");
+}
+
+#[test]
+fn crash_reports_switch_on_the_general_page() {
+    let mut fx = fixture(Scenario::Sample, Some(Page::General));
+    if std::env::var_os(cww::crash_reports::ENV).is_some() {
+        return;
+    }
+    fx.wait_for_label("While paused, the Local Agent refuses");
+    let switch = |fx: &Fixture| {
+        fx.harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Send crash reports")
+            .click();
+    };
+    switch(&fx);
+    fx.harness.run_steps(4);
+    assert_eq!(crash_reports_setting(&fx), Some(true));
+    switch(&fx);
+    fx.harness.run_steps(4);
+    assert_eq!(crash_reports_setting(&fx), Some(false));
+}
+
+#[test]
+fn the_welcome_page_asks_about_crash_reports_in_its_own_step() {
+    let mut fx = fixture(Scenario::Fresh, None);
+    if std::env::var_os(cww::crash_reports::ENV).is_some() {
+        return;
+    }
+    fx.harness.state_mut().ask_crash_reports();
+    fx.wait_for_label("It's running in the background");
+    // No question over the welcome page: it's a step of its own.
+    assert!(
+        fx.harness
+            .query_by_label_contains(super::crash_reports::QUESTION)
+            .is_none()
+    );
+    fx.harness.get_by_label("Send Crash Reports").scroll_to_me();
+    fx.harness.run_steps(4);
+    fx.harness.get_by_label("Send Crash Reports").click();
+    fx.harness.run_steps(4);
+    assert_eq!(crash_reports_setting(&fx), Some(true));
+    fx.wait_for_label("Crash reports are on.");
+}
+
 #[test]
 fn nothing_is_shared_until_the_user_says_so() {
     let mut fx = fixture(Scenario::Fresh, None);

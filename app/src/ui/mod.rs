@@ -10,6 +10,7 @@ mod account;
 mod activity;
 pub mod chat;
 mod chrome;
+mod crash_reports;
 mod dictation;
 mod folders;
 mod general;
@@ -406,6 +407,7 @@ pub struct SettingsApp {
     dictation: dictation::Settings,
     notifications: Option<notifications::Settings>,
     welcome_autostart: bool,
+    crash_reports: crash_reports::CrashReportsState,
     mark: Option<egui::TextureHandle>,
     /// The Documents folder to offer, if there is one.
     documents: Option<PathBuf>,
@@ -470,6 +472,12 @@ impl SettingsApp {
             dictation: dictation::Settings::new(&shared.paths.daemon),
             notifications: None,
             welcome_autostart: true,
+            crash_reports: crash_reports::CrashReportsState {
+                consent: cww::crash_reports::Consent::load(&shared.paths.daemon),
+                // Tests ask for the question when they test it.
+                dismissed: cfg!(test),
+                error: None,
+            },
             mark: None,
             shared,
         }
@@ -486,6 +494,12 @@ impl SettingsApp {
 
     pub fn set_page(&mut self, page: Page) {
         self.page = page;
+    }
+
+    /// Ask about crash reports as a first run would; tests start without.
+    #[cfg(test)]
+    pub fn ask_crash_reports(&mut self) {
+        self.crash_reports.dismissed = false;
     }
 
     /// Offer this folder as the Documents folder (tests use a temporary one).
@@ -575,6 +589,7 @@ impl SettingsApp {
         }
         let p = self.theme.palette;
         self.style_for_page(ui.ctx());
+        self.crash_reports_question(ui.ctx());
         if self.page != Page::Chat
             && let Some(chat) = &mut self.chat
         {

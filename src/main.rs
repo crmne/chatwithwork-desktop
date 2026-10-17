@@ -12,7 +12,7 @@ use cww::config::{Config, DEFAULT_SERVER};
 use cww::control::{self, ControlRequest};
 use cww::paths::Paths;
 use cww::roots::{NewRoot, add_root, remove_root, set_writable};
-use cww::{audit, auth, daemon, service};
+use cww::{audit, auth, crash_reports, daemon, service};
 
 /// Chat with Work Local Agent.
 ///
@@ -173,6 +173,9 @@ enum DebugCommand {
     /// Confine this process for a keychain-held key, then write, read and
     /// delete a test secret in the OS keychain.
     Keychain,
+    /// Panic on purpose, to check crash reports end to end. Sends one only
+    /// where they're turned on (`CWW_CRASH_REPORTS=1`).
+    Panic,
 }
 
 #[derive(Subcommand)]
@@ -214,6 +217,17 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let paths = Paths::from_env()?;
+    // The daemon installs its own, as `daemon`, where `cww-agent` does too.
+    let component = match &cli.command {
+        None | Some(Command::Tui { .. }) => Some(crash_reports::Component::Tui),
+        Some(Command::Daemon {
+            command: DaemonCommand::Run { .. },
+        }) => None,
+        Some(_) => Some(crash_reports::Component::Cli),
+    };
+    if let Some(component) = component {
+        crash_reports::install(component, &paths);
+    }
     let Some(command) = cli.command else {
         use std::io::IsTerminal;
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
@@ -334,6 +348,9 @@ fn run(cli: Cli) -> Result<()> {
             lines,
             json,
         } => log(&paths, lines, follow, json)?,
+        Command::Debug {
+            command: DebugCommand::Panic,
+        } => panic!("cww debug panic: a test of crash reports"),
         Command::Debug {
             command: DebugCommand::Keychain,
         } => {
