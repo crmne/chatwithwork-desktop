@@ -138,7 +138,7 @@ jobs:
     needs: [inputs, merge-inputs]
     permissions:
       contents: write
-    uses: crmne/native-packages/.github/workflows/package.yml@999768410cf53cdc68c8679c09cb14de1a6bca7b # v0.8.1
+    uses: crmne/native-packages/.github/workflows/package.yml@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
     with:
       targets: linux-amd64,linux-arm64
       version: ${{ inputs.version || needs.inputs.outputs.version }}
