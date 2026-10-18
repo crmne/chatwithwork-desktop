@@ -394,7 +394,7 @@ crash_reports = true   # or false; the apps ask while it's unset
 
 `CWW_CRASH_REPORTS=1` or `CWW_CRASH_REPORTS=0` in the environment overrides the file, for the daemon, the CLI and both apps. The daemon and the CLI never ask; they follow the setting. Every running part of the Local Agent reads it again when it crashes, so a change applies at once.
 
-When it's on and the Local Agent panics (a crash in its Rust code), it sends one report to our own error tracker, a Bugsink server we run at `errors.paolino.me` in Germany, with no third party involved. A report holds:
+When it's on and the Local Agent panics (a crash in its Rust code), it sends one report to our own error tracker, a Bugsink server we run at `errors.plenty.is` in Germany, with no third party involved. A report holds:
 
 - where in the source code it panicked (file, line and column);
 - the panic's message, but only text written in the source code, or the start of one of Rust's own messages such as "index out of bounds", never text formed while it ran;

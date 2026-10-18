@@ -4,7 +4,7 @@
 //! `crash_reports = true` in `config.toml` or `CWW_CRASH_REPORTS=1` turns
 //! them on anywhere (the environment wins over the file). What's sent is a
 //! Rust panic only, to the Local Agent's project on our own error tracker,
-//! Bugsink at `errors.paolino.me`, which speaks the Sentry protocol:
+//! Bugsink at `errors.plenty.is`, which speaks the Sentry protocol:
 //!
 //! - where in the source code it panicked (file, line and column);
 //! - the panic's message only when it was written in the source code, or
@@ -45,7 +45,7 @@ use crate::paths::{Paths, write_private_file};
 /// The `cww-local-agent` project on our Bugsink server. A DSN only lets a
 /// client submit events, so it ships inside the program like any other
 /// client's.
-const DEFAULT_DSN: &str = "https://872298cbc64440d887ab210dceb83560@errors.paolino.me/8";
+const DEFAULT_DSN: &str = "https://872298cbc64440d887ab210dceb83560@errors.plenty.is/8";
 
 /// `CWW_CRASH_REPORTS_DSN` at build time replaces the address, and an empty
 /// value builds a Local Agent that can't send crash reports at all.
@@ -909,19 +909,16 @@ mod tests {
     #[test]
     fn the_compiled_address_is_our_bugsink_project() {
         let dsn = Dsn::parse(DEFAULT_DSN).expect("the default DSN parses");
-        assert_eq!(dsn.origin, "https://errors.paolino.me");
+        assert_eq!(dsn.origin, "https://errors.plenty.is");
         assert_eq!(dsn.project, "8");
         assert_eq!(
             dsn.envelope_url(),
-            "https://errors.paolino.me/api/8/envelope/"
+            "https://errors.plenty.is/api/8/envelope/"
         );
         assert!(available());
-        assert!(
-            Dsn::parse("https://errors.paolino.me/8").is_none(),
-            "no key"
-        );
-        assert!(Dsn::parse("ftp://k@errors.paolino.me/8").is_none());
-        assert!(Dsn::parse("https://k@errors.paolino.me/").is_none());
+        assert!(Dsn::parse("https://errors.plenty.is/8").is_none(), "no key");
+        assert!(Dsn::parse("ftp://k@errors.plenty.is/8").is_none());
+        assert!(Dsn::parse("https://k@errors.plenty.is/").is_none());
     }
 
     /// A one-request HTTP server: the request's head and body.
