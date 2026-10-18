@@ -76,6 +76,9 @@ fastframe-scroll = { version = "0.8.1", git = "https://github.com/crmne/fastfram
 # Linux (Waybar, KDE, GNOME with the AppIndicator extension), the
 # notification area on Windows, and the menu bar on macOS.
 fastframe-tray = { version = "0.8.1", git = "https://github.com/crmne/fastframe", rev = "6699f993d61af09719d8d61a02a345119226b056" }
+# Start at login in the tray: the XDG autostart entry on Linux, a login
+# item with the bundle's launch agent on macOS, the Run key on Windows.
+fastframe-autostart = { version = "0.8.1", git = "https://github.com/crmne/fastframe", rev = "6699f993d61af09719d8d61a02a345119226b056" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
 # Maps the system UI font instead of reading it: San Francisco is 8 MB.

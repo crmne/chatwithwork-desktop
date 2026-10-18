@@ -193,6 +193,17 @@ fn run(args: Args) -> anyhow::Result<()> {
         return shell::run(server.paths.clone(), options);
     }
     let paths = paths::Paths::from_env()?;
+    #[cfg(target_os = "macos")]
+    if args.shell.screenshot.is_none() {
+        // Moves an earlier version's login agent onto the bundled one. It
+        // asks SMAppService, so not on the thread that opens the window.
+        let spawned = std::thread::Builder::new()
+            .name("cww-autostart".into())
+            .spawn(autostart::migrate);
+        if let Err(e) = spawned {
+            log::warn!("can't move start at login: {e}");
+        }
+    }
     let mut options = args.shell;
     if options.screenshot.is_none() {
         options.instance = Some(instance::slot());

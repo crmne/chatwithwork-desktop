@@ -296,6 +296,8 @@ enum Done {
     OrganizationLoggedOut(Result<(), String>),
     Started(Result<String, String>),
     Picked(Option<PathBuf>),
+    /// Whether the app now starts at login, and why changing it failed.
+    Autostart(bool, Option<String>),
 }
 
 struct Jobs {
@@ -384,6 +386,8 @@ struct AccountState {
 #[derive(Default)]
 struct GeneralState {
     autostart: bool,
+    /// Registering or removing the login start, on a worker.
+    setting_autostart: bool,
     starting: bool,
     agent_error: Option<String>,
     error: Option<String>,
@@ -1044,6 +1048,11 @@ impl SettingsApp {
                     self.general.pausing = false;
                     self.general.error = result.err();
                 }
+                Done::Autostart(on, error) => {
+                    self.general.setting_autostart = false;
+                    self.general.autostart = on;
+                    self.general.error = error;
+                }
                 Done::Deny(result) => {
                     self.deny = match result {
                         Ok(deny) => Loadable::Loaded(deny),
@@ -1201,6 +1210,21 @@ impl SettingsApp {
         let client = self.shared.client.clone();
         self.jobs.spawn(ctx, move || {
             Done::Labeled(client.label_root(&id, &label).map_err(|e| e.to_string()))
+        });
+    }
+
+    /// Starts the app at login, or stops, on a worker: the platform's
+    /// registration can block. The switch shows `on` meanwhile and then
+    /// what the platform has.
+    fn set_autostart(&mut self, ctx: &egui::Context, on: bool) {
+        self.general.autostart = on;
+        self.general.setting_autostart = true;
+        self.general.error = None;
+        self.jobs.spawn(ctx, move || {
+            let error = crate::autostart::set_enabled(on)
+                .err()
+                .map(|e| format!("{e:#}"));
+            Done::Autostart(crate::autostart::is_enabled(), error)
         });
     }
 

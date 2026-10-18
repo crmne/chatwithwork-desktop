@@ -149,19 +149,16 @@ impl SettingsApp {
                 ui.button("Skip for Now").clicked()
             };
             if clicked {
-                self.finish_welcome();
+                self.finish_welcome(ui.ctx());
             }
         });
     }
 
-    pub(super) fn finish_welcome(&mut self) {
+    pub(super) fn finish_welcome(&mut self, ctx: &egui::Context) {
         self.app_state.onboarded = true;
         self.app_state.save(&self.shared.paths);
         if self.welcome_autostart != self.general.autostart {
-            match crate::autostart::set_enabled(self.welcome_autostart) {
-                Ok(()) => self.general.autostart = self.welcome_autostart,
-                Err(e) => self.general.error = Some(format!("{e:#}")),
-            }
+            self.set_autostart(ctx, self.welcome_autostart);
         }
         self.page = Page::Folders;
     }

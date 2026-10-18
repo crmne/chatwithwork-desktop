@@ -84,7 +84,7 @@ If an app holds the lock but does not answer within three seconds (hung, say), t
 ## Starting at login
 
 - The daemon has its own service, registered by `cww daemon install` (systemd user unit, LaunchAgent). It starts at login whether or not the app runs.
-- "Start at login" in the app controls the app itself: an XDG autostart entry (`~/.config/autostart/cww-app.desktop`), a LaunchAgent (`~/Library/LaunchAgents/com.chatwithwork.cww-app.plist`), or the `Run` registry key. The entry passes `--background`, so the app starts in the tray without opening its window.
+- "Start at login" in the app controls the app itself, through [fastframe-autostart](https://github.com/crmne/fastframe/tree/main/crates/fastframe-autostart): an XDG autostart entry (`~/.config/autostart/cww-app.desktop`), the `ChatWithWorkLocalAgent` value under the `Run` registry key, or on macOS 13 and later a login item: the launch agent the bundle carries (`Contents/Library/LaunchAgents/com.chatwithwork.local-agent.autostart.plist`, from `packaging/macos/autostart.plist`), which System Settings lists under Login Items. Each passes `--background`, so the app starts in the tray without opening its window, and the switch reads the registration back from the system, so turning it off in the system's own settings shows in the app. On macOS the app moves a LaunchAgent that earlier versions wrote (`~/Library/LaunchAgents/com.chatwithwork.cww-app.plist`) onto the bundled agent when it starts, and deletes the old file once macOS reports the new one enabled. macOS 11 and 12, which have no login item API, and a run outside the bundle keep using that LaunchAgent.
 - The welcome page turns it on when it finishes, with a switch to decline.
 
 ## Platform notes

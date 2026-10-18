@@ -1,90 +1,134 @@
-//! "Start at login" for the app itself: an XDG autostart entry on Linux, a
-//! LaunchAgent on macOS, and the Run key on Windows. The daemon has its own
-//! service (`cww daemon install`), which always starts at login.
+//! "Start at login" for the app itself, through fastframe-autostart: an XDG
+//! autostart entry on Linux, a login item on macOS, and the Run key on
+//! Windows. The daemon has its own service (`cww daemon install`), which
+//! always starts at login.
 //!
-//! The entry starts the app with `--background`, so it only shows its
-//! tray item.
-
-use std::path::{Path, PathBuf};
+//! The app starts with `--background`, so it only shows its tray item. On
+//! macOS that is the launch agent the bundle carries
+//! (`packaging/macos/autostart.plist`), since a login item cannot pass
+//! arguments.
+//!
+//! Every call blocks on files, the registry or `SMAppService`, so the
+//! settings window runs them on a worker.
 
 use anyhow::{Context, Result};
+use fastframe_autostart::{Autostart, Start};
 
-/// What the entry runs.
-fn command() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("finding the app")?;
-    Ok(exe.canonicalize().unwrap_or(exe))
+/// The argument a login start passes.
+pub const BACKGROUND: &str = "--background";
+
+/// The app's registration. The Linux entry keeps the path
+/// (`autostart/cww-app.desktop`) and name earlier versions wrote, and the
+/// Windows Run value its name, so existing registrations read back.
+fn autostart() -> Autostart {
+    let name = if cfg!(windows) {
+        "ChatWithWorkLocalAgent"
+    } else {
+        "Chat with Work"
+    };
+    Autostart::new("cww-app", name).hidden_argument(BACKGROUND)
 }
-
-#[cfg(target_os = "linux")]
-fn entry_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| crate::paths::home_dir().map(|h| h.join(".config")))?;
-    Some(config.join("autostart/cww-app.desktop"))
-}
-
-#[cfg(target_os = "macos")]
-const LABEL: &str = "com.chatwithwork.cww-app";
-
-#[cfg(target_os = "macos")]
-fn entry_path() -> Option<PathBuf> {
-    crate::paths::home_dir().map(|h| h.join(format!("Library/LaunchAgents/{LABEL}.plist")))
-}
-
-#[cfg(windows)]
-const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-#[cfg(windows)]
-const RUN_VALUE: &str = "ChatWithWorkLocalAgent";
 
 pub fn is_enabled() -> bool {
-    #[cfg(unix)]
-    {
-        entry_path().is_some_and(|p| p.exists())
+    #[cfg(target_os = "macos")]
+    if legacy::exists() {
+        return true;
     }
-    #[cfg(windows)]
-    {
-        windows_registry::read_string(RUN_KEY, RUN_VALUE).is_some()
-    }
+    autostart().state().start().is_some()
 }
 
 pub fn set_enabled(enabled: bool) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let path = entry_path().context("no home folder")?;
-        if !enabled {
-            return match std::fs::remove_file(&path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    Err(e).with_context(|| format!("removing {}", path.display()))
-                }
-                _ => Ok(()),
-            };
-        }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        std::fs::write(&path, entry(&command()?))
-            .with_context(|| format!("writing {}", path.display()))
-    }
-    #[cfg(windows)]
-    {
-        if enabled {
-            let exe = command()?;
-            let exe = exe.to_string_lossy();
-            // canonicalize() gives a \\?\ path, which the Run key doesn't need.
-            let exe = exe.strip_prefix(r"\\?\").unwrap_or(&exe);
-            windows_registry::write_string(RUN_KEY, RUN_VALUE, &format!("\"{exe}\" --background"))
+    let autostart = autostart();
+    #[cfg(target_os = "macos")]
+    if autostart.state() == fastframe_autostart::State::Unsupported {
+        // macOS 11 and 12 have no SMAppService, and a run outside the
+        // bundle has no login item: the LaunchAgent earlier versions wrote.
+        return if enabled {
+            legacy::write()
         } else {
-            windows_registry::delete_value(RUN_KEY, RUN_VALUE)
-        }
+            legacy::remove()
+        };
+    }
+    let _state = autostart
+        .set(enabled.then_some(Start::Hidden))
+        .context("changing what starts at login")?;
+    // Once the bundled agent is approved, the old LaunchAgent would start
+    // the app a second time.
+    #[cfg(target_os = "macos")]
+    if !enabled || _state == fastframe_autostart::State::On(Start::Hidden) {
+        legacy::remove()?;
+    }
+    Ok(())
+}
+
+/// Moves a LaunchAgent that earlier versions wrote to
+/// `~/Library/LaunchAgents` onto the bundled agent, so the app keeps
+/// starting at login, once. The old file goes only once the new
+/// registration is approved; until then it keeps starting the app. The
+/// loaded job is left alone: it may be this very process, and without the
+/// file it is not loaded at the next login. Blocks; call it on a worker.
+#[cfg(target_os = "macos")]
+pub fn migrate() {
+    use fastframe_autostart::State;
+    if !legacy::exists() {
+        return;
+    }
+    let autostart = autostart();
+    if autostart.state() == State::Unsupported {
+        return;
+    }
+    match autostart.set(Some(Start::Hidden)) {
+        Ok(State::On(Start::Hidden)) => match legacy::remove() {
+            Ok(()) => log::info!("moved start at login to the bundled agent"),
+            Err(e) => log::warn!("{e:#}"),
+        },
+        Ok(state) => log::info!("keeping the old login agent while the new one is {state:?}"),
+        Err(e) => log::warn!("keeping the old login agent: {e}"),
     }
 }
 
-/// The desktop entry (Linux) or property list (macOS) that starts `exe`.
-#[cfg_attr(windows, allow(dead_code))]
-fn entry(exe: &Path) -> String {
-    #[cfg(target_os = "macos")]
-    {
+#[cfg(target_os = "macos")]
+mod legacy {
+    //! The LaunchAgent in `~/Library/LaunchAgents` that versions before
+    //! fastframe-autostart wrote, still used where `SMAppService` is not.
+
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context, Result};
+
+    const LABEL: &str = "com.chatwithwork.cww-app";
+
+    fn path() -> Option<PathBuf> {
+        crate::paths::home_dir().map(|h| h.join(format!("Library/LaunchAgents/{LABEL}.plist")))
+    }
+
+    pub fn exists() -> bool {
+        path().is_some_and(|p| p.exists())
+    }
+
+    pub fn write() -> Result<()> {
+        let path = path().context("no home folder")?;
+        let exe = std::env::current_exe().context("finding the app")?;
+        let exe = exe.canonicalize().unwrap_or(exe);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        std::fs::write(&path, plist(&exe)).with_context(|| format!("writing {}", path.display()))
+    }
+
+    pub fn remove() -> Result<()> {
+        let Some(path) = path() else {
+            return Ok(());
+        };
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", path.display()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn plist(exe: &Path) -> String {
         let escape = |s: &str| {
             s.replace('&', "&amp;")
                 .replace('<', "&lt;")
@@ -100,7 +144,7 @@ fn entry(exe: &Path) -> String {
   <key>ProgramArguments</key>
   <array>
     <string>{exe}</string>
-    <string>--background</string>
+    <string>{background}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -111,59 +155,20 @@ fn entry(exe: &Path) -> String {
 </dict>
 </plist>
 "#,
-            exe = escape(&exe.to_string_lossy())
+            exe = escape(&exe.to_string_lossy()),
+            background = super::BACKGROUND,
         )
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        format!(
-            "[Desktop Entry]\n\
-             Type=Application\n\
-             Name=Chat with Work\n\
-             Comment=Share folders you choose with Chat with Work\n\
-             Exec={} --background\n\
-             Icon=cww-app\n\
-             Terminal=false\n\
-             NoDisplay=true\n\
-             X-GNOME-Autostart-enabled=true\n",
-            desktop_exec_arg(&exe.to_string_lossy())
-        )
-    }
-}
-
-/// Quote a program path for a desktop entry's `Exec` key.
-#[cfg(not(target_os = "macos"))]
-#[cfg_attr(windows, allow(dead_code))]
-fn desktop_exec_arg(arg: &str) -> String {
-    let plain = arg
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-+,".contains(c));
-    if plain {
-        return arg.to_string();
-    }
-    let mut quoted = String::from('"');
-    for c in arg.chars() {
-        if matches!(c, '"' | '`' | '$' | '\\') {
-            quoted.push('\\');
-        }
-        if c == '%' {
-            quoted.push('%');
-        }
-        quoted.push(c);
-    }
-    quoted.push('"');
-    quoted
 }
 
 #[cfg(windows)]
 pub mod windows_registry {
-    //! The few registry calls the app needs, all under HKEY_CURRENT_USER.
+    //! The registry reads the app needs besides starting at login, under
+    //! HKEY_CURRENT_USER.
 
-    use anyhow::{Result, bail};
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_SZ, RRF_RT_REG_DWORD,
-        RRF_RT_REG_SZ, RegCloseKey, RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
+        HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW,
     };
 
     fn wide(s: &str) -> Vec<u16> {
@@ -189,105 +194,47 @@ pub mod windows_registry {
         };
         (status == ERROR_SUCCESS).then_some(data)
     }
-
-    pub fn read_string(key: &str, value: &str) -> Option<String> {
-        let (key, value) = (wide(key), wide(value));
-        let mut buf = vec![0u16; 2048];
-        let mut size = (buf.len() * 2) as u32;
-        let mut kind = REG_SZ;
-        // SAFETY: the buffers outlive the call and `size` is `buf` in bytes.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                RRF_RT_REG_SZ,
-                &mut kind,
-                buf.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return None;
-        }
-        let len = (size as usize / 2).saturating_sub(1);
-        Some(String::from_utf16_lossy(&buf[..len]))
-    }
-
-    fn open(key: &str, access: u32) -> Result<HKEY> {
-        let key = wide(key);
-        let mut handle: HKEY = std::ptr::null_mut();
-        // SAFETY: `key` is NUL-terminated and `handle` receives the key.
-        let status =
-            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, access, &mut handle) };
-        if status != ERROR_SUCCESS {
-            bail!("opening the registry key failed ({status})");
-        }
-        Ok(handle)
-    }
-
-    pub fn write_string(key: &str, value: &str, data: &str) -> Result<()> {
-        let handle = open(key, KEY_SET_VALUE)?;
-        let (value, data) = (wide(value), wide(data));
-        // SAFETY: `data` is NUL-terminated UTF-16 and its byte length is passed.
-        let status = unsafe {
-            RegSetValueExW(
-                handle,
-                value.as_ptr(),
-                0,
-                REG_SZ,
-                data.as_ptr().cast(),
-                (data.len() * 2) as u32,
-            )
-        };
-        // SAFETY: `handle` came from RegOpenKeyExW.
-        unsafe { RegCloseKey(handle) };
-        if status != ERROR_SUCCESS {
-            bail!("writing the registry value failed ({status})");
-        }
-        Ok(())
-    }
-
-    pub fn delete_value(key: &str, value: &str) -> Result<()> {
-        let handle = open(key, KEY_SET_VALUE | KEY_READ)?;
-        let value = wide(value);
-        // SAFETY: `value` is NUL-terminated.
-        let status = unsafe { RegDeleteValueW(handle, value.as_ptr()) };
-        // SAFETY: `handle` came from RegOpenKeyExW.
-        unsafe { RegCloseKey(handle) };
-        // ERROR_FILE_NOT_FOUND: it wasn't there, which is what we wanted.
-        if status != ERROR_SUCCESS && status != 2 {
-            bail!("removing the registry value failed ({status})");
-        }
-        Ok(())
-    }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    /// The bundle's launch agent starts the app the way `--background`
+    /// expects, under the bundle identifier in `Info.plist`.
     #[test]
-    fn desktop_entries_quote_the_program() {
-        assert_eq!(desktop_exec_arg("/usr/bin/cww-app"), "/usr/bin/cww-app");
+    fn the_bundled_agent_starts_the_app_in_the_background() {
+        let bundled = include_str!("../../packaging/macos/autostart.plist");
         assert_eq!(
-            desktop_exec_arg("/home/u/My Apps/cww-app"),
-            "\"/home/u/My Apps/cww-app\""
+            bundled,
+            fastframe_autostart::macos_agent_plist("com.chatwithwork.local-agent", BACKGROUND),
+            "regenerate packaging/macos/autostart.plist"
         );
-        assert_eq!(desktop_exec_arg("/a/$b"), "\"/a/\\$b\"");
-        let text = entry(Path::new("/usr/bin/cww-app"));
         assert!(
-            text.contains("Exec=/usr/bin/cww-app --background\n"),
-            "{text}"
+            include_str!("../../packaging/macos/Info.plist")
+                .contains("<string>com.chatwithwork.local-agent</string>")
         );
-        assert!(text.starts_with("[Desktop Entry]\n"));
+        let bundle = include_str!("../../packaging/macos/bundle.sh");
+        assert!(bundle.contains(&format!(
+            "Contents/Library/LaunchAgents/{}",
+            fastframe_autostart::macos_agent_plist_name("com.chatwithwork.local-agent")
+        )));
+    }
+
+    #[test]
+    fn a_login_start_opens_no_window() {
+        let login = crate::parse([BACKGROUND.to_string()].into_iter())
+            .unwrap()
+            .unwrap();
+        assert!(login.shell.background && !login.shell.open_settings);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn launch_agents_run_the_app_in_the_background() {
-        let text = entry(Path::new("/Applications/A & B.app/Contents/MacOS/cww-app"));
+    fn the_old_launch_agent_runs_the_app_in_the_background() {
+        let text = legacy::plist(std::path::Path::new(
+            "/Applications/A & B.app/Contents/MacOS/cww-app",
+        ));
         assert!(
             text.contains("<string>/Applications/A &amp; B.app/Contents/MacOS/cww-app</string>")
         );

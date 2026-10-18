@@ -45,14 +45,14 @@ impl SettingsApp {
             );
             setting_row(ui, &theme, "Start at login", &description, |ui| {
                 let mut on = self.general.autostart;
-                if widgets::switch(ui, &theme, &mut on, "Start at login").changed() {
-                    match crate::autostart::set_enabled(on) {
-                        Ok(()) => {
-                            self.general.autostart = on;
-                            self.general.error = None;
-                        }
-                        Err(e) => self.general.error = Some(format!("{e:#}")),
-                    }
+                let changed = ui
+                    .add_enabled_ui(!self.general.setting_autostart, |ui| {
+                        widgets::switch(ui, &theme, &mut on, "Start at login")
+                    })
+                    .inner
+                    .changed();
+                if changed {
+                    self.set_autostart(ui.ctx(), on);
                 }
             });
             row_separator(ui, &theme);

@@ -24,6 +24,10 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install -m 755 "$app_binary" "$app/Contents/MacOS/cww-app"
 install -m 755 "$cww_binary" "$app/Contents/MacOS/cww"
 sed "s/__VERSION__/$numeric_version/g" "$here/Info.plist" > "$app/Contents/Info.plist"
+# Start at login runs this agent, which opens the app with --background (a
+# login item cannot pass arguments). Named after CFBundleIdentifier.
+mkdir -p "$app/Contents/Library/LaunchAgents"
+install -m 644 "$here/autostart.plist" "$app/Contents/Library/LaunchAgents/com.chatwithwork.local-agent.autostart.plist"
 
 iconset="$(mktemp -d)/cww-app.iconset"
 mkdir -p "$iconset"
