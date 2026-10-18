@@ -2,15 +2,25 @@
 //! mono 16 kHz PCM WAV, at most five minutes. No speech means no upload.
 
 use std::io::{BufRead, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, SampleFormat, SizedSample};
+use crossbeam_channel::{Receiver, Sender};
 use cww::tui::dictation::protocol::{self, Frame};
+use fastframe_audio::{Capture, Device, Input, InputOptions};
 
 const RATE: u32 = 16_000;
 const LIMIT: usize = RATE as usize * 300;
+/// Channels to ask the device for. PipeWire links a capture stream's ports
+/// to the source's by position without mixing, so a stereo stream from a
+/// mono microphone gets silence on the right and halves the speech level
+/// the gate measures. Asked for mono, it delivers a mono microphone whole
+/// and a stereo one's left channel; PulseAudio mixes either way. Elsewhere
+/// the device's own count (`0`), as before; the recorder downmixes.
+const CHANNELS: u16 = if cfg!(target_os = "linux") { 1 } else { 0 };
+/// Samples the capture callback can hand over before the recorder drains
+/// them, about 2.7 seconds of 48 kHz stereo; it drains every 70 ms.
+const QUEUE: usize = 1 << 18;
 
 enum End {
     Stop,
@@ -34,30 +44,25 @@ pub fn record(progress: bool) -> i32 {
 }
 
 fn capture(progress: bool) -> Result<(), ()> {
-    let device = cpal::default_host().default_input_device().ok_or(())?;
-    let config = device.default_input_config().map_err(|_| ())?;
-    if config.channels() == 0 || config.sample_rate() == 0 {
+    let (tap, samples) = tap(QUEUE);
+    // The default microphone at its own rate. Not following a new default:
+    // the stream ends with the recording, and the sound servers move a
+    // running stream themselves.
+    let mut input = Input::open(
+        InputOptions {
+            device: Device::Default,
+            channels: CHANNELS,
+            sample_rate: None,
+            follow_default: false,
+            ..InputOptions::default()
+        },
+        tap,
+    )
+    .map_err(|_| ())?;
+    if input.channels() == 0 || input.sample_rate() == 0 {
         return Err(());
     }
-    let pcm = Arc::new(Mutex::new(Pcm::new(
-        config.sample_rate(),
-        config.channels(),
-    )));
-    let (tx, rx) = mpsc::channel();
-    let stream = match config.sample_format() {
-        SampleFormat::F32 => stream::<f32>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::F64 => stream::<f64>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::I8 => stream::<i8>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::I16 => stream::<i16>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::I32 => stream::<i32>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::I64 => stream::<i64>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::U8 => stream::<u8>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::U16 => stream::<u16>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::U32 => stream::<u32>(&device, &config, &pcm, tx.clone()),
-        SampleFormat::U64 => stream::<u64>(&device, &config, &pcm, tx.clone()),
-        _ => return Err(()),
-    }?;
-    stream.play().map_err(|_| ())?;
+    let mut pcm = Pcm::new(input.sample_rate(), input.channels());
     let mut out = std::io::stdout().lock();
     if progress {
         protocol::write(
@@ -71,6 +76,7 @@ fn capture(progress: bool) -> Result<(), ()> {
         out.write_all(b"ready\n").map_err(|_| ())?;
         out.flush().map_err(|_| ())?;
     }
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
         let end = if std::io::stdin().lock().read_line(&mut line).is_ok() && line.trim() == "stop" {
@@ -86,18 +92,21 @@ fn capture(progress: bool) -> Result<(), ()> {
         if remaining.is_zero() {
             break End::Stop;
         }
-        let step = if progress {
-            Duration::from_millis(protocol::STEP_MS)
-        } else {
-            remaining
-        };
-        match rx.recv_timeout(step.min(remaining)) {
+        match rx.recv_timeout(Duration::from_millis(protocol::STEP_MS).min(remaining)) {
             Ok(end) => break end,
             Err(mpsc::RecvTimeoutError::Disconnected) => break End::Cancel,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        // A stream that failed ends the recording, as it always has; there
+        // is no maintain() to reopen it. A glitch it plays on through (an
+        // overrun, a route the server followed, refused real-time priority)
+        // does not. The list is drained so it cannot grow.
+        let _ = input.take_errors();
+        if input.failed() {
+            break End::Failed;
+        }
+        pcm.extend(samples.try_iter());
         if progress {
-            let level = pcm.lock().map_err(|_| ())?.level();
             protocol::write(
                 &mut out,
                 Frame::Level {
@@ -105,19 +114,20 @@ fn capture(progress: bool) -> Result<(), ()> {
                         .elapsed()
                         .as_millis()
                         .min(u128::from(protocol::MAX_MS)) as u32,
-                    level,
+                    level: pcm.level(),
                 },
             )
             .map_err(|_| ())?;
         }
     };
     // Close the microphone before sending any audio to the parent.
-    drop(stream);
+    drop(input);
     match end {
         End::Failed => Err(()),
         End::Cancel => Ok(()),
         End::Stop => {
-            let audio = pcm.lock().map_err(|_| ())?.wav();
+            pcm.extend(samples.try_iter());
+            let audio = pcm.wav();
             if progress {
                 protocol::write(&mut out, Frame::Audio { bytes: audio.len() }).map_err(|_| ())?;
             }
@@ -126,33 +136,40 @@ fn capture(progress: bool) -> Result<(), ()> {
     }
 }
 
-fn stream<T>(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    pcm: &Arc<Mutex<Pcm>>,
-    tx: mpsc::Sender<End>,
-) -> Result<cpal::Stream, ()>
-where
-    T: SizedSample,
-    f32: FromSample<T>,
-{
-    let pcm = Arc::clone(pcm);
-    device
-        .build_input_stream(
-            config.config(),
-            move |data: &[T], _| {
-                if let Ok(mut pcm) = pcm.lock() {
-                    for sample in data {
-                        pcm.sample(sample.to_sample::<f32>());
-                    }
-                }
-            },
-            move |_| {
-                let _ = tx.send(End::Failed);
-            },
-            None,
-        )
-        .map_err(|_| ())
+/// Hands what the device captures to the recorder without waiting: the
+/// callback only copies into a bounded lock-free queue, and the recorder
+/// downmixes, resamples and gates on its own thread.
+struct Tap {
+    queue: Sender<f32>,
+}
+
+fn tap(capacity: usize) -> (Tap, Receiver<f32>) {
+    let (queue, samples) = crossbeam_channel::bounded(capacity);
+    (Tap { queue }, samples)
+}
+
+impl Capture for Tap {
+    // The recorder reads the format from the input once it is open, and a
+    // stream reopened in another format never reaches it: without
+    // maintain() the input does not reopen.
+    fn configure(&mut self, _sample_rate: u32, _channels: u16) {}
+
+    fn capture(&mut self, input: &[f32]) {
+        // A block that does not fit is dropped whole, so the samples after
+        // it still start on a frame. Only this thread sends, so the room
+        // seen here can only grow before the block is in.
+        let room = self
+            .queue
+            .capacity()
+            .unwrap_or(0)
+            .saturating_sub(self.queue.len());
+        if input.len() > room {
+            return;
+        }
+        for sample in input {
+            let _ = self.queue.try_send(*sample);
+        }
+    }
 }
 
 struct Pcm {
@@ -185,6 +202,12 @@ impl Pcm {
             window: 0,
             audible: 0,
             heard: false,
+        }
+    }
+
+    fn extend(&mut self, samples: impl IntoIterator<Item = f32>) {
+        for sample in samples {
+            self.sample(sample);
         }
     }
 
@@ -341,6 +364,38 @@ mod tests {
             pcm.sample(0.1);
         }
         assert!(!pcm.wav().is_empty());
+    }
+
+    #[test]
+    fn captured_blocks_reach_the_converter_in_order_off_the_callback() {
+        let (mut tap, samples) = tap(QUEUE);
+        let mut pcm = Pcm::new(48_000, 2);
+        // A second of 48 kHz stereo in 10 ms device blocks, left loud and
+        // right silent, drained now and then as the recorder does.
+        let block = [0.5_f32, 0.0].repeat(480);
+        for blocks in 0..100 {
+            tap.capture(&block);
+            if blocks % 7 == 0 {
+                pcm.extend(samples.try_iter());
+            }
+        }
+        pcm.extend(samples.try_iter());
+        assert_eq!(pcm.samples.len(), RATE as usize);
+        assert!(pcm.samples.iter().all(|s| *s == 8192));
+    }
+
+    #[test]
+    fn a_block_that_does_not_fit_is_dropped_whole_so_channels_stay_aligned() {
+        let (mut tap, samples) = tap(8);
+        tap.capture(&[0.5, 0.0, 0.5, 0.0, 0.5, 0.0]);
+        // Only two places left: the whole block waits for none of them.
+        tap.capture(&[1.0, 1.0, 1.0, 1.0]);
+        tap.capture(&[0.5, 0.0]);
+        let queued: Vec<f32> = samples.try_iter().collect();
+        assert_eq!(queued, [0.5, 0.0].repeat(4));
+        let mut pcm = Pcm::new(RATE, 2);
+        pcm.extend(queued);
+        assert!(pcm.samples.iter().all(|s| *s == 8192));
     }
 
     #[test]

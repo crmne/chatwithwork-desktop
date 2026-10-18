@@ -46,7 +46,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 pollster = "0.4"
 # Microphone capture stays in the app; the daemon remains a static binary.
-cpal = { version = "0.18.2", default-features = false }
+# Every app plays and records through fastframe-audio: on Linux it goes to
+# PipeWire, then PulseAudio, then ALSA, so building needs libpipewire's
+# headers and clang, and the binary links libpipewire-0.3.so.0. Same
+# release as the other fastframe crates.
+fastframe-audio = { version = "0.12.0", git = "https://github.com/crmne/fastframe", rev = "840518e73f402a9f535f2920ac51a311ca5987f1" }
+# The recorder's lock-free queue from the capture callback, which must not
+# wait. Already in the tree through tray-icon's muda.
+crossbeam-channel = "0.5"
 # The Documents folder of each platform (XDG user dirs, Known Folders).
 directories = "6"
 # Opens the config file and the log in their default apps.

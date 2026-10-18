@@ -14,7 +14,7 @@ Every Chat with Work client dictates the same way: the recording is transcribed 
 
 ## How the audio travels
 
-- **Recording:** `cpal` (the platform's own audio API), downmixed to mono and resampled to 16 kHz, kept in memory only, and written as WAV (16-bit), which the server accepts: 5 minutes is about 9.6 MB, under its 10 MB limit. Opus could replace it later to make uploads smaller.
+- **Recording:** `fastframe-audio` (PipeWire, then PulseAudio, then ALSA on Linux; CoreAudio on macOS; WASAPI on Windows), downmixed to mono and resampled to 16 kHz, kept in memory only, and written as WAV (16-bit), which the server accepts: 5 minutes is about 9.6 MB, under its 10 MB limit. Opus could replace it later to make uploads smaller.
 - **Upload:** the app has no web session, so the recording goes through the daemon, as attachments do: the app hands the bytes to the daemon over the control socket (a `dictate` request with the audio and its type), and the daemon sends them with the device's token to Chat with Work. Only a computer whose chats are allowed can dictate. The daemon keeps nothing.
 - **The server's side:** a Local Agent counterpart of the web's dictation endpoint, with the same checks, limits, refusals and charging, the same DPoP token and the `local_agent:chat` permission:
   - `GET /local_agent/dictations/new` answers `{ "cloud": bool, "reason": ... }`, so the button can say why before anyone records. `cloud: false` with no reason reads as unavailable.
