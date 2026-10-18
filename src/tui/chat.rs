@@ -47,6 +47,10 @@ pub struct ChatSummary {
     pub updated_at: String,
     /// RFC 3339, when it was started; empty from an older server.
     pub created_at: String,
+    /// RFC 3339, when someone last asked something in it (a new chat's is
+    /// when it started). Lists sort by it, so answers never move a chat;
+    /// empty from an older server, which sorts by `updated_at`.
+    pub last_asked_at: String,
     pub url: String,
     /// The model the next question goes to; `None` from an older server.
     pub model: Option<ModelRef>,
@@ -63,6 +67,18 @@ pub struct ChatSummary {
     /// What this person may do with it; `None` from an older server, which
     /// offers none of it here.
     pub can: Option<Can>,
+}
+
+impl ChatSummary {
+    /// When the list's order puts it: its latest question, or, from an
+    /// older server, its latest change.
+    pub fn asked_at(&self) -> &str {
+        if self.last_asked_at.is_empty() {
+            &self.updated_at
+        } else {
+            &self.last_asked_at
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -1794,6 +1810,8 @@ mod tests {
         }))
         .unwrap();
         assert!(transcript.chat.processing());
+        // A server from before `last_asked_at` orders by `updated_at`.
+        assert_eq!(transcript.chat.asked_at(), "2026-09-25T08:14:03Z");
         assert_eq!(transcript.entries.len(), 5);
         assert!(
             matches!(&transcript.entries[1], Entry::Activity { pending: true, steps, .. } if steps.len() == 1)
@@ -1802,6 +1820,16 @@ mod tests {
         // A server from before the queue sends none.
         assert!(transcript.queued.is_empty());
         assert_eq!(transcript.queue_note(), None);
+    }
+
+    #[test]
+    fn orders_by_the_latest_question() {
+        let chat: ChatSummary = serde_json::from_value(json!({
+            "number": 42, "updated_at": "2026-10-02T09:05:00Z",
+            "last_asked_at": "2026-10-02T09:04:12.345678Z"
+        }))
+        .unwrap();
+        assert_eq!(chat.asked_at(), "2026-10-02T09:04:12.345678Z");
     }
 
     #[test]

@@ -797,11 +797,14 @@ pub enum SideItem {
     PinnedChat(u64),
 }
 
-/// Whether `a` was updated after `b`, both RFC 3339.
-fn newer(a: &str, b: &str) -> bool {
-    match (parse_ts(a), parse_ts(b)) {
-        (Some(a), Some(b)) => a > b,
-        _ => a > b,
+/// Whether `a` goes above `b` in the list: its latest question is newer,
+/// or, asked at the same time, it's the newer chat.
+fn above(a: &ChatSummary, b: &ChatSummary) -> bool {
+    let (x, y) = (a.asked_at(), b.asked_at());
+    match (parse_ts(x), parse_ts(y)) {
+        (Some(x), Some(y)) if x != y => x > y,
+        (None, _) | (_, None) if x != y => x > y,
+        _ => a.number > b.number,
     }
 }
 
@@ -1125,14 +1128,14 @@ impl ChatPane {
     }
 
     /// A chat as the server last sent it: new ones go in, others are
-    /// replaced, and the list stays newest first.
+    /// replaced, and the list stays newest question first, as on the web.
     pub fn upsert_chat(&mut self, chat: ChatSummary) {
         self.keep_selection(|pane| {
             let chats = &mut pane.list.chats;
             chats.retain(|c| c.number != chat.number);
             let at = chats
                 .iter()
-                .position(|c| newer(&chat.updated_at, &c.updated_at))
+                .position(|c| above(&chat, c))
                 .unwrap_or(chats.len());
             chats.insert(at, chat.clone());
             if let Some(transcript) = pane
@@ -1143,6 +1146,20 @@ impl ChatPane {
                 transcript.chat = chat;
             }
         });
+    }
+
+    /// This person just asked in a chat: it goes to the top at once, as
+    /// the server will put it, before the server's copy says so.
+    pub fn asked(&mut self, number: u64, at: OffsetDateTime) {
+        let Some(mut chat) = self.list.chats.iter().find(|c| c.number == number).cloned() else {
+            return;
+        };
+        if let Ok(at) = at.format(&Rfc3339)
+            && parse_ts(&at) > parse_ts(chat.asked_at())
+        {
+            chat.last_asked_at = at;
+            self.upsert_chat(chat);
+        }
     }
 
     /// A chat that's gone from the list.
@@ -3299,6 +3316,9 @@ impl App {
         self.chat.pending_question = Some(text.clone());
         self.chat.scroll = 0;
         self.chat.pinned = true;
+        if let Some(chat) = self.chat.open {
+            self.chat.asked(chat, OffsetDateTime::now_utc());
+        }
         let attachments = std::mem::take(&mut self.chat.attachments)
             .into_iter()
             .filter_map(|a| a.uploaded.map(|(id, _)| id))

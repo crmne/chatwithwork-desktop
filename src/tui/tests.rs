@@ -3189,6 +3189,55 @@ fn the_list_keeps_its_selection_as_chats_come_and_go() {
 }
 
 #[test]
+fn the_list_puts_the_latest_question_first() {
+    let mut app = app();
+    chats_ready(&mut app);
+    let order = |app: &App| -> Vec<u64> { app.chat.list.chats.iter().map(|c| c.number).collect() };
+    // An answer changes the chat, not when it was last asked: it stays put.
+    let mut answered = summary(38, "Onboarding checklist", "2026-09-25T09:00:00Z");
+    answered.last_asked_at = "2026-09-24T16:30:00.123456Z".into();
+    app.chat.upsert_chat(answered);
+    assert_eq!(order(&app), [42, 40, 38, 31, 27]);
+    // A question moves it to the top.
+    let mut asked = summary(31, "Vendor contracts", "2026-09-25T09:01:00Z");
+    asked.last_asked_at = "2026-09-25T09:00:59.5Z".into();
+    app.chat.upsert_chat(asked);
+    assert_eq!(order(&app), [31, 42, 40, 38, 27]);
+    // Asked at the same moment, the newer chat goes first.
+    let mut same = summary(27, "Hiring plan", "2026-09-25T09:02:00Z");
+    same.last_asked_at = "2026-09-25T09:00:59.5Z".into();
+    app.chat.upsert_chat(same);
+    assert_eq!(order(&app), [31, 27, 42, 40, 38]);
+}
+
+#[test]
+fn asking_in_a_chat_moves_it_to_the_top_at_once() {
+    let mut app = app();
+    chats_ready(&mut app);
+    for _ in 0..4 {
+        app.update(key(KeyCode::Down));
+    }
+    assert_eq!(app.chat.selected_chat().map(|c| c.number), Some(31));
+    app.update(key(KeyCode::Enter));
+    let mut transcript = budget_transcript("idle");
+    transcript.chat = summary(31, "Vendor contracts", "2026-09-19T10:00:00Z");
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 31,
+        result: Ok(transcript),
+    }));
+    type_text(&mut app, "Which ones renew this year?");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Chat(ChatCommand::Send { chat: Some(31), .. })))
+    );
+    let order: Vec<u64> = app.chat.list.chats.iter().map(|c| c.number).collect();
+    assert_eq!(order, [31, 42, 40, 38, 27], "before the server answers");
+    assert_eq!(app.chat.selected_chat().map(|c| c.number), Some(31));
+}
+
+#[test]
 fn the_list_stays_current_over_the_daemons_socket() {
     let mut app = app();
     budget_open(&mut app, every_action());
@@ -3330,7 +3379,7 @@ fn snapshot_pinned_sits_under_recent_as_on_the_web() {
         .list
         .chats
         .iter()
-        .map(|c| (c.updated_at.clone(), c.number))
+        .map(|c| (c.asked_at().to_string(), c.number))
         .collect();
     newest.sort_by(|a, b| b.0.cmp(&a.0));
     assert_eq!(order, newest.iter().map(|(_, n)| *n).collect::<Vec<_>>());
