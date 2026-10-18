@@ -64,7 +64,7 @@ cargo install --locked --path .
 cargo install --locked --path app
 ```
 
-Run these commands from a checkout. They install both commands; the packages or one-line installer also provide desktop integration. The terminal agent alone needs Rust 1.90 or newer.
+Run these commands from a checkout. On Linux the desktop app also needs CMake, clang and the ALSA and PipeWire development headers (`cmake clang libclang-dev libasound2-dev libpipewire-0.3-dev pkg-config` on Debian and Ubuntu). They install both commands; the packages or one-line installer also provide desktop integration. The terminal agent alone needs Rust 1.90 or newer.
 
 For a Linux terminal-only build with native notification support, install `notification-broker` instead of `app` in the second command. The notification helper needs Rust 1.98 or newer. On macOS, native notifications require the packaged application bundle, including its identity and signature; loose development binaries are insufficient.
 

@@ -478,12 +478,12 @@ jobs:
       - uses: ./.github/actions/speech-build
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
-      - name: Check the app needs only C, C++ and ALSA libraries, glibc 2.35 or older
+      - name: Check the app needs only C, C++, ALSA and PipeWire libraries, glibc 2.35 or older
         run: |
           bin="target/${{ matrix.target }}/release/cww-app"
           readelf -d "$bin" | grep NEEDED
-          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libasound\.so\.2|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libstdc\+\+\.so\.6|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
-            echo "::error::$bin links more than the C, C++ and ALSA libraries"
+          if readelf -d "$bin" | grep NEEDED | grep -vE '\[(libasound\.so\.2|libpipewire-0\.3\.so\.0|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libstdc\+\+\.so\.6|ld-linux-[a-z0-9-]+\.so\.[0-9])\]'; then
+            echo "::error::$bin links more than the C, C++, ALSA and PipeWire libraries"
             exit 1
           fi
           newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)

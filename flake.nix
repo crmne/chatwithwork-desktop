@@ -35,7 +35,9 @@
             nativeBuildInputs = [ pkgs.makeWrapper pkgs.cmake pkgs.rustPlatform.bindgenHook ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns pkgs.rcodesign ];
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
+            # fastframe-audio records through PipeWire on Linux; bindgenHook above
+            # gives its bindings libclang.
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib pkgs.pipewire ];
 
             # The end-to-end test binds a local port; the rest touches only
             # temporary directories.

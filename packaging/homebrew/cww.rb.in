@@ -12,6 +12,8 @@ class Cww < Formula
 
   on_linux do
     depends_on "alsa-lib"
+    # Dictation records through PipeWire's client library (libpipewire-0.3).
+    depends_on "pipewire"
     depends_on "libglvnd"
     depends_on "libx11"
     depends_on "libxcursor"
