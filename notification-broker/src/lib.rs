@@ -15,6 +15,8 @@ use tokio::sync::{mpsc, oneshot};
 const APP_ID: &str = "com.chatwithwork.local-agent";
 const COMMAND_CAPACITY: usize = 32;
 const EVENT_CAPACITY: usize = 128;
+/// The app's mark, the window icon's PNG, for notifications.
+const LOGO: &[u8] = include_bytes!("../../app/assets/icon-256.png");
 
 type NativeEvent = fastframe_notifications::Event;
 type Callback = Box<dyn Fn(NativeEvent) + Send + Sync>;
@@ -149,10 +151,18 @@ impl Native {
         Client::new(
             App::new(APP_ID, "Chat with Work")
                 .desktop_entry("cww-app")
-                .icon("cww-app"),
+                .icon("cww-app")
+                .logo(LOGO, logo_background()),
         )
         .map(Self)
     }
+}
+
+/// The dark canvas. Windows shows the mark, a white bubble with a black
+/// scribble, on a tile of it, which keeps the dark theme from inverting it.
+fn logo_background() -> [u8; 3] {
+    let (red, green, blue) = cww::tui::theme::CANVAS;
+    [red, green, blue]
 }
 
 impl Backend for Native {
@@ -866,5 +876,20 @@ mod tests {
         let (completion, _finished) = Completion::new();
         // A zero-capacity slice reports WriteZero instead of accepting bytes.
         assert!(pollster::block_on(serve(fake, receiver, &mut &mut [][..], completion)).is_err());
+    }
+
+    /// `Client::new` refuses the whole client, so every notification, when
+    /// the logo is not a PNG Fastframe reads: 8-bit grey or colour with
+    /// alpha, at most 1024 pixels a side.
+    #[test]
+    fn the_logo_is_a_png_fastframe_accepts() {
+        assert_eq!(&LOGO[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&LOGO[12..16], b"IHDR");
+        let side = |at: usize| u32::from_be_bytes(LOGO[at..at + 4].try_into().unwrap());
+        assert!((1..=1024).contains(&side(16)) && (1..=1024).contains(&side(20)));
+        let (depth, colour) = (LOGO[24], LOGO[25]);
+        assert_eq!(depth, 8);
+        assert!(matches!(colour, 4 | 6), "grey or colour with alpha");
+        assert_eq!(logo_background(), [0x06, 0x07, 0x0B]);
     }
 }
