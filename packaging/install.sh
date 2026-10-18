@@ -4,7 +4,7 @@
 #   curl --proto '=https' --tlsv1.2 -LsSf \
 #     https://github.com/crmne/chatwithwork-local-agent/releases/latest/download/cww-installer.sh | sh
 #
-# Linux (x86_64, arm64; glibc 2.35+) and macOS (universal, signed and
+# Linux (x86_64, arm64; glibc 2.39+) and macOS (universal, signed and
 # notarized). Installs the GUI, terminal interface and daemon. Commands go
 # in ~/.local/bin, or $CWW_INSTALL_DIR. Set CWW_VERSION=1.2.3 for a release. The
 # download is checked against the release's checksums.txt before anything
@@ -81,7 +81,7 @@ dir="$tmp/${asset%.tar.gz}"
 [ -f "$dir/cww" ] || fail "$asset has no cww binary"
 if [ "$platform" = Linux ]; then
   [ -f "$dir/cww-app.desktop" ] && [ -f "$dir/cww-app.svg" ] || fail "$asset has no desktop launcher or icon"
-  "$dir/cww-app" --version >/dev/null || fail "the desktop app cannot run; Linux needs glibc 2.35 or newer"
+  "$dir/cww-app" --version >/dev/null || fail "the desktop app cannot run; Linux needs glibc 2.39 or newer"
 else
   [ -f "$dir/Chat with Work.app/Contents/MacOS/cww-app" ] || fail "$asset has no desktop app"
 fi

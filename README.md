@@ -22,7 +22,7 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 | NixOS, Nix (Linux, Apple silicon macOS) | `nix profile install github:crmne/chatwithwork-local-agent` | `cww-app` or `cww`; the package also carries desktop integration. |
 | Linux, Homebrew | `brew install crmne/tap/cww` | `cww-app` or `cww`. Add the Homebrew prefix's `share` directory to your desktop session's `XDG_DATA_DIRS` for menu discovery. |
 
-Linux desktop binaries need glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, Rocky/RHEL 10+); the packages install the graphics libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its window closes. Install your desktop's XDG portal backend for the native folder picker. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
+Linux desktop binaries need glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+, Fedora 40+, Rocky/RHEL 10+); the packages install the graphics libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its window closes. Install your desktop's XDG portal backend for the native folder picker. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
 
 **Starting the background agent**
 

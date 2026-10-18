@@ -66,10 +66,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             app-target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             app-target: aarch64-unknown-linux-gnu
     steps:
@@ -158,7 +158,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
-        image: ['ubuntu:24.04', 'debian:12-slim', 'debian:13-slim', 'fedora:41', 'fedora:latest', 'rockylinux/rockylinux:10']
+        image: ['ubuntu:24.04', 'debian:13-slim', 'fedora:41', 'fedora:latest', 'rockylinux/rockylinux:10']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8

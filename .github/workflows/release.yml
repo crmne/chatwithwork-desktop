@@ -443,8 +443,9 @@ jobs:
 
   # The desktop app for Linux, with the static cww from the build job beside
   # it. The app links only the C library and loads Wayland, X11 and OpenGL
-  # at run time, so it's built against Ubuntu 22.04's glibc 2.35 to run on
-  # that and every newer distribution.
+  # at run time, so it's built against Ubuntu 24.04's glibc 2.39 to run on
+  # that and every newer distribution. Older releases' PipeWire is too old
+  # for the bindings fastframe-audio's PipeWire host builds.
   linux-app:
     name: desktop app (${{ matrix.target }})
     needs: [release-source, build]
@@ -458,10 +459,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cww-target: x86_64-unknown-linux-musl
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             cww-target: aarch64-unknown-linux-musl
     env:
@@ -478,7 +479,7 @@ jobs:
       - uses: ./.github/actions/speech-build
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
-      - name: Check the app needs only C, C++, ALSA and PipeWire libraries, glibc 2.35 or older
+      - name: Check the app needs only C, C++, ALSA and PipeWire libraries, glibc 2.39 or older
         run: |
           bin="target/${{ matrix.target }}/release/cww-app"
           readelf -d "$bin" | grep NEEDED
@@ -488,7 +489,7 @@ jobs:
           fi
           newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
           echo "Newest glibc symbol: $newest"
-          if [ "$(printf '%s\n' GLIBC_2.35 "$newest" | sort -V | tail -n 1)" != GLIBC_2.35 ]; then
+          if [ "$(printf '%s\n' GLIBC_2.39 "$newest" | sort -V | tail -n 1)" != GLIBC_2.39 ]; then
             echo "::error::$bin needs $newest"
             exit 1
           fi
