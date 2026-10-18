@@ -11,13 +11,6 @@ use fastframe_audio::{Capture, Device, Input, InputOptions};
 
 const RATE: u32 = 16_000;
 const LIMIT: usize = RATE as usize * 300;
-/// Channels to ask the device for. PipeWire links a capture stream's ports
-/// to the source's by position without mixing, so a stereo stream from a
-/// mono microphone gets silence on the right and halves the speech level
-/// the gate measures. Asked for mono, it delivers a mono microphone whole
-/// and a stereo one's left channel; PulseAudio mixes either way. Elsewhere
-/// the device's own count (`0`), as before; the recorder downmixes.
-const CHANNELS: u16 = if cfg!(target_os = "linux") { 1 } else { 0 };
 /// Samples the capture callback can hand over before the recorder drains
 /// them, about 2.7 seconds of 48 kHz stereo; it drains every 70 ms.
 const QUEUE: usize = 1 << 18;
@@ -45,13 +38,14 @@ pub fn record(progress: bool) -> i32 {
 
 fn capture(progress: bool) -> Result<(), ()> {
     let (tap, samples) = tap(QUEUE);
-    // The default microphone at its own rate. Not following a new default:
+    // The default microphone at its own rate and channels; a mono one comes
+    // in every channel. Not following a new default:
     // the stream ends with the recording, and the sound servers move a
     // running stream themselves.
     let mut input = Input::open(
         InputOptions {
             device: Device::Default,
-            channels: CHANNELS,
+            channels: 0,
             sample_rate: None,
             follow_default: false,
             ..InputOptions::default()
