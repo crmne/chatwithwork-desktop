@@ -4352,6 +4352,8 @@ async fn changes_files_on_windows() {
         path: docs.join("Private"),
         follow_symlinks: false,
         writable: false,
+        commands: false,
+        network: false,
     });
     config.save(&fx.paths).unwrap();
     let bin = recycle_bin_of(&fx.base);
