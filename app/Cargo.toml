@@ -31,10 +31,10 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 # The settings window. glow keeps the binary and the dependency tree small;
 # a settings window needs no wgpu. AccessKit connects the controls to the
 # platform screen readers.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "wayland", "x11"] }
-egui = "0.36"
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "glow", "default_fonts", "wayland", "x11"] }
+egui = "0.36.2"
 # Decodes the title bar’s SVG icons through egui’s image loader.
-egui_extras = { version = "0.36", default-features = false, features = ["svg", "datepicker"] }
+egui_extras = { version = "0.36.2", default-features = false, features = ["svg", "datepicker"] }
 # The event loop the tray and the window share. eframe already compiles it.
 winit = { version = "0.30", default-features = false }
 # PNG decoding for the icons and encoding for --screenshot. eframe already
@@ -50,7 +50,7 @@ pollster = "0.4"
 # PipeWire, then PulseAudio, then ALSA, so building needs libpipewire's
 # headers and clang, and the binary links libpipewire-0.3.so.0. Same
 # release as the other fastframe crates.
-fastframe-audio = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-audio = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # The recorder's lock-free queue from the capture callback, which must not
 # wait. Already in the tree through tray-icon's muda.
 crossbeam-channel = "0.5"
@@ -64,28 +64,28 @@ jiff = "0.2"
 # commit). Move them together.
 # Follows the desktop's font rendering (hinting, sub-pixel positions, and
 # linear coverage on Linux), shared with the other fastframe apps.
-fastframe-text = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-text = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Reveals a switch between light and dark from the middle of the window
 # outwards, as Omarchy does.
-fastframe-theme = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-theme = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Draws color emoji in the platform's own style in every egui text, such
 # as folder and file names.
-fastframe-emoji = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-emoji = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Native traffic lights and desktop caption controls, drag, and resizing.
-fastframe-titlebar = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-titlebar = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # One running copy per user: a second launch asks it to open its window.
-fastframe-instance = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-instance = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Scrolling that feels like the platform's: a wheel notch scrolls as far
 # as in other apps, and on Linux touchpad gestures keep their speed and
 # glide on after the fingers lift.
-fastframe-scroll = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-scroll = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # The tray item with the platform's own menu: a StatusNotifierItem on
 # Linux (Waybar, KDE, GNOME with the AppIndicator extension), the
 # notification area on Windows, and the menu bar on macOS.
-fastframe-tray = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-tray = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Start at login in the tray: the XDG autostart entry on Linux, a login
 # item with the bundle's launch agent on macOS, the Run key on Windows.
-fastframe-autostart = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-autostart = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
 # Maps the system UI font instead of reading it: San Francisco is 8 MB.
@@ -119,7 +119,7 @@ blocking = "=1.6.2"
 # Reads the accent color and dark mode through the desktop portal, which
 # works inside a Flatpak and starts no gsettings process. Same release as
 # the other fastframe crates.
-fastframe-desktop = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-desktop = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -142,7 +142,7 @@ demo = ["tokio/rt-multi-thread", "dep:tokio-util"]
 # Drives the window through its accessibility tree. The chat page's tests
 # also render it offscreen with wgpu (a software rasterizer where there is
 # one) and save PNG snapshots.
-egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
+egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot"] }
 tempfile = "3.27"
 
 # The stand-in daemon, and a test that runs the real one.

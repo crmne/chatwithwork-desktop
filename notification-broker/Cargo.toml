@@ -19,4 +19,4 @@ serde_json = "1"
 pollster = "0.4"
 tokio = { version = "1.53", features = ["sync", "macros"] }
 # Same owner-approved revision as every Fastframe dependency in app/.
-fastframe-notifications = { version = "0.12.1", git = "https://github.com/crmne/fastframe", rev = "c2ad64595b479c8a72a66a9ad7b074acf28d4b91" }
+fastframe-notifications = { version = "0.13.0", git = "https://github.com/crmne/fastframe", tag = "v0.13.0" }
