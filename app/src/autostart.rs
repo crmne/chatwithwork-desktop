@@ -206,7 +206,7 @@ mod tests {
     fn the_bundled_agent_starts_the_app_in_the_background() {
         let bundled = include_str!("../../packaging/macos/autostart.plist");
         assert_eq!(
-            bundled,
+            bundled.replace("\r\n", "\n"),
             fastframe_autostart::macos_agent_plist("com.chatwithwork.local-agent", BACKGROUND),
             "regenerate packaging/macos/autostart.plist"
         );

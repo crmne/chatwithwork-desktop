@@ -502,6 +502,8 @@ fn allowing_changes_asks_first_and_stopping_does_not() {
     }
 }
 
+// Command execution is available only on Unix, matching the folder controls.
+#[cfg(unix)]
 #[test]
 fn running_commands_asks_first_only_where_changes_are_allowed() {
     let mut fx = fixture(Scenario::Sample, Some(Page::Folders));
@@ -552,6 +554,8 @@ fn running_commands_asks_first_only_where_changes_are_allowed() {
     }
 }
 
+// Command execution is available only on Unix, matching the folder controls.
+#[cfg(unix)]
 #[test]
 fn renders_the_command_switches() {
     for dark in [false, true] {
@@ -593,6 +597,26 @@ fn renders_the_command_switches() {
             );
         }
     }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn unsupported_platforms_do_not_offer_command_permissions() {
+    let mut fx = fixture(Scenario::Sample, Some(Page::Folders));
+    fx.wait_for_label("Indexed · 1,532 files");
+    assert!(
+        fx.harness
+            .query_all_by_label("Run commands")
+            .next()
+            .is_none()
+    );
+    assert!(
+        fx.harness
+            .query_all_by_label("Commands use the network")
+            .next()
+            .is_none()
+    );
+    assert!(!fx.changes().iter().any(|r| r["cmd"] == "roots_commands"));
 }
 
 #[test]
