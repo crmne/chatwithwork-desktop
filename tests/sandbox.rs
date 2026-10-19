@@ -241,6 +241,8 @@ fn only_folders_that_allow_changes_are_writable_on_macos() {
         path: path.to_path_buf(),
         follow_symlinks: false,
         writable,
+        commands: false,
+        network: false,
     };
     Config {
         roots: vec![root("docs", &docs, true), root("ro", &ro, false)],
