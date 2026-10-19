@@ -42,6 +42,7 @@ pub const MAX_COMMAND_CHARS: usize = 8_000;
 /// Most bytes one [`Runs::output`] call returns.
 pub const MAX_OUTPUT_CHUNK: usize = 64 * 1024;
 /// Bytes of a run's latest output kept for [`Runs::output`].
+#[cfg(unix)]
 const WINDOW: usize = 1024 * 1024;
 /// Finished runs kept for their status and output.
 const FINISHED_KEPT: usize = 32;
@@ -162,6 +163,7 @@ pub struct Summary {
     pub started_at: u64,
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stream {
     Out,
@@ -171,8 +173,11 @@ enum Stream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
     Running,
+    #[cfg(unix)]
     Exited(i32),
+    #[cfg(unix)]
     TimedOut,
+    #[cfg(unix)]
     Stopped,
     Failed(String),
 }
@@ -202,12 +207,12 @@ struct Cell {
     err: VecDeque<u8>,
     out_total: u64,
     err_total: u64,
+    #[cfg(unix)]
     tail_bytes: usize,
 }
 
 impl Cell {
     fn new(plan: &Plan, root: String, dir: String) -> Self {
-        let limits = &plan.limits;
         Self {
             id: plan.id.clone(),
             root,
@@ -230,10 +235,12 @@ impl Cell {
             out_total: 0,
             err_total: 0,
             // UTF-8 takes at most 4 bytes a character.
-            tail_bytes: limits.output_chars.saturating_mul(4).max(1024),
+            #[cfg(unix)]
+            tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
         }
     }
 
+    #[cfg(unix)]
     fn append(&mut self, stream: Stream, bytes: &[u8]) {
         self.window.extend(bytes);
         self.total += bytes.len() as u64;
@@ -264,8 +271,11 @@ impl Cell {
     fn status(&self) -> Status {
         let (state, exit_code, error) = match &self.state {
             State::Running => ("running", None, None),
+            #[cfg(unix)]
             State::Exited(code) => ("exited", Some(*code), None),
+            #[cfg(unix)]
             State::TimedOut => ("timed_out", None, None),
+            #[cfg(unix)]
             State::Stopped => ("stopped", None, None),
             State::Failed(error) => ("failed", None, Some(error.clone())),
         };
