@@ -649,7 +649,7 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 |---|---|
 | Tool calls per rolling minute (all chats) | 120 |
 | Characters per `read` call | 32 000 |
-| `read` characters per chat per rolling hour | 256 000 |
+| `read` characters per chat per rolling hour | 1 000 000 |
 | `read` characters per rolling hour, all chats | 2 000 000 |
 | Search hits per call / snippet length | 20 / 300 characters |
 | `list` entries per page | 200 |

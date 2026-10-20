@@ -205,7 +205,7 @@ impl Default for Limits {
         Self {
             calls_per_minute: 120,
             read_chars_per_call: 32_000,
-            read_chars_per_chat_hour: 256_000,
+            read_chars_per_chat_hour: 1_000_000,
             read_chars_per_hour: 2_000_000,
             search_hits: 20,
             snippet_chars: 300,

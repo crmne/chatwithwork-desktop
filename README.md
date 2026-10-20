@@ -320,7 +320,7 @@ allow_hardlinks = false                        # reads only: changes never touch
 [limits]
 calls_per_minute = 120
 read_chars_per_call = 32000
-read_chars_per_chat_hour = 256000
+read_chars_per_chat_hour = 1000000
 read_chars_per_hour = 2000000
 changes_per_minute = 30          # changes: create, write, edit, mkdir, move, delete
 changes_per_day = 500
