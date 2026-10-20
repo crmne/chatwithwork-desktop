@@ -1,10 +1,11 @@
-# ZIP dependency review, 16 October 2026
+# ZIP dependency review, 16 October 2026 (updated 20 October 2026)
 
-The direct ZIP reader uses registry `zip` 9.0.3. The latest published
-`calamine` 0.36.1, `docx-rs` 0.4.22 and `rust_xlsxwriter` 0.99.1 still require
-zip 8, so the lockfile also retains 8.6.0. All zip 8 versions were yanked.
-Remove the exact-version yank exception in `deny.toml` when these libraries
-publish compatible updates. RustSec advisories remain errors.
+The direct ZIP reader uses registry `zip` 9. `calamine` 0.37 and
+`rust_xlsxwriter` 0.100 use zip 9 too, but `docx-rs` 0.4.22, its latest
+release, still requires zip 8, so the lockfile also retains 8.6.0. RustSec now
+lists the three advisories below for zip 8 (RUSTSEC-2026-0367, -0368 and
+-0369), and `deny.toml` ignores exactly those IDs. Remove them when docx-rs
+publishes a zip 9 release. Any other advisory remains an error.
 
 The published upstream advisories concern extracting archives to disk:
 

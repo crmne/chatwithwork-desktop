@@ -19,13 +19,23 @@ all-features = false
 # Fail on any RustSec advisory (vulnerable, unmaintained, unsound, yanked).
 unmaintained = "all"
 yanked = "deny"
-# The current calamine/docx-rs/rust_xlsxwriter releases still require zip 8.
-# Their uses do not extract archives to disk; the affected symlink/permission
-# APIs are unreachable. Our direct reader uses zip 9. See docs/zip-review.md.
-# This exempts only the yank, not any RustSec advisory. Remove when those
-# registry dependencies support zip 9; do not broaden to other versions.
+# docx-rs 0.4.22, the latest release, still requires zip 8 (calamine and
+# rust_xlsxwriter have moved to zip 9). Its three advisories concern
+# extracting archives to disk, and docx-rs only builds documents in memory. See docs/zip-review.md. Remove these when docx-rs
+# supports zip 9.
+#
+# zbus 6 folded zvariant, zvariant_derive and zbus_names into zbus, so the
+# standalone crates are marked unmaintained. They come only
+# through keyring's Secret Service store (secret-service and
+# zbus-secret-service-keyring-store), whose releases still require zbus 5.
+# Remove these when they move to zbus 6.
 ignore = [
-    { crate = "zip@8.6.0", reason = "Document dependencies require zip 8 and do not use its vulnerable disk extraction APIs; see docs/zip-review.md" },
+    { id = "RUSTSEC-2026-0367", reason = "zip 8 (GHSA-vv5m-jxxh-4627) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 8 (GHSA-4v9h-p7m9-rh26) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 8 (GHSA-4684-h2q9-2vcp) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
 ]
 
 [licenses]
