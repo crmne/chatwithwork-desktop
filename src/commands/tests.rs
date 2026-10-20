@@ -74,6 +74,23 @@ fn request(command: &str) -> Request {
     }
 }
 
+/// A request for a command that uses tools like `cat`, `sleep` and `seq`.
+/// A run's `PATH` names only the usual system folders, which Nix's build
+/// sandbox leaves without coreutils, so the command also looks where this
+/// test found its own: the run can read `/nix`, so they work there too.
+/// Elsewhere the system folders come first and nothing changes.
+fn shell(command: &str) -> Request {
+    let ours = std::env::var("PATH").unwrap_or_default();
+    let dirs: Vec<&str> = ours
+        .split(':')
+        .filter(|dir| dir.starts_with('/') && !dir.contains('\''))
+        .collect();
+    if dirs.is_empty() {
+        return request(command);
+    }
+    request(&format!("PATH=\"$PATH:{}\"; {command}", dirs.join(":")))
+}
+
 fn wait(runs: &Runs, id: &str) -> Finished {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -247,7 +264,7 @@ fn a_command_runs_in_its_folder_and_reports_how_it_ended() {
         .runs
         .start(
             &fx.config,
-            &request("cat README.md; echo oops >&2; echo made > out.txt; exit 3"),
+            &shell("cat README.md; echo oops >&2; echo made > out.txt; exit 3"),
         )
         .unwrap();
     assert!(valid_id(&status.id));
@@ -284,7 +301,7 @@ fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
         "echo changed > {0} 2>/dev/null; chmod 644 {0} 2>/dev/null; echo \"secret=$CWW_SECRET_FOR_TEST\"; echo \"home=$HOME\"; touch \"$HOME/ok\" && echo home-writable",
         outside.display()
     );
-    let status = fx.runs.start(&fx.config, &request(&command)).unwrap();
+    let status = fx.runs.start(&fx.config, &shell(&command)).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
     #[cfg(unix)]
@@ -318,7 +335,7 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
             .runs
             .start(
                 &fx.config,
-                &request("tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '"),
+                &shell("tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '"),
             )
             .unwrap();
         let done = wait(&fx.runs, &status.id);
@@ -350,7 +367,7 @@ fn a_command_is_stopped_on_request_and_at_its_time_limit() {
     let mut fx = fixture(true);
     let status = fx
         .runs
-        .start(&fx.config, &request("echo started; sleep 30"))
+        .start(&fx.config, &shell("echo started; sleep 30"))
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !fx
@@ -369,7 +386,7 @@ fn a_command_is_stopped_on_request_and_at_its_time_limit() {
     assert!(done.status.duration_ms < 10_000);
 
     fx.config.limits.command_timeout_seconds = 1;
-    let status = fx.runs.start(&fx.config, &request("sleep 30")).unwrap();
+    let status = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.status.state, "timed_out");
 }
@@ -381,7 +398,7 @@ fn output_is_read_in_pieces_and_the_result_keeps_the_end() {
     }
     let mut fx = fixture(true);
     fx.config.limits.command_output_chars = 100;
-    let status = fx.runs.start(&fx.config, &request("seq 1 2000")).unwrap();
+    let status = fx.runs.start(&fx.config, &shell("seq 1 2000")).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.stdout.chars().count(), 100);
     assert!(done.stdout.ends_with("1999\n2000\n"));
@@ -406,7 +423,7 @@ fn too_many_running_commands_wait_their_turn() {
     }
     let mut fx = fixture(true);
     fx.config.limits.commands_running = 1;
-    let first = fx.runs.start(&fx.config, &request("sleep 30")).unwrap();
+    let first = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
     assert_eq!(
         fx.runs
             .start(&fx.config, &request("true"))
@@ -438,7 +455,7 @@ fn a_paused_computer_runs_nothing_and_stops_what_runs() {
         return;
     }
     fx.config.paused = false;
-    let running = fx.runs.start(&fx.config, &request("sleep 30")).unwrap();
+    let running = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
     fx.config.paused = true;
     fx.runs.stop_outside(&fx.config);
     assert_eq!(wait(&fx.runs, &running.id).status.state, "stopped");
@@ -454,13 +471,13 @@ fn the_list_says_what_runs_where_running_first() {
     wait(&fx.runs, &done.id);
     let req = Request {
         dir: "src".into(),
-        ..request("sleep 30")
+        ..shell("sleep 30")
     };
     let running = fx.runs.start(&fx.config, &req).unwrap();
     let list = fx.runs.list();
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].status.id, running.id);
-    assert_eq!(list[0].command, "sleep 30");
+    assert_eq!(list[0].command, req.command);
     assert_eq!(list[0].dir, "src");
     assert_eq!(list[0].root, "project");
     assert!(list[0].started_at > 0);
@@ -480,7 +497,7 @@ fn a_command_is_stopped_at_its_process_limit() {
         .runs
         .start(
             &fx.config,
-            &request("for i in 1 2 3 4 5 6 7 8 9 10; do sleep 20 & done; wait"),
+            &shell("for i in 1 2 3 4 5 6 7 8 9 10; do sleep 20 & done; wait"),
         )
         .unwrap();
     let done = wait(&fx.runs, &status.id);
@@ -491,7 +508,7 @@ fn a_command_is_stopped_at_its_process_limit() {
     fx.config.limits.command_processes = 64;
     let status = fx
         .runs
-        .start(&fx.config, &request("sleep 0.3 & sleep 0.3 & wait"))
+        .start(&fx.config, &shell("sleep 0.3 & sleep 0.3 & wait"))
         .unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.status.state, "exited");
