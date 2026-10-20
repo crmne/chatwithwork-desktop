@@ -523,7 +523,7 @@ mod windows_task {
             r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Chat with Work Local Agent (cww): shares the folders you choose with Chat with Work, read-only.</Description>
+    <Description>Chat with Work Local Agent (cww): lets Chat with Work read, and with your approval change files and run commands, in folders you share.</Description>
     <URI>\{TASK_NAME}</URI>
   </RegistrationInfo>
   <Triggers>

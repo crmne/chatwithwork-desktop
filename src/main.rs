@@ -16,8 +16,8 @@ use cww::{audit, auth, crash_reports, daemon, service};
 
 /// Chat with Work Local Agent.
 ///
-/// Shares folders you choose with Chat with Work, read-only. Without a
-/// command, opens the terminal UI.
+/// Lets Chat with Work read, and with your approval change files and run
+/// commands, in folders you share. Without a command, opens the terminal UI.
 #[derive(Parser)]
 #[command(name = "cww", version, about, long_about = None)]
 struct Cli {

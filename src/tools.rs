@@ -1,5 +1,5 @@
-//! The MCP server: four read-only tools, and the change tools when a shared
-//! folder allows changes.
+//! The MCP server: four read-only tools, the change tools when a shared
+//! folder allows changes, and the command tools when one also allows commands.
 //!
 //! `roots`, `search`, `list` and `read` are annotated `readOnlyHint: true`
 //! and `openWorldHint: false`, with no write, exec, or network code behind

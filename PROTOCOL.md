@@ -21,7 +21,7 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
 ## 1. Roles and overview
 
-- The **daemon** runs on the user's computer. It is an MCP *server* that exposes four read-only tools, and seven change tools while at least one shared folder allows changes (section 8.7).
+- The **daemon** runs on the user's computer. It is an MCP *server* that lets Chat with Work read, and with the user's approval change files and run commands, in folders the user shares: four read-only tools, seven change tools while at least one shared folder allows changes (section 8.7), and the command tools while one also allows commands, on Linux and macOS (section 8.15).
 - The **server** is Chat with Work. It is the MCP *client*: the model loop runs there and calls the tools.
 - The daemon opens the only connection, outbound, to `wss://<server>/local_agent`. The server never connects to the daemon.
 - Over that socket the server sends JSON-RPC requests and the daemon answers them. The daemon never sends requests: no sampling, no elicitation, no roots.

@@ -1,6 +1,6 @@
 # Changing files
 
-Status: built, 2026-10-03. The daemon can create, edit, move and delete files in the shared folders where the person allows it. Everything else stays read-only. This document is the design as built and the contract for the Chat with Work server. The wire details are in [PROTOCOL.md](../PROTOCOL.md) (sections 8.7 to 8.14, 9, 10), the control requests in [CONTROL.md](../CONTROL.md) (`roots_writable`), and the user-facing summary and threat model in the [README](../README.md).
+Status: built, 2026-10-03. The daemon can create, edit, move and delete files in the shared folders where the person allows it. Everything else stays read-only, except commands in folders that also allow them (`docs/commands.md`). This document is the design as built and the contract for the Chat with Work server. The wire details are in [PROTOCOL.md](../PROTOCOL.md) (sections 8.7 to 8.14, 9, 10), the control requests in [CONTROL.md](../CONTROL.md) (`roots_writable`), and the user-facing summary and threat model in the [README](../README.md).
 
 ## Decisions
 
