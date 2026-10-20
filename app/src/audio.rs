@@ -48,6 +48,9 @@ fn capture(progress: bool) -> Result<(), ()> {
             channels: 0,
             sample_rate: None,
             follow_default: false,
+            // Dictation, not call audio, so no role: it keeps its own
+            // remembered volume and lowers nothing else.
+            media_name: Some("Dictation".into()),
             ..InputOptions::default()
         },
         tap,

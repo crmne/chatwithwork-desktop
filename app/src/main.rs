@@ -58,6 +58,12 @@ fn main() {
     if let Ok(paths) = cww::paths::Paths::from_env() {
         cww::crash_reports::install(cww::crash_reports::Component::App, &paths);
     }
+    // Names the app in the system's volume mixer (PipeWire and PulseAudio),
+    // with the icon the Linux packages install, before any stream opens.
+    let _ = fastframe_audio::set_app_info(fastframe_audio::AppInfo {
+        name: "Chat with Work".into(),
+        icon: Some("cww-app".into()),
+    });
     // The supervisor owns this pipe-only helper even while every window is
     // closed. macOS notification callbacks require the process's main loop.
     if std::env::args().skip(1).eq(["--notification-broker"]) {
