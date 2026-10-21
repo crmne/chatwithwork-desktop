@@ -82,6 +82,10 @@ jobs:
           bash packaging/macos/test-install.sh dist/cww-test.pkg
           rm -rf "dist/Chat with Work.app" dist/cww-test.pkg
 
+      - name: Check the Windows binaries need no Visual C++ Redistributable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe
       - name: Build the Windows installer
         if: runner.os == 'Windows'
         shell: pwsh

@@ -9,3 +9,10 @@ GGML_AVX2 = "OFF"
 GGML_BMI2 = "OFF"
 GGML_FMA = "OFF"
 GGML_F16C = "OFF"
+
+# Link the C runtime statically on Windows. A fresh Windows install has no
+# Visual C++ Redistributable, and cww.exe, cww-agent.exe and cww-app.exe
+# would fail to start without VCRUNTIME140.dll (0xC0000135). The cc and cmake
+# crates build C and C++ dependencies with the matching /MT runtime.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

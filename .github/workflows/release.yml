@@ -145,6 +145,13 @@ jobs:
             "$bin" --version
           done
 
+      - name: Check the Windows binaries need no Visual C++ Redistributable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $release = "target\${{ matrix.target }}\release"
+          ./packaging/windows/check-runtime.ps1 "$release\cww.exe" "$release\cww-agent.exe" "$release\cww-app.exe"
+
       - name: Sign binaries (Azure Artifact Signing)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
         uses: azure/artifact-signing-action@v2
