@@ -247,6 +247,12 @@ h3 {
   animation: pulse 1.4s var(--ease-glide) infinite;
 }
 
+/* Still in the sidebar, as in the egui app: one pulsing dot kept WebKitGTK
+   compositing every frame, about 19% of a core while idle. */
+.sidebar .dot--live {
+  animation: none;
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.35;
