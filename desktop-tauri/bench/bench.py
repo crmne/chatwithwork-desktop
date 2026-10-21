@@ -243,7 +243,7 @@ OPEN_CHAT = json.dumps({"server": "https://chatwithwork.com", "account": "482139
 
 def launch(app, args, chat=None, autotest=None):
     """Starts one app on Folders, or on a chat; returns (Run, Demo or None)."""
-    env = dict(os.environ, CWW_PAINT_MARK="1")
+    env = dict(os.environ, CWW_PAINT_MARK="1", CWW_CRASH_REPORTS="0")
     if app == "egui":
         cmd = [args.egui, "--demo"]
         if chat:
