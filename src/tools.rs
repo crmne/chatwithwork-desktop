@@ -54,6 +54,27 @@ pub const CHAT_ID_META: &str = "com.chatwithwork/chatId";
 /// its default. See PROTOCOL.md.
 pub const WRITE_WHEN_META: &str = "com.chatwithwork/writeWhen";
 
+/// Request `_meta` key: the call comes from a chat of the Chat with Work
+/// bot with this ID, which reaches only the folders lent to it
+/// (PROTOCOL.md section 7.2.1).
+pub const BOT_META: &str = "com.chatwithwork/botId";
+
+/// Request `_meta` key on a bot's `run`: nobody approved it, because the
+/// bot may run commands unattended where its loan says so.
+pub const UNATTENDED_META: &str = "com.chatwithwork/unattended";
+
+/// Who a call is for: a person (any shared folder, as each allows), or a
+/// bot (only the folders lent to it).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Caller {
+    #[default]
+    Person,
+    Bot {
+        id: String,
+        unattended: bool,
+    },
+}
+
 pub const READ_TOOLS: [&str; 4] = ["roots", "search", "list", "read"];
 
 /// Offered only while a shared folder allows changes.
@@ -144,6 +165,21 @@ impl LocalFiles {
         request_id: String,
         progress: Option<Progress>,
     ) -> Option<CallToolResult> {
+        self.call_as(name, args, chat_id, request_id, progress, Caller::Person)
+            .await
+    }
+
+    /// As [`call_with_progress`](Self::call_with_progress), for `caller`: a
+    /// bot's call reaches only the folders lent to it.
+    pub async fn call_as(
+        &self,
+        name: &str,
+        args: Option<JsonObject>,
+        chat_id: Option<String>,
+        request_id: String,
+        progress: Option<Progress>,
+        caller: Caller,
+    ) -> Option<CallToolResult> {
         let known = READ_TOOLS.contains(&name)
             || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
             || (COMMAND_TOOLS.contains(&name) && self.commands().is_some());
@@ -188,10 +224,20 @@ impl LocalFiles {
             .and_then(Value::as_str)
             .map(|s| s.chars().take(256).collect());
 
+        if let Caller::Bot { id, .. } = &caller {
+            entry.detail = Some(format!("for bot {id}"));
+        }
+
         let started = std::time::Instant::now();
-        let outcome = self
-            .run(name, args, chat_id.as_deref().unwrap_or(""), progress)
-            .await;
+        let outcome = match self.admit(name, &args, &caller) {
+            Ok(only) => {
+                let output = self
+                    .run(name, args, chat_id.as_deref().unwrap_or(""), progress, only)
+                    .await;
+                output.map(|output| self.for_caller(output, &caller))
+            }
+            Err(err) => Err(err),
+        };
         let result = match outcome {
             Ok(output) => {
                 if let Output::Change(change) = &output {
@@ -236,6 +282,80 @@ impl LocalFiles {
         Some(result)
     }
 
+    /// A person's call goes as it is. A bot's reaches only the folders lent
+    /// to it: every path it names must be in one, a search looks only in
+    /// them, and a command it runs without anyone approving it must be in a
+    /// folder whose loan lets it.
+    /// Returns the folders a bot's search may look in, or `None` for all.
+    fn admit(
+        &self,
+        name: &str,
+        args: &Value,
+        caller: &Caller,
+    ) -> Result<Option<Vec<String>>, ToolError> {
+        let Caller::Bot { id, unattended } = caller else {
+            return Ok(None);
+        };
+        let reader = &self.inner.reader;
+        let refused = |root: &str| {
+            ToolError::new(
+                ErrorCode::NotLent,
+                format!("the folder {root} isn't lent to this bot on this computer"),
+            )
+        };
+        for key in ["path", "from", "to", "root"] {
+            let Some(root) = args
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|value| value.split(':').next().unwrap_or_default().to_string())
+            else {
+                continue;
+            };
+            let Some(loan) = reader.loan(&root, id) else {
+                return Err(refused(&root));
+            };
+            let dry_run = args.get("dry_run") == Some(&Value::Bool(true));
+            if name == "run" && *unattended && !dry_run && !loan.unattended {
+                return Err(ToolError::new(
+                    ErrorCode::NeedsApproval,
+                    format!("this bot's commands in {root} need a person to approve each one"),
+                ));
+            }
+        }
+        if name == "search" && args.get("root").is_none() {
+            let lent = reader.lent_to(id);
+            if lent.is_empty() {
+                return Err(ToolError::new(
+                    ErrorCode::NotLent,
+                    "no folder on this computer is lent to this bot",
+                ));
+            }
+            return Ok(Some(lent));
+        }
+        Ok(None)
+    }
+
+    /// What a bot sees of the list of folders: only those lent to it, each
+    /// saying whether its commands there start unattended.
+    fn for_caller(&self, output: Output, caller: &Caller) -> Output {
+        match (output, caller) {
+            (Output::Roots(_), Caller::Bot { id, .. }) => {
+                let reader = &self.inner.reader;
+                let roots: Vec<_> = reader
+                    .roots()
+                    .into_iter()
+                    .filter_map(|mut root| {
+                        let loan = reader.loan(&root.id, id)?;
+                        root.unattended = Some(loan.unattended && root.allows_commands);
+                        Some(root)
+                    })
+                    .collect();
+                Output::Roots(json!({ "roots": roots }))
+            }
+            (output, _) => output,
+        }
+    }
+
     fn budget(&self) -> usize {
         self.inner
             .max_message_bytes
@@ -248,6 +368,7 @@ impl LocalFiles {
         args: Value,
         chat: &str,
         progress: Option<Progress>,
+        only: Option<Vec<String>>,
     ) -> Result<Output, ToolError> {
         if self.inner.paused.load(Ordering::SeqCst) {
             return Err(ToolError::new(
@@ -264,7 +385,8 @@ impl LocalFiles {
                 Ok(Output::Roots(json!({ "roots": roots })))
             }
             "search" => {
-                let req: SearchRequest = parse_args(args)?;
+                let mut req: SearchRequest = parse_args(args)?;
+                req.only = only;
                 let resp = blocking(move || reader.search(&req)).await?;
                 Ok(Output::Search(resp))
             }
@@ -891,6 +1013,25 @@ impl ServerHandler for LocalFiles {
                 Value::Number(n) => Some(n.to_string()),
                 _ => None,
             });
+        let meta = |key: &str| {
+            request
+                .meta
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .or_else(|| context.meta.get(key))
+                .cloned()
+        };
+        let caller = match meta(BOT_META) {
+            Some(Value::String(id)) => Caller::Bot {
+                id: id.chars().take(20).collect(),
+                unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
+            },
+            Some(Value::Number(id)) => Caller::Bot {
+                id: id.to_string(),
+                unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
+            },
+            _ => Caller::Person,
+        };
         let request_id = match serde_json::to_value(&context.id) {
             Ok(Value::String(s)) => s,
             Ok(other) => other.to_string(),
@@ -918,12 +1059,13 @@ impl ServerHandler for LocalFiles {
             report
         });
         match self
-            .call_with_progress(
+            .call_as(
                 &request.name,
                 request.arguments,
                 chat_id,
                 request_id,
                 progress,
+                caller,
             )
             .await
         {

@@ -115,6 +115,19 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         network: bool,
     },
+    /// Lend a shared folder to a Chat with Work bot, or stop lending it
+    /// (PROTOCOL.md section 7.2.1). `unattended` lets the bot's commands
+    /// there start without anyone approving each one, only where commands
+    /// are allowed.
+    RootsBot {
+        root: String,
+        bot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        lent: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unattended: bool,
+    },
     /// The commands this computer ran for Chat with Work (`run`): those
     /// running and the latest to end, with each one's command line, folder
     /// and state. Only for this computer's own windows.

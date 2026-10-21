@@ -49,6 +49,7 @@ fn fixture(commands: bool) -> Fixture {
     paths.ensure().unwrap();
     let mut config = Config::default();
     config.roots.push(Root {
+        bots: Vec::new(),
         id: "project".into(),
         label: "Project".into(),
         path: folder.clone(),

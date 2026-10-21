@@ -55,6 +55,10 @@ pub struct RootInfo {
     pub index: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indexed_files: Option<u64>,
+    /// For a bot's own list of the folders lent to it: whether its commands
+    /// there start without anyone approving each one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -69,6 +73,9 @@ pub struct SearchRequest {
     pub modified_after: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// The folders a bot's search may look in: only those lent to it.
+    #[serde(skip)]
+    pub only: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -188,6 +195,28 @@ impl Reader {
         Ok(())
     }
 
+    /// The loan of folder `root` to the bot with ID `bot`, if it's lent to it.
+    pub fn loan(&self, root: &str, bot: &str) -> Option<crate::config::BotLoan> {
+        let state = self.state.read().expect("reader state");
+        state
+            .configured
+            .iter()
+            .find(|r| r.id == root)?
+            .loan(bot)
+            .cloned()
+    }
+
+    /// The IDs of the folders lent to the bot with ID `bot`.
+    pub fn lent_to(&self, bot: &str) -> Vec<String> {
+        let state = self.state.read().expect("reader state");
+        state
+            .configured
+            .iter()
+            .filter(|r| r.loan(bot).is_some())
+            .map(|r| r.id.clone())
+            .collect()
+    }
+
     pub fn roots(&self) -> Vec<RootInfo> {
         let state = self.state.read().expect("reader state");
         let status = self
@@ -216,6 +245,7 @@ impl Reader {
                         (true, _) => "pending".into(),
                     },
                     indexed_files: s.map(|s| s.files),
+                    unattended: None,
                 }
             })
             .collect()
@@ -236,7 +266,12 @@ impl Reader {
             .clamp(1, state.limits.search_hits);
         let roots: Vec<Arc<RootHandle>> = match &req.root {
             Some(id) => vec![root_by_id(&state, id)?],
-            None => state.roots.clone(),
+            None => state
+                .roots
+                .iter()
+                .filter(|r| req.only.as_ref().is_none_or(|only| only.contains(&r.id)))
+                .cloned()
+                .collect(),
         };
         let modified_after = req.modified_after.as_deref().map(parse_time).transpose()?;
         let glob = req.path_glob.as_deref().map(compile_glob).transpose()?;

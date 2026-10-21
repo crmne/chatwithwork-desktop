@@ -211,6 +211,7 @@ mod tests {
         std::fs::create_dir_all(base.join("a/b/ignored")).unwrap();
         std::fs::write(base.join("a/b/ignored/five.txt"), "x").unwrap();
         let root = RootHandle::open(&crate::config::Root {
+            bots: Vec::new(),
             id: "docs".into(),
             label: "Docs".into(),
             path: base,

@@ -25,6 +25,7 @@ fn only_shared_folders_are_readable() {
     let paths = Paths::under(&home);
     Config {
         roots: vec![Root {
+            bots: Vec::new(),
             id: "shared".into(),
             label: "Shared".into(),
             path: shared.clone(),
@@ -96,6 +97,7 @@ fn only_folders_that_allow_changes_are_writable() {
     let home = base.join("cww");
     let paths = Paths::under(&home);
     let root = |id: &str, path: &std::path::Path, writable| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),
@@ -236,6 +238,7 @@ fn only_folders_that_allow_changes_are_writable_on_macos() {
     let home = base.join("cww");
     let paths = Paths::under(&home);
     let root = |id: &str, path: &std::path::Path, writable| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),

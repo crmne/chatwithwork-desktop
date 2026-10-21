@@ -42,6 +42,7 @@ fn fixture_with(limits: Limits) -> Fixture {
     fs::hard_link(outside.join("secret.txt"), docs.join("hardlink.txt")).unwrap();
     let paths = Paths::under(&base.join("cww"));
     let root = |id: &str, path: &Path, writable| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.to_uppercase(),
         path: path.to_path_buf(),
@@ -683,6 +684,7 @@ fn refuses_folders_that_hold_a_shared_folder() {
     fs::create_dir_all(&inner).unwrap();
     let paths = Paths::under(&f.base.join("cww2"));
     let root = |id: &str, path: &Path| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),
@@ -718,6 +720,7 @@ fn folders_shared_read_only_stay_read_only_inside_writable_ones() {
     fs::write(inner.join("keep.md"), "keep").unwrap();
     let paths = Paths::under(&f.base.join("cww4"));
     let root = |id: &str, path: &Path, writable| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),
@@ -819,6 +822,7 @@ fn moves_across_filesystems_by_copying() {
     }
     let paths = Paths::under(&f.base.join("cww3"));
     let root = |id: &str, path: &Path| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),
@@ -965,6 +969,7 @@ fn folders_shared_read_only_stay_read_only_whatever_name_reaches_them() {
     fs::write(inner.join("keep.md"), "keep").unwrap();
     let paths = Paths::under(&f.base.join("cww5"));
     let root = |id: &str, path: &Path, writable| Root {
+        bots: Vec::new(),
         id: id.into(),
         label: id.into(),
         path: path.to_path_buf(),

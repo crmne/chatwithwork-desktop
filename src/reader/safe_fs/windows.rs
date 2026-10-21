@@ -1018,6 +1018,7 @@ mod tests {
         );
         std::fs::hard_link(outside.join("secret.txt"), root_path.join("hardlink.txt")).unwrap();
         let root = RootHandle::open(&Root {
+            bots: Vec::new(),
             id: "docs".into(),
             label: "Docs".into(),
             path: root_path,

@@ -127,6 +127,13 @@ pub struct Root {
     /// dependencies). Off by default: commands run without a network.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub network: bool,
+    /// Chat with Work bots this folder is lent to (PROTOCOL.md section 7.2.1).
+    /// A call a bot's chat makes reaches only the folders lent to that bot,
+    /// and a command it runs without a person approving it only where its
+    /// loan says so. Only ever changed here or from this computer's apps,
+    /// never by the server.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bots: Vec<BotLoan>,
 }
 
 impl Root {
@@ -134,6 +141,26 @@ impl Root {
     pub fn runs_commands(&self) -> bool {
         self.writable && self.commands
     }
+
+    /// The loan of this folder to the bot with this ID, if it's lent to it.
+    pub fn loan(&self, bot: &str) -> Option<&BotLoan> {
+        self.bots.iter().find(|loan| loan.id == bot)
+    }
+}
+
+/// A shared folder lent to one Chat with Work bot: the bot's ID on the
+/// server, the name it had when it was lent (for the local user only), and
+/// whether its commands here may run without a person approving each one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BotLoan {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// Commands the bot runs here start without anyone approving them in
+    /// Chat with Work. Only where commands are allowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unattended: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -287,6 +314,7 @@ mod tests {
 
         let mut config = Config::default();
         config.roots.push(Root {
+            bots: Vec::new(),
             id: "abc123".into(),
             label: "Docs".into(),
             path: "/tmp/docs".into(),
