@@ -63,15 +63,21 @@ async fn control(request: Value) -> Result<Value, String> {
         return Err(format!("The window can't send {cmd:?}."));
     }
     let chat = cmd == "chat";
-    tauri::async_runtime::spawn_blocking(move || daemon::request(&request).map(|a| if chat { with_html(a) } else { a }))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        daemon::request(&request).map(|a| if chat { with_html(a) } else { a })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Follows one chat, and stops following the one before. Chunks are
 /// joined and rendered here, so each event carries the answer so far.
 #[tauri::command]
-async fn follow_chat(app: AppHandle, follows: State<'_, Follows>, chat: String) -> Result<(), String> {
+async fn follow_chat(
+    app: AppHandle,
+    follows: State<'_, Follows>,
+    chat: String,
+) -> Result<(), String> {
     follows.chat.lock().unwrap().take();
     let number = chat.clone();
     let subscription = tauri::async_runtime::spawn_blocking(move || {
@@ -101,11 +107,14 @@ async fn follow_chat(app: AppHandle, follows: State<'_, Follows>, chat: String) 
 #[tauri::command]
 async fn follow_list(app: AppHandle, follows: State<'_, Follows>) -> Result<(), String> {
     let subscription = tauri::async_runtime::spawn_blocking(move || {
-        daemon::subscribe(&json!({ "cmd": "subscribe", "topics": ["chats"] }), move |event| {
-            if event["event"] == "chats" {
-                let _ = app.emit("chats", &event["update"]);
-            }
-        })
+        daemon::subscribe(
+            &json!({ "cmd": "subscribe", "topics": ["chats"] }),
+            move |event| {
+                if event["event"] == "chats" {
+                    let _ = app.emit("chats", &event["update"]);
+                }
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -116,11 +125,14 @@ async fn follow_list(app: AppHandle, follows: State<'_, Follows>) -> Result<(), 
 #[tauri::command]
 async fn follow_status(app: AppHandle, follows: State<'_, Follows>) -> Result<(), String> {
     let subscription = tauri::async_runtime::spawn_blocking(move || {
-        daemon::subscribe(&json!({ "cmd": "subscribe", "topics": ["status"] }), move |event| {
-            if event["event"] == "status" {
-                let _ = app.emit("status", &event["status"]);
-            }
-        })
+        daemon::subscribe(
+            &json!({ "cmd": "subscribe", "topics": ["status"] }),
+            move |event| {
+                if event["event"] == "status" {
+                    let _ = app.emit("status", &event["status"]);
+                }
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -134,7 +146,9 @@ async fn follow_status(app: AppHandle, follows: State<'_, Follows>) -> Result<()
 #[tauri::command]
 fn painted(what: String) {
     if std::env::var_os("CWW_PAINT_MARK").is_some() {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
         eprintln!("cww-paint {what} {}", now.as_micros());
     }
 }
@@ -161,17 +175,24 @@ fn launch_options() -> Value {
 /// daemon from the paired server (CONTROL.md, `asset`) and kept for the
 /// life of the window by the web view's cache.
 fn asset(path: &str) -> Response<Vec<u8>> {
-    let fetched = daemon::request(&json!({ "cmd": "asset", "path": path })).ok().and_then(|answer| {
-        let data = base64::engine::general_purpose::STANDARD.decode(answer["data"].as_str()?).ok()?;
-        Some((answer["content_type"].as_str()?.to_string(), data))
-    });
+    let fetched = daemon::request(&json!({ "cmd": "asset", "path": path }))
+        .ok()
+        .and_then(|answer| {
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(answer["data"].as_str()?)
+                .ok()?;
+            Some((answer["content_type"].as_str()?.to_string(), data))
+        });
     match fetched {
         Some((content_type, data)) => Response::builder()
             .header("Content-Type", content_type)
             .header("Cache-Control", "max-age=31536000, immutable")
             .body(data)
             .unwrap(),
-        None => Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap(),
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap(),
     }
 }
 
