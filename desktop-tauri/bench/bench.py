@@ -26,6 +26,7 @@ Stops only processes it started, by PID.
 import argparse
 import glob
 import json
+import shlex
 import os
 import re
 import signal
@@ -37,6 +38,12 @@ import threading
 import time
 
 MAC = sys.platform == "darwin"
+# On Linux under Hyprland, every window opens on the hidden special
+# workspace "agents" (BENCH_VISIBLE=1 opens them normally). A hidden window
+# gets no frame callbacks, which may hold back or delay its frames, so
+# first-paint numbers measured there are an upper bound.
+HIDDEN = not MAC and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and not os.environ.get("BENCH_VISIBLE")
+SCRATCH = os.environ.get("BENCH_SCRATCH", tempfile.gettempdir())
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 
 
@@ -177,13 +184,51 @@ class Run:
     def __init__(self, cmd, env):
         self.marks = {}
         self.webkit_before = webkit_pids()
-        self.started = time.time_ns() // 1000
-        self.proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         self.event = threading.Condition()
-        threading.Thread(target=self._read, daemon=True).start()
+        self.started = time.time_ns() // 1000
+        if HIDDEN:
+            # Hyprland starts it on its hidden special workspace, so no
+            # window shows where anyone works. The wrapper writes its PID
+            # and becomes the app, whose stderr goes to a file.
+            work = tempfile.mkdtemp(prefix="cww-bench-", dir=SCRATCH)
+            self.log, pidfile = os.path.join(work, "stderr"), os.path.join(work, "pid")
+            changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
+            exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in changed.items())
+            line = f"echo $$ > {pidfile}; exec env {exports} {' '.join(shlex.quote(os.path.abspath(c)) if i == 0 else shlex.quote(c) for i, c in enumerate(cmd))} 2> {self.log}"
+            # Hyprland 0.56's Lua dispatcher, with the window's workspace as a rule.
+            lua = f'hl.dsp.exec_cmd([==[sh -c {shlex.quote(line)}]==], {{ workspace = "special:agents silent" }})'
+            subprocess.run(["hyprctl", "dispatch", lua], check=True, capture_output=True)
+            for _ in range(200):
+                if os.path.exists(pidfile) and open(pidfile).read().strip():
+                    break
+                time.sleep(0.02)
+            self.pid = int(open(pidfile).read())
+            self.proc = None
+            threading.Thread(target=self._tail, daemon=True).start()
+        else:
+            self.proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            self.pid = self.proc.pid
+            threading.Thread(target=self._read, daemon=True).start()
+
+    def _tail(self):
+        while not os.path.exists(self.log):
+            time.sleep(0.01)
+        with open(self.log) as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    if not os.path.exists(f"/proc/{self.pid}"):
+                        return
+                    time.sleep(0.005)
+                    continue
+                self._line(line)
 
     def _read(self):
         for line in self.proc.stderr:
+            self._line(line)
+
+    def _line(self, line):
+        if True:
             m = re.match(r"cww-paint (\w+) (\d+)", line)
             if m:
                 with self.event:
@@ -201,16 +246,19 @@ class Run:
         return self.marks.get(what)
 
     def processes(self):
-        return descendants(self.proc.pid) + sorted(webkit_pids() - self.webkit_before)
+        return descendants(self.pid) + sorted(webkit_pids() - self.webkit_before)
 
     def stop(self):
         tree = self.processes()
-        self.proc.send_signal(signal.SIGTERM)
-        try:
-            self.proc.wait(5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
+        os.kill(self.pid, signal.SIGTERM)
+        for _ in range(100):
+            if self.proc is not None and self.proc.poll() is not None:
+                break
+            if self.proc is None and not os.path.exists(f"/proc/{self.pid}"):
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(self.pid, signal.SIGKILL)
         time.sleep(0.5)
         for pid in tree[1:]:
             try:
@@ -349,8 +397,9 @@ def main():
             cold = start_times(app, args, True, files)
         print(f"{app}: memory and CPU", file=sys.stderr)
         results[app] = {"warm_ms": warm, "cold_ms": cold, **idle_and_stream(app, args)}
-    print("tauri: in-page checks", file=sys.stderr)
-    results["tauri"]["autotests"] = autotests(args)
+    if not HIDDEN:  # they wait for frames, which a hidden window never gets
+        print("tauri: in-page checks", file=sys.stderr)
+        results["tauri"]["autotests"] = autotests(args)
     for app, r in results.items():
         print(f"\n== {app}")
         print(f"start to first paint, warm: {summary(r['warm_ms'])}")

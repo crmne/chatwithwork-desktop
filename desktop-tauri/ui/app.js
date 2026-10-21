@@ -64,11 +64,16 @@ document.addEventListener("click", (event) => {
 
 // Measuring ---------------------------------------------------------------
 
+// Marked once the page is laid out with the daemon's data, as the egui
+// app marks the frame it lays out with it: not when the compositor shows
+// it. Waiting for a frame would never end in a hidden window, which gets
+// no frames, and the benchmark runs on a hidden workspace.
 const marked = new Set();
 function markPainted(what) {
   if (marked.has(what)) return;
   marked.add(what);
-  requestAnimationFrame(() => requestAnimationFrame(() => invoke("painted", { what })));
+  void document.body.offsetHeight; // forces style and layout now
+  invoke("painted", { what });
 }
 
 // Pages -------------------------------------------------------------------

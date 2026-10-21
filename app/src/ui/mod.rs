@@ -1353,9 +1353,7 @@ impl SettingsApp {
         if self.page == Page::Folders && self.shared.status().is_some() {
             FOLDERS.call_once(|| eprintln!("cww-paint folders {}", now()));
         }
-        if self.page == Page::Chat
-            && self.chat_state().is_some_and(|s| s.transcript.is_some())
-        {
+        if self.page == Page::Chat && self.chat_state().is_some_and(|s| s.transcript.is_some()) {
             CHAT.call_once(|| eprintln!("cww-paint chat {}", now()));
         }
     }

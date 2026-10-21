@@ -24,7 +24,9 @@ pub fn socket_path() -> PathBuf {
     {
         return PathBuf::from(runtime).join("cww/cww.sock");
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".local/state/cww/cww.sock")
 }
 
@@ -53,7 +55,10 @@ pub fn request(request: &Value) -> Result<Value, String> {
     if answer["ok"] == Value::Bool(true) {
         Ok(answer)
     } else {
-        Err(answer["error"].as_str().unwrap_or("The Local Agent refused that.").to_string())
+        Err(answer["error"]
+            .as_str()
+            .unwrap_or("The Local Agent refused that.")
+            .to_string())
     }
 }
 
