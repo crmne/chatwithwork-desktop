@@ -1,0 +1,40 @@
+[package]
+name = "cww-desktop-tauri"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Prototype: Chat with Work Desktop on Tauri 2, talking to the cww daemon over its control socket"
+license = "MIT OR Apache-2.0"
+authors = ["Carmine Paolino <carmine@paolino.me>"]
+publish = false
+
+# A prototype outside the main workspace, with its own lock file, so the
+# daemon's and the egui app's dependencies stay exactly as they are.
+[workspace]
+
+[[bin]]
+name = "cww-desktop-tauri"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+# Answers are Markdown, rendered here as the egui app parses them.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[features]
+# Embeds ui/ in the binary and serves it from tauri://. Without the Tauri
+# CLI, cargo build needs it on to make a production build.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# The same as the egui app's, so sizes compare.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
