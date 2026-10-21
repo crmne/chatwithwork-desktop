@@ -1333,6 +1333,34 @@ impl SettingsApp {
     }
 }
 
+impl SettingsApp {
+    /// For the Tauri prototype's benchmark (docs/tauri-prototype.md): with
+    /// `CWW_PAINT_MARK` set, prints the wall clock once the first frame
+    /// with the daemon's status (Folders) or an open chat's transcript has
+    /// been laid out, as the prototype's page does after its first frame.
+    fn mark_painted(&mut self) {
+        static FOLDERS: std::sync::Once = std::sync::Once::new();
+        static CHAT: std::sync::Once = std::sync::Once::new();
+        if std::env::var_os("CWW_PAINT_MARK").is_none() {
+            return;
+        }
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros()
+        };
+        if self.page == Page::Folders && self.shared.status().is_some() {
+            FOLDERS.call_once(|| eprintln!("cww-paint folders {}", now()));
+        }
+        if self.page == Page::Chat
+            && self.chat_state().is_some_and(|s| s.transcript.is_some())
+        {
+            CHAT.call_once(|| eprintln!("cww-paint chat {}", now()));
+        }
+    }
+}
+
 impl eframe::App for SettingsApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.custom_titlebar {
@@ -1342,6 +1370,7 @@ impl eframe::App for SettingsApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        self.mark_painted();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
