@@ -68,7 +68,7 @@ What happens to it: the extension sends it only to Chat with Work Desktop on the
 
 Certify all three: not sold to third parties; not used or transferred for purposes unrelated to the single purpose; not used to determine creditworthiness.
 
-**Privacy policy:** https://chatwithwork.com/privacy (its "Your browser" paragraph covers the extension).
+**Privacy policy:** https://chatwithwork.com/privacy-policy (its "Your browser" paragraph covers the extension).
 
 ## Test instructions for the reviewer
 
