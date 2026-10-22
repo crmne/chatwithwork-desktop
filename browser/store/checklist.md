@@ -7,7 +7,7 @@ Nothing here is submitted without Carmine's go-ahead. In order:
 - [ ] The browser work is on `main`: the extension, the native messaging host and the daemon's tools (crmne/chatwithwork-desktop#20 and #21), and the server side (crmne/chatwithwork, `LocalAgent::Device::BrowserTool`, on main).
 - [ ] A Chat with Work Desktop release that includes them, so reviewers and people can install a `cww` that answers the extension. `cww browser enable` (or the app's settings, once the settings page has its browser section) registers the host.
 - [ ] The privacy policy at https://chatwithwork.com/privacy-policy has its "Your browser" paragraph (on main in crmne/chatwithwork; live once deployed).
-- [ ] The extension's private key is in 1Password (it's now only at `~/.local/share/chatwithwork-browser/key.pem` on Carmine's desktop, mode 0600). The public half is the manifest's `key`, which gives the ID `ehjfihpogoacjodjnanclodinjnnpmcp` that `cww` allows (`src/browsing/bridge.rs`, `EXTENSION_ID`).
+- [x] The extension's private key is in 1Password, and nowhere else: the Document item "Chat with Work browser extension key" in the chatwithwork vault (`op://chatwithwork/Chat with Work browser extension key/key.pem`). The public half is the manifest's `key`, which gives the ID `ehjfihpogoacjodjnanclodinjnnpmcp` that `cww` allows (`src/browsing/bridge.rs`, `EXTENSION_ID`).
 - [ ] A Chrome Web Store developer account for Plenty UG (one-time fee, 2-step verification, the publisher's contact email verified). Group publisher if others should manage it.
 - [ ] A reviewer test account on chatwithwork.com with credits, for the dashboard's private test-instructions field.
 
@@ -16,7 +16,7 @@ Nothing here is submitted without Carmine's go-ahead. In order:
 - [ ] `cd browser && npm ci && npm test && npm run e2e`, all green.
 - [ ] Bump `version` in `static/manifest.json` and `package.json` together.
 - [ ] `npm run package` writes `chatwithwork-browser.zip` without the manifest's `key` field.
-- [ ] First upload only: add the private key to the zip as `key.pem` at its root (`cp ~/.local/share/chatwithwork-browser/key.pem build/ && (cd build && zip -q ../chatwithwork-browser.zip key.pem)`), so the store keeps our ID. Check the ID the dashboard shows is `ehjfihpogoacjodjnanclodinjnnpmcp` before anything else; if it isn't, stop: `cww` won't let that extension in. Never commit `key.pem`, and delete `build/key.pem` after.
+- [ ] First upload only: add the private key to the zip as `key.pem` at its root, so the store keeps our ID: `(umask 077; op-cache read "op://chatwithwork/Chat with Work browser extension key/key.pem" > build/key.pem) && (cd build && zip -q ../chatwithwork-browser.zip key.pem)`. Check the ID the dashboard shows is `ehjfihpogoacjodjnanclodinjnnpmcp` before anything else; if it isn't, stop: `cww` won't let that extension in. Never commit `key.pem`, and delete `build/key.pem` and the zip with it in after the upload.
 
 ## The listing
 
