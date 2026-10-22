@@ -19,7 +19,7 @@ use crate::desktop::Desktop;
 use crate::windows::{SETTINGS, is_local_url};
 
 /// Control requests the settings pages may send (CONTROL.md).
-pub const ALLOWED: [&str; 17] = [
+pub const ALLOWED: [&str; 18] = [
     "hello",
     "status",
     "pause",
@@ -29,6 +29,7 @@ pub const ALLOWED: [&str; 17] = [
     "roots_writable",
     "roots_commands",
     "roots_label",
+    "roots_bot",
     "suggested_roots",
     "deny",
     "audit_tail",
@@ -473,6 +474,7 @@ mod tests {
             json!({ "cmd": "status" }),
             json!({ "cmd": "pause" }),
             json!({ "cmd": "roots_label", "root": "docs", "label": "Docs" }),
+            json!({ "cmd": "roots_bot", "root": "app", "bot": "42", "name": "Issue fixer", "lent": true, "unattended": false }),
             json!({ "cmd": "audit_tail", "lines": 50 }),
             json!({ "cmd": "notification_permission", "request": true }),
         ] {

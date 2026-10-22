@@ -47,11 +47,15 @@ Two checks enforce it. A capability added at start (`desktop.rs`), for the serve
 The settings window shows `app/ui`, plain HTML, CSS and JavaScript without a framework or build step, styled with the web app's Live Wire tokens (`ui/tokens.css`, copied from the web app) and Geist. They work without a network and before pairing. Only they reach the daemon:
 
 - The capability in `capabilities/local.json` names the `settings` window and no remote URL. Each command in `local.rs` checks again that its caller is a bundled page in that window.
-- `control` sends a control request (CONTROL.md) only if it is on `local::ALLOWED`: status, pause and resume, shared folders and their changes and commands, the deny list, the activity log, and notification permission. Never chats, uploads, `reload` or `shutdown`.
+- `control` sends a control request (CONTROL.md) only if it is on `local::ALLOWED`: status, pause and resume, shared folders and their changes and commands, lending them to bots (`roots_bot`), the deny list, the activity log, and notification permission. Never chats, uploads, `reload` or `shutdown`.
 - The rest are the app's own: pairing (it runs `cww login --json` and reports its code and outcome as `pairing` events), the folder picker, starting the daemon (`cww daemon install`), start at login, crash reports, dictation preferences and Whisper models for `cww tui`, opening the config file or the logs, and opening the Chat with Work window on one of the server's pages.
 - The daemon's status arrives as a `status` event, which the app hands to the page by calling its `window.cwwEvent` (so the pages need none of Tauri's own APIs, not even its events); the activity log's sentences are made in Rust (`activity.rs`), as the egui app made them.
 
 Organizations, people, notification preferences, models and templates are in the web app's Settings, in the Chat with Work window.
+
+## Lending folders to bots
+
+Each shared folder lists the Chat with Work bots it is lent to (`status`'s `roots[].bots`), with Lend to a Bot (by the bot's ID, the number in its address in Chat with Work, and an optional name to recognize it), a switch per bot for unattended commands where the folder allows commands, and Stop Lending. All of it is one `roots_bot` request. As CONTROL.md asks, lending says what the bot's chats can then do in the folder (read, change where changes are allowed, run commands where commands are allowed, each asking in Chat with Work unless the bot's own settings let it run) and asks first, and so does turning unattended commands on; stopping, and turning unattended off, happen at once.
 
 ## Testing and pictures
 

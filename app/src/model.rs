@@ -53,6 +53,18 @@ pub struct RootStatus {
     pub allows_commands: bool,
     /// Those commands may use the network.
     pub network: bool,
+    /// The Chat with Work bots it is lent to (`roots_bot`).
+    pub bots: Vec<BotLoan>,
+}
+
+/// A folder lent to a bot: its chats reach the folder as it allows, and
+/// with `unattended` its commands there start without anyone approving them.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BotLoan {
+    pub id: String,
+    pub name: String,
+    pub unattended: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

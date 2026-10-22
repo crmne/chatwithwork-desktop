@@ -219,7 +219,102 @@ function folderRow(app, root) {
         ? "Commands here can reach the internet, to install packages or fetch dependencies."
         : "Commands here run without a network.",
       switchInput(root.network, (on) => change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: on }),
-        { label: `Commands in ${root.label} use the network`, disabled: busy })) : null));
+        { label: `Commands in ${root.label} use the network`, disabled: busy })) : null,
+      bots(app, root, busy)));
+}
+
+// What lending a folder lets a bot do, in the words CONTROL.md asks for.
+function lendQuestion(root) {
+  const can = ["read the files in it"];
+  if (root.writable) can.push("change them");
+  if (root.writable && root.allows_commands) can.push("run commands");
+  const reach = can.length > 1 ? `${can.slice(0, -1).join(", ")} and ${can[can.length - 1]}` : can[0];
+  return `Lend “${root.label}” to this bot? Its chats can ${reach} here, and reach no other folder on this computer. Each change and command asks in Chat with Work first, unless the bot's own settings there let it run. You can stop lending at any time.`;
+}
+
+// Bots this folder is lent to (PR #18's roots_bot): one control request
+// lends, changes unattended commands, and stops lending.
+function bots(app, root, busy) {
+  const view = app.view("folders");
+  const loans = root.bots || [];
+  const lending = view.lending?.root === root.id ? view.lending : null;
+  const unattending = view.unattending?.root === root.id ? view.unattending : null;
+  const commands = root.writable && root.allows_commands;
+  const loanName = (loan) => loan.name || `Bot ${loan.id}`;
+  const rows = [
+    h("div", { class: "row" },
+      h("div", { class: "row__body" },
+        h("h3", {}, "Lent to bots"),
+        h("p", {}, loans.length
+          ? "These Chat with Work bots can use this folder, and no other on this computer."
+          : "A Chat with Work bot reaches this computer only through folders you lend it here.")),
+      !lending ? h("div", { class: "row__actions" }, button("Lend to a Bot…", () => {
+        view.lending = { root: root.id, bot: "", name: "" };
+        app.render();
+        document.querySelector(`[data-key="bot-id-${CSS.escape(root.id)}"]`)?.focus();
+      }, { disabled: busy })) : null),
+  ];
+  for (const loan of loans) {
+    rows.push(h("div", { class: "row" },
+      h("div", { class: "row__body" },
+        h("h3", {}, loanName(loan)),
+        h("span", { class: "micro" }, `Bot ${loan.id}${loan.unattended ? " · commands start without approval" : ""}`)),
+      h("div", { class: "row__actions" },
+        commands ? h("label", { class: "check" },
+          switchInput(loan.unattended || unattending?.bot === loan.id, (on) => {
+            if (on) {
+              view.unattending = { root: root.id, bot: loan.id };
+              app.render();
+            } else {
+              change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: true, unattended: false });
+            }
+          }, { label: `Unattended commands for ${loanName(loan)}`, disabled: busy || !!unattending }),
+          "Unattended") : null,
+        button("Stop Lending", () =>
+          change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: false }),
+        { kind: "btn-subtle-negative", disabled: busy }))));
+    if (unattending?.bot === loan.id) {
+      rows.push(h("div", { class: "confirm" },
+        h("p", {}, `Let ${loanName(loan)}'s commands in “${root.label}” start without anyone approving each one? They run in the same sandbox and limits as any command here, and can change or delete anything in this folder, and nothing outside it.`),
+        h("div", { class: "inline" },
+          button("Cancel", () => {
+            view.unattending = null;
+            app.render();
+          }),
+          button("Allow Unattended Commands", () => {
+            view.unattending = null;
+            change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: true, unattended: true });
+          }, { kind: "btn-primary" }))));
+    }
+  }
+  if (lending) {
+    const id = lending.bot.trim();
+    const valid = /^[0-9]{1,20}$/.test(id);
+    rows.push(h("form", { class: "confirm", onsubmit: (event) => {
+      event.preventDefault();
+      if (!valid) return;
+      view.lending = null;
+      change(app, root.id, { cmd: "roots_bot", root: root.id, bot: id, name: lending.name.trim() || undefined, lent: true, unattended: false });
+    } },
+      h("div", { class: "inline" },
+        h("input", { class: "input", inputMode: "numeric", placeholder: "Bot ID, like 42", "aria-label": "Bot ID",
+          value: lending.bot, "data-key": `bot-id-${root.id}`, oninput: (event) => {
+            const wasValid = /^[0-9]{1,20}$/.test(lending.bot.trim());
+            lending.bot = event.target.value;
+            if (wasValid !== /^[0-9]{1,20}$/.test(lending.bot.trim())) app.render();
+          } }),
+        h("input", { class: "input", placeholder: "Name, to recognize it (optional)", "aria-label": "Bot name", maxLength: 80,
+          value: lending.name, "data-key": `bot-name-${root.id}`, oninput: (event) => (lending.name = event.target.value) })),
+      h("p", { class: "note" }, "The bot's ID is the number in its address in Chat with Work (/bots/42); its page shows it."),
+      h("p", {}, lendQuestion(root)),
+      h("div", { class: "inline" },
+        button("Cancel", () => {
+          view.lending = null;
+          app.render();
+        }),
+        h("button", { type: "submit", class: "btn btn-primary", disabled: !valid }, "Lend Folder"))));
+  }
+  return rows;
 }
 
 export function render(app) {
