@@ -1,7 +1,8 @@
 //! The menu bar item (macOS), notification-area icon (Windows) or tray item
 //! (Linux, through the AppIndicator library), with the platform's own menu:
 //! the daemon's state as two greyed-out lines, then Open Chat with Work,
-//! Pause Sharing, Settings and Quit.
+//! Pause Sharing, Stop Using the Browser while the browser is on, Settings
+//! and Quit.
 
 use tauri::AppHandle;
 use tauri::image::Image;
@@ -15,6 +16,7 @@ mod ids {
     pub const DETAIL: &str = "detail";
     pub const OPEN: &str = "open";
     pub const PAUSE: &str = "pause";
+    pub const BROWSER: &str = "browser";
     pub const SETTINGS: &str = "settings";
     pub const QUIT: &str = "quit";
 }
@@ -27,6 +29,15 @@ pub fn pause_label(paused: bool) -> &'static str {
         "Resume Sharing"
     } else {
         "Pause Sharing"
+    }
+}
+
+/// The label of the browser's kill switch.
+pub fn browser_label(stopped: bool) -> &'static str {
+    if stopped {
+        "Resume Using the Browser"
+    } else {
+        "Stop Using the Browser"
     }
 }
 
@@ -44,6 +55,7 @@ pub fn tooltip(view: &TrayView, platform: Platform) -> String {
 pub enum Action {
     Open,
     TogglePause,
+    ToggleBrowser,
     Settings,
     Quit,
 }
@@ -52,6 +64,7 @@ pub fn action(id: &str) -> Option<Action> {
     Some(match id {
         ids::OPEN => Action::Open,
         ids::PAUSE => Action::TogglePause,
+        ids::BROWSER => Action::ToggleBrowser,
         ids::SETTINGS => Action::Settings,
         ids::QUIT => Action::Quit,
         _ => return None,
@@ -59,11 +72,44 @@ pub fn action(id: &str) -> Option<Action> {
 }
 
 pub struct Tray {
+    app: AppHandle,
     icon: TrayIcon,
     headline: MenuItem<tauri::Wry>,
     detail: MenuItem<tauri::Wry>,
     pause: MenuItem<tauri::Wry>,
+    browser: MenuItem<tauri::Wry>,
     view: TrayView,
+}
+
+/// The menu, with the browser's entry only while the browser is on (Tauri
+/// can't hide an item, so the menu is made again when that changes).
+fn menu(
+    app: &AppHandle,
+    lines: [&MenuItem<tauri::Wry>; 3],
+    browser: Option<&MenuItem<tauri::Wry>>,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let platform = Platform::current();
+    let [headline, detail, pause] = lines;
+    let open = MenuItem::with_id(app, ids::OPEN, OPEN_LABEL, true, None::<&str>)?;
+    let settings = MenuItem::with_id(
+        app,
+        ids::SETTINGS,
+        platform.settings_item(),
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, ids::QUIT, platform.quit_item(), true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let last = PredefinedMenuItem::separator(app)?;
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        vec![headline, detail, &separator, &open, pause];
+    if let Some(browser) = browser {
+        items.push(browser);
+    }
+    items.push(&settings);
+    items.push(&last);
+    items.push(&quit);
+    Menu::with_items(app, &items)
 }
 
 const COLOR: &[u8] = include_bytes!("../assets/tray-64.png");
@@ -99,7 +145,6 @@ impl Tray {
             false,
             None::<&str>,
         )?;
-        let open = MenuItem::with_id(app, ids::OPEN, OPEN_LABEL, true, None::<&str>)?;
         let pause = MenuItem::with_id(
             app,
             ids::PAUSE,
@@ -107,32 +152,23 @@ impl Tray {
             view.paused.is_some(),
             None::<&str>,
         )?;
-        let settings = MenuItem::with_id(
+        let browser = MenuItem::with_id(
             app,
-            ids::SETTINGS,
-            platform.settings_item(),
+            ids::BROWSER,
+            browser_label(view.browser_stopped == Some(true)),
             true,
             None::<&str>,
         )?;
-        let quit = MenuItem::with_id(app, ids::QUIT, platform.quit_item(), true, None::<&str>)?;
-        let menu = Menu::with_items(
+        let menu_now = menu(
             app,
-            &[
-                &headline,
-                &detail,
-                &PredefinedMenuItem::separator(app)?,
-                &open,
-                &pause,
-                &settings,
-                &PredefinedMenuItem::separator(app)?,
-                &quit,
-            ],
+            [&headline, &detail, &pause],
+            view.browser_stopped.is_some().then_some(&browser),
         )?;
         let icon = TrayIconBuilder::with_id("cww-app")
             .icon(icon(view.dimmed))
             .icon_as_template(cfg!(target_os = "macos"))
             .tooltip(tooltip(view, platform))
-            .menu(&menu)
+            .menu(&menu_now)
             // macOS opens the menu on any click; Windows opens the app on a
             // left click and the menu on a right one. Linux trays always
             // show the menu.
@@ -153,10 +189,12 @@ impl Tray {
             })
             .build(app)?;
         Ok(Self {
+            app: app.clone(),
             icon,
             headline,
             detail,
             pause,
+            browser,
             view: view.clone(),
         })
     }
@@ -181,6 +219,21 @@ impl Tray {
             let _ = self.pause.set_text(pause_label(view.paused == Some(true)));
             let _ = self.pause.set_enabled(view.paused.is_some());
         }
+        if view.browser_stopped != old.browser_stopped {
+            if let Some(stopped) = view.browser_stopped {
+                let _ = self.browser.set_text(browser_label(stopped));
+            }
+            if view.browser_stopped.is_some() != old.browser_stopped.is_some() {
+                let shown = view.browser_stopped.is_some().then_some(&self.browser);
+                if let Ok(menu) = menu(
+                    &self.app,
+                    [&self.headline, &self.detail, &self.pause],
+                    shown,
+                ) {
+                    let _ = self.icon.set_menu(Some(menu));
+                }
+            }
+        }
         if tooltip(view, platform) != tooltip(&old, platform) {
             let _ = self.icon.set_tooltip(Some(tooltip(view, platform)));
         }
@@ -204,6 +257,7 @@ mod tests {
             paused: Some(false),
             tooltip: "Chat with Work Desktop: Online".into(),
             dimmed: false,
+            browser_stopped: None,
         }
     }
 
@@ -217,6 +271,9 @@ mod tests {
         assert_eq!(action("detail"), None);
         assert_eq!(pause_label(true), "Resume Sharing");
         assert_eq!(pause_label(false), "Pause Sharing");
+        assert_eq!(action("browser"), Some(Action::ToggleBrowser));
+        assert_eq!(browser_label(false), "Stop Using the Browser");
+        assert_eq!(browser_label(true), "Resume Using the Browser");
     }
 
     #[test]

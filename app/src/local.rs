@@ -19,7 +19,7 @@ use crate::desktop::Desktop;
 use crate::windows::{SETTINGS, is_local_url};
 
 /// Control requests the settings pages may send (CONTROL.md).
-pub const ALLOWED: [&str; 18] = [
+pub const ALLOWED: [&str; 23] = [
     "hello",
     "status",
     "pause",
@@ -38,6 +38,13 @@ pub const ALLOWED: [&str; 18] = [
     "notification_preferences",
     "notification_preferences_update",
     "notification_browser_link",
+    // The browser (docs/browser.md). Turning it on registers the host first,
+    // which only `cww` can do, so that goes through `browser_enable`.
+    "browser",
+    "browser_site",
+    "browser_changes",
+    "browser_stopped",
+    "browser_bot",
 ];
 
 type Answer = Result<Value, Value>;
@@ -222,6 +229,18 @@ pub async fn logout(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answe
 }
 
 /// Registers and starts the daemon's service (`cww daemon install`).
+/// Turn the browser on or off: `cww browser enable` registers `cww` as the
+/// extension's native messaging host for this user's browsers and turns
+/// the tools on; `disable` removes both. Answers what `cww` said.
+#[tauri::command]
+pub async fn browser_enable(webview: Webview, enabled: bool) -> Answer {
+    local_page(&webview)?;
+    blocking(move || crate::agent::browser(enabled))
+        .await?
+        .map(|said| json!({ "said": said }))
+        .map_err(|e| refusal("failed", format!("{e:#}")))
+}
+
 #[tauri::command]
 pub async fn start_agent(webview: Webview) -> Answer {
     local_page(&webview)?;

@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "cancel_pairing",
     "logout",
     "start_agent",
+    "browser_enable",
     "autostart",
     "set_autostart",
     "crash_reports",

@@ -101,6 +101,12 @@ impl Client {
         self.request(&request).map(drop)
     }
 
+    /// The browser's kill switch (CONTROL.md, Browser).
+    pub fn set_browser_stopped(&self, stopped: bool) -> Result<()> {
+        self.request(&ControlRequest::BrowserStopped { stopped })
+            .map(drop)
+    }
+
     #[cfg(test)]
     pub fn add_root(&self, path: &Path, label: Option<&str>) -> Result<Value> {
         self.request(&ControlRequest::RootsAdd {
