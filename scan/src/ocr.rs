@@ -54,7 +54,11 @@ pub fn system_engine() -> Result<Box<dyn Engine>, String> {
     {
         Tesseract::find().map(|t| Box::new(t) as Box<dyn Engine>)
     }
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(crate::vision::Vision))
+    }
+    #[cfg(windows)]
     {
         Err("Reading text isn't available on this system yet.".into())
     }

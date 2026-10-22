@@ -23,7 +23,7 @@ pdf-writer = "0.15"
 # Black-and-white pages and the text layer's font streams.
 flate2 = "1"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 # libsane is loaded at run time, from the distribution's package, never
 # shipped: its backends are GPL with an exception for frontends that load
 # them, and a computer without SANE still runs the app.
@@ -31,3 +31,10 @@ libloading = "0.8"
 
 [dev-dependencies]
 tempfile = "3.27"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Apple's Vision reads pages on a Mac, with word boxes, in every language it
+# knows; built into macOS, nothing to download.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-vision = "0.3"

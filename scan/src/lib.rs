@@ -24,8 +24,10 @@ pub mod helper;
 pub mod ocr;
 pub mod pdf;
 pub mod sample;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod sane;
+#[cfg(target_os = "macos")]
+pub mod vision;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -197,11 +199,11 @@ pub fn system_backend() -> Result<Box<dyn Backend>, ScanError> {
     if let Some(sample) = sample::Sample::from_env() {
         return Ok(Box::new(sample));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         Ok(Box::new(sane::Sane::load()?))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(ScanError::new(
             "unsupported",

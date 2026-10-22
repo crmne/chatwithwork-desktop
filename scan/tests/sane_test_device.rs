@@ -3,7 +3,7 @@
 //! installed; CI on Linux installs it (sane-backends' `test` backend must
 //! be enabled in dll.conf, or SANE_CONFIG_DIR point at a dll.conf naming it).
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

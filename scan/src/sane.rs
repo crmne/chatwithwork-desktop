@@ -1,4 +1,6 @@
-//! SANE, on Linux: the distribution's `libsane.so.1`, loaded at run time.
+//! SANE, on Linux (the distribution's `libsane.so.1`) and on macOS
+//! (Homebrew's `libsane.1.dylib`, for scanners whose makers ship no
+//! ImageCapture driver, such as Canon's P-208II), loaded at run time.
 //!
 //! No maintained Rust crate wraps SANE, and the dozen functions a frontend
 //! needs are a small, stable C API (SANE 1.0), so this is our own binding.
@@ -111,7 +113,16 @@ struct Api {
 }
 
 /// The library's names, newest first.
-const LIBRARIES: [&str; 2] = ["libsane.so.1", "libsane.so"];
+#[cfg(target_os = "linux")]
+const LIBRARIES: &[&str] = &["libsane.so.1", "libsane.so"];
+/// Homebrew's, on Apple silicon and on Intel, then whatever the loader finds.
+#[cfg(target_os = "macos")]
+const LIBRARIES: &[&str] = &[
+    "/opt/homebrew/lib/libsane.1.dylib",
+    "/usr/local/lib/libsane.1.dylib",
+    "/opt/local/lib/libsane.1.dylib",
+    "libsane.1.dylib",
+];
 
 /// SANE, initialised. Dropping it calls `sane_exit`.
 pub struct Sane {
@@ -123,7 +134,11 @@ pub struct Sane {
 fn missing() -> ScanError {
     ScanError::new(
         "no_sane",
-        "Scanning needs SANE. Install your distribution's sane package (sane-backends, libsane1 or sane), then open this page again.",
+        if cfg!(target_os = "macos") {
+            "This scanner needs SANE on a Mac: install it with Homebrew (brew install sane-backends), then look for scanners again."
+        } else {
+            "Scanning needs SANE. Install your distribution's sane package (sane-backends, libsane1 or sane), then open this page again."
+        },
     )
 }
 

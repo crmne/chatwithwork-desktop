@@ -246,7 +246,10 @@ fn default_language(languages: &[Language]) -> Option<String> {
         .or_else(|_| std::env::var("LC_MESSAGES"))
         .or_else(|_| std::env::var("LANG"))
         .unwrap_or_default();
-    let wanted = match locale.get(..2).unwrap_or_default() {
+    // Tesseract names languages in three letters ("deu"), Vision by locale
+    // ("de-DE"); either matches the system's two-letter language.
+    let two = locale.get(..2).unwrap_or_default();
+    let three = match two {
         "de" => "deu",
         "fr" => "fra",
         "it" => "ita",
@@ -256,10 +259,14 @@ fn default_language(languages: &[Language]) -> Option<String> {
         "pl" => "pol",
         _ => "eng",
     };
-    [wanted, "eng"]
-        .iter()
-        .find(|code| languages.iter().any(|l| l.code == **code))
-        .map(|code| code.to_string())
+    let matching = |two: &str, three: &str| {
+        languages
+            .iter()
+            .find(|l| l.code == three || l.code.split('-').next() == Some(two))
+            .map(|l| l.code.clone())
+    };
+    matching(two, three)
+        .or_else(|| matching("en", "eng"))
         .or_else(|| languages.first().map(|l| l.code.clone()))
 }
 
@@ -960,6 +967,11 @@ mod tests {
         assert_eq!(default_language(&[lang("eng")]).as_deref(), Some("eng"));
         assert_eq!(default_language(&[lang("ita")]).as_deref(), Some("ita"));
         assert_eq!(default_language(&[]), None);
+        // Vision's codes on a Mac.
+        assert_eq!(
+            default_language(&[lang("en-US"), lang("de-DE")]).as_deref(),
+            Some("de-DE")
+        );
     }
 
     #[test]
