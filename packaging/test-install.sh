@@ -3,8 +3,9 @@
 #
 #   bash packaging/test-install.sh ubuntu:24.04 path/to/native-packages-output
 #
-# Both executables and desktop integration must be installed. The GUI loads
-# graphics libraries at runtime, so check those in a minimal container too.
+# Both executables and desktop integration must be installed. The GUI links
+# WebKitGTK and GTK and loads the tray's AppIndicator library at run time,
+# so check those in a minimal container too.
 # The daemon test pairs nothing and uses only synthetic content.
 set -euo pipefail
 image=${1:?Supply an Ubuntu, Debian, Fedora or Rocky container image}
@@ -51,8 +52,12 @@ docker run --rm --platform "linux/${target#linux-}" \
     else pacman -S --noconfirm python; fi
     python3 - <<"PY"
 import ctypes
-for name in ("libGL.so.1", "libEGL.so.1", "libX11.so.6", "libX11-xcb.so.1", "libXcursor.so.1", "libXi.so.6", "libXrandr.so.2", "libxkbcommon.so.0", "libxkbcommon-x11.so.0", "libwayland-client.so.0", "libwayland-cursor.so.0", "libwayland-egl.so.1"):
+import os
+for name in ("libwebkit2gtk-4.1.so.0", "libgtk-3.so.0", "libsoup-3.0.so.0", "libdbus-1.so.3"):
     ctypes.CDLL(name)
+# A weak dependency on RPM distributions, where only EPEL may carry it.
+if os.environ.get("FORMAT") != "rpm":
+    ctypes.CDLL("libayatana-appindicator3.so.1")
 PY
     test -s /usr/lib/systemd/user/cww.service
     grep -qx "ExecStart=/usr/bin/cww daemon run" /usr/lib/systemd/user/cww.service

@@ -8,6 +8,11 @@ InstallModes:
 - silent
 - silentWithProgress
 UpgradeBehavior: install
+# The desktop app's window is a WebView2 web view. Windows 11 and current
+# Windows 10 have the runtime; WinGet installs it where it's missing.
+Dependencies:
+  PackageDependencies:
+  - PackageIdentifier: Microsoft.EdgeWebView2Runtime
 Commands:
 - cww
 AppsAndFeaturesEntries:
