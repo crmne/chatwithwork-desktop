@@ -178,6 +178,13 @@ impl BrowserTools {
         }
         let method = name.trim_start_matches("browser_");
         let mut value = self.bridge.call(method, params).await?;
+        // The person may have stopped the browser, or taken a site off the
+        // list, while the extension worked: the answer follows the rules as
+        // they are now.
+        let policy = self.bridge.policy();
+        if policy.stopped {
+            return Err(stopped());
+        }
         let site = value.get("url").and_then(Value::as_str).map(sites::host);
         // Every page the answer carries must be on an allowed site, or
         // nothing of it goes out.

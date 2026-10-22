@@ -141,27 +141,67 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
-// Run `expression` in a world of the extension's own in the tab's main
-// frame: it sees the page's DOM, but not the page's scripts, nor they it.
-export async function evaluate<T = unknown>(tabId: number, expression: string): Promise<T> {
+// The extension's own world in the tab's main frame: it sees the page's
+// DOM, but not the page's scripts, nor they it.
+export async function isolatedContext(tabId: number): Promise<number> {
   const tree = await send<{ frameTree: { frame: { id: string } } }>(tabId, "Page.getFrameTree");
   const world = await send<{ executionContextId: number }>(tabId, "Page.createIsolatedWorld", {
     frameId: tree.frameTree.frame.id,
     worldName: "Chat with Work",
     grantUniveralAccess: false,
   });
+  return world.executionContextId;
+}
+
+// Run `expression` in the extension's world.
+export async function evaluate<T = unknown>(tabId: number, expression: string): Promise<T> {
+  const contextId = await isolatedContext(tabId);
   const result = await send<{ result: { value?: T }; exceptionDetails?: { text?: string } }>(
     tabId,
     "Runtime.evaluate",
+    { expression, contextId, returnByValue: true, awaitPromise: true },
+  );
+  if (result.exceptionDetails) {
+    throw new ToolError("page_error", `the page refused a check: ${result.exceptionDetails.text ?? "error"}`);
+  }
+  return result.result.value as T;
+}
+
+// Call `fn` (a function's source) with `this` the element `backendNodeId`
+// and `others` (more elements) then `args` as its arguments, in the
+// extension's world.
+export async function callOn<T = unknown>(
+  tabId: number,
+  backendNodeId: number,
+  fn: string,
+  args: unknown[] = [],
+  others: number[] = [],
+): Promise<T> {
+  const contextId = await isolatedContext(tabId);
+  const resolve = async (id: number) => {
+    const { object } = await send<{ object: { objectId: string } }>(tabId, "DOM.resolveNode", {
+      backendNodeId: id,
+      executionContextId: contextId,
+    }).catch(() => {
+      throw new ToolError("not_found", `e${id} isn't on the page any more; read the page again`);
+    });
+    return object.objectId;
+  };
+  const objectId = await resolve(backendNodeId);
+  const extra = await Promise.all(others.map(resolve));
+  const result = await send<{ result: { value?: T }; exceptionDetails?: { text?: string } }>(
+    tabId,
+    "Runtime.callFunctionOn",
     {
-      expression,
-      contextId: world.executionContextId,
+      objectId,
+      functionDeclaration: fn,
+      arguments: [...extra.map((id) => ({ objectId: id })), ...args.map((value) => ({ value }))],
       returnByValue: true,
       awaitPromise: true,
     },
   );
   if (result.exceptionDetails) {
-    throw new ToolError("page_error", `the page refused a check: ${result.exceptionDetails.text ?? "error"}`);
+    throw new ToolError("page_error", `the page refused: ${result.exceptionDetails.text ?? "error"}`);
   }
   return result.result.value as T;
 }

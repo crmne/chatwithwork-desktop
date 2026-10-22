@@ -9,6 +9,8 @@ const PLAN = `<!doctype html><html><head><title>Falcon plan</title></head><body>
   <label>Email <input name="email" value="ana@example.com"></label>
   <label>Password <input type="password" name="pw" value="hunter2"></label>
   <label>Card <input autocomplete="cc-number" name="card" value="4111111111111111"></label>
+  <label for="cn">Card number</label> <input id="cn" value="5500000000000004">
+  <span id="sc">Security code</span> <div role="textbox" contenteditable aria-labelledby="sc">737</div>
   <button>Sign in</button>
 </form>
 <div style="height:3000px"></div>
@@ -95,6 +97,8 @@ test("reads a background tab in the group as accessible text, never sensitive va
   expect(text).toMatch(/textbox "Card" \[ref=e\d+\] \[sensitive\]: \(hidden\)/);
   expect(text).not.toContain("hunter2");
   expect(text).not.toContain("4111111111111111");
+  expect(text).not.toContain("5500000000000004");
+  expect(text).not.toContain("737");
   expect(reply.result.next_offset).toBeNull();
 
   const paged = await setup.daemon.call("read", { tab, offset: 5, max_chars: 10 });

@@ -33,7 +33,12 @@ async function loadStopped(): Promise<void> {
   state.stopped = stored.stopped === true;
 }
 
-function connect(): void {
+// The kill switch is read before anything connects or answers, so a worker
+// that just started never says it isn't stopped when it is.
+const loaded = loadStopped();
+
+async function connect(): Promise<void> {
+  await loaded;
   if (port) return;
   let next: chrome.runtime.Port;
   try {
@@ -100,6 +105,7 @@ async function onMessage(message: any): Promise<void> {
 }
 
 async function answer(method: string, params: unknown): Promise<{ result: unknown } | { error: { code: string; message: string } }> {
+  await loaded;
   try {
     if (state.stopped || state.policy.stopped) {
       throw new ToolError(
@@ -166,7 +172,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   void (async () => {
     if (message?.type === "stop") await setStopped(true);
     if (message?.type === "resume") await setStopped(false);
-    if (message?.type === "reconnect") connect();
+    if (message?.type === "reconnect") await connect();
     const tabs = await groupTabs();
     reply({
       native: state.native,
@@ -183,12 +189,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === RECONNECT_ALARM) connect();
+  if (alarm.name === RECONNECT_ALARM) void connect();
 });
-chrome.runtime.onStartup.addListener(() => connect());
-chrome.runtime.onInstalled.addListener(() => connect());
+chrome.runtime.onStartup.addListener(() => void connect());
+chrome.runtime.onInstalled.addListener(() => void connect());
 
-void loadStopped().then(() => {
-  connect();
-  void refreshBadge();
-});
+void connect().then(() => refreshBadge());

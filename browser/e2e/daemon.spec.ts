@@ -33,7 +33,8 @@ test.beforeAll(async () => {
   });
   await until(() => {
     try {
-      return cww("status", "--json") ? true : undefined;
+      // `status` answers even with no daemon; wait until one does.
+      return JSON.parse(cww("status", "--json")).running === false ? undefined : true;
     } catch {
       return undefined;
     }

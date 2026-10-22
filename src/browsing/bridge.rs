@@ -286,7 +286,9 @@ impl Bridge {
                     if !read? {
                         return Ok(());
                     }
-                    let Ok(message) = serde_json::from_slice::<Value>(&line) else {
+                    let message = serde_json::from_slice::<Value>(&line);
+                    line.clear();
+                    let Ok(message) = message else {
                         tracing::debug!("browser extension sent a line that isn't JSON");
                         continue;
                     };
@@ -350,11 +352,14 @@ impl Bridge {
 }
 
 /// Read one line into `line`, without its newline. `false` at the end.
+///
+/// Cancel-safe, as a branch of `select!` must be: bytes read before it is
+/// dropped stay in `line` (the caller clears it after a whole line) or in
+/// the reader, never lost.
 async fn read_line<R: AsyncBufRead + Unpin>(
     lines: &mut R,
     line: &mut Vec<u8>,
 ) -> anyhow::Result<bool> {
-    line.clear();
     loop {
         let available = lines.fill_buf().await?;
         if available.is_empty() {
@@ -451,6 +456,25 @@ fn browser_name(agent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_line_read_across_a_cancelled_read_keeps_every_byte() {
+        use tokio::io::AsyncWriteExt;
+        let (mut extension, daemon) = tokio::io::duplex(64);
+        let mut lines = tokio::io::BufReader::new(daemon);
+        let mut line = Vec::new();
+        extension.write_all(b"{\"id\":1,\"result\":").await.unwrap();
+        // Another branch of select! wins while the line is half read.
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            read_line(&mut lines, &mut line),
+        )
+        .await;
+        assert!(cancelled.is_err());
+        extension.write_all(b"\"ok\"}\n").await.unwrap();
+        assert!(read_line(&mut lines, &mut line).await.unwrap());
+        assert_eq!(line, br#"{"id":1,"result":"ok"}"#);
+    }
 
     #[test]
     fn names_the_browser() {
