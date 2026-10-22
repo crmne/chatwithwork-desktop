@@ -319,7 +319,7 @@ Each folder still allows only what it allows anyone: changes where changes are a
 |---|---|
 | `server/discover` | `supportedVersions`, `capabilities: {"tools":{}}`, and `_meta["io.modelcontextprotocol/serverInfo"] = {"name":"cww","version":…}`. |
 | `initialize` | Legacy handshake (7.1). `serverInfo.name` is `cww`, and the result carries instructions. |
-| `tools/list` | The four read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), in one page. The list only changes when the user turns changes on or off for a folder, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
+| `tools/list` | The four read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
 | `tools/call` | See section 8. |
 | `notifications/initialized`, `notifications/cancelled` | Accepted. Cancelling abandons a call in progress. |
 | `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, anything else | `-32601` method not found. |
@@ -612,6 +612,22 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
 
 `run_status` (`{"run": id}`, read-only) answers `{"status": {...}, "stdout", "stderr", "stdout_cut", "stderr_cut"}`. `run_output` (`{"run": id, "offset": 0, "max_chars": 16000}`, read-only) answers `{"id", "offset", "next_offset", "skipped", "text", "done"}`: both streams as they came, from a byte offset, at most 32 000 characters; `skipped` is what's no longer kept (the latest megabyte is). `run_stop` (`{"run": id}`, a write) stops it and everything it started, and answers as `run_status` once it has. An unknown handle is `not_found`; commands are forgotten when the daemon restarts.
 
+### 8.16 Browser
+
+Offered only while the person turned the browser on on this computer (`[browser] enabled` in `config.toml`, `cww browser enable`, or the desktop app), never from the server, and only to a person's chats or a bot's the browser is lent to. The daemon then lists these tools after the others; turning the browser on or off reconnects, as for folders. They act through the Chat with Work extension in the person's own Chromium-family browser, only on tabs in its "Chat with Work" tab group, and only on the sites the person allowed on the computer (`[browser] sites`, `cww browser allow`). Every rule is enforced by the extension and again by the daemon; see [docs/browser.md](docs/browser.md).
+
+| Tool | `readOnlyHint` | `openWorldHint` | Arguments | Answer |
+|---|---|---|---|---|
+| `browser_tabs` | true | true | none | `tabs`: `{tab, title, url, allowed: true, loading}` for tabs on allowed sites, `{tab, site, allowed: false}` for the others (never their title or address); `sites`: the allowed sites |
+| `browser_read` | true | true | `tab`, `offset`, `max_chars` (1 to 32 000) | `tab`, `url`, `title`, `text`, `offset`, `next_offset` (null at the end), `total_chars` |
+| `browser_screenshot` | true | true | `tab` | `tab`, `url`, `title`, `width`, `height`, and an `image` content block (`image/jpeg`, at most about 180 KB) after the text block |
+| `browser_scroll` | true | true | `tab`, `direction` (`up` or `down`), `pages` (1 to 10), or `ref` | `tab`, `url`, `title`, `scroll_y`, `page_height`, `view_height`, `at_end` |
+| `browser_wait` | true | true | `tab`, `text` (1 to 500 characters), `seconds` (1 to 15) | `tab`, `url`, `title`, `found`, `waited_ms` |
+
+`tab` is a tab's id from `browser_tabs`; without it, the group's tab used last. `browser_read`'s text is the page's accessibility tree, one line per item (`- heading "Inbox" [level=1]`, `- link "Compose" [ref=e41]`, `- textbox "Search" [ref=e110]: budget`, `- paragraph: text`), indented by nesting; things that can be clicked or typed in carry `[ref=e<n>]`. Password, card and one-time code fields show `[sensitive]: (hidden)`, and are blurred in screenshots. `max_chars` is lowered by the read budget (section 10), and the characters returned count against it like a `read`. An answer whose `url` isn't on an allowed site is dropped by the daemon (`site_not_allowed`). When the page opened a JavaScript dialog, the extension dismissed it and the answer's `dialog` says what it was.
+
+Errors (section 9) the browser adds: `browser_unavailable` (no browser with the extension is connected), `browser_stopped` (the person stopped it, in the extension or on the computer, or paused the computer), `site_not_allowed`, `not_in_group` (the tab isn't in the group), `no_tab` (the group is empty), `sensitive_field`, `would_submit`, and `page_error` (the page or the browser failed). A bot's call to a browser not lent to it is `not_lent`.
+
 ## 9. Errors
 
 **OAuth endpoints** return `{"error": "<code>", "error_description": "<optional>"}` with a 4xx status, using the codes above plus RFC 6749 codes. `use_dpop_nonce` triggers one retry. `invalid_grant`, `unauthorized_client` and `access_denied` on refresh mean the device is revoked.
@@ -653,11 +669,12 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
 | `not_changeable` | A kind of file the daemon never makes or changes: a program or launcher, an executable file, a binary file as text, an Office file as text. |
 | `trash_unavailable` | The system trash can't take the old version or the item, so nothing changed. |
 | `conflict` | The file changed since the caller looked (`expected_sha256`, or during the change). |
-| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it. |
+| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it, or used a browser not lent to it. |
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
+| `browser_unavailable`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `no_tab`, `sensitive_field`, `would_submit`, `page_error` | The browser tools' refusals and failures (8.16). |
 | `internal` | Unexpected failure. |
 
-Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in Chat with Work Desktop on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `paused`, `not_lent` and `needs_approval` are logged as refusals, the others as errors.
+Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in Chat with Work Desktop on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `paused`, `not_lent`, `needs_approval`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `sensitive_field` and `would_submit` are logged as refusals, the others as errors.
 
 Messages are written for the model and the user. They never include absolute paths.
 

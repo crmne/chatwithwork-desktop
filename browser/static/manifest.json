@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Chat with Work",
+  "short_name": "Chat with Work",
+  "version": "0.1.0",
+  "description": "Lets Chat with Work use tabs in its own tab group, on sites you allow, through Chat with Work Desktop.",
+  "homepage_url": "https://chatwithwork.com",
+  "minimum_chrome_version": "125",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArexSfE8536hMs9zWRhMToTd0WvmxvOBK3NBFhRHg4fqZVZbkwDk4KcFouuHVou5h/v+v51jbRoPxa1UkmoF5nIwGl9zPq2CG80g7YG7H+Thf1g/OwpIU+jgr0GnTaD2pagWv1NnGmxxiUHLz6dSpQbaYHCGaLlkId9JFyXe9/8OHjr0uZfm33MMGa9mb1O7WuF/xTc4c4qikAcg5NYhPgBlMUgmKt3VQkma4YnXykYNvmLmeEE8w7bmHYU1ftRxAKEgZI7Hm5fxd2lWux2g5IpY7OpmXMPNwZVWLdnXQ0lowEnXK6/7kl1Lf5uRZrVr2kO+tpRddCwWnjKESBsPFkQIDAQAB",
+  "permissions": ["debugger", "tabs", "tabGroups", "nativeMessaging", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "js/background.js", "type": "module" },
+  "action": {
+    "default_title": "Chat with Work",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
+  },
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "chatwithwork-browser",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Chat with Work browser extension",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node scripts/build.mjs && node --test "build-tests/tests/*.test.js"",
+    "e2e": "node scripts/build.mjs && playwright test",
+    "package": "node scripts/build.mjs --store"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/chrome": "0.3.4",
+    "@types/node": "25.9.9",
+    "typescript": "7.0.2"
+  }
+}
