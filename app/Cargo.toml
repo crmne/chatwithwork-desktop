@@ -92,6 +92,14 @@ webkit2gtk = "2.0"
 # Saves those pictures as PNG.
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Pictures of the windows in --demo builds (snapshot.rs): WKWebView draws its
+# own content. Already in the tree through Tauri and wry.
+objc2-web-kit = "0.3"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+block2 = "0.6"
+
 [features]
 default = ["custom-protocol"]
 # Embeds ui/ (the bundled local pages) in the binary and serves it from

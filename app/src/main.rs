@@ -44,7 +44,7 @@ mod paths;
 mod policy;
 mod scan;
 mod server;
-#[cfg(all(target_os = "linux", feature = "demo"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]
 mod snapshot;
 mod speech;
 mod state;

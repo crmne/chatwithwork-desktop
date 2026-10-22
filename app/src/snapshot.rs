@@ -1,6 +1,7 @@
 //! Pictures of the windows, for docs and reviews, in `--demo` builds on
-//! Linux only. WebKitGTK paints the snapshot itself, so it works while the
-//! window is on a hidden workspace where the compositor shows nothing.
+//! Linux and macOS. The web view paints the snapshot itself (WebKitGTK, or
+//! WKWebView), so it works on a hidden workspace where the compositor shows
+//! nothing, and from a process without screen-recording permission.
 //!
 //! `CWW_APP_SNAPSHOT=<dir>` takes the settings window's pages one by one
 //! (or `CWW_APP_SNAPSHOT_PAGES=folders,general`, where `main` is the web
@@ -119,6 +120,7 @@ pub fn run(app: AppHandle, dir: PathBuf) {
     app.exit(0);
 }
 
+#[cfg(target_os = "linux")]
 fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
@@ -139,6 +141,49 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
                     let _ = tx.send(saved);
                 },
             );
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv_timeout(Duration::from_secs(20))
+        .map_err(|_| "timed out".to_string())?
+}
+
+/// On macOS, WKWebView draws its own content into an image, which needs no
+/// screen-recording permission (a process started over SSH has none).
+#[cfg(target_os = "macos")]
+fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_foundation::{NSDictionary, NSError};
+    use objc2_web_kit::WKWebView;
+
+    let (tx, rx) = mpsc::channel();
+    let path = path.to_path_buf();
+    window
+        .with_webview(move |webview| {
+            // SAFETY: on macOS, wry's inner view is its WKWebView, used on
+            // the main thread, where with_webview runs this.
+            let view: &WKWebView = unsafe { &*(webview.inner() as *const WKWebView) };
+            let handler = block2::RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+                // SAFETY: WebKit hands over an image or null.
+                let saved = match unsafe { image.as_ref() } {
+                    None => Err("no image".to_string()),
+                    Some(image) => image
+                        .TIFFRepresentation()
+                        .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
+                        .and_then(|rep| unsafe {
+                            rep.representationUsingType_properties(
+                                NSBitmapImageFileType::PNG,
+                                &NSDictionary::new(),
+                            )
+                        })
+                        .ok_or_else(|| "couldn't make a PNG".to_string())
+                        .and_then(|png| {
+                            std::fs::write(&path, png.to_vec()).map_err(|e| e.to_string())
+                        }),
+                };
+                let _ = tx.send(saved);
+            });
+            // SAFETY: a snapshot of the visible page, delivered to the block.
+            unsafe { view.takeSnapshotWithConfiguration_completionHandler(None, &handler) };
         })
         .map_err(|e| e.to_string())?;
     rx.recv_timeout(Duration::from_secs(20))
@@ -253,6 +298,19 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
         let _ = window.eval(script);
     }
     std::thread::sleep(Duration::from_secs(wait));
+    // Saving reads the pages first; the first page on a Mac waits for
+    // Vision's model, so wait for the file rather than a fixed time.
+    if step == "saved"
+        && let Some(file) = std::env::var_os("CWW_DEMO_SAVE_TO").map(std::path::PathBuf::from)
+    {
+        for _ in 0..120 {
+            if file.exists() {
+                std::thread::sleep(Duration::from_secs(2));
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
     // WebKitGTK takes prefers-color-scheme from GTK, not the window's theme,
     // so the picture's theme is set on the page.
     let _ = window.eval(format!(

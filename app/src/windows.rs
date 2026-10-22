@@ -347,12 +347,12 @@ pub fn show_scan(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", feature = "demo"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]
 fn snapshots() -> bool {
     crate::snapshot::requested().is_some()
 }
 
-#[cfg(not(all(target_os = "linux", feature = "demo")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "demo")))]
 fn snapshots() -> bool {
     false
 }

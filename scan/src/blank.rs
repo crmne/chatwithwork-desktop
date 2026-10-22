@@ -22,6 +22,8 @@ pub const MAX_INKED_CELLS: usize = 2;
 /// Margins left out, as a share of each side.
 const MARGIN_X: f64 = 0.07;
 const MARGIN_Y: f64 = 0.05;
+/// A row or column darker than this share of the way across is an edge.
+const EDGE_SHARE: f64 = 0.6;
 
 /// Whether a page scanned at `resolution` is blank.
 pub fn is_blank(image: &DynamicImage, resolution: u32) -> bool {
@@ -44,20 +46,31 @@ pub fn inked_cells(image: &DynamicImage, resolution: u32) -> usize {
         h - (f64::from(h) * MARGIN_Y) as u32,
     );
     let threshold = dark_threshold(&gray, x0, x1, y0, y1);
+    let dark = |x: u32, y: u32| gray.get_pixel(x, y)[0] < threshold;
+    // Rows and columns dark nearly all the way across are the paper's edge
+    // or the scanner's background past it, never writing, whose letters
+    // always leave gaps.
+    let rule = |count: usize, span: u32| count as f64 > f64::from(span) * EDGE_SHARE;
+    let rows: Vec<bool> = (0..h)
+        .map(|y| rule((x0..x1).filter(|&x| dark(x, y)).count(), x1 - x0))
+        .collect();
+    let cols: Vec<bool> = (0..w)
+        .map(|x| rule((y0..y1).filter(|&y| dark(x, y)).count(), y1 - y0))
+        .collect();
     let mut inked = 0;
     let mut y = y0;
     while y < y1 {
         let mut x = x0;
         while x < x1 {
-            let mut dark = 0;
+            let mut dark_pixels = 0;
             for cy in y..(y + CELL).min(y1) {
                 for cx in x..(x + CELL).min(x1) {
-                    if gray.get_pixel(cx, cy)[0] < threshold {
-                        dark += 1;
+                    if !rows[cy as usize] && !cols[cx as usize] && dark(cx, cy) {
+                        dark_pixels += 1;
                     }
                 }
             }
-            if dark >= DARK_PIXELS_PER_CELL {
+            if dark_pixels >= DARK_PIXELS_PER_CELL {
                 inked += 1;
             }
             x += CELL;
@@ -156,9 +169,28 @@ mod tests {
     }
 
     #[test]
+    fn the_papers_edge_and_the_scanners_background_are_blank() {
+        // A back the feeder scanned past the paper: the paper's edge as a line
+        // across, the scanner's grey below it, and a shadow down one side.
+        let mut img = GrayImage::from_pixel(1240, 1754, Luma([250]));
+        for y in 1500..1754 {
+            for x in 0..1240 {
+                img.put_pixel(x, y, Luma([if y < 1504 { 30 } else { 120 }]));
+            }
+        }
+        for y in 0..1500 {
+            for x in 1150..1158 {
+                img.put_pixel(x, y, Luma([60]));
+            }
+        }
+        assert!(is_blank(&DynamicImage::ImageLuma8(img), 150));
+    }
+
+    #[test]
     fn a_letter_is_not_blank() {
+        // Thirty lines of words: 50 px each, with the gaps between them.
         let marks: Vec<_> = (0..30)
-            .map(|line| (180, 300 + line * 40, 800, 12))
+            .flat_map(|line| (0..11).map(move |word| (180 + word * 70, 300 + line * 40, 50, 12)))
             .collect();
         assert!(!is_blank(&page(&marks, 255), 150));
     }
