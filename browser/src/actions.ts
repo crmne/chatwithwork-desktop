@@ -125,8 +125,10 @@ const screenshot: Method = async (params, policy) => {
   await prepareForCapture(tabId, SENSITIVE_PATTERNS);
   // Also every field browser_read hides, found the same way, including
   // those named only by a label and those in shadow roots.
+  // Each by its node, so those in shadow roots, which a document query
+  // doesn't reach, are unblurred after too.
   const { sensitive } = await sensitiveFields(tabId).catch(() => ({ sensitive: new Set<number>() }));
-  for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR).catch(() => {});
+  for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR, [true]).catch(() => {});
   let data = "";
   let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / Math.max(1, view.clientWidth));
   let quality = 70;
@@ -144,6 +146,7 @@ const screenshot: Method = async (params, policy) => {
       scale *= 0.75;
     }
   } finally {
+    for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR, [false]).catch(() => {});
     await afterCapture(tabId, SENSITIVE_PATTERNS);
   }
   if (data.length > maxBytes) {
@@ -212,9 +215,14 @@ async function sensitiveFields(tabId: number): Promise<{ nodes: AXNode[]; sensit
   return { nodes, sensitive };
 }
 
-const BLUR = `function () {
-  this.setAttribute("data-chat-with-work-blur", "");
-  this.style.setProperty("filter", "blur(8px)", "important");
+const BLUR = `function (on) {
+  if (on) {
+    this.setAttribute("data-chat-with-work-blur", "");
+    this.style.setProperty("filter", "blur(8px)", "important");
+  } else if (this.hasAttribute("data-chat-with-work-blur")) {
+    this.removeAttribute("data-chat-with-work-blur");
+    this.style.removeProperty("filter");
+  }
 }`;
 
 export function refId(ref: unknown): number {
