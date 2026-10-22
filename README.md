@@ -64,7 +64,7 @@ cargo install --locked --path .
 cargo install --locked --path app
 ```
 
-Run these commands from a checkout. On Linux the desktop app also needs CMake, clang and the ALSA and PipeWire development headers (`cmake clang libclang-dev libasound2-dev libpipewire-0.3-dev pkg-config` on Debian and Ubuntu). They install both commands; the packages or one-line installer also provide desktop integration. The terminal agent alone needs Rust 1.90 or newer.
+Run these commands from a checkout. On Linux the desktop app also needs CMake, clang, the ALSA and PipeWire development headers, and WebKitGTK 4.1, GTK 3 and AppIndicator (`cmake clang libclang-dev libasound2-dev libpipewire-0.3-dev pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev libdbus-1-dev` on Debian and Ubuntu, `webkit2gtk-4.1 gtk3 libayatana-appindicator` besides the audio packages on Arch). They install both commands; the packages or one-line installer also provide desktop integration. The terminal agent alone needs Rust 1.90 or newer.
 
 For a Linux terminal-only build with native notification support, install `notification-broker` instead of `app` in the second command. The notification helper needs Rust 1.98 or newer. On macOS, native notifications require the packaged application bundle, including its identity and signature; loose development binaries are insufficient.
 
@@ -158,7 +158,7 @@ account deletion, and profile pictures still open the website.
 
 Run in a terminal, `cww` opens a terminal UI laid out like the desktop app's chat page. On the left: New chat, the search, Recent (your chats, the one asked in last first, as on the web, so asking in an older chat brings it back to the top), and Pinned under it as on the web: the projects you pinned (picking one shows its chats and starts a new chat in it; picking it again shows every chat), then the chats you pinned, with your name at the foot, and your credits under it when they run low. The list stays current as chats start, change or go, on the web too. On the right, with no title over it, as on the web: the open chat and the composer, with the model on its edge. Your name, `,` or `/settings` open the settings, with the same pages as the desktop app: Shared folders (with their index state), Always private (the deny list, which only `config.toml` changes), Activity (every request from Chat with Work, colour-coded by decision), Account (the pairing, the connection, whether chats are allowed here, your organization and credits, and the web's own settings pages, which open in the browser) and General (the daemon, pausing, and where its files are). Nothing else stays on screen: a single word at the top right says when something needs you (the daemon stopped, offline, connecting, paused, not paired, revoked, or the open chat not live), and clicking it opens the page that helps.
 
-Use the microphone beside the desktop composer's paperclip, or `Ctrl-R` / `/dictate` in the terminal. Choose transcription in the desktop app’s **General → Dictation** settings: **Cloud transcription** uses your paired server in the EU and credits; **On this computer** uses Whisper locally with no audio upload or credits. Download Tiny, Base or Small once, then use that model offline. Models support multiple languages, are verified before use, can be removed, and are not bundled in releases. Local failures never fall back to cloud. The terminal shares this choice. Words remain editable before you send them. Stop with the microphone button or Escape; Escape during transcription discards the result. The terminal also accepts Ctrl-C to discard a recording. Recordings stay in memory, stop after five minutes, and silence is never uploaded. Dictation needs the desktop app installed beside `cww`; terminal-only archives have no microphone helper. System microphone permission may be requested on first use.
+In the Chat with Work window, dictate with the microphone beside the composer's paperclip, as on the web. In the terminal, use `Ctrl-R` / `/dictate`, and choose its transcription in the desktop app's **General → Dictation** settings: **Cloud transcription** uses your paired server in the EU and credits; **On this computer** uses Whisper locally with no audio upload or credits. Download Tiny, Base or Small once, then use that model offline. Models support multiple languages, are verified before use, can be removed, and are not bundled in releases. Local failures never fall back to cloud. The terminal shares this choice. Words remain editable before you send them. Stop with the microphone button or Escape; Escape during transcription discards the result. The terminal also accepts Ctrl-C to discard a recording. Recordings stay in memory, stop after five minutes, and silence is never uploaded. Dictation needs the desktop app installed beside `cww`; terminal-only archives have no microphone helper. System microphone permission may be requested on first use.
 
 In the terminal, `/web on` and `/web off` choose web search for the current chat. The first use explains the rate and privacy note. The choice requires the organization's permission and a model that supports web search. Scheduled chats show their schedule context and a clock in the list. Code runs show their source and output under `/steps`; files they produce stay visible with the steps folded. `/download` lists files and `/download <number> <path>` saves one. Local file approvals include the proposed text, diff or document preview and any warning from the computer.
 
@@ -235,13 +235,21 @@ The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 
 
 ## Desktop app
 
-`cww-app` is a menu bar (macOS), notification area (Windows) or tray (Linux) app for the same daemon. It shows whether Chat with Work can reach this computer, pauses and resumes sharing, and has a window for your Chat with Work chats, drawn as the web draws them (models, attached files, approvals, and retry, branch, rename, delete and share included), and for shared folders, the deny list, the activity log, pairing, notification preferences, and start at login. On first run it starts the agent, pairs, offers to share your Documents folder, and asks whether to send [crash reports](#crash-reports), and it shares nothing until you say so. The welcome page is centered. A saved Custom title bar preference defaults to system decorations on Linux and an integrated header on Windows and macOS. Closing the window keeps the tray app and agent running. The Notifications page edits the same organization preferences as the website and offers explicit permission and browser-link controls.
+`cww-app` is Chat with Work Desktop: the Chat with Work web app in a window of its own, a menu bar (macOS), notification area (Windows) or tray (Linux) item for the daemon, and the Local Agent's settings. It is built with [Tauri](https://tauri.app) on the system's web view (WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows).
+
+- **The Chat with Work window** loads the real web app from the server this computer is paired with (chatwithwork.com, staging, or your own), on `/chats/new`, which opens the organization you used last, the way the phone apps wrap the site. So it is always the web app as it is today. Links that leave the server open in your browser, signing in with Google, Slack or Dropbox and connecting services run in your browser and come back, files dropped on the window go to the composer, downloads go to your Downloads folder, and the microphone works for dictation. It keeps your sign-in, size and position between launches. Its pages can ask the app for very little: open a link in the browser, open the settings, and wait for a sign-in in the browser ([docs/desktop-app.md](docs/desktop-app.md)). They never reach the daemon.
+- **The settings window** has pages built into the app, which work offline and before pairing: a first-run welcome, shared folders (with the native folder picker, changes and commands), what is always private, the activity log, pairing, notifications on this computer, and general settings (start at login, pausing, crash reports, dictation for the terminal app). Only these pages reach the daemon, through an allow-list of control requests.
+- **The tray item** says whether Chat with Work can reach this computer, and opens Chat with Work, pauses and resumes sharing, opens the settings, and quits.
+
+On first run it opens the welcome page: it starts the agent, pairs, offers to share your Documents folder, and asks whether to send [crash reports](#crash-reports), and it shares nothing until you say so. Closing a window keeps the tray item and the agent running, and frees the window's web view.
 
 ```sh
 cargo run --release -p cww-app
 ```
 
-Install it as described under [Install](#install). It is a client of the control channel, like the terminal UI. See [docs/settings-app.md](docs/settings-app.md).
+Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install. On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
+
+Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-local-agent/tree/egui-final) tag, for anyone who wants to revive a fully native app.
 
 ## What the assistant can do
 
@@ -390,7 +398,7 @@ Proxy:      http://alice:***@proxy.example:3128 (from config)
 
 ## Crash reports
 
-Crash reports are off until you turn them on. The desktop app asks once, on its welcome page or the first time its window opens, and `cww tui` asks the first time it starts. Change your answer under General in either, or in `config.toml`:
+Crash reports are off until you turn them on. The desktop app asks once, on its welcome page, and `cww tui` asks the first time it starts. Change your answer under General in either, or in `config.toml`:
 
 ```toml
 crash_reports = true   # or false; the apps ask while it's unset
@@ -482,7 +490,7 @@ cargo deny check                            # licenses, advisories, bans, source
 | `auth` | Device key, DPoP proofs, device flow, secret storage. |
 | `daemon`, `control`, `service` | The daemon, its control channel ([CONTROL.md](CONTROL.md)), and systemd, launchd and Scheduled Task registration. |
 | `tui` | The terminal UI, a client of the control socket. Screens are pinned as text snapshots in `src/tui/snapshots`; `UPDATE_SNAPSHOTS=1 cargo test` rewrites them. |
-| `app/` | The desktop app (`cww-app`): tray item and settings window, another client of the control socket. See [docs/settings-app.md](docs/settings-app.md). |
+| `app/` | The desktop app (`cww-app`), on Tauri: the web app's window, the tray item, and the bundled settings pages (`app/ui`), the only part that is a client of the control socket. See [docs/desktop-app.md](docs/desktop-app.md). |
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed, and packaged with [native-packages](https://github.com/crmne/native-packages); see [PACKAGING.md](PACKAGING.md).
 
