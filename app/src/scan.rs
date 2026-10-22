@@ -86,6 +86,8 @@ struct Session {
 pub struct Preferences {
     pub settings: Option<Settings>,
     pub device: Option<String>,
+    /// Where Save to Computer last saved, where its dialog starts.
+    pub save_dir: Option<PathBuf>,
 }
 
 impl Preferences {
@@ -387,6 +389,7 @@ pub fn scan_save_settings(
     Preferences {
         settings: Some(settings),
         device,
+        ..Preferences::load(&desktop.paths)
     }
     .save(&desktop.paths)
     .map(|()| json!({}))
@@ -416,6 +419,7 @@ pub fn scan_start(
     let _ = Preferences {
         settings: Some(settings.clone()),
         device: Some(device.id.clone()),
+        ..Preferences::load(&desktop.paths)
     }
     .save(&desktop.paths);
     let dir = match scans.page_dir(&desktop.paths) {
@@ -678,16 +682,7 @@ pub async fn scan_send(
     let scans_ = scans.inner().clone();
     let paths = desktop.paths.clone();
     let result = blocking(move || -> Result<Value, Value> {
-        if pages.is_empty() {
-            return Err(refusal("invalid", "There are no pages to send."));
-        }
-        let engine = match &language {
-            Some(code) => Some((scans_.engine.clone().map_err(|reason| refusal("no_ocr", reason))?, code.clone())),
-            None => None,
-        };
-        let pdf = build_pdf(&pages, engine.as_ref().map(|(e, l)| (e.as_ref(), l.as_str())), &|text| {
-            tell(&app, json!({ "kind": "progress", "text": text }));
-        })?;
+        let pdf = make_pdf(&app, &scans_, &pages, language.as_deref())?;
         if pdf.len() > MAX_PDF_BYTES {
             return Err(refusal(
                 "too_large",
@@ -702,7 +697,7 @@ pub async fn scan_send(
         use base64::Engine as _;
         let request = ControlRequest::ScanSend {
             destination,
-            filename: filename(),
+            filename: filename(pages.len()),
             data: base64::engine::general_purpose::STANDARD.encode(&pdf),
             pages: pages.len() as u32,
             scan_id,
@@ -713,16 +708,146 @@ pub async fn scan_send(
     })
     .await;
     scans.busy.store(false, Ordering::SeqCst);
-    let answer = result??;
-    // Sent: the pages leave the computer's disk too.
-    scans.discard_pages();
-    Ok(answer)
+    // The pages stay until Rescan or the window closes, so the same scan can
+    // also be saved, or sent somewhere else.
+    result?
 }
 
-/// "Scan 2026-10-22 14.05.pdf", in local time.
-fn filename() -> String {
+/// The pages to send or save: all but the blank ones left out.
+fn kept_pages(scans: &Scans) -> Vec<Page> {
+    let session = scans.session.lock().expect("session");
+    session.pages.iter().filter(|p| !p.blank).cloned().collect()
+}
+
+/// The PDF of the pages, read in `language` where given, telling the page
+/// how far it got.
+fn make_pdf(
+    app: &AppHandle,
+    scans: &Scans,
+    pages: &[Page],
+    language: Option<&str>,
+) -> Result<Vec<u8>, Value> {
+    if pages.is_empty() {
+        return Err(refusal("invalid", "There are no pages."));
+    }
+    let engine = match language {
+        Some(code) => Some((
+            scans
+                .engine
+                .clone()
+                .map_err(|reason| refusal("no_ocr", reason))?,
+            code,
+        )),
+        None => None,
+    };
+    build_pdf(
+        pages,
+        engine.as_ref().map(|(e, l)| (e.as_ref(), *l)),
+        &|text| {
+            tell(app, json!({ "kind": "progress", "text": text }));
+        },
+    )
+}
+
+/// Saves the PDF on this computer, where the person picks, without Chat
+/// with Work: no pairing, no sign-in, nothing sent. The dialog starts in the
+/// folder saved to last (Documents the first time) and remembers the one
+/// picked.
+#[tauri::command]
+pub async fn scan_save(
+    webview: Webview,
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<Scans>>,
+    language: Option<String>,
+) -> Answer {
+    scan_page_only(&webview)?;
+    let pages = kept_pages(&scans);
+    if pages.is_empty() {
+        return Err(refusal("invalid", "There are no pages to save."));
+    }
+    use tauri_plugin_dialog::DialogExt;
+    let paths = desktop.paths.clone();
+    let start = Preferences::load(&paths)
+        .save_dir
+        .filter(|dir| dir.is_dir())
+        .or_else(crate::paths::documents_dir);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Save Scan")
+        .set_file_name(filename(pages.len()))
+        .add_filter("PDF", &["pdf"]);
+    if let Some(dir) = start {
+        dialog = dialog.set_directory(dir);
+    }
+    // Demo builds can answer the dialog for pictures and checks, which can't
+    // click it (`CWW_DEMO_SAVE_TO=<file>`); real builds always ask.
+    #[cfg(feature = "demo")]
+    let preset = std::env::var_os("CWW_DEMO_SAVE_TO").map(PathBuf::from);
+    #[cfg(not(feature = "demo"))]
+    let preset: Option<PathBuf> = None;
+    let picked = match preset {
+        Some(path) => Some(path),
+        None => blocking(move || dialog.blocking_save_file())
+            .await?
+            .and_then(|p| p.into_path().ok()),
+    };
+    let Some(path) = picked else {
+        return Ok(json!({ "saved": null }));
+    };
+    let path = if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    {
+        path
+    } else {
+        path.with_extension("pdf")
+    };
+    if scans.busy.swap(true, Ordering::SeqCst) {
+        return Err(refusal("busy", "Wait for the scan to finish."));
+    }
+    let scans_ = scans.inner().clone();
+    let target = path.clone();
+    let result = blocking(move || -> Result<(), Value> {
+        let pdf = make_pdf(&app, &scans_, &pages, language.as_deref())?;
+        tell(&app, json!({ "kind": "progress", "text": "Saving…" }));
+        std::fs::write(&target, pdf)
+            .map_err(|e| refusal("failed", format!("Couldn't save the scan: {e}")))
+    })
+    .await;
+    scans.busy.store(false, Ordering::SeqCst);
+    result??;
+    let _ = Preferences {
+        save_dir: path.parent().map(PathBuf::from),
+        ..Preferences::load(&paths)
+    }
+    .save(&paths);
+    Ok(json!({ "saved": path, "name": path.file_name().map(|n| n.to_string_lossy().into_owned()) }))
+}
+
+/// Shows a saved scan's folder: only the folder the window saved to last.
+#[tauri::command]
+pub fn scan_reveal(webview: Webview, desktop: State<'_, Arc<Desktop>>, path: PathBuf) -> Answer {
+    scan_page_only(&webview)?;
+    let saved_to = Preferences::load(&desktop.paths).save_dir;
+    match path.parent() {
+        Some(dir) if saved_to.as_deref() == Some(dir) => {
+            let _ = open::that_detached(dir);
+            Ok(json!({}))
+        }
+        _ => Err(refusal("invalid", "That isn't a scan this window saved.")),
+    }
+}
+
+/// "Scan 2026-10-22 14.05, 3 pages.pdf", in local time.
+fn filename(pages: usize) -> String {
     let now = jiff::Zoned::now();
-    format!("Scan {}.pdf", now.strftime("%Y-%m-%d %H.%M"))
+    let noun = if pages == 1 { "page" } else { "pages" };
+    format!(
+        "Scan {}, {pages} {noun}.pdf",
+        now.strftime("%Y-%m-%d %H.%M")
+    )
 }
 
 /// The PDF of `pages`, read with `ocr` where given. Pages are read a few at
@@ -833,6 +958,7 @@ mod tests {
         let saved = Preferences {
             settings: Some(Settings::default()),
             device: Some("test:0".into()),
+            save_dir: Some(dir.path().into()),
         };
         saved.save(&paths).unwrap();
         assert_eq!(Preferences::load(&paths), saved);
@@ -893,8 +1019,12 @@ mod tests {
 
     #[test]
     fn filenames_name_the_time() {
-        let name = filename();
-        assert!(name.starts_with("Scan 20") && name.ends_with(".pdf"));
+        let name = filename(3);
+        assert!(
+            name.starts_with("Scan 20") && name.ends_with(", 3 pages.pdf"),
+            "{name}"
+        );
+        assert!(filename(1).ends_with(", 1 page.pdf"));
         assert!(!name.contains('/') && !name.contains(':'));
     }
 }

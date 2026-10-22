@@ -226,6 +226,10 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
             r#"(async () => { document.getElementById('crop').close(); const { pages } = await window.__TAURI_INTERNALS__.invoke('scan_info'); await window.__TAURI_INTERNALS__.invoke('scan_edit', { id: pages[0].id, crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.55 } }); location.reload(); })()"#,
             4,
         ),
+        "saved" => (
+            r#"document.querySelector('[data-key="save"]')?.click()"#,
+            10,
+        ),
         "turned" => (
             r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,
             3,

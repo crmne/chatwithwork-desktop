@@ -304,14 +304,19 @@
   flex: 1;
 }
 
+/* Send stays at the right edge when the bar wraps on a narrow window. */
+.scan__bar > .btn-primary {
+  margin-inline-start: auto;
+}
+
 .scan__bar .select {
-  max-inline-size: 15rem;
+  max-inline-size: 12rem;
 }
 
 .scan__bar .input {
   flex: 1 1 8rem;
   inline-size: auto;
-  min-inline-size: 8rem;
+  min-inline-size: 7rem;
   max-inline-size: 18rem;
 }
 

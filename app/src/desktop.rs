@@ -349,6 +349,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::scan::scan_destinations,
             crate::scan::scan_send,
             crate::scan::scan_open,
+            crate::scan::scan_save,
+            crate::scan::scan_reveal,
             crate::offline::offline_info,
             crate::offline::offline_retry,
             crate::offline::offline_open_anyway,

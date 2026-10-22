@@ -2,7 +2,7 @@
 
 Chat with Work Desktop scans paper with a scanner attached to your computer, makes it a searchable PDF on the computer, and sends it to Chat with Work: into a new chat, or to a bot that takes scans (a bot whose trigger is "A scan from Chat with Work Desktop", such as the Mail scanner recipe, which files each letter in Nextcloud and tells you what to do about it).
 
-**Scans stay on your computer until you send them.** The scanner is driven by the system's own scanning service, the text is read on your computer, and the pages are kept in a private folder of the app's own until you send them or close the window. Chat with Work's servers do no OCR.
+**Scans stay on your computer until you send them**, and you can use the scanner without Chat with Work at all: Save to Computer keeps the searchable PDF on your computer. The scanner is driven by the system's own scanning service, the text is read on your computer, and the pages are kept in a private folder of the app's own until you send them or close the window. Chat with Work's servers do no OCR.
 
 Status: built on Linux (SANE and Tesseract). macOS (ImageCaptureCore and Vision) and Windows (WIA, TWAIN, and `Windows.Media.Ocr`) are next, behind the same interface.
 
@@ -14,7 +14,9 @@ Choose **Scan…** in the tray menu (or run `cww-app --scan`).
 - **Scan** reads the feeder until it's empty (or one page from a flatbed). Pages appear as they arrive. Blank pages are left out but kept below the pages, where **Keep** brings one back.
 - **Each page** can be moved earlier or later (or dragged), turned, cropped, or deleted. Black and white pages show as they'll be sent.
 - **Rescan** replaces the pages; **Scan More Pages** adds to them.
-- **Send to Chat with Work** makes the PDF (reading each page's text first, a second or two a page), and sends it to a new chat, with an optional message, or to a bot. A sent scan's pages are deleted from the computer.
+- **Save to Computer** makes the PDF (reading each page's text first, a second or two a page) and saves it where you pick, named after the date and the page count (`Scan 2026-10-22 14.05, 3 pages.pdf`). The dialog starts in the folder you saved to last. It needs no Chat with Work account: the computer doesn't have to be paired.
+- **Send to Chat with Work** makes the same PDF and sends it to a new chat, with an optional message, or to a bot. Sending needs the computer paired and allowed to use your chats.
+- The pages stay until you scan again or close the window, so a scan can be saved and sent, or sent to more than one place. Sending the same pages to the same bot again is recognized as the same scan.
 
 Chat with Work takes files of at most 25 MB: about 30 letter pages in grayscale at 300 dpi. A larger scan says so before anything is sent.
 
@@ -48,14 +50,14 @@ cww-app: blank pages, crop and turn, OCR, the PDF ──control socket──▶ 
 - **OCR** returns words with their boxes. On Linux it's the `tesseract` command (TSV output, one process per page, up to four pages at once). The text layer is written by `pdf.rs`: each word as invisible text (render mode 3) in Tesseract's glyph-less font (`scan/assets/glyphless.ttf`, Apache-2.0), sized to its line and stretched to its box, over the page's image, with a ToUnicode map, so any language copies out as it was read. No Ghostscript, no Python, no OCRmyPDF.
 - **The PDF** keeps grey and color pages as JPEG (quality 80) and black and white pages as one bit a pixel, at the resolution they were scanned at.
 - **Sending** goes through the daemon, which holds the device's DPoP-bound token; the app sends it the PDF over the control socket (`scan_send`, CONTROL.md). A new chat is an upload and a new chat, as the terminal does; a bot is a trigger event (`POST /local_agent/scans`, PROTOCOL.md section 13). Either needs the computer to be paired and allowed to use your chats.
-- **The pages** live in `<state dir>/scans/<random id>/` (0700) while the window is open. Closing the window, sending, Rescan, and the app's next start delete them.
+- **The pages** live in `<state dir>/scans/<random id>/` (0700) while the window is open. Closing the window, Rescan, and the app's next start delete them. Saving writes only the PDF you asked for, where you asked; the folder is remembered in `scan.json` beside the app's settings.
 
 ## Developing without a scanner
 
 - `CWW_SCAN_SAMPLE_DIR=<folder>` replaces the system's scanners with "Sample scanner", whose feeder holds the folder's PNG and JPEG files in name order (one-sided scans take every other one), at `CWW_SCAN_SAMPLE_DPI` (300).
 - SANE's own `test` backend is a fake scanner with a feeder that empties after ten pages. Enable it in a `dll.conf` of your own (`SANE_CONFIG_DIR`), and set `CWW_SCAN_TEST_DEVICES=1`, since the app hides test devices otherwise. `scan/tests/sane_test_device.rs` scans it end to end; CI runs it with `CWW_SCAN_REQUIRE_SANE=1`, so a missing SANE fails rather than skips.
 - `cargo run -p cww-scan --example searchable -- 300 deu out.pdf page.png` makes a searchable PDF from images, to try OCR and the text layer.
-- In a `--demo` build, `CWW_APP_SNAPSHOT_PAGES=scan,scan:scanned,scan:blank,scan:turned,scan:crop,scan:cropped,scan:send` takes pictures of each step (see `snapshot.rs`), and `CWW_DEMO_SCAN_OUT=<file>` keeps the PDF the demo daemon was sent.
+- In a `--demo` build, `CWW_APP_SNAPSHOT_PAGES=scan,scan:scanned,scan:blank,scan:turned,scan:crop,scan:cropped,scan:saved,scan:send` takes pictures of each step (see `snapshot.rs`), and `CWW_DEMO_SCAN_OUT=<file>` keeps the PDF the demo daemon was sent, and `CWW_DEMO_SAVE_TO=<file>` answers the save dialog.
 
 ## Not done yet
 

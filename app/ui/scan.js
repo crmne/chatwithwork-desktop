@@ -226,7 +226,6 @@ async function send() {
       message: state.destination === "chat" ? state.message : null,
       language: state.settings.ocr && state.ocr.available ? state.settings.ocr : null,
     });
-    state.pages = [];
     state.message = "";
     const url = answer.chat?.url;
     state.notice = {
@@ -238,6 +237,31 @@ async function send() {
     state.error = error.message;
   }
   state.sending = false;
+  state.progress = null;
+  render();
+}
+
+// Saves the PDF on this computer: no Chat with Work, no sign-in.
+async function save() {
+  const kept = state.pages.filter((p) => !p.blank);
+  if (!kept.length || state.sending) return;
+  state.sending = true;
+  state.saving = true;
+  state.error = null;
+  state.notice = null;
+  render();
+  try {
+    const answer = await call("scan_save", {
+      language: state.settings.ocr && state.ocr.available ? state.settings.ocr : null,
+    });
+    if (answer.saved) {
+      state.notice = { tone: "positive", text: `Saved as ${answer.name}.`, action: ["Show in Folder", () => call("scan_reveal", { path: answer.saved })] };
+    }
+  } catch (error) {
+    state.error = error.message;
+  }
+  state.sending = false;
+  state.saving = false;
   state.progress = null;
   render();
 }
@@ -421,6 +445,8 @@ function bar(kept) {
   return h("footer", { class: "scan__bar" },
     h("button", { type: "button", class: "btn", disabled: busy || !state.device || !state.pages.length, "data-key": "rescan",
       onclick: () => scan(false) }, "Rescan"),
+    h("button", { type: "button", class: "btn", disabled: busy || !kept.length, "data-key": "save", onclick: save },
+      icon("download-simple"), state.saving ? "Saving…" : "Save to Computer"),
     h("span", { class: "spacer" }),
     state.progress ? h("span", { class: "scan__progress", role: "status" }, state.progress) : null,
     state.destinationsError && kept.length ? h("span", { class: "scan__progress" }, state.destinationsError) : null,
@@ -431,7 +457,7 @@ function bar(kept) {
     }) : null,
     !state.progress ? choice : null,
     h("button", { type: "button", class: "btn btn-primary", disabled: !canSend, "data-key": "send", onclick: send },
-      icon("paper-plane-tilt"), state.sending ? "Sending…" : "Send to Chat with Work"));
+      icon("paper-plane-tilt"), state.sending && !state.saving ? "Sending…" : "Send to Chat with Work"));
 }
 
 // ---- The crop view --------------------------------------------------------
