@@ -10,7 +10,7 @@
                 ╭ CRASH REPORTS ───────────────────────────────────────────────────╮
                 │ Send crash reports to the Chat with Work team?                   │
                 │                                                                  │
-                │ When the Local Agent crashes, send where in its code it          │
+                │ When the background agent crashes, send where in its code it     │
                 │ happened, its version and your operating system to the Chat with │
                 │ Work team. Never your files, chats, names or tokens.             │
                 │                                                                  │

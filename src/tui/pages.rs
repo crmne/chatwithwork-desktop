@@ -389,10 +389,10 @@ fn privacy(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     section(
         "Also private",
         Some(if deny.allow_hardlinks {
-            "The Local Agent's own settings, keys, index and logs. Files with more than one \
+            "The background agent's own settings, keys, index and logs. Files with more than one \
              hard link are allowed by your configuration."
         } else {
-            "The Local Agent's own settings, keys, index and logs, and files with more than \
+            "The background agent's own settings, keys, index and logs, and files with more than \
              one hard link, which could point outside a shared folder."
         }),
         &[],
@@ -668,7 +668,7 @@ fn general(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Span::styled(format!(" · cww {}", status.version), theme.faint()),
         ],
     };
-    lines.push(field("Local Agent", agent, theme));
+    lines.push(field("Agent", agent, theme));
     let sharing = match app.daemon.paused() {
         None => vec![Span::styled("–", theme.faint())],
         Some(true) => vec![

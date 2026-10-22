@@ -199,7 +199,7 @@ mod tests {
             headline: "Online, sharing 2 folders".into(),
             detail: detail.map(Into::into),
             paused: Some(false),
-            tooltip: "Chat with Work: Online".into(),
+            tooltip: "Chat with Work Desktop: Online".into(),
             dimmed: false,
         }
     }
@@ -221,15 +221,15 @@ mod tests {
         let indexing = view(Some("Indexing 1 folder…"));
         assert_eq!(
             tooltip(&indexing, Platform::Linux),
-            "Chat with Work: Online\nIndexing 1 folder…"
+            "Chat with Work Desktop: Online\nIndexing 1 folder…"
         );
         assert_eq!(
             tooltip(&indexing, Platform::Windows),
-            "Chat with Work: Online"
+            "Chat with Work Desktop: Online"
         );
         assert_eq!(
             tooltip(&view(None), Platform::Linux),
-            "Chat with Work: Online"
+            "Chat with Work Desktop: Online"
         );
     }
 

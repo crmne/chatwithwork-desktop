@@ -59,8 +59,8 @@ export function render(app) {
       h("div", { class: "row" }, h("div", { class: "row__body" },
         h("h3", {}, "Also private"),
         h("p", {}, deny.allow_hardlinks
-          ? "The Local Agent's own settings, keys, index and logs. Files with more than one hard link are allowed by your configuration."
-          : "The Local Agent's own settings, keys, index and logs, and files with more than one hard link, which could point outside a shared folder.")))),
+          ? "The background agent's own settings, keys, index and logs. Files with more than one hard link are allowed by your configuration."
+          : "The background agent's own settings, keys, index and logs, and files with more than one hard link, which could point outside a shared folder.")))),
     h("div", { class: "section" },
       h("p", { class: "muted" }, "To change this list, edit the ", h("code", {}, "[deny]"), " section of config.toml, and it applies right away."),
       h("div", { class: "inline" }, button("Open config.toml", () => call("open_file", { which: "config" }).catch((error) => {

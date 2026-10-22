@@ -169,7 +169,7 @@ impl Follow {
         self.shared.wake();
         match result {
             Ok(Some(_)) => Ok(()),
-            Ok(None) => Err("The Local Agent isn't running.".into()),
+            Ok(None) => Err("The background agent isn't running.".into()),
             Err(e) => Err(format!("{e:#}")),
         }
     }

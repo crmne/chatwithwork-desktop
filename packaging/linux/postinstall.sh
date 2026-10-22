@@ -5,7 +5,7 @@ cat <<'MSG'
 Chat with Work is installed: desktop app, terminal interface and background agent.
 
 Open Chat with Work from your applications menu, or run cww-app.
-Choose Start Local Agent in the app to run it now and at future logins.
+Start the background agent from the app to run it now and at future logins.
 Run cww for the terminal interface.
 
 This system-wide installer cannot select a user account for the agent.

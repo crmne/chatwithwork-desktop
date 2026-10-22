@@ -50,14 +50,14 @@ export function render(app) {
   const busy = folders.adding || folders.picking;
 
   const steps = [
-    step(1, "Run the Local Agent", !!status,
+    step(1, "Run the background agent", !!status,
       status ? h("p", {}, "It's running in the background.") : agentMissing(app)),
     step(2, "Connect to Chat with Work", paired && !app.view("pairing").active,
-      !status ? h("p", {}, "Start the Local Agent first.")
+      !status ? h("p", {}, "Start the background agent first.")
         : paired && !app.view("pairing").active ? h("p", {}, `Paired with ${host(status.server)}.`)
           : pairingSection(app, status)),
     step(3, "Choose what to share", shared,
-      !status ? h("p", {}, "Start the Local Agent first.")
+      !status ? h("p", {}, "Start the background agent first.")
         : shared ? h("p", {}, `Sharing ${status.roots.map((r) => r.label).join(", ")}.`)
           : [
             folders.documents
@@ -83,7 +83,7 @@ export function render(app) {
   return h("div", { class: "welcome" },
     h("div", { class: "welcome__hero" },
       h("img", { src: "mark.svg", alt: "" }),
-      h("h1", {}, "Welcome to Chat with Work"),
+      h("h1", {}, "Welcome to Chat with Work Desktop"),
       h("p", {}, "Chat with Work can search and read the folders you choose on this computer. Nothing is shared until you say so.")),
     ...steps,
     h("div", { class: "welcome__end" },

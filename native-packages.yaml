@@ -11,8 +11,8 @@ nfpm:
   vendor: Plenty
   homepage: https://chatwithwork.com
   description: |-
-    Chat with Work: desktop app (Chat with Work Desktop), terminal interface
-    and local background agent.
+    Chat with Work Desktop: the desktop app, terminal interface and
+    background agent.
     Chat with your assistant and share only the folders you choose.
     Includes the applications-menu entry, icon and systemd user service.
   license: MIT OR Apache-2.0
@@ -122,7 +122,7 @@ libraries:
   libgio-2.0.so.0: { deb: "libglib2.0-0t64 | libglib2.0-0", rpm: glib2 }
   libdbus-1.so.3: { deb: libdbus-1-3, rpm: dbus-libs }
 release:
-  repository: crmne/chatwithwork-local-agent
+  repository: crmne/chatwithwork-desktop
   checksums: checksums.txt
   prereleases: true
 assets:
@@ -162,7 +162,7 @@ assets:
     local: dist/cww-v@VERSION@-aarch64-pc-windows-msvc.zip
   SOURCE:
     file: chatwithwork-local-agent-@VERSION@.tar.gz
-    url: https://github.com/crmne/chatwithwork-local-agent/archive/refs/tags/v@VERSION@.tar.gz
+    url: https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v@VERSION@.tar.gz
     checksummed: false
     local: dist/chatwithwork-local-agent-@VERSION@.tar.gz
 templates:
@@ -174,9 +174,9 @@ templates:
   arch/chatwithwork-local-agent-bin/chatwithwork-local-agent-bin.install: packaging/arch/cww.install
   arch/chatwithwork-local-agent-git/PKGBUILD: packaging/arch/chatwithwork-local-agent-git/PKGBUILD.in
   arch/chatwithwork-local-agent-git/chatwithwork-local-agent-git.install: packaging/arch/cww.install
-  winget/ChatWithWork.LocalAgent.yaml: packaging/winget/ChatWithWork.LocalAgent.yaml.in
-  winget/ChatWithWork.LocalAgent.installer.yaml: packaging/winget/ChatWithWork.LocalAgent.installer.yaml.in
-  winget/ChatWithWork.LocalAgent.locale.en-US.yaml: packaging/winget/ChatWithWork.LocalAgent.locale.en-US.yaml.in
+  winget/ChatWithWork.Desktop.yaml: packaging/winget/ChatWithWork.Desktop.yaml.in
+  winget/ChatWithWork.Desktop.installer.yaml: packaging/winget/ChatWithWork.Desktop.installer.yaml.in
+  winget/ChatWithWork.Desktop.locale.en-US.yaml: packaging/winget/ChatWithWork.Desktop.locale.en-US.yaml.in
   scoop/cww.json: packaging/scoop/cww.json.in
 repositories:
   homebrew:

@@ -1,7 +1,7 @@
-# Install the Chat with Work Local Agent (cww) on Windows from the latest
+# Install Chat with Work Desktop (cww) on Windows from the latest
 # GitHub release, without administrator rights.
 #
-#   powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-local-agent/releases/latest/download/cww-installer.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 #
 # Downloads the MSI for this machine (x64 or arm64), checks it against the
 # release's checksums.txt, and installs it for the current user: cww.exe on
@@ -9,7 +9,7 @@
 # pair. Set $env:CWW_VERSION = "1.2.3" for a specific release, or
 # $env:CWW_DOWNLOAD_BASE to a mirror holding a release's files.
 $ErrorActionPreference = "Stop"
-$repo = "crmne/chatwithwork-local-agent"
+$repo = "crmne/chatwithwork-desktop"
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
   "AMD64" { "x86_64-pc-windows-msvc" }

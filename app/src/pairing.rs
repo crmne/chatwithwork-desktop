@@ -24,7 +24,7 @@ pub struct Code {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PairEvent {
     Code(Code),
-    /// Paired. `daemon_error` says why the running Local Agent didn't pick
+    /// Paired. `daemon_error` says why the running background agent didn't pick
     /// the pairing up, or couldn't be started; the pairing is saved anyway.
     Paired {
         daemon_error: Option<String>,
@@ -49,7 +49,7 @@ pub struct Cli;
 
 fn cww() -> Result<std::path::PathBuf, String> {
     crate::agent::cww_binary().ok_or_else(|| {
-        "Couldn't find the cww command. Install the Local Agent, then try again.".to_string()
+        "Couldn't find the cww command. Install the background agent, then try again.".to_string()
     })
 }
 
@@ -161,7 +161,7 @@ fn read_event(event: serde_json::Value) -> Option<PairEvent> {
         "paired" => {
             let daemon_error = event["daemon_error"].as_str().map(|e| {
                 sentence(&format!(
-                    "Paired, but the Local Agent didn't pick it up: {e}"
+                    "Paired, but the background agent didn't pick it up: {e}"
                 ))
             });
             Some(PairEvent::Paired { daemon_error })
@@ -203,7 +203,7 @@ mod tests {
             read_event(json!({ "event": "paired", "daemon": "failed", "daemon_error": "couldn't reach the daemon: refused" })),
             Some(PairEvent::Paired {
                 daemon_error: Some(
-                    "Paired, but the Local Agent didn't pick it up: couldn't reach the daemon: refused."
+                    "Paired, but the background agent didn't pick it up: couldn't reach the daemon: refused."
                         .into()
                 )
             })

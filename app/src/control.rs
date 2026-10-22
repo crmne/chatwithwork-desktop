@@ -29,9 +29,9 @@ pub enum ControlError {
 impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotRunning => f.write_str("The Local Agent isn't running."),
+            Self::NotRunning => f.write_str("The background agent isn't running."),
             Self::Refused(message) => f.write_str(&sentence(message)),
-            Self::Other(e) => write!(f, "Couldn't read the Local Agent's answer: {e:#}"),
+            Self::Other(e) => write!(f, "Couldn't read the background agent's answer: {e:#}"),
         }
     }
 }
@@ -166,7 +166,7 @@ impl Client {
                         Err(ControlError::NotRunning) => idle_rounds += 1,
                         Err(e) => {
                             idle_rounds += 1;
-                            log::warn!("watching the Local Agent: {e}");
+                            log::warn!("watching the background agent: {e}");
                         }
                     }
                     publish(None);
@@ -238,7 +238,7 @@ fn wait_for_socket(socket: &Path, fallback: Duration, rounds: u32) {
         let mut watcher = match watcher {
             Ok(w) => w,
             Err(e) => {
-                log::info!("can't watch for the Local Agent ({e}); checking every minute");
+                log::info!("can't watch for the background agent ({e}); checking every minute");
                 std::thread::sleep(fallback);
                 return;
             }

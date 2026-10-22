@@ -1,13 +1,13 @@
 # Security policy
 
-The Chat with Work Local Agent (`cww`) reads files on people's computers on behalf of a remote server, and changes them in the folders where the user allows changes. We treat any way to read something the user didn't share, to change anything outside a folder that allows changes, to delete anything for good, or to make the daemon do something other than answer its tools, as a serious vulnerability.
+Chat with Work Desktop (`cww`) reads files on people's computers on behalf of a remote server, and changes them in the folders where the user allows changes. We treat any way to read something the user didn't share, to change anything outside a folder that allows changes, to delete anything for good, or to make the daemon do something other than answer its tools, as a serious vulnerability.
 
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately:
 
 - Use GitHub's **"Report a vulnerability"** button on this repository (Security ▸ Advisories), or
-- Email **hello@chatwithwork.com** (the contact on [chatwithwork.com/security](https://chatwithwork.com/security)) with "Local Agent vulnerability" in the subject.
+- Email **hello@chatwithwork.com** (the contact on [chatwithwork.com/security](https://chatwithwork.com/security)) with "Chat with Work Desktop vulnerability" in the subject.
 
 Please don't open a public issue. Include the cww version (`cww --version`), your OS, and steps to reproduce. A proof of concept against the fake server in `tests/e2e.rs` is ideal.
 

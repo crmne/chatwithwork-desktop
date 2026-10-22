@@ -84,7 +84,10 @@ pub async fn offline_retry(
     let online = tauri::async_runtime::spawn_blocking(move || reachable(&server))
         .await
         .unwrap_or(false);
-    log::info!("offline page: the server is {}", if online { "back" } else { "still unreachable" });
+    log::info!(
+        "offline page: the server is {}",
+        if online { "back" } else { "still unreachable" }
+    );
     if online {
         let target = desktop
             .take_wanted()

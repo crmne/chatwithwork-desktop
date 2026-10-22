@@ -14,7 +14,7 @@ use cww::paths::Paths;
 use cww::roots::{NewRoot, add_root, remove_root, set_writable};
 use cww::{audit, auth, crash_reports, daemon, service};
 
-/// Chat with Work Local Agent.
+/// Chat with Work Desktop.
 ///
 /// Lets Chat with Work read, and with your approval change files and run
 /// commands, in folders you share. Without a command, opens the terminal UI.

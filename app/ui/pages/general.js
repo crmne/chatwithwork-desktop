@@ -7,7 +7,7 @@ import { displayPath } from "./folders.js";
 export const title = "General";
 export const icon = "gear-six";
 
-const REPOSITORY = "https://github.com/crmne/chatwithwork-local-agent";
+const REPOSITORY = "https://github.com/crmne/chatwithwork-desktop";
 
 export async function load(app) {
   const view = app.view("general");
@@ -168,7 +168,7 @@ export function render(app) {
       }),
       row({
         title: "Pause sharing",
-        text: "While paused, the Local Agent refuses every request from Chat with Work.",
+        text: "While paused, the background agent refuses every request from Chat with Work.",
         actions: switchInput(!!status?.paused, (on) => setPaused(app, on), { label: "Pause sharing", disabled: !status || view.pausing }),
       }),
       crash && crash.available ? row({
@@ -179,7 +179,7 @@ export function render(app) {
     view.error ? notice(view.error) : null,
     view.crashError ? notice(view.crashError) : null,
     dictationSection(app),
-    section("Local Agent", null,
+    section("Background agent", null,
       status
         ? group(
           row({ title: "Background agent", actions: h("span", { class: "muted" }, `Running · version ${status.version} · process ${status.pid}`) }),
@@ -191,13 +191,13 @@ export function render(app) {
     section("About", null,
       group(
         row({
-          title: `Chat with Work ${app.info.version}`,
+          title: `Chat with Work Desktop ${app.info.version}`,
           text: "Open source under the MIT or Apache 2.0 license. The code, the wire protocol and the threat model are public.",
           extra: h("p", {}, h("button", { type: "button", class: "link", onclick: () => call("open_url", { url: REPOSITORY }) }, "Source code and security notes")),
         }),
         row({
           title: "Quit",
-          text: `Closes the windows and the ${app.info.tray_place} item. The Local Agent keeps running in the background.`,
+          text: `Closes the windows and the ${app.info.tray_place} item. The background agent keeps running in the background.`,
           actions: button(app.info.quit_item, () => call("quit")),
         }))));
   return page;

@@ -264,7 +264,7 @@ pub fn show_settings(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
     // A fixed size for pictures, which tiling compositors leave floating.
     let fixed = snapshots();
     let window = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(path.into()))
-        .title("Chat with Work Settings")
+        .title("Chat with Work Desktop Settings")
         .inner_size(920.0, 660.0)
         .resizable(!fixed)
         .min_inner_size(560.0, 420.0)

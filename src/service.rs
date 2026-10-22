@@ -45,13 +45,13 @@ pub fn install(paths: &Paths, options: &InstallOptions) -> Result<PathBuf> {
                     .args(["print", &format!("{domain}/{LAUNCHD_LABEL}")])
                     .output()
                     .map(|output| output.status.success())
-                    .context("waiting for the previous Local Agent to stop")
+                    .context("waiting for the previous background agent to stop")
             })?;
         }
         let output = Command::new("launchctl")
             .args(["bootstrap", &domain, &plist.to_string_lossy()])
             .output()
-            .context("registering the Local Agent with launchd")?;
+            .context("registering the background agent with launchd")?;
         if !output.status.success() {
             bail!(
                 "launchctl bootstrap failed ({}): {}",
@@ -159,7 +159,7 @@ fn wait_for_launchd_removal(mut still_registered: impl FnMut() -> Result<bool>) 
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    bail!("The previous Local Agent is still stopping. Try again in a moment.")
+    bail!("The previous background agent is still stopping. Try again in a moment.")
 }
 
 /// Where distribution packages install the systemd user unit.
@@ -211,8 +211,8 @@ fn launch_agent_path() -> Result<PathBuf> {
 pub fn systemd_unit(exe: &Path, paths: &Paths, options: &InstallOptions) -> String {
     let mut unit = format!(
         "[Unit]\n\
-         Description=Chat with Work Local Agent (cww)\n\
-         Documentation=https://github.com/crmne/chatwithwork-local-agent\n\
+         Description=Chat with Work Desktop (cww)\n\
+         Documentation=https://github.com/crmne/chatwithwork-desktop\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
          \n\
@@ -328,6 +328,8 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
 mod windows_task {
     use super::*;
 
+    // The name from before the app was Chat with Work Desktop, kept so an
+    // upgrade finds, replaces and removes the task it registered.
     pub const TASK_NAME: &str = "Chat with Work Local Agent";
 
     pub fn install(exe: &Path, paths: &Paths) -> Result<PathBuf> {
@@ -456,7 +458,7 @@ mod windows_task {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        bail!("The previous Local Agent did not stop. Try again in a moment.")
+        bail!("The previous background agent did not stop. Try again in a moment.")
     }
 
     fn wait_for_start(paths: &Paths) -> Result<()> {
@@ -473,7 +475,7 @@ mod windows_task {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         bail!(
-            "The Local Agent did not start. See {} for details.",
+            "The background agent did not start. See {} for details.",
             paths.daemon_log_file().display()
         )
     }
@@ -523,7 +525,7 @@ mod windows_task {
             r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Chat with Work Local Agent (cww): lets Chat with Work read, and with your approval change files and run commands, in folders you share.</Description>
+    <Description>Chat with Work Desktop (cww): lets Chat with Work read, and with your approval change files and run commands, in folders you share.</Description>
     <URI>\{TASK_NAME}</URI>
   </RegistrationInfo>
   <Triggers>

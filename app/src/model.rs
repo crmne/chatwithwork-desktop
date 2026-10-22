@@ -289,7 +289,7 @@ impl TrayView {
         };
         Self {
             health,
-            tooltip: format!("Chat with Work: {}", health.label()),
+            tooltip: format!("Chat with Work Desktop: {}", health.label()),
             headline,
             detail,
             paused,

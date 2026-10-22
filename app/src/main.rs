@@ -1,5 +1,5 @@
 //! Chat with Work Desktop: the Chat with Work web app in a native window,
-//! the tray item for the `cww` daemon, and the Local Agent's settings.
+//! the tray item for the `cww` daemon, and the background agent's settings.
 //!
 //! - The main window loads the real web app from the server this computer
 //!   is paired with (or chatwithwork.com), the way the phone apps wrap the

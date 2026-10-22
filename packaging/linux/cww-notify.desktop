@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Chat with Work
-Comment=Chat with Work local agent
+Comment=Chat with Work Desktop
 Exec=cww
 Icon=cww-app
 Terminal=true

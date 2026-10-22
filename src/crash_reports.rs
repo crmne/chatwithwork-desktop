@@ -3,7 +3,7 @@
 //! Off until someone says yes: the desktop app and `cww tui` ask once, and
 //! `crash_reports = true` in `config.toml` or `CWW_CRASH_REPORTS=1` turns
 //! them on anywhere (the environment wins over the file). What's sent is a
-//! Rust panic only, to the Local Agent's project on our own error tracker,
+//! Rust panic only, to the background agent's project on our own error tracker,
 //! Bugsink at `errors.plenty.is`, which speaks the Sentry protocol:
 //!
 //! - where in the source code it panicked (file, line and column);
@@ -12,7 +12,7 @@
 //!   text put into it while running, which could hold a file name, a chat
 //!   or a token;
 //! - the release (`cww@0.3.1`), whether it is a development build, which
-//!   part of the Local Agent it was (`daemon`, `tui`, `cli`, `app`), and the
+//!   part of the background agent it was (`daemon`, `tui`, `cli`, `app`), and the
 //!   operating system's name, kernel version and architecture.
 //!
 //! Never the user or host name, the command line, environment variables,
@@ -48,7 +48,7 @@ use crate::paths::{Paths, write_private_file};
 const DEFAULT_DSN: &str = "https://872298cbc64440d887ab210dceb83560@errors.plenty.is/8";
 
 /// `CWW_CRASH_REPORTS_DSN` at build time replaces the address, and an empty
-/// value builds a Local Agent that can't send crash reports at all.
+/// value builds a Chat with Work Desktop that can't send crash reports at all.
 const COMPILED_DSN: Option<&str> = match option_env!("CWW_CRASH_REPORTS_DSN") {
     Some(dsn) if dsn.is_empty() => None,
     Some(dsn) => Some(dsn),
@@ -70,7 +70,7 @@ const WITHHELD: &str = "panic (its message was formed at run time, so it is not 
 /// The thread that sends; a panic on it is never reported.
 const THREAD: &str = "cww-crash-report";
 
-/// Which part of the Local Agent a report comes from.
+/// Which part of the background agent a report comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Component {
     Daemon,
@@ -672,7 +672,7 @@ fn replace_user_folders(text: &str, prefix: &str) -> String {
 
 /// The crash report setting for `config.toml`'s documentation and the
 /// apps' wording, in one place.
-pub const ABOUT: &str = "When the Local Agent crashes, send where in its code it happened, its \
+pub const ABOUT: &str = "When the background agent crashes, send where in its code it happened, its \
      version and your operating system to the Chat with Work team. Never your files, chats, \
      names or tokens.";
 

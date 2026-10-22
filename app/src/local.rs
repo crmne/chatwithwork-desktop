@@ -278,7 +278,7 @@ pub fn set_crash_reports(
         })
 }
 
-/// Opens one of the Local Agent's own files in its default app: `config`
+/// Opens one of the background agent's own files in its default app: `config`
 /// (config.toml), `audit` (the activity log) or `log` (the daemon's log).
 #[tauri::command]
 pub fn open_file(webview: Webview, desktop: State<'_, Arc<Desktop>>, which: String) -> Answer {

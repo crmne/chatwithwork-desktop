@@ -1,4 +1,4 @@
-# Chat with Work Local Agent: control API, version 1
+# Chat with Work Desktop: control API, version 1
 
 The daemon (`cww daemon run`) listens on a local control channel. The `cww` command line, the `cww` terminal UI and the settings app all use it to read the daemon's state, pause it, manage shared folders (and whether Chat with Work may change files in them) and follow the audit log. This document is the contract for those clients. The tunnel to Chat with Work is a different protocol; see [PROTOCOL.md](PROTOCOL.md).
 

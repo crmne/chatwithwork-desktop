@@ -1,4 +1,4 @@
-# systemd user unit for the Chat with Work Local Agent, installed by the
+# systemd user unit for Chat with Work Desktop, installed by the
 # distribution packages to /usr/lib/systemd/user/cww.service.
 #
 #   systemctl --user enable --now cww.service
@@ -8,8 +8,8 @@
 # Behind an HTTP proxy, set `proxy = "http://proxy.example:3128"` in
 # ~/.config/cww/config.toml: services don't see a shell's HTTPS_PROXY.
 [Unit]
-Description=Chat with Work Local Agent (cww)
-Documentation=https://github.com/crmne/chatwithwork-local-agent
+Description=Chat with Work Desktop (cww)
+Documentation=https://github.com/crmne/chatwithwork-desktop
 After=network-online.target
 Wants=network-online.target
 

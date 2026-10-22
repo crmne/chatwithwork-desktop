@@ -1,12 +1,12 @@
 class Cww < Formula
-  desc "Chat with Work desktop app, terminal interface and background agent"
-  homepage "https://github.com/crmne/chatwithwork-local-agent"
+  desc "Chat with Work Desktop app, terminal interface and background agent"
+  homepage "https://github.com/crmne/chatwithwork-desktop"
   version "@VERSION@"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     # Universal CLI and app bundle, signed with Developer ID and notarized.
-    url "https://github.com/crmne/chatwithwork-local-agent/releases/download/v@VERSION@/cww-v@VERSION@-macos-universal.tar.gz"
+    url "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-macos-universal.tar.gz"
     sha256 "@MACOS_SHA256@"
   end
 
@@ -14,19 +14,14 @@ class Cww < Formula
     depends_on "alsa-lib"
     # Dictation records through PipeWire's client library (libpipewire-0.3).
     depends_on "pipewire"
-    depends_on "libglvnd"
-    depends_on "libx11"
-    depends_on "libxcursor"
-    depends_on "libxi"
-    depends_on "libxrandr"
-    depends_on "libxkbcommon"
-    depends_on "wayland"
+    # The window is a WebKitGTK 4.1 web view, which Homebrew doesn't carry:
+    # the app uses the distribution's (see caveats).
     on_intel do
-      url "https://github.com/crmne/chatwithwork-local-agent/releases/download/v@VERSION@/cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "@LINUX_APP_AMD64_SHA256@"
     end
     on_arm do
-      url "https://github.com/crmne/chatwithwork-local-agent/releases/download/v@VERSION@/cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "@LINUX_APP_ARM64_SHA256@"
     end
   end
@@ -45,11 +40,7 @@ class Cww < Formula
       bin.install_symlink prefix/"Chat with Work.app/Contents/MacOS/cww-app"
     else
       bin.install "cww"
-      libexec.install "cww-app"
-      libexec.install_symlink bin/"cww"
-      graphics = %w[libglvnd libx11 libxcursor libxi libxrandr libxkbcommon wayland]
-      (bin/"cww-app").write_env_script libexec/"cww-app",
-        LD_LIBRARY_PATH: graphics.map { |name| Formula[name].opt_lib }.join(":")
+      bin.install "cww-app"
       # A desktop launcher does not inherit Homebrew's shell environment.
       inreplace "cww-app.desktop", "Exec=cww-app", "Exec=#{opt_bin}/cww-app"
       (share/"applications").install "cww-app.desktop"
@@ -61,7 +52,7 @@ class Cww < Formula
   def caveats
     <<~EOS
       Open the desktop app with cww-app, or run cww for the terminal interface.
-      Choose Start Local Agent in the app, or start it now and at login with:
+      Start the background agent from the app, or start it now and at login with:
         cww daemon install
       Check it with cww status. Nothing is shared until you pair and choose a folder.
 
@@ -69,6 +60,9 @@ class Cww < Formula
         macOS: use brew install --cask crmne/tap/chat-with-work
         Linux: add #{HOMEBREW_PREFIX}/share to XDG_DATA_DIRS in your desktop session
       Without a user service manager, run cww daemon run in a terminal.
+      On Linux, the app's window needs your distribution's WebKitGTK 4.1, GTK 3
+      and AppIndicator libraries (libwebkit2gtk-4.1-0 and
+      libayatana-appindicator3-1 on Debian and Ubuntu).
     EOS
   end
 

@@ -1,16 +1,16 @@
 {
     "version": "@VERSION@",
     "description": "Chat with Work: desktop app, terminal interface and local background agent.",
-    "homepage": "https://github.com/crmne/chatwithwork-local-agent",
+    "homepage": "https://github.com/crmne/chatwithwork-desktop",
     "license": "MIT|Apache-2.0",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/crmne/chatwithwork-local-agent/releases/download/v@VERSION@/cww-v@VERSION@-x86_64-pc-windows-msvc.zip",
+            "url": "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-x86_64-pc-windows-msvc.zip",
             "hash": "@WINDOWS_X64_ZIP_SHA256@",
             "extract_dir": "cww-v@VERSION@-x86_64-pc-windows-msvc"
         },
         "arm64": {
-            "url": "https://github.com/crmne/chatwithwork-local-agent/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.zip",
+            "url": "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.zip",
             "hash": "@WINDOWS_ARM64_ZIP_SHA256@",
             "extract_dir": "cww-v@VERSION@-aarch64-pc-windows-msvc"
         }
@@ -26,11 +26,11 @@
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "https://github.com/crmne/chatwithwork-local-agent/releases/download/v$version/cww-v$version-x86_64-pc-windows-msvc.zip",
+                "url": "https://github.com/crmne/chatwithwork-desktop/releases/download/v$version/cww-v$version-x86_64-pc-windows-msvc.zip",
                 "extract_dir": "cww-v$version-x86_64-pc-windows-msvc"
             },
             "arm64": {
-                "url": "https://github.com/crmne/chatwithwork-local-agent/releases/download/v$version/cww-v$version-aarch64-pc-windows-msvc.zip",
+                "url": "https://github.com/crmne/chatwithwork-desktop/releases/download/v$version/cww-v$version-aarch64-pc-windows-msvc.zip",
                 "extract_dir": "cww-v$version-aarch64-pc-windows-msvc"
             }
         },

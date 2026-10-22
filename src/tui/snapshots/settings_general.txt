@@ -1,8 +1,8 @@
  ◆ Chat with Work              │  General
                                │
-  ← Chats                  esc │  The Local Agent that answers Chat with Work in the background.
+  ← Chats                  esc │  The background agent that answers Chat with Work.
                                │
-  SETTINGS                     │  Local Agent     ● Running · cww 0.1.0
+  SETTINGS                     │  Agent           ● Running · cww 0.1.0
    Shared folders              │  Sharing         Answering Chat with Work
    Always private              │  Crash reports   Off
    Activity                    │  Configuration   /srv/cww/config.toml

@@ -1,4 +1,4 @@
-// Notifications on this computer: the Local Agent shows them natively,
+// Notifications on this computer: the background agent shows them natively,
 // whether a window is open or not. What notifies you (chats, emails) is
 // chosen in Chat with Work's own settings.
 
@@ -65,7 +65,7 @@ export function render(app) {
   }
   const native = view.native;
   append(page, 
-    section("On this computer", "The Local Agent shows a notification when a chat needs you or has finished while you're not looking at it. It never shows what the chat says.",
+    section("On this computer", "The background agent shows a notification when a chat needs you or has finished while you're not looking at it. It never shows what the chat says.",
       group(row({
         title: "Native notifications",
         text: native ? describe(native) : "Checking this computer's notification support…",

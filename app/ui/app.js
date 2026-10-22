@@ -117,14 +117,14 @@ export function thousands(n) {
 
 // Shown on pages that need the daemon while it isn't running.
 export function agentMissing(app) {
-  if (!app.known) return h("p", { class: "muted" }, "Checking the Local Agent…");
+  if (!app.known) return h("p", { class: "muted" }, "Checking the background agent…");
   const view = app.view("agent");
   return group(h("div", { class: "row row--stack" },
     h("div", { class: "row__body" },
-      h("h3", {}, "The Local Agent isn't running"),
+      h("h3", {}, "The background agent isn't running"),
       h("p", {}, "It runs in the background and answers Chat with Work. Start it to share folders and see its activity.")),
     h("div", { class: "inline" },
-      button(view.starting ? "Starting…" : "Start Local Agent", async () => {
+      button(view.starting ? "Starting…" : "Start Background Agent", async () => {
         view.starting = true;
         view.error = null;
         app.render();
@@ -136,7 +136,7 @@ export function agentMissing(app) {
         view.starting = false;
         app.render();
       }, { kind: "btn-primary", disabled: view.starting || !app.info.agent_installed })),
-    !app.info.agent_installed ? h("p", { class: "note" }, "Couldn't find the cww command. Install the Local Agent, then try again.") : null,
+    !app.info.agent_installed ? h("p", { class: "note" }, "Couldn't find the cww command. Install the background agent, then try again.") : null,
     view.error ? notice(view.error) : null));
 }
 

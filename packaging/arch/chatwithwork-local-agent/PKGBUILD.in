@@ -2,9 +2,9 @@
 pkgname=chatwithwork-local-agent
 pkgver=@VERSION@
 pkgrel=@PKGREL@
-pkgdesc="Chat with Work: desktop app, terminal interface and local background agent"
+pkgdesc="Chat with Work Desktop: the desktop app, terminal interface and background agent"
 arch=('x86_64' 'aarch64')
-url="https://github.com/crmne/chatwithwork-local-agent"
+url="https://github.com/crmne/chatwithwork-desktop"
 license=('MIT OR Apache-2.0')
 install="${pkgname}.install"
 depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'dbus')
@@ -19,17 +19,19 @@ conflicts=('cww' 'chatwithwork-local-agent-bin' 'chatwithwork-local-agent-git')
 # because the release profile strips symbols, so a debug package would be
 # empty.
 options=('!debug' '!lto')
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/crmne/chatwithwork-local-agent/archive/refs/tags/v${pkgver}.tar.gz")
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('@SOURCE_SHA256@')
 
+# GitHub names the archive's folder after the repository, which was renamed
+# chatwithwork-desktop; the package keeps its name, so upgrades follow.
 prepare() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${srcdir}=/"
@@ -37,14 +39,14 @@ build() {
 }
 
 check() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo test --frozen --release --workspace
 }
 
 package() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
   install -Dm755 target/release/cww "${pkgdir}/usr/bin/cww"
   install -Dm755 target/release/cww-app "${pkgdir}/usr/bin/cww-app"
   install -Dm644 packaging/linux/cww-app.desktop "${pkgdir}/usr/share/applications/cww-app.desktop"

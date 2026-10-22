@@ -169,7 +169,7 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-          description: Chat with Work Local Agent
+          description: Chat with Work Desktop
       - name: Sign binaries (certificate)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == '' && env.WINDOWS_CERTIFICATE_PFX != ''
         shell: pwsh
@@ -234,7 +234,7 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-          description: Chat with Work Local Agent
+          description: Chat with Work Desktop
       - name: Sign installer (certificate)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == '' && env.WINDOWS_CERTIFICATE_PFX != ''
         shell: pwsh
@@ -580,7 +580,7 @@ jobs:
           if [ -f "$notes" ]; then
             cp "$notes" release-notes.md
           elif [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            echo "Prerelease build of the Chat with Work Local Agent ${GITHUB_REF_NAME}." > release-notes.md
+            echo "Prerelease build of Chat with Work Desktop ${GITHUB_REF_NAME}." > release-notes.md
           else
             echo "::error::Write $notes and push it before tagging a stable release."
             exit 1
@@ -588,7 +588,7 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          name: Chat with Work Local Agent ${{ needs.release-source.outputs.version }}
+          name: Chat with Work Desktop ${{ needs.release-source.outputs.version }}
           body_path: release-notes.md
           generate_release_notes: false
           draft: ${{ contains(github.ref_name, '-') }}

@@ -17,9 +17,9 @@
                                │  .npmrc
                                │
                                │  Also private
-                               │  The Local Agent's own settings, keys, index and logs, and files
-                               │  with more than one hard link, which could point outside a shared
-                               │  folder.
+                               │  The background agent's own settings, keys, index and logs, and
+                               │  files with more than one hard link, which could point outside a
+                               │  shared folder.
                                │
                                │  To change this list, edit the [deny] section of config.toml
                                │  (/srv/cww/config.toml), and it applies right away.

@@ -94,8 +94,8 @@ fn describe(entry: &AuditEntry) -> (String, Option<String>) {
         return (text, detail);
     }
     let text = match entry.event.as_str() {
-        "started" => "The Local Agent started",
-        "stopped" => "The Local Agent stopped",
+        "started" => "The background agent started",
+        "stopped" => "The background agent stopped",
         "connected" => "Connected to Chat with Work",
         "disconnected" => "Disconnected from Chat with Work",
         "paused" => "Sharing paused",

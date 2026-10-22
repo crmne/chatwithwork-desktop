@@ -26,7 +26,7 @@ pub struct Config {
     /// connection. Overrides `HTTPS_PROXY` and the other proxy variables,
     /// which services don't inherit from a shell. See `crate::proxy`.
     pub proxy: Option<String>,
-    /// Send a report to the Chat with Work team when the Local Agent
+    /// Send a report to the Chat with Work team when the background agent
     /// crashes: where in its code, its version and the operating system,
     /// never files, chats, names or tokens. Off until set; the desktop app
     /// and `cww tui` ask once. `CWW_CRASH_REPORTS=1` or `0` overrides it.
@@ -292,7 +292,7 @@ impl Config {
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
         let text = toml::to_string_pretty(self).context("serializing config")?;
-        let header = "# Chat with Work local agent (cww) configuration.\n\
+        let header = "# Chat with Work Desktop (cww) configuration.\n\
                       # The server can't change this file. See README.md for every option.\n\n";
         write_private_file(&paths.config_file(), format!("{header}{text}").as_bytes())
     }

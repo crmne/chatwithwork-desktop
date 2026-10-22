@@ -1,6 +1,6 @@
-# Chat with Work Local Agent
+# Chat with Work Desktop
 
-The Chat with Work Local Agent (`cww` on the command line) is the open-source companion for [Chat with Work](https://chatwithwork.com). It lets Chat with Work read, and with your approval change files and run commands, in folders you share on your Mac, Windows PC or Linux machine, and nothing else.
+Chat with Work Desktop is the open-source desktop app for [Chat with Work](https://chatwithwork.com): Chat with Work in a window of its own, and a background agent (`cww` on the command line) that lets Chat with Work read, and with your approval change files and run commands, in folders you share on your Mac, Windows PC or Linux machine, and nothing else.
 
 - **Reads, and changes only with your approval:** a shared folder gets four read tools, `roots`, `search`, `list` and `read`. Turn on "Allow changes" for it, on your computer, and the assistant can also create, edit, move and delete files there, each change approved by you in Chat with Work. On Mac and Linux you can also allow commands in such a folder, each run approved by you too ([What the assistant can do](#what-the-assistant-can-do)). Old versions and deleted files go to your system trash; nothing is deleted for good, and no programs, launchers or macro documents are ever written.
 - **Only the folders you share,** and never the secrets inside them. SSH keys, `.env` files, keychains and browser profiles stay private even inside a shared folder.
@@ -14,15 +14,15 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 
 | Platform | Install | Open |
 |---|---|---|
-| macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-local-agent/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
-| Windows 10 and 11 | `winget install ChatWithWork.LocalAgent`, or download the `.msi` from the latest release | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
+| macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
+| Windows 10 and 11 | `winget install ChatWithWork.Desktop`, or download the `.msi` from the latest release | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
 | Arch | `yay -S chatwithwork-local-agent-bin` (or `chatwithwork-local-agent` to build from source, `chatwithwork-local-agent-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
 | Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-local-agent_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
 | Fedora, RHEL, openSUSE | Download the `.rpm`, then `sudo dnf install ./chatwithwork-local-agent-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
-| NixOS, Nix (Linux, Apple silicon macOS) | `nix profile install github:crmne/chatwithwork-local-agent` | `cww-app` or `cww`; the package also carries desktop integration. |
+| NixOS, Nix (Linux, Apple silicon macOS) | `nix profile install github:crmne/chatwithwork-desktop` | `cww-app` or `cww`; the package also carries desktop integration. |
 | Linux, Homebrew | `brew install crmne/tap/cww` | `cww-app` or `cww`. Add the Homebrew prefix's `share` directory to your desktop session's `XDG_DATA_DIRS` for menu discovery. |
 
-Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
+The Linux, Arch and Windows packages, the `cww` command and the `cww-app` program keep their names from before the app was called Chat with Work Desktop, so existing installs upgrade in place. Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
 
 **Starting the background agent**
 
@@ -30,7 +30,7 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 |---|---|
 | Windows MSI / WinGet / PowerShell, per-user Scoop | The installer registers and starts the agent for your account, now and at every login. |
 | macOS `.pkg` | The installer tries to register and start the agent for the logged-in console user. If nobody is logged in, finish setup after login. |
-| Linux packages, Nix, Homebrew, portable app | Open the app and choose **Start Local Agent**, or run `cww daemon install` as your own user. System-wide package installation cannot choose which user account should run the agent. |
+| Linux packages, Nix, Homebrew, portable app | Open the app and choose **Start Background Agent**, or run `cww daemon install` as your own user. System-wide package installation cannot choose which user account should run the agent. |
 | macOS / Linux one-line installer | Tries `cww daemon install` for the installing user and prints recovery instructions if no user service manager is available. |
 
 `cww daemon install` starts the agent now, enables it at future logins, and restarts an existing service to use the installed version. If automatic setup failed, run that command without `sudo`. On Linux, check it with `systemctl --user status cww.service`; after a package upgrade, restart it with `systemctl --user restart cww.service`. On any platform, `cww status` reports the agent's state. Without a user service manager, keep `cww daemon run` running in a terminal. Closing the desktop app does not stop the background service.
@@ -38,7 +38,7 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 **One line, macOS or Linux, no root**
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-local-agent/releases/latest/download/cww-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.sh | sh
 ```
 
 It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, and registers the desktop launcher and icon on Linux. On macOS the app goes in `~/Applications`. Set `CWW_INSTALL_DIR` to change the command directory. The installer uses `XDG_DATA_HOME` for Linux desktop files and `XDG_CACHE_HOME` for temporary downloads, defaulting to `~/.local/share` and `~/.cache`.
@@ -46,7 +46,7 @@ It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, a
 **Windows without WinGet**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-local-agent/releases/latest/download/cww-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
 Windows builds are not signed yet. If SmartScreen warns, choose **More info**, then **Run anyway**. Portable Windows zips also contain all three executables; extract them to a permanent folder before registering the agent. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
@@ -71,7 +71,7 @@ For a Linux terminal-only build with native notification support, install `notif
 Release archives come with SHA-256 checksums, signed for the desktop app's updater, and GitHub artifact attestations. To check a download:
 
 ```sh
-gh attestation verify cww-app-v0.3.0-x86_64-unknown-linux-gnu.tar.gz --repo crmne/chatwithwork-local-agent
+gh attestation verify cww-app-v0.3.0-x86_64-unknown-linux-gnu.tar.gz --repo crmne/chatwithwork-desktop
 ```
 
 [PACKAGING.md](PACKAGING.md) explains packaging, signing, startup and removal. Open the desktop app or run `cww` to pair and choose folders, or follow the steps below.
@@ -129,7 +129,7 @@ cww daemon stop        # stop it until the next logon
 cww daemon uninstall   # add --purge to also delete keys, config, index and logs
 ```
 
-`cww daemon run` runs in the foreground instead. Set `CWW_LOG=debug` for more output. With Homebrew, `brew services start cww` works too. On Windows the logon task runs `cww-agent.exe`, the same daemon without a console window, and it logs to `%LOCALAPPDATA%\cww\state\daemon.log`. If Task Scheduler denies access, setup uses your account's Startup folder instead and starts the agent immediately, without administrator rights. This fallback starts at login but does not restart the agent after a crash; open the app and choose **Start Local Agent** if needed. `cww daemon uninstall` removes either registration.
+`cww daemon run` runs in the foreground instead. Set `CWW_LOG=debug` for more output. With Homebrew, `brew services start cww` works too. On Windows the logon task runs `cww-agent.exe`, the same daemon without a console window, and it logs to `%LOCALAPPDATA%\cww\state\daemon.log`. If Task Scheduler denies access, setup uses your account's Startup folder instead and starts the agent immediately, without administrator rights. This fallback starts at login but does not restart the agent after a crash; open the app and choose **Start Background Agent** if needed. `cww daemon uninstall` removes either registration.
 
 The CLI, the terminal UI and the settings app talk to the daemon over a local socket (a named pipe on Windows) that only your user can open. [CONTROL.md](CONTROL.md) documents it for other clients.
 
@@ -235,7 +235,7 @@ The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 
 
 ## Desktop app
 
-`cww-app` is Chat with Work Desktop: the Chat with Work web app in a window of its own, a menu bar (macOS), notification area (Windows) or tray (Linux) item for the daemon, and the Local Agent's settings. It is built with [Tauri](https://tauri.app) on the system's web view (WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows).
+`cww-app` is Chat with Work Desktop: the Chat with Work web app in a window of its own, a menu bar (macOS), notification area (Windows) or tray (Linux) item for the daemon, and the background agent's settings. It is built with [Tauri](https://tauri.app) on the system's web view (WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows).
 
 - **The Chat with Work window** loads the real web app from the server this computer is paired with (chatwithwork.com, staging, or your own), on `/chats/new`, which opens the organization you used last, the way the phone apps wrap the site. So it is always the web app as it is today. Links that leave the server open in your browser, signing in with Google, Slack or Dropbox and connecting services run in your browser and come back, files dropped on the window go to the composer, downloads go to your Downloads folder, and the microphone works for dictation. It keeps your sign-in, size and position between launches. Its pages can ask the app for very little: open a link in the browser, open the settings, and wait for a sign-in in the browser ([docs/desktop-app.md](docs/desktop-app.md)). They never reach the daemon.
 - **The settings window** has pages built into the app, which work offline and before pairing: a first-run welcome, shared folders (with the native folder picker, changes and commands), what is always private, the activity log, pairing, notifications on this computer, and general settings (start at login, pausing, crash reports, dictation for the terminal app). Only these pages reach the daemon, through an allow-list of control requests.
@@ -249,7 +249,7 @@ cargo run --release -p cww-app
 
 Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install. On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
 
-Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-local-agent/tree/egui-final) tag, for anyone who wants to revive a fully native app.
+Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, for anyone who wants to revive a fully native app.
 
 ## What the assistant can do
 
@@ -404,9 +404,9 @@ Crash reports are off until you turn them on. The desktop app asks once, on its 
 crash_reports = true   # or false; the apps ask while it's unset
 ```
 
-`CWW_CRASH_REPORTS=1` or `CWW_CRASH_REPORTS=0` in the environment overrides the file, for the daemon, the CLI and both apps. The daemon and the CLI never ask; they follow the setting. Every running part of the Local Agent reads it again when it crashes, so a change applies at once.
+`CWW_CRASH_REPORTS=1` or `CWW_CRASH_REPORTS=0` in the environment overrides the file, for the daemon, the CLI and both apps. The daemon and the CLI never ask; they follow the setting. Every running part of the background agent reads it again when it crashes, so a change applies at once.
 
-When it's on and the Local Agent panics (a crash in its Rust code), it sends one report to our own error tracker, a Bugsink server we run at `errors.plenty.is` in Germany, with no third party involved. A report holds:
+When it's on and the background agent panics (a crash in its Rust code), it sends one report to our own error tracker, a Bugsink server we run at `errors.plenty.is` in Germany, with no third party involved. A report holds:
 
 - where in the source code it panicked (file, line and column);
 - the panic's message, but only text written in the source code, or the start of one of Rust's own messages such as "index out of bounds", never text formed while it ran;

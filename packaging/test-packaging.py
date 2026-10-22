@@ -94,7 +94,9 @@ exit "${TEST_DAEMON_EXIT:-0}"
                         "chatwithwork-local-agent-git"):
             with self.subTest(variant=variant):
                 recipe = ROOT / "packaging/arch" / variant / "PKGBUILD.in"
-                tree = source / (variant if variant.endswith("-git") else f"{variant}-9.8.7")
+                # The source archive's folder is named after the repository.
+                folder = {"chatwithwork-local-agent": "chatwithwork-desktop"}.get(variant, variant)
+                tree = source / (variant if variant.endswith("-git") else f"{folder}-9.8.7")
                 if not variant.endswith("-bin"):
                     shutil.copytree(source / "cww-app-v9.8.7-x86_64-unknown-linux-gnu", tree)
                     (tree / "target/release").mkdir(parents=True)

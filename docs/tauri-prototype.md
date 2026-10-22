@@ -1,6 +1,6 @@
 # Tauri prototype: is it fast enough to replace egui?
 
-> The prototype measured here (a Tauri copy of the egui screens, in `desktop-tauri/`) was replaced by the app in [desktop-app.md](desktop-app.md), which takes this page's suggestion: a window on the server's real pages instead of a second copy of them. Its code is kept at the [`tauri-prototype-final`](https://github.com/crmne/chatwithwork-local-agent/tree/tauri-prototype-final) tag.
+> The prototype measured here (a Tauri copy of the egui screens, in `desktop-tauri/`) was replaced by the app in [desktop-app.md](desktop-app.md), which takes this page's suggestion: a window on the server's real pages instead of a second copy of them. Its code is kept at the [`tauri-prototype-final`](https://github.com/crmne/chatwithwork-desktop/tree/tauri-prototype-final) tag.
 
 A quick prototype, not a port, to see whether Chat with Work Desktop could move from egui to Tauri 2 and reuse web UI. It lives in [`desktop-tauri/`](../desktop-tauri), outside the Cargo workspace with its own lock file, so nothing in the daemon or the egui app changes except a measuring hook (below).
 

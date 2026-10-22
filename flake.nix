@@ -1,5 +1,5 @@
 {
-  description = "Chat with Work desktop app, terminal interface and background agent";
+  description = "Chat with Work Desktop app, terminal interface and background agent";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -84,8 +84,8 @@
             '';
 
             meta = {
-              description = "Chat with Work desktop app, terminal interface and background agent";
-              homepage = "https://github.com/crmne/chatwithwork-local-agent";
+              description = "Chat with Work Desktop app, terminal interface and background agent";
+              homepage = "https://github.com/crmne/chatwithwork-desktop";
               license = with pkgs.lib.licenses; [
                 mit
                 asl20
