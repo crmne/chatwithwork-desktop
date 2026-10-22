@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.98"
 description = "Private native notification helper for Chat with Work"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/crmne/chatwithwork-local-agent"
+repository = "https://github.com/crmne/chatwithwork-desktop"
 publish = false
 
 [[bin]]

@@ -86,7 +86,7 @@ try {
       Start-Sleep -Seconds 1
     }
     if (-not $running) { throw 'The login shortcut did not start the agent' }
-    # The desktop app's Start Local Agent action must also be repeatable.
+    # The desktop app's Start Background Agent action must also be repeatable.
     & (Join-Path $dir 'cww.exe') daemon install
     if ($LASTEXITCODE -ne 0) { throw 'Starting the agent again as a standard user failed' }
   }

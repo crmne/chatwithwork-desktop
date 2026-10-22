@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 # location without requiring it to exist; installation creates it below.
 $directory = [Environment]::GetFolderPath('Startup', 'DoNotVerify')
 if ([string]::IsNullOrWhiteSpace($directory)) { throw 'Your Windows Startup folder could not be found.' }
+# The shortcut's name from before the rename, so upgrades replace it.
 $path = Join-Path $directory 'Chat with Work Local Agent.lnk'
 if ($env:CWW_STARTUP_ACTION -eq 'remove') {
     if (Test-Path -LiteralPath $path) {
@@ -19,7 +20,7 @@ $shortcut = $shell.CreateShortcut($path)
 $shortcut.TargetPath = $env:CWW_STARTUP_EXE
 $shortcut.Arguments = $env:CWW_STARTUP_ARGS
 $shortcut.WorkingDirectory = [IO.Path]::GetDirectoryName($env:CWW_STARTUP_EXE)
-$shortcut.Description = 'Chat with Work Local Agent'
+$shortcut.Description = 'Chat with Work Desktop'
 $shortcut.WindowStyle = 7
 $shortcut.Save()
 [Console]::WriteLine($path)

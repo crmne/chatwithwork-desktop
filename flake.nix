@@ -1,5 +1,5 @@
 {
-  description = "Chat with Work desktop app, terminal interface and background agent";
+  description = "Chat with Work Desktop app, terminal interface and background agent";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -36,8 +36,10 @@
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns pkgs.rcodesign ];
             # fastframe-audio records through PipeWire on Linux; bindgenHook above
-            # gives its bindings libclang.
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.alsa-lib pkgs.pipewire ];
+            # gives its bindings libclang. The window is WebKitGTK in GTK 3.
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [
+              alsa-lib pipewire webkitgtk_4_1 gtk3 libsoup_3 librsvg dbus
+            ]);
 
             # The end-to-end test binds a local port; the rest touches only
             # temporary directories.
@@ -52,9 +54,10 @@
               substituteInPlace $out/share/applications/cww-app.desktop \
                 --replace-fail Exec=cww-app Exec=$out/bin/cww-app
               install -Dm644 app/assets/mark.svg $out/share/icons/hicolor/scalable/apps/cww-app.svg
+              # The tray item loads AppIndicator at run time.
               wrapProgram $out/bin/cww-app --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (with pkgs; [
-                libglvnd wayland libxkbcommon libX11 libXcursor libXi libXrandr
-              ])}
+                libayatana-appindicator
+              ])} --prefix XDG_DATA_DIRS : "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
             '' else ''
               app="$out/Applications/Chat with Work.app"
               mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -81,8 +84,8 @@
             '';
 
             meta = {
-              description = "Chat with Work desktop app, terminal interface and background agent";
-              homepage = "https://github.com/crmne/chatwithwork-local-agent";
+              description = "Chat with Work Desktop app, terminal interface and background agent";
+              homepage = "https://github.com/crmne/chatwithwork-desktop";
               license = with pkgs.lib.licenses; [
                 mit
                 asl20

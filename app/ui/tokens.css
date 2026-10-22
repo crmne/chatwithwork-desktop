@@ -1,0 +1,129 @@
+/*
+  Live Wire tokens.
+
+  Colors resolve with light-dark(), so they follow whichever color-scheme the
+  daisyUI theme sets: the system preference by default, or data-theme on any
+  element ("livewire-dark" or "livewire-light").
+
+  Neutrals carry the interface. Signals are for state and "live" moments;
+  the rainbow is only for the composer and moments when work is happening.
+*/
+
+:root {
+  /* Surfaces */
+  --canvas: light-dark(#F3F5F9, #06070B);
+  --canvas-sunken: light-dark(#EAEEF4, #0A0C12);
+  --surface: light-dark(#FFFFFF, #0F121A);
+  --surface-raised: light-dark(#FFFFFF, #141824);
+  --surface-hover: light-dark(#F1F4F8, #161B27);
+  --surface-selected: light-dark(#E7EBF2, #1A2030);
+
+  /* Ink. Every ink, faint included, reads at 4.5:1 or more as small text on the canvas and every surface,
+     in both themes (test/views/ink_contrast_test.rb). */
+  --ink: light-dark(#0A0D14, #E9ECF4);
+  --ink-muted: light-dark(#5A6374, #8D96AA);
+  --ink-faint: light-dark(#616A7E, #80889D);
+  --ink-inverted: light-dark(#FFFFFF, #06070B);
+
+  /* Hairlines */
+  --line: light-dark(#D6DCE7, #1C2130);
+  --line-strong: light-dark(#C3CBDA, #2A3144);
+  --hairline: 1px solid var(--line);
+  --dot: light-dark(rgb(10 13 20 / 10%), rgb(233 236 244 / 8%));
+
+  /* Signals: brighter on dark, deeper on light so they hold contrast */
+  --signal-green: light-dark(#13C977, #44FF9A);
+  --signal-blue: light-dark(#1E8FE6, #44B0FF);
+  --signal-violet: light-dark(#7A3CF0, #9B5CFF);
+  --signal-orange: light-dark(#F0552F, #FF6644);
+  --signal-lime: light-dark(#B9C92A, #EBFF70);
+
+  /* Signal ink: the same hues, dark enough for small text on light surfaces */
+  --signal-green-ink: light-dark(#0A8A50, #44FF9A);
+  --signal-blue-ink: light-dark(#1569B5, #44B0FF);
+  --signal-violet-ink: light-dark(#6A2FDB, #B58AFF);
+  --signal-orange-ink: light-dark(#C93A17, #FF7F61);
+  --signal-lime-ink: light-dark(#5F6B00, #EBFF70);
+
+  /* Meaning */
+  --positive: var(--signal-green);
+  --positive-ink: var(--signal-green-ink);
+  --live: var(--signal-blue);
+  --live-ink: var(--signal-blue-ink);
+  --attention: light-dark(#D99A06, #FFC247);
+  --attention-ink: light-dark(#8A5F00, #FFC247);
+  --negative: var(--signal-orange);
+  --negative-ink: var(--signal-orange-ink);
+
+  /* A decision waiting for someone: the whole card takes the meaning's color. The wash is the
+     card, the edge its ring, and the paper what will be written, set inside it like a letter. */
+  --attention-wash: light-dark(
+    color-mix(in oklab, var(--attention) 16%, var(--surface)),
+    color-mix(in oklab, var(--attention) 14%, var(--surface))
+  );
+  --attention-edge: color-mix(in oklab, var(--attention) 42%, var(--line));
+  --attention-paper: color-mix(in oklab, var(--attention) 3%, light-dark(var(--surface), var(--canvas-sunken)));
+  --negative-wash: color-mix(in oklab, var(--negative) 10%, var(--surface));
+  --negative-edge: color-mix(in oklab, var(--negative) 45%, var(--line));
+  --negative-paper: color-mix(in oklab, var(--negative) 3%, light-dark(var(--surface), var(--canvas-sunken)));
+
+  --rainbow: linear-gradient(90deg, #44ff9a -0.55%, #44b0ff 22.86%, #8b44ff 48.36%, #ff6644 73.33%, #ebff70 99.34%);
+  /* The rainbow closed into a loop, for edges and rings that move while work happens */
+  --rainbow-loop: linear-gradient(90deg, #44ff9a, #44b0ff, #8b44ff, #ff6644, #ebff70, #44ff9a);
+  --rainbow-conic: conic-gradient(#44ff9a, #44b0ff, #8b44ff, #ff6644, #ebff70, #44ff9a);
+  /* For thin rings, like the thinking line's: on light surfaces the pale green and yellow
+     disappear, so the light theme deepens every stop */
+  --rainbow-conic-ring: conic-gradient(
+    light-dark(#10c46a, #44ff9a),
+    light-dark(#1f8eff, #44b0ff),
+    light-dark(#7a2eff, #8b44ff),
+    light-dark(#f4511e, #ff6644),
+    light-dark(#b5c400, #ebff70),
+    light-dark(#10c46a, #44ff9a)
+  );
+
+  /* Radii */
+  --radius-tag: 0.375rem;
+  --radius-control: 0.625rem;
+  --radius-card: 0.875rem;
+  --radius-panel: 1.25rem;
+  --radius-pill: 999px;
+
+  /* Elevation: a hairline ring plus one soft drop, never heavy */
+  --shadow-color: light-dark(rgb(20 30 60 / 28%), rgb(0 0 0 / 90%));
+  --shadow-inset: light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 4%));
+  --shadow-float: 0 1px 0 var(--shadow-inset) inset, 0 20px 50px -24px var(--shadow-color);
+  --shadow-menu: 0 0 0 1px var(--line), 0 16px 40px -16px var(--shadow-color);
+
+  /* Focus */
+  --focus-ring-color: light-dark(#1E8FE6, #44B0FF);
+  --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus-ring-color);
+
+  /* Motion */
+  --duration-instant: 80ms;
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 400ms;
+  --duration-wire: 1.2s;
+  --ease-snap: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-glide: cubic-bezier(0.6, 0, 0.3, 1);
+
+  /* Type. Marketing headlines (the hero h1, section h2s, the end card) set their face through
+     --font-display, so trying another display face is these lines plus its @font-face.
+     Unbounded is wide, so it runs lighter and tighter than Geist would. */
+  --font-display: "Unbounded", var(--font-sans);
+  --font-display-weight: 560;
+  --leading-display: 0.98;
+  --tracking-display: -0.045em;
+  --tracking-heading: -0.025em;
+  --tracking-mono: 0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}

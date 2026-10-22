@@ -323,7 +323,7 @@ fn read_only_inside(label: &str) -> ToolError {
         ErrorCode::NotWritable,
         format!(
             "This path is inside “{label}”, which is shared read-only. The person can allow \
-             changes for it in the Local Agent on their computer."
+             changes for it in Chat with Work Desktop on their computer."
         ),
     )
 }
@@ -333,7 +333,7 @@ fn not_writable(root: &RootHandle) -> ToolError {
         ErrorCode::NotWritable,
         format!(
             "Changes aren't allowed in the shared folder “{}”. The person can turn on Allow \
-             changes for it in the Local Agent on their computer.",
+             changes for it in Chat with Work Desktop on their computer.",
             root.label
         ),
     )

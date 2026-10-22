@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  LaunchAgent for the Chat with Work Local Agent (Homebrew on Apple silicon).
+  LaunchAgent for Chat with Work Desktop (Homebrew on Apple silicon).
   `cww daemon install` writes this file to ~/Library/LaunchAgents with the
   right binary path for your machine and loads it; copy it by hand only if
   you know you need to.

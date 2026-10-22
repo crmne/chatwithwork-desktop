@@ -1,8 +1,8 @@
 #!/bin/sh
-# Install the Chat with Work Local Agent (cww) from the latest GitHub release.
+# Install Chat with Work Desktop (cww) from the latest GitHub release.
 #
 #   curl --proto '=https' --tlsv1.2 -LsSf \
-#     https://github.com/crmne/chatwithwork-local-agent/releases/latest/download/cww-installer.sh | sh
+#     https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.sh | sh
 #
 # Linux (x86_64, arm64; glibc 2.39+) and macOS (universal, signed and
 # notarized). Installs the GUI, terminal interface and daemon. Commands go
@@ -12,7 +12,7 @@
 # CWW_DOWNLOAD_BASE points at a mirror holding a release's files.
 set -eu
 
-repo="crmne/chatwithwork-local-agent"
+repo="crmne/chatwithwork-desktop"
 install_dir="${CWW_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf '%s\n' "$*"; }
@@ -144,7 +144,7 @@ if [ "$(id -u)" -ne 0 ] && "$install_dir/cww" daemon install; then
   say "The background agent is running and will start at every login."
 else
   say "The background agent could not be started for your account."
-  say "Choose Start Local Agent in Chat with Work, or run as your own user (without sudo):"
+  say "Choose Start Background Agent in Chat with Work, or run as your own user (without sudo):"
   say "  \"$install_dir/cww\" daemon install"
   say "Without a user service manager: \"$install_dir/cww\" daemon run"
 fi

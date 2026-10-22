@@ -1,6 +1,6 @@
-# Chat with Work Local Agent: tunnel protocol, version 1
+# Chat with Work Desktop: tunnel protocol, version 1
 
-This document describes everything that goes over the wire between the Local Agent daemon (`cww`) and a Chat with Work server: pairing, tokens, the WebSocket tunnel, and the MCP messages inside it. A server implementation (the Rails app, or a self-hosted one) can be checked against it line by line.
+This document describes everything that goes over the wire between the background agent (`cww`) and a Chat with Work server: pairing, tokens, the WebSocket tunnel, and the MCP messages inside it. A server implementation (the Rails app, or a self-hosted one) can be checked against it line by line.
 
 The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -656,7 +656,7 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
 | `internal` | Unexpected failure. |
 
-Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in the Local Agent on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `paused`, `not_lent` and `needs_approval` are logged as refusals, the others as errors.
+Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in Chat with Work Desktop on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `paused`, `not_lent` and `needs_approval` are logged as refusals, the others as errors.
 
 Messages are written for the model and the user. They never include absolute paths.
 

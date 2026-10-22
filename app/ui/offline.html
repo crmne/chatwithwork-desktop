@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chat with Work</title>
+    <link rel="stylesheet" href="tokens.css">
+    <link rel="stylesheet" href="app.css">
+    <script type="module" src="offline.js"></script>
+  </head>
+  <body class="offline">
+    <main class="offline__card" aria-live="polite">
+      <img src="mark.svg" alt="" class="offline__mark">
+      <h1>You're offline</h1>
+      <p id="reason">Chat with Work can't be reached right now.</p>
+      <p class="note" id="status">It tries again by itself every 15 seconds.</p>
+      <div class="inline offline__actions">
+        <button type="button" class="btn btn-primary" id="retry">Retry</button>
+        <button type="button" class="btn" id="settings">Open Settings</button>
+        <button type="button" class="btn btn-ghost" id="anyway">Open Anyway</button>
+      </div>
+      <p class="note">Your shared folders and the background agent's settings work offline.</p>
+    </main>
+  </body>
+</html>

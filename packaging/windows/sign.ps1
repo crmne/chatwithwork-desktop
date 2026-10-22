@@ -17,7 +17,7 @@ $pfx = Join-Path ([System.IO.Path]::GetTempPath()) ("cww-" + [guid]::NewGuid() +
 [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX))
 try {
   & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
-    /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /d "Chat with Work Local Agent" $Files
+    /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /d "Chat with Work Desktop" $Files
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   & $signtool.FullName verify /pa $Files
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

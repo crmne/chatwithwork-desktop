@@ -1,5 +1,5 @@
 <!--
-  Chat with Work Local Agent, as a per-user MSI (WiX Toolset 5).
+  Chat with Work Desktop, as a per-user MSI (WiX Toolset 5).
 
   - Installs cww.exe, cww-app.exe and cww-agent.exe to %LOCALAPPDATA%\Programs\Chat with Work Local Agent
     and adds that folder to the user's PATH. Per-user, so no UAC prompt.
@@ -13,7 +13,7 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-    Name="Chat with Work Local Agent"
+    Name="Chat with Work Desktop"
     Manufacturer="Plenty"
     Version="$(Version)"
     UpgradeCode="{FBC69B33-161E-40DC-9D83-5B54DB1A9821}"
@@ -22,21 +22,22 @@
     Language="1033"
     Codepage="1252">
     <!-- Never change the UpgradeCode: it ties every version together. -->
-    <SummaryInformation Codepage="1252" Description="Chat with Work Local Agent (cww)" Manufacturer="Plenty" />
+    <SummaryInformation Codepage="1252" Description="Chat with Work Desktop (cww)" Manufacturer="Plenty" />
     <MajorUpgrade
       Schedule="afterInstallInitialize"
       AllowSameVersionUpgrades="yes"
       DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/crmne/chatwithwork-local-agent" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/crmne/chatwithwork-local-agent#readme" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/crmne/chatwithwork-desktop" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/crmne/chatwithwork-desktop#readme" />
     <Property Id="ARPCOMMENTS" Value="Desktop app, terminal interface and local background agent. Open Chat with Work to finish setup, or run cww daemon install to start the agent." />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
+        <!-- The folder from before the rename, so upgrades install over it. -->
         <Directory Id="INSTALLFOLDER" Name="Chat with Work Local Agent" />
       </Directory>
     </StandardDirectory>
@@ -87,7 +88,7 @@
       </Component>
     </ComponentGroup>
 
-    <Feature Id="Main" Title="Chat with Work Local Agent" AllowAbsent="no">
+    <Feature Id="Main" Title="Chat with Work Desktop" AllowAbsent="no">
       <ComponentGroupRef Id="Program" />
       <ComponentGroupRef Id="Shortcuts" />
     </Feature>
@@ -96,7 +97,7 @@
       Register and remove the per-user daemon without flashing a console
       window (WixQuietExec). cww falls back to a Startup shortcut if Task
       Scheduler is unavailable. Failures are ignored so the app can offer
-      Start Local Agent after installation.
+      Start Background Agent after installation.
     -->
     <SetProperty Id="RegisterDaemon" Value="&quot;[#CwwExe]&quot; daemon install"
       Before="RegisterDaemon" Sequence="execute" />

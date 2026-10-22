@@ -161,41 +161,6 @@ mod legacy {
     }
 }
 
-#[cfg(windows)]
-pub mod windows_registry {
-    //! The registry reads the app needs besides starting at login, under
-    //! HKEY_CURRENT_USER.
-
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW,
-    };
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    pub fn read_dword(key: &str, value: &str) -> Option<u32> {
-        let (key, value) = (wide(key), wide(value));
-        let mut data: u32 = 0;
-        let mut size = std::mem::size_of::<u32>() as u32;
-        let mut kind = REG_DWORD;
-        // SAFETY: the buffers outlive the call and `size` describes `data`.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                RRF_RT_REG_DWORD,
-                &mut kind,
-                (&mut data as *mut u32).cast(),
-                &mut size,
-            )
-        };
-        (status == ERROR_SUCCESS).then_some(data)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,10 +188,13 @@ mod tests {
 
     #[test]
     fn a_login_start_opens_no_window() {
-        let login = crate::parse([BACKGROUND.to_string()].into_iter())
-            .unwrap()
-            .unwrap();
-        assert!(login.shell.background && !login.shell.open_settings);
+        let Ok(crate::args::Parsed::Run(login)) =
+            crate::args::parse([BACKGROUND.to_string()].into_iter())
+        else {
+            panic!("a login start parses");
+        };
+        assert!(login.background);
+        assert_eq!(login.open, crate::args::Open::Nothing);
     }
 
     #[cfg(target_os = "macos")]

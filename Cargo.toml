@@ -3,10 +3,10 @@ name = "cww"
 version = "0.3.1"
 edition = "2024"
 rust-version = "1.90"
-description = "Chat with Work Local Agent: lets Chat with Work read, and with your approval change files and run commands, in folders you share"
+description = "Chat with Work Desktop: lets Chat with Work read, and with your approval change files and run commands, in folders you share"
 license = "MIT OR Apache-2.0"
 authors = ["Carmine Paolino <carmine@paolino.me>"]
-repository = "https://github.com/crmne/chatwithwork-local-agent"
+repository = "https://github.com/crmne/chatwithwork-desktop"
 homepage = "https://chatwithwork.com"
 readme = "README.md"
 keywords = ["mcp", "search", "files", "agent"]
@@ -14,8 +14,10 @@ categories = ["command-line-utilities", "filesystem"]
 publish = false
 
 [workspace]
-# The desktop app lives in app/. It links this crate's control client and
-# paths, and talks to the daemon over the control channel (CONTROL.md).
+# The desktop app's tray and preferences window live in app/, its main
+# window (the web app in a Tauri web view) in desktop/. Both link this
+# crate's control client and paths, and talk to the daemon over the control
+# channel (CONTROL.md).
 # Native notification code is shared with a separate headless helper; the
 # CLI/daemon package keeps its existing dependencies and Rust requirement.
 members = [".", "app", "notification-broker"]
@@ -144,35 +146,3 @@ tempfile = "3.27"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-
-[patch.crates-io]
-# crmne/egui apps-0.36.2, shared with ZapFast, Spotifast, RekordFlash and
-# TonePush: egui 0.36.2 plus eframe pacing Wayland frames by the compositor's
-# frame callbacks, so a settings window Hyprland stops showing (covered by a
-# fullscreen window, on a hidden workspace, or with the display off) never
-# blocks the event loop, and with it the tray, in a vsync swap
-# (emilk/egui#8631); egui-winit using winit's Wayland clipboard; each
-# emoji cluster laid out one emoji wide; invisible widgets hidden from
-# accessibility, so a focus request for one not drawn yet can't panic
-# AccessKit; a compatibility-profile OpenGL fallback for old drivers; and
-# the window's size restored at any zoom. Every egui crate comes from the same revision so they
-# share one emath and epaint. Drop this once egui releases the fix.
-ecolor = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-eframe = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_extras = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-wgpu = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-winit = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_kittest = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_glow = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-emath = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint_default_fonts = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-# crmne/winit apps-0.30: winit 0.30.13 plus Wayland `Occluded` for the
-# xdg-shell suspended state (rust-windowing/winit#4709, #4710), which the
-# eframe above uses, files dropped on a window and the clipboard through one
-# Wayland data device, the mixed-DPI resize fix, and a dropped macOS window
-# ordered out before it closes. Exiting the event loop closes only winit's
-# windows, preserving Fastframe's native status-item menu. Moves with the egui
-# revision above: winit alone would take Hyprland's selection from egui.
-winit = { git = "https://github.com/crmne/winit", rev = "63c7c72ae6dc81520f04a2c5d996665f3c9ba4fd" }

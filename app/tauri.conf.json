@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chat with Work",
+  "mainBinaryName": "cww-app",
+  "identifier": "com.chatwithwork.local-agent",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "publisher": "PlentyLabs UG (haftungsbeschränkt) & Co. KG",
+    "copyright": "© 2026 Carmine Paolino. MIT or Apache 2.0",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "assets/cww-app.ico",
+      "icons/icon.png"
+    ]
+  }
+}

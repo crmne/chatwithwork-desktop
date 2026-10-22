@@ -1,4 +1,4 @@
-//! Chat with Work Local Agent.
+//! Chat with Work Desktop.
 //!
 //! `cww` shares chosen folders with Chat with Work through MCP tools, over a
 //! WebSocket it opens itself: four read-only tools, tools that change files

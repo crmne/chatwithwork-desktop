@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>Chat with Work Local Agent</title>
+    <title>Chat with Work Desktop</title>
     <organization>com.chatwithwork</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>

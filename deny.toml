@@ -36,6 +36,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: a build-time macro helper of the GTK 3 bindings (glib 0.18) that Tauri's Linux window and tray use; no code of it runs in the app. Remove when Tauri moves to GTK 4" },
 ]
 
 [licenses]
@@ -63,25 +64,24 @@ confidence-threshold = 0.9
 crate = "option-ext"
 allow = ["MPL-2.0"]
 
-# The desktop app's clipboard on Windows (arboard) is BSL-1.0: permissive,
-# no notice needed in binaries.
+# Servo's CSS parser and selector matching, which Tauri's build and
+# config code use to read HTML, are MPL-2.0 too: file-level copyleft, fine
+# to link into an MIT/Apache binary, and we ship them unmodified.
 [[licenses.exceptions]]
-crate = "clipboard-win"
-allow = ["BSL-1.0"]
+crate = "cssparser"
+allow = ["MPL-2.0"]
 
 [[licenses.exceptions]]
-crate = "error-code"
-allow = ["BSL-1.0"]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
 
-# egui's built-in fonts carry the fonts' own licenses.
 [[licenses.exceptions]]
-crate = "epaint_default_fonts"
-allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
 
-# fastframe-fonts bundles Inter and the Noto fallbacks under their own license.
 [[licenses.exceptions]]
-crate = "fastframe-fonts"
-allow = ["OFL-1.1"]
+crate = "selectors"
+allow = ["MPL-2.0"]
 
 [[licenses.clarify]]
 # ring's license file combines ISC, MIT and OpenSSL-derived terms.
@@ -107,13 +107,11 @@ deny = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# The desktop app's forks, pinned in Cargo.toml: egui and winit (patched
-# until upstream releases the fixes), fastframe, and the cpal fork
-# fastframe-audio records through (stream names, RustAudio/cpal#1409).
+# The desktop app's forks, pinned in Cargo.toml: fastframe (audio,
+# notifications and start at login), the cpal fork fastframe-audio records
+# through (stream names, RustAudio/cpal#1409), and the command sandbox.
 allow-git = [
     "https://github.com/crmne/cpal",
-    "https://github.com/crmne/egui",
     "https://github.com/crmne/microsoft-mxc",
     "https://github.com/crmne/fastframe",
-    "https://github.com/crmne/winit",
 ]

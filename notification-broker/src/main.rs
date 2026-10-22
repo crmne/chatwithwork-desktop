@@ -8,7 +8,7 @@ fn main() {
         return;
     }
     if !std::env::args_os().skip(1).eq(["--notification-broker"]) {
-        eprintln!("This helper is managed by the Chat with Work local agent.");
+        eprintln!("This helper is managed by Chat with Work Desktop.");
         std::process::exit(2);
     }
     if let Err(error) = cww_notification_broker::run_broker() {

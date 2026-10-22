@@ -132,7 +132,7 @@ pub struct DenyList {
     pub extra: Vec<String>,
     /// Built-in patterns dropped in `config.toml`.
     pub removed: Vec<String>,
-    /// The Local Agent's own folders.
+    /// The background agent's own folders.
     pub own_dirs: Vec<String>,
     pub allow_hardlinks: bool,
     pub config_file: Option<String>,
@@ -250,7 +250,7 @@ impl Page {
                  leaves it."
             }
             Page::Account => "This computer's pairing with your Chat with Work account.",
-            Page::General => "The Local Agent that answers Chat with Work in the background.",
+            Page::General => "The background agent that answers Chat with Work.",
         }
     }
 

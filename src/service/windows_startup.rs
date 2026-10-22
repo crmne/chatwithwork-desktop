@@ -41,10 +41,10 @@ fn shortcut(command: Option<(&Path, &[String])>) -> Result<Option<PathBuf>> {
     }
     let output = shell
         .output()
-        .context("setting up the Local Agent's startup shortcut")?;
+        .context("setting up the background agent's startup shortcut")?;
     if !output.status.success() {
         bail!(
-            "Could not update the Local Agent's startup shortcut: {}",
+            "Could not update the background agent's startup shortcut: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
@@ -73,7 +73,7 @@ pub(super) fn start(exe: &Path, arguments: &[String]) -> Result<()> {
     command.extend([b'"' as u16, b' ' as u16]);
     command.extend(super::windows_task::quote_arguments(arguments).encode_utf16());
     if executable.contains(&0) || command.contains(&0) {
-        bail!("The Local Agent's command contains a null character");
+        bail!("The background agent's command contains a null character");
     }
     executable.push(0);
     command.push(0);
@@ -101,7 +101,7 @@ pub(super) fn start(exe: &Path, arguments: &[String]) -> Result<()> {
     };
     if created == 0 {
         return Err(std::io::Error::last_os_error())
-            .context("starting the Local Agent in the background");
+            .context("starting the background agent in the background");
     }
     // SAFETY: successful creation returns these two owned handles. Closing
     // them does not terminate the background process.

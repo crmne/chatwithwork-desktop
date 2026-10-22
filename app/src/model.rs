@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Status {
     pub version: String,
@@ -22,13 +22,13 @@ pub struct Status {
     /// its events; the daemon's status doesn't carry it.
     pub last_access: Option<AuditEntry>,
     /// Counts audit events, so every new entry is a change the window sees.
-    #[serde(skip)]
+    #[serde(skip_deserializing)]
     pub activity: u64,
     pub config_file: Option<PathBuf>,
     pub audit_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ConnectionStatus {
     /// `not_paired`, `connecting`, `connected`, `offline` or `revoked`.
@@ -37,7 +37,7 @@ pub struct ConnectionStatus {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RootStatus {
     pub id: String,
@@ -53,6 +53,18 @@ pub struct RootStatus {
     pub allows_commands: bool,
     /// Those commands may use the network.
     pub network: bool,
+    /// The Chat with Work bots it is lent to (`roots_bot`).
+    pub bots: Vec<BotLoan>,
+}
+
+/// A folder lent to a bot: its chats reach the folder as it allows, and
+/// with `unattended` its commands there start without anyone approving them.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BotLoan {
+    pub id: String,
+    pub name: String,
+    pub unattended: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -83,6 +95,7 @@ pub struct AuditEntry {
     pub trash: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DenyList {
@@ -108,11 +121,13 @@ impl Status {
     }
 
     /// The server's host, for "Connected to chatwithwork.com".
+    #[cfg(test)]
     pub fn server_host(&self) -> Option<String> {
         self.server.as_deref().map(host_of)
     }
 }
 
+#[cfg(test)]
 pub fn host_of(origin: &str) -> String {
     origin
         .split_once("://")
@@ -154,13 +169,13 @@ impl Health {
         }
     }
 
-    /// A few words, for tight spots such as the sidebar.
-    pub fn short_label(self) -> &'static str {
+    /// The status dot's meaning in the settings pages (`.state--<tone>`).
+    pub fn tone(self) -> &'static str {
         match self {
-            Self::NotPaired => "Not paired",
-            Self::Offline => "Offline",
-            Self::Revoked => "Disconnected",
-            other => other.label(),
+            Self::Online => "positive",
+            Self::Connecting => "live",
+            Self::Paused | Self::NotPaired | Self::Offline => "attention",
+            Self::Stopped | Self::Revoked => "negative",
         }
     }
 
@@ -205,6 +220,15 @@ impl Platform {
         match self {
             Self::MacOs => "Settings…",
             Self::Windows | Self::Linux => "Settings",
+        }
+    }
+
+    /// Where the tray item lives, in the platform's words.
+    pub fn tray_place(self) -> &'static str {
+        match self {
+            Self::MacOs => "menu bar",
+            Self::Windows => "notification area",
+            Self::Linux => "system tray",
         }
     }
 
@@ -265,7 +289,7 @@ impl TrayView {
         };
         Self {
             health,
-            tooltip: format!("Chat with Work: {}", health.label()),
+            tooltip: format!("Chat with Work Desktop: {}", health.label()),
             headline,
             detail,
             paused,
@@ -384,6 +408,15 @@ mod tests {
         assert_eq!(Health::of(Some(&s)), Health::Revoked);
         s.paused = true;
         assert_eq!(Health::of(Some(&s)), Health::Paused, "paused wins");
+    }
+
+    #[test]
+    fn only_online_reads_as_positive() {
+        assert_eq!(Health::Online.tone(), "positive");
+        assert_eq!(Health::Connecting.tone(), "live");
+        assert_eq!(Health::Paused.tone(), "attention");
+        assert_eq!(Health::Stopped.tone(), "negative");
+        assert_eq!(Health::Revoked.tone(), "negative");
     }
 
     #[test]

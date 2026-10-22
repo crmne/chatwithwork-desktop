@@ -426,7 +426,8 @@ fn sample() -> State {
             { "id": "documents", "label": "Documents", "available": true, "index": "ready",
               "indexed_files": 1532, "local_path": home.join("Documents") },
             { "id": "work-projects", "label": "Work projects", "available": true, "index": "indexing",
-              "indexed_files": 214, "local_path": home.join("Work/Projects"), "writable": true },
+              "indexed_files": 214, "local_path": home.join("Work/Projects"), "writable": true,
+              "allows_commands": true, "bots": [{ "id": "42", "name": "Issue fixer", "unattended": false }] },
         ],
         "pairing": null,
         "config_file": home.join(".config/cww/config.toml"),
@@ -580,6 +581,36 @@ impl Demo {
                             "root_changes_stopped"
                         },
                     );
+                });
+                json!({ "ok": true })
+            }
+            // Lending a folder to a bot, as the daemon's `roots_bot`.
+            "roots_bot" => {
+                let which = request["root"].as_str().unwrap_or_default().to_string();
+                let bot = request["bot"].as_str().unwrap_or_default().to_string();
+                let lent = request["lent"].as_bool().unwrap_or(false);
+                let unattended = request["unattended"].as_bool().unwrap_or(false);
+                let name = request["name"].as_str().map(str::to_string);
+                if bot.is_empty() || !bot.bytes().all(|b| b.is_ascii_digit()) {
+                    return json!({ "ok": false, "error": "that isn't a bot's ID" });
+                }
+                self.change(|s| {
+                    for r in s.status["roots"].as_array_mut().expect("roots") {
+                        if r["id"] != json!(which) {
+                            continue;
+                        }
+                        let mut loans: Vec<Value> = r["bots"].as_array().cloned().unwrap_or_default();
+                        let kept = loans
+                            .iter()
+                            .find(|l| l["id"] == json!(bot))
+                            .and_then(|l| l["name"].as_str().map(str::to_string));
+                        loans.retain(|l| l["id"] != json!(bot));
+                        if lent {
+                            loans.push(json!({ "id": bot, "name": name.clone().or(kept).unwrap_or_default(), "unattended": unattended }));
+                        }
+                        r["bots"] = json!(loans);
+                    }
+                    Self::event(s, if lent { "root_bot_lent" } else { "root_bot_withdrawn" });
                 });
                 json!({ "ok": true })
             }
@@ -1883,11 +1914,7 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
     std::fs::create_dir_all(&paths.daemon.runtime_dir)?;
     if scenario == Scenario::Sample {
         // A paired sample has been through the welcome page.
-        crate::ui::AppState {
-            onboarded: true,
-            ..Default::default()
-        }
-        .save(&paths);
+        crate::state::AppState { onboarded: true }.save(&paths)?;
     }
     let demo = Arc::new(Demo {
         state: Mutex::new(match scenario {

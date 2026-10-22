@@ -55,7 +55,7 @@ fn is_executable(path: &Path) -> bool {
 /// Register and start the daemon's service. Returns what `cww` printed.
 pub fn start() -> Result<String> {
     let cww = cww_binary()
-        .context("Couldn't find the cww command. Install the Local Agent, then try again.")?;
+        .context("Couldn't find the cww command. Install the background agent, then try again.")?;
     let mut command = Command::new(&cww);
     command.args(["daemon", "install"]);
     #[cfg(windows)]
@@ -70,7 +70,7 @@ pub fn start() -> Result<String> {
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let message = stderr.trim().trim_start_matches("error: ");
-        bail!("Couldn't start the Local Agent: {message}");
+        bail!("Couldn't start the background agent: {message}");
     }
     Ok(stdout)
 }
