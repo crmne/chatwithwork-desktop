@@ -6,7 +6,7 @@ Nothing here is submitted without Carmine's go-ahead. In order:
 
 - [ ] The browser work is on `main`: the extension, the native messaging host and the daemon's tools (crmne/chatwithwork-desktop#20 and #21), and the server side (crmne/chatwithwork, `LocalAgent::Device::BrowserTool`, on main).
 - [ ] A Chat with Work Desktop release that includes them, so reviewers and people can install a `cww` that answers the extension. `cww browser enable` (or the app's settings, once the settings page has its browser section) registers the host.
-- [ ] The privacy policy at https://chatwithwork.com/privacy has its "Your browser" paragraph live (crmne/chatwithwork, `app/views/home/privacy_policy.html.erb`).
+- [ ] The privacy policy at https://chatwithwork.com/privacy-policy has its "Your browser" paragraph (on main in crmne/chatwithwork; live once deployed).
 - [ ] The extension's private key is in 1Password (it's now only at `~/.local/share/chatwithwork-browser/key.pem` on Carmine's desktop, mode 0600). The public half is the manifest's `key`, which gives the ID `ehjfihpogoacjodjnanclodinjnnpmcp` that `cww` allows (`src/browsing/bridge.rs`, `EXTENSION_ID`).
 - [ ] A Chrome Web Store developer account for Plenty UG (one-time fee, 2-step verification, the publisher's contact email verified). Group publisher if others should manage it.
 - [ ] A reviewer test account on chatwithwork.com with credits, for the dashboard's private test-instructions field.
