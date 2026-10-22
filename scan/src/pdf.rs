@@ -161,14 +161,7 @@ impl Builder {
                 x.bits_per_component(1);
             }
             ColorMode::Grayscale | ColorMode::Color => {
-                let converted = if color == ColorMode::Color {
-                    DynamicImage::ImageRgb8(image.to_rgb8())
-                } else {
-                    DynamicImage::ImageLuma8(image.to_luma8())
-                };
-                let mut jpeg = Vec::new();
-                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY)
-                    .encode_image(&converted)?;
+                let jpeg = jpeg(image, color == ColorMode::Color)?;
                 let mut x = self.pdf.image_xobject(image_id, &jpeg);
                 x.filter(Filter::DctDecode);
                 x.width(image.width() as i32).height(image.height() as i32);
@@ -222,6 +215,34 @@ impl Builder {
             .producer(TextStr("Chat with Work Desktop"));
         self.pdf.finish()
     }
+}
+
+/// A page as JPEG, with as many components as the PDF declares: three for
+/// colour, one for grey. (Encoding a grey DynamicImage wrote three, which
+/// viewers then read as a grey image three times as wide.)
+fn jpeg(image: &DynamicImage, color: bool) -> anyhow::Result<Vec<u8>> {
+    use image::ExtendedColorType;
+    use image::codecs::jpeg::JpegEncoder;
+    let mut out = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
+    if color {
+        let rgb = image.to_rgb8();
+        encoder.encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            ExtendedColorType::Rgb8,
+        )?;
+    } else {
+        let gray = image.to_luma8();
+        encoder.encode(
+            gray.as_raw(),
+            gray.width(),
+            gray.height(),
+            ExtendedColorType::L8,
+        )?;
+    }
+    Ok(out)
 }
 
 /// The words as invisible text, in PDF points from the page's bottom left.
@@ -382,6 +403,21 @@ mod tests {
             }));
             assert!(text.contains("/GlyphLessFont"));
         }
+    }
+
+    /// The number of components a baseline or progressive JPEG says it has.
+    fn jpeg_components(jpeg: &[u8]) -> u8 {
+        let at = jpeg
+            .windows(2)
+            .position(|w| w == [0xFF, 0xC0] || w == [0xFF, 0xC2])
+            .expect("a frame header");
+        jpeg[at + 9]
+    }
+
+    #[test]
+    fn grey_pages_are_one_component_jpegs_and_colour_three() {
+        assert_eq!(jpeg_components(&jpeg(&page(), false).unwrap()), 1);
+        assert_eq!(jpeg_components(&jpeg(&page(), true).unwrap()), 3);
     }
 
     #[test]
