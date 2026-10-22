@@ -62,6 +62,10 @@ jiff = "0.2"
 fastframe-autostart = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
+# Scanning: scanners through the system (in a helper process), blank
+# pages, OCR on the computer and the searchable PDF.
+cww-scan = { path = "../scan" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "pnm"] }
 # Waits for the daemon's socket to appear instead of polling for it.
 notify = "8.2"
 # Random nonces for the loopback callback.

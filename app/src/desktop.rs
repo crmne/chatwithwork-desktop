@@ -158,6 +158,12 @@ pub fn tray_action(app: &AppHandle, id: &str) {
                 let _ = windows::show_settings(&app, None);
             });
         }
+        Some(Action::Scan) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = windows::show_scan(&app);
+            });
+        }
         Some(Action::TogglePause) => {
             let paused = desktop
                 .status
@@ -190,6 +196,7 @@ fn open(app: &AppHandle, open: &Open) {
             }
         },
         Open::Settings(page) => windows::show_settings(app, *page),
+        Open::Scan => windows::show_scan(app),
         Open::Nothing => Ok(()),
     };
     if let Err(e) = result {
@@ -276,6 +283,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             }
         }));
     }
+    // Pages a scan left behind when the app last stopped are deleted.
+    let scans = Arc::new(crate::scan::Scans::default());
+    scans.close(&desktop.paths);
     let setup_desktop = desktop.clone();
     let app = builder
         .plugin(
@@ -288,6 +298,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         )
         .plugin(tauri_plugin_dialog::init())
         .manage(desktop.clone())
+        .manage(scans.clone())
         // The microphone, for the composer's dictation, only for the
         // server's pages; the bundled pages and other sites ask nothing.
         .on_permission_request(|webview, kind| {
@@ -325,6 +336,19 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::download_model,
             crate::local::cancel_download,
             crate::local::remove_model,
+            crate::scan::scan_info,
+            crate::scan::scan_devices,
+            crate::scan::scan_capabilities,
+            crate::scan::scan_save_settings,
+            crate::scan::scan_start,
+            crate::scan::scan_cancel,
+            crate::scan::scan_page,
+            crate::scan::scan_edit,
+            crate::scan::scan_arrange,
+            crate::scan::scan_discard,
+            crate::scan::scan_destinations,
+            crate::scan::scan_send,
+            crate::scan::scan_open,
             crate::offline::offline_info,
             crate::offline::offline_retry,
             crate::offline::offline_open_anyway,

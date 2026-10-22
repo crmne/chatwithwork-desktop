@@ -239,7 +239,8 @@ The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 
 
 - **The Chat with Work window** loads the real web app from the server this computer is paired with (chatwithwork.com, staging, or your own), on `/chats/new`, which opens the organization you used last, the way the phone apps wrap the site. So it is always the web app as it is today. Links that leave the server open in your browser, signing in with Google, Slack or Dropbox and connecting services run in your browser and come back, files dropped on the window go to the composer, downloads go to your Downloads folder, and the microphone works for dictation. It keeps your sign-in, size and position between launches. Its pages can ask the app for very little: open a link in the browser, open the settings, and wait for a sign-in in the browser ([docs/desktop-app.md](docs/desktop-app.md)). They never reach the daemon.
 - **The settings window** has pages built into the app, which work offline and before pairing: a first-run welcome, shared folders (with the native folder picker, changes and commands), what is always private, the activity log, pairing, notifications on this computer, and general settings (start at login, pausing, crash reports, dictation for the terminal app). Only these pages reach the daemon, through an allow-list of control requests.
-- **The tray item** says whether Chat with Work can reach this computer, and opens Chat with Work, pauses and resumes sharing, opens the settings, and quits.
+- **The tray item** says whether Chat with Work can reach this computer, and opens Chat with Work, pauses and resumes sharing, opens the scan window and the settings, and quits.
+- **The scan window** scans paper with a scanner attached to the computer (on Linux through SANE so far; macOS and Windows are next), leaves out blank pages, lets you crop, turn, order and delete pages, and sends one searchable PDF to a new chat or to a bot such as the Mail scanner recipe. The text is read on your computer (Tesseract on Linux), and scans stay on your computer until you send them ([docs/scanning.md](docs/scanning.md)).
 
 On first run it opens the welcome page: it starts the agent, pairs, offers to share your Documents folder, and asks whether to send [crash reports](#crash-reports), and it shares nothing until you say so. Closing a window keeps the tray item and the agent running, and frees the window's web view.
 
@@ -247,7 +248,7 @@ On first run it opens the welcome page: it starts the agent, pairs, offers to sh
 cargo run --release -p cww-app
 ```
 
-Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install. On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
+Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install; scanning also needs SANE and Tesseract with your language, which the packages recommend. On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
 
 Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, for anyone who wants to revive a fully native app.
 

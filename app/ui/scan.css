@@ -1,0 +1,441 @@
+/*
+  The scan window: the settings in the sunken side column the settings
+  window's nav uses, the pages as a grid of sheets, and a bar at the foot
+  with Rescan, Scan More Pages and Send. Live Wire's tokens and the
+  settings' components (app.css) throughout; only the scan's own pieces
+  are here.
+*/
+
+.scan {
+  grid-template-columns: 17rem minmax(0, 1fr);
+}
+
+.scan__settings {
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.scan__settings .nav__brand {
+  padding-block-end: 0.25rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.field > label,
+.field__label {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+
+.field .select,
+.field .input {
+  inline-size: 100%;
+}
+
+.field__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.field__row .select {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.field .segmented {
+  display: flex;
+}
+
+.field .segmented label {
+  flex: 1;
+  padding-inline: 0.375rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.toggle span {
+  display: flex;
+  flex-direction: column;
+}
+
+.toggle small {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.toggle:has(input:disabled) {
+  cursor: default;
+  color: var(--ink-muted);
+}
+
+.scan__privacy {
+  display: flex;
+  gap: 0.5rem;
+  margin-block-start: auto;
+  padding-block-start: 0.75rem;
+  border-block-start: var(--hairline);
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.scan__privacy svg {
+  flex-shrink: 0;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  margin-block-start: 0.125rem;
+}
+
+.scan__go {
+  inline-size: 100%;
+  min-block-size: 2.25rem;
+}
+
+.btn svg {
+  inline-size: 0.9375rem;
+  block-size: 0.9375rem;
+}
+
+.btn-icon {
+  min-inline-size: 2rem;
+  padding: 0;
+}
+
+/* The pages */
+
+.scan__main {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.scan__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem 2rem;
+}
+
+.scan__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  margin-block-end: 1.25rem;
+}
+
+.scan__header h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-heading);
+}
+
+.scan__header .state {
+  margin-inline-start: auto;
+}
+
+.scan__body > .notice {
+  margin-block-end: 1rem;
+}
+
+.sheets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 1.25rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sheet__paper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 210 / 297;
+  padding: 0.5rem;
+  border: var(--hairline);
+  border-radius: var(--radius-card);
+  background-color: var(--canvas-sunken);
+  cursor: grab;
+}
+
+.sheet__paper img {
+  max-inline-size: 100%;
+  max-block-size: 100%;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%), 0 0 0 1px var(--line);
+  background-color: #fff;
+}
+
+.sheet--blank .sheet__paper img {
+  opacity: 0.45;
+}
+
+.sheet--dragging {
+  opacity: 0.4;
+}
+
+.sheet--target .sheet__paper {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+.sheet--arriving .sheet__paper {
+  animation: arrive var(--duration-slow) var(--ease-glide);
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    translate: 0 0.5rem;
+  }
+}
+
+.sheet__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.sheet__number {
+  flex: 1;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.sheet__foot .btn {
+  min-block-size: 1.75rem;
+  min-inline-size: 1.75rem;
+  color: var(--ink-muted);
+}
+
+.sheet__foot .btn:hover {
+  color: var(--ink);
+}
+
+.sheet__badge {
+  position: absolute;
+  inset-block-start: 0.875rem;
+  inset-inline-start: 0.875rem;
+}
+
+.sheet--placeholder .sheet__paper {
+  border-style: dashed;
+  cursor: default;
+}
+
+.left-out {
+  margin-block-start: 2rem;
+}
+
+.left-out > summary {
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.left-out[open] > summary {
+  margin-block-end: 1rem;
+}
+
+.scan__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-block-size: 60%;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+.scan__empty svg {
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  color: var(--ink-faint);
+}
+
+.scan__empty strong {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.scan__empty p {
+  max-inline-size: 26rem;
+  color: var(--ink-muted);
+}
+
+/* The bar at the foot: what to do with the pages */
+
+.scan__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 2rem;
+  border-block-start: var(--hairline);
+  background-color: var(--canvas);
+}
+
+.scan__bar .spacer {
+  flex: 1;
+}
+
+.scan__bar .select {
+  max-inline-size: 15rem;
+}
+
+.scan__bar .input {
+  flex: 1 1 8rem;
+  inline-size: auto;
+  min-inline-size: 8rem;
+  max-inline-size: 18rem;
+}
+
+.scan__progress {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+
+/* The crop view */
+
+.crop {
+  inline-size: min(56rem, calc(100vw - 2rem));
+  max-block-size: calc(100vh - 2rem);
+  padding: 0;
+  border: var(--hairline);
+  border-radius: var(--radius-panel);
+  background-color: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-float);
+}
+
+.crop::backdrop {
+  background-color: rgb(0 0 0 / 45%);
+}
+
+.crop__layout {
+  display: flex;
+  flex-direction: column;
+  max-block-size: calc(100vh - 2rem);
+}
+
+.crop__header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem 1.25rem;
+  border-block-end: var(--hairline);
+}
+
+.crop__header h2 {
+  flex: 1;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.crop__stage {
+  flex: 1;
+  min-block-size: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background-color: var(--canvas-sunken);
+  overflow: hidden;
+}
+
+.crop__frame {
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  line-height: 0;
+}
+
+.crop__frame img {
+  max-inline-size: 100%;
+  max-block-size: calc(100vh - 12rem);
+  pointer-events: none;
+}
+
+.crop__box {
+  position: absolute;
+  border: 1.5px solid var(--signal-blue);
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 45%);
+  cursor: move;
+}
+
+.crop__handle {
+  position: absolute;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  border: 1.5px solid var(--signal-blue);
+  border-radius: 50%;
+  background-color: #fff;
+  translate: -50% -50%;
+}
+
+.crop__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-block-start: var(--hairline);
+}
+
+.crop__footer .note {
+  flex: 1;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+
+@media (max-width: 48rem) {
+  .scan {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .scan__settings {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .scan__settings .nav__brand {
+    display: flex;
+  }
+
+  .scan__body,
+  .scan__bar {
+    padding-inline: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet--arriving .sheet__paper {
+    animation: none;
+  }
+}

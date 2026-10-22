@@ -11,6 +11,8 @@ use crate::policy::{self, Decision};
 
 pub const MAIN: &str = "main";
 pub const SETTINGS: &str = "settings";
+/// The bundled scan page (scan.rs).
+pub const SCAN: &str = "scan";
 /// Windows the web app opens for itself (`target="_blank"` on its own pages).
 pub const POPUP_PREFIX: &str = "page-";
 
@@ -247,7 +249,13 @@ fn watch_failed_loads(window: &WebviewWindow, desktop: std::sync::Arc<Desktop>) 
 /// the page's own `window.cwwEvent` rather than Tauri's event system, so the
 /// pages need no core permissions at all.
 pub fn tell_settings(app: &AppHandle, event: &str, payload: impl serde::Serialize) {
-    let Some(window) = app.get_webview_window(SETTINGS) else {
+    tell_window(app, SETTINGS, event, payload);
+}
+
+/// Hands an event to a bundled page in the window `label`, if it's open on
+/// one.
+pub fn tell_window(app: &AppHandle, label: &str, event: &str, payload: impl serde::Serialize) {
+    let Some(window) = app.get_webview_window(label) else {
         return;
     };
     if !window.url().is_ok_and(|url| is_local_url(&url)) {
@@ -303,6 +311,42 @@ pub fn show_settings(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Shows the scan window. Closing it deletes the pages not sent and stops
+/// the scanner's helper.
+pub fn show_scan(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(SCAN) {
+        bring_forward(&window);
+        return Ok(());
+    }
+    let fixed = snapshots();
+    let window = WebviewWindowBuilder::new(app, SCAN, WebviewUrl::App("scan.html".into()))
+        .title("Scan")
+        .theme(snapshot_theme())
+        .inner_size(1040.0, 720.0)
+        .resizable(!fixed)
+        .min_inner_size(600.0, 480.0)
+        .zoom_hotkeys_enabled(true)
+        .on_navigation(|url| is_local_url(url) || matches!(url.scheme(), "about" | "data" | "blob"))
+        .on_new_window(|url, _| {
+            open_externally(&url);
+            NewWindowResponse::Deny
+        })
+        .build()?;
+    let closing = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let desktop = closing.state::<std::sync::Arc<Desktop>>().inner().clone();
+            let scans = closing
+                .state::<std::sync::Arc<crate::scan::Scans>>()
+                .inner()
+                .clone();
+            std::thread::spawn(move || scans.close(&desktop.paths));
+        }
+    });
+    bring_forward(&window);
+    Ok(())
+}
+
 #[cfg(all(target_os = "linux", feature = "demo"))]
 fn snapshots() -> bool {
     crate::snapshot::requested().is_some()
@@ -311,6 +355,19 @@ fn snapshots() -> bool {
 #[cfg(not(all(target_os = "linux", feature = "demo")))]
 fn snapshots() -> bool {
     false
+}
+
+/// The theme pictures are taken in (`CWW_APP_SNAPSHOT_THEME`), else the
+/// system's.
+fn snapshot_theme() -> Option<tauri::Theme> {
+    if !snapshots() {
+        return None;
+    }
+    match std::env::var("CWW_APP_SNAPSHOT_THEME").as_deref() {
+        Ok("dark") => Some(tauri::Theme::Dark),
+        Ok("light") => Some(tauri::Theme::Light),
+        _ => None,
+    }
 }
 
 /// Whether any window is open, for macOS's Dock icon.

@@ -4,17 +4,18 @@
 
 Until 0.3.1 the app was native, drawn with egui, with a chat window of its own that had to follow every change to the web app. That code is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, with its docs (`docs/settings-app.md`, `docs/chat-window.md`, `docs/native-parity.md`). The prototype and measurements that led here are kept at the [`tauri-prototype-final`](https://github.com/crmne/chatwithwork-desktop/blob/tauri-prototype-final/docs/tauri-prototype.md) tag.
 
-## Three parts
+## The parts
 
 | | What | Talks to |
 |---|---|---|
 | **Chat with Work window** (`main`, and `page-N` for pages it opens in a new window) | The real web app, loaded from the server | The server, like a browser. The app only through the bridge below |
 | **Settings window** (`settings`) | Pages bundled in the binary (`app/ui`): welcome, shared folders, always private, activity, account (pairing), notifications, general | The daemon, through `local.rs`'s allow-list, and the app's own settings |
-| **Tray item** | The daemon's state, Open Chat with Work, Pause Sharing, Settings, Quit | The daemon's status, followed by one thread |
+| **Scan window** (`scan`) | A bundled page (`app/ui/scan.html`): scan, check the pages, send them ([scanning.md](scanning.md)) | The scanner through a helper process (`--scan-helper`), and the daemon only to send, through `scan.rs`'s own commands |
+| **Tray item** | The daemon's state, Open Chat with Work, Pause Sharing, Scan…, Settings, Quit | The daemon's status, followed by one thread |
 
 While no window is open the app is its tray item and that thread: a window's web view, and on Linux and macOS its web processes, go with the window. Closing the last window never quits; Quit in the tray or in General does. On macOS the app has a Dock icon only while a window is open.
 
-The same binary is also three pipe-only helpers the daemon and `cww tui` start, before any window or tray exists: `--notification-broker` (native notifications, through fastframe-notifications in `notification-broker/`), `--record-audio` / `--record-audio-progress` (the terminal composer's microphone, through fastframe-audio), and `--transcribe-local <model>` (Whisper on this computer). They keep the name `cww-app`, so the daemon, `cww tui`, the packages and existing start-at-login entries find them where they were.
+The same binary is also pipe-only helpers, started before any window or tray exists: the daemon and `cww tui` start `--notification-broker` (native notifications, through fastframe-notifications in `notification-broker/`), `--record-audio` / `--record-audio-progress` (the terminal composer's microphone, through fastframe-audio), and `--transcribe-local <model>` (Whisper on this computer); the app itself starts `--scan-helper` (the scanner's driver, while the scan window is open). They keep the name `cww-app`, so the daemon, `cww tui`, the packages and existing start-at-login entries find them where they were.
 
 ## The Chat with Work window
 
@@ -53,6 +54,10 @@ The settings window shows `app/ui`, plain HTML, CSS and JavaScript without a fra
 - The daemon's status arrives as a `status` event, which the app hands to the page by calling its `window.cwwEvent` (so the pages need none of Tauri's own APIs, not even its events); the activity log's sentences are made in Rust (`activity.rs`), as the egui app made them.
 
 Organizations, people, notification preferences, models and templates are in the web app's Settings, in the Chat with Work window.
+
+## The scan window
+
+Scan… in the tray, or `cww-app --scan`, opens it. Its page gets its own commands (`capabilities/scan.json`, for the `scan` window and no remote URL; each command in `scan.rs` checks its caller again), never the settings' `control`: the scanner goes through a helper process the app starts while the window is open, and the daemon is asked only for where a scan can go and to send it (`scan_destinations`, `scan_send`). Pages are kept in a private folder under the app's state directory and deleted when they're sent, when the window closes, and when the app starts. The details are in [scanning.md](scanning.md).
 
 ## Lending folders to bots
 

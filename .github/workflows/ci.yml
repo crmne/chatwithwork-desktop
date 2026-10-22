@@ -40,6 +40,21 @@ jobs:
       - run: mbx test --locked --no-run
       - run: mbx test --locked
         timeout-minutes: 5
+      # Scanning: on Linux against SANE's own test device (a fake feeder of
+      # ten pages, enabled in a dll.conf of its own) and the system Tesseract.
+      - name: Install SANE and Tesseract
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu
+          mkdir -p "$RUNNER_TEMP/sane.d"
+          echo test > "$RUNNER_TEMP/sane.d/dll.conf"
+          echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"
+          echo "CWW_SCAN_REQUIRE_SANE=1" >> "$GITHUB_ENV"
+      - run: cargo fmt -p cww-scan --check
+      - run: mbx clippy -p cww-scan --all-targets --locked -- -D warnings
+      - run: mbx test -p cww-scan --locked
+        timeout-minutes: 5
 
   # The desktop app, on the three platforms it runs on.
   app:

@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "scan",
+  "description": "The bundled scan page in the scan window: the scanner through the app's scan helper, the pages kept on this computer, and sending the PDF through the daemon (scan.rs). Pages from the network never get this: it names no remote URL.",
+  "windows": ["scan"],
+  "local": true,
+  "permissions": [
+    "allow-scan-info",
+    "allow-scan-devices",
+    "allow-scan-capabilities",
+    "allow-scan-save-settings",
+    "allow-scan-start",
+    "allow-scan-cancel",
+    "allow-scan-page",
+    "allow-scan-edit",
+    "allow-scan-arrange",
+    "allow-scan-discard",
+    "allow-scan-destinations",
+    "allow-scan-send",
+    "allow-scan-open"
+  ]
+}
