@@ -192,7 +192,7 @@ pub fn definitions() -> Vec<Definition> {
                 "properties": {
                     "tab": { "type": "integer", "description": TAB },
                     "ref": { "type": "string", "description": REF },
-                    "submits": { "type": "boolean", "description": "Whether the click sends, buys, posts or deletes something. Default true." },
+                    "submits": { "type": "boolean", "default": true, "description": "Whether the click sends, buys, posts or deletes something. Default true." },
                     "dry_run": { "type": "boolean", "description": DRY_RUN }
                 },
                 "required": ["ref"],
@@ -215,8 +215,8 @@ pub fn definitions() -> Vec<Definition> {
                     "tab": { "type": "integer", "description": TAB },
                     "ref": { "type": "string", "description": REF },
                     "text": { "type": "string", "maxLength": 10000 },
-                    "clear": { "type": "boolean", "description": "Replace the field's text. Default true." },
-                    "submit": { "type": "boolean", "description": "Press Enter after typing. Default false." },
+                    "clear": { "type": "boolean", "default": true, "description": "Replace the field's text. Default true." },
+                    "submit": { "type": "boolean", "default": false, "description": "Press Enter after typing. Default false." },
                     "dry_run": { "type": "boolean", "description": DRY_RUN }
                 },
                 "required": ["ref", "text"],
