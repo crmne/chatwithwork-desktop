@@ -13,6 +13,14 @@ const PLAN = `<!doctype html><html><head><title>Falcon plan</title></head><body>
   <span id="sc">Security code</span> <div role="textbox" contenteditable aria-labelledby="sc">737</div>
   <button>Sign in</button>
 </form>
+<card-form></card-form>
+<script>
+  customElements.define("card-form", class extends HTMLElement {
+    connectedCallback() {
+      this.attachShadow({ mode: "open" }).innerHTML = '<label>Card number <input id="shadow-card" value="4000056655665556"></label>';
+    }
+  });
+</script>
 <div style="height:3000px"></div>
 <p>The end of the plan.</p>
 <script>
@@ -99,6 +107,7 @@ test("reads a background tab in the group as accessible text, never sensitive va
   expect(text).not.toContain("4111111111111111");
   expect(text).not.toContain("5500000000000004");
   expect(text).not.toContain("737");
+  expect(text).not.toContain("4000056655665556");
   expect(reply.result.next_offset).toBeNull();
 
   const paged = await setup.daemon.call("read", { tab, offset: 5, max_chars: 10 });
@@ -138,6 +147,13 @@ test("screenshots a background tab, as a JPEG that fits a tool result", async ()
   expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
   expect(reply.result.image.data.length).toBeLessThanOrEqual(180_000);
   expect(reply.result.width).toBeGreaterThan(0);
+  // Fields blurred for the picture, a shadow root's too, are clear after it.
+  const page = setup.context.pages().find((p) => p.url() === `${allowed}/`)!;
+  const filters = await page.evaluate(() => [
+    getComputedStyle(document.querySelector("card-form")!.shadowRoot!.querySelector("input")!).filter,
+    getComputedStyle(document.querySelector('input[type="password"]')!).filter,
+  ]);
+  expect(filters).toEqual(["none", "none"]);
   if (process.env.SAVE_SCREENSHOT) (await import("node:fs")).writeFileSync(process.env.SAVE_SCREENSHOT, bytes);
 });
 
