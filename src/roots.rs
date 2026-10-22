@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{Config, Root};
+use crate::config::{BotLoan, Config, Root};
 use crate::paths::{Paths, home_dir};
 use crate::policy::DenyList;
 use crate::reader::safe_fs::is_valid_root_id;
@@ -113,6 +113,7 @@ pub fn add_root(config: &mut Config, paths: &Paths, new: NewRoot<'_>) -> Result<
         bail!("the label is longer than 80 characters");
     }
     let root = Root {
+        bots: Vec::new(),
         id: new_id(config, &label),
         label,
         path,
@@ -155,6 +156,9 @@ pub fn set_writable(
         // Commands change files too: they stop with changes.
         root.commands = false;
         root.network = false;
+        root.bots
+            .iter_mut()
+            .for_each(|loan| loan.unattended = false);
     }
     Ok(root.clone())
 }
@@ -183,6 +187,55 @@ pub fn set_commands(
     }
     root.commands = commands;
     root.network = commands && network;
+    if !commands {
+        // No command runs there now, so none runs unattended either.
+        root.bots
+            .iter_mut()
+            .for_each(|loan| loan.unattended = false);
+    }
+    Ok(root.clone())
+}
+
+/// Lend a shared folder to a Chat with Work bot (`lent`), or stop lending it.
+/// `unattended` lets the bot's commands there start without anyone
+/// approving each one, only where commands are allowed. Lending again
+/// replaces the loan, so a name or `unattended` changes in place.
+pub fn set_bot(
+    config: &mut Config,
+    which: &str,
+    bot: &str,
+    name: Option<&str>,
+    lent: bool,
+    unattended: bool,
+) -> Result<Root> {
+    if bot.is_empty() || bot.len() > 20 || !bot.bytes().all(|b| b.is_ascii_digit()) {
+        bail!(
+            "{bot:?} isn't a bot's ID: it's the number in the bot's address in Chat with Work, like 42"
+        );
+    }
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    if lent && unattended && !root.runs_commands() {
+        bail!(
+            "{} doesn't allow commands. Allow them there first (`cww roots allow-commands {}`)",
+            root.label,
+            root.id
+        );
+    }
+    let name: String = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| n.chars().take(80).collect())
+        .or_else(|| root.loan(bot).map(|loan| loan.name.clone()))
+        .unwrap_or_default();
+    root.bots.retain(|loan| loan.id != bot);
+    if lent {
+        root.bots.push(BotLoan {
+            id: bot.to_string(),
+            name,
+            unattended,
+        });
+    }
     Ok(root.clone())
 }
 
@@ -376,6 +429,7 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(new_id(&config, "Work Docs!"), "work-docs");
         config.roots.push(Root {
+            bots: Vec::new(),
             id: "work-docs".into(),
             label: "x".into(),
             path: "/x".into(),
@@ -387,6 +441,50 @@ mod tests {
         assert_eq!(new_id(&config, "Work docs"), "work-docs-2");
         assert_eq!(new_id(&config, "文档"), "root");
         assert_eq!(new_id(&config, "A"), "root");
+    }
+
+    #[test]
+    fn lends_a_folder_to_a_bot_and_stops() {
+        let mut config = Config::default();
+        config.roots.push(Root {
+            bots: Vec::new(),
+            id: "app".into(),
+            label: "App".into(),
+            path: "/x".into(),
+            follow_symlinks: false,
+            writable: true,
+            commands: false,
+            network: false,
+        });
+
+        let root = set_bot(&mut config, "app", "42", Some("Issue fixer"), true, false).unwrap();
+        assert_eq!(root.loan("42").unwrap().name, "Issue fixer");
+        assert!(!root.loan("42").unwrap().unattended);
+        assert!(
+            set_bot(&mut config, "app", "42", None, true, true).is_err(),
+            "unattended only where commands are allowed"
+        );
+        assert!(set_bot(&mut config, "app", "issue-fixer", None, true, false).is_err());
+
+        // As set_commands would where commands run (not on Windows yet).
+        config.roots[0].commands = true;
+        let root = set_bot(&mut config, "app", "42", None, true, true).unwrap();
+        assert_eq!(root.bots.len(), 1, "lending again replaces the loan");
+        assert_eq!(
+            root.loan("42").unwrap().name,
+            "Issue fixer",
+            "keeps its name"
+        );
+        assert!(root.loan("42").unwrap().unattended);
+
+        set_commands(&mut config, "app", false, false).unwrap();
+        assert!(
+            !config.roots[0].loan("42").unwrap().unattended,
+            "stopping commands stops unattended ones"
+        );
+
+        let root = set_bot(&mut config, "app", "42", None, false, false).unwrap();
+        assert!(root.loan("42").is_none());
     }
 
     #[cfg(windows)]
@@ -511,6 +609,7 @@ mod tests {
         let home = home.canonicalize().unwrap_or(home);
         let mut config = Config::default();
         config.roots.push(Root {
+            bots: Vec::new(),
             id: "home".into(),
             label: "Home".into(),
             path: home,

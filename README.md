@@ -275,6 +275,10 @@ In folders where you also allow commands (`cww roots allow-commands <root>`, or 
 
 Chat with Work asks before every command. See [docs/commands.md](docs/commands.md).
 
+### Lending folders to bots
+
+A Chat with Work bot (an assistant your organization sets up to work by itself, like one that fixes issues) reaches this computer only through the folders you lend it, here: `cww roots lend <root> <bot-id>`, with the number in the bot's address in Chat with Work. Its chats then reach that folder as the folder allows, and no other, and each of its commands asks you first in Chat with Work. Where the folder allows commands, `--unattended` lets the bot's commands there start without anyone approving each one, in the same sandbox and limits, which is how a bot runs tests on a server or a spare Mac by itself. `cww roots stop-lending <root> <bot-id>` ends a loan, and stopping commands in a folder ends its unattended commands. See PROTOCOL.md 7.2.1.
+
 Paths always look like `work-docs:plans/q3.pdf`.
 
 ## Performance

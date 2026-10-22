@@ -41,6 +41,11 @@ pub enum ErrorCode {
     TrashUnavailable,
     /// The file changed since the caller looked at it.
     Conflict,
+    /// A bot's call reached a folder that isn't lent to that bot.
+    NotLent,
+    /// A bot's command was to start without anyone approving it where its
+    /// loan doesn't let it.
+    NeedsApproval,
     Internal,
 }
 
@@ -64,6 +69,8 @@ impl ErrorCode {
             Self::NotChangeable => "not_changeable",
             Self::TrashUnavailable => "trash_unavailable",
             Self::Conflict => "conflict",
+            Self::NotLent => "not_lent",
+            Self::NeedsApproval => "needs_approval",
             Self::Internal => "internal",
         }
     }
@@ -81,6 +88,8 @@ impl ErrorCode {
                 | Self::Paused
                 | Self::NotWritable
                 | Self::NotChangeable
+                | Self::NotLent
+                | Self::NeedsApproval
         )
     }
 }

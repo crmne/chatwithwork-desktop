@@ -809,6 +809,41 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
+    async fn set_bot(
+        &self,
+        which: String,
+        bot: String,
+        name: Option<String>,
+        lent: bool,
+        unattended: bool,
+    ) -> Result<Value> {
+        let id = bot.clone();
+        let root = self
+            .edit_config(move |config, _| {
+                crate::roots::set_bot(config, &which, &bot, name.as_deref(), lent, unattended)
+            })
+            .await?;
+        let mut entry = AuditEntry::event(if lent {
+            "root_bot_lent"
+        } else {
+            "root_bot_withdrawn"
+        });
+        let unattended = root.loan(&id).is_some_and(|loan| loan.unattended);
+        entry.detail = Some(format!(
+            "{} ({}) to bot {id}{}",
+            root.id,
+            root.label,
+            if unattended {
+                ", its commands unattended"
+            } else {
+                ""
+            }
+        ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
     async fn remove_root(&self, which: String) -> Result<Value> {
         let root = self
             .edit_config(move |config, _| remove_root(config, &which))
@@ -969,9 +1004,11 @@ impl Daemon {
         let roots: Vec<Value> = roots
             .into_iter()
             .map(|r| {
-                let path = config.root(&r.id).map(|c| c.path.display().to_string());
+                let configured = config.root(&r.id);
+                let path = configured.map(|c| c.path.display().to_string());
                 let mut v = serde_json::to_value(&r).unwrap_or_default();
                 v["local_path"] = json!(path);
+                v["bots"] = json!(configured.map(|c| c.bots.clone()).unwrap_or_default());
                 v
             })
             .collect();
@@ -1113,6 +1150,7 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsRemove { .. }
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
+                    | ControlRequest::RootsBot { .. }
                     | ControlRequest::RootsLabel { .. }
                     | ControlRequest::Pause
                     | ControlRequest::Resume
@@ -1186,6 +1224,13 @@ impl ControlHandler for Daemon {
                 commands,
                 network,
             } => self.set_commands(root, commands, network).await,
+            ControlRequest::RootsBot {
+                root,
+                bot,
+                name,
+                lent,
+                unattended,
+            } => self.set_bot(root, bot, name, lent, unattended).await,
             ControlRequest::Commands => self.commands_json().await,
             ControlRequest::CommandOutput { run, offset, max } => {
                 let max = max.unwrap_or(crate::commands::MAX_OUTPUT_CHUNK);

@@ -156,6 +156,23 @@ enum RootsCommand {
     },
     /// Stop running commands in a shared folder.
     DenyCommands { root: String },
+    /// Lend a shared folder to a Chat with Work bot, by the number in its
+    /// address in Chat with Work: the bot's chats then reach this folder,
+    /// as the folder allows. Each change and command asks you first, unless
+    /// `--unattended` lets its commands here start without asking.
+    Lend {
+        root: String,
+        bot: String,
+        /// The bot's name, to recognize it here.
+        #[arg(long)]
+        name: Option<String>,
+        /// Let the bot's commands here start without anyone approving each
+        /// one. Only where commands are allowed.
+        #[arg(long)]
+        unattended: bool,
+    },
+    /// Stop lending a shared folder to a bot.
+    StopLending { root: String, bot: String },
 }
 
 #[derive(Subcommand)]
@@ -526,6 +543,37 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             );
             notify_daemon(paths, "");
         }
+        RootsCommand::Lend {
+            root,
+            bot,
+            name,
+            unattended,
+        } => {
+            let root =
+                cww::roots::set_bot(&mut config, &root, &bot, name.as_deref(), true, unattended)?;
+            config.save(paths)?;
+            println!(
+                "{} ({}) is lent to bot {bot}. {}",
+                root.label,
+                root.path.display(),
+                if unattended {
+                    "Its commands here start without anyone approving each one."
+                } else {
+                    "Each of its commands here waits for you to approve it in Chat with Work."
+                }
+            );
+            notify_daemon(paths, "");
+        }
+        RootsCommand::StopLending { root, bot } => {
+            let root = cww::roots::set_bot(&mut config, &root, &bot, None, false, false)?;
+            config.save(paths)?;
+            println!(
+                "{} ({}) isn't lent to bot {bot} now.",
+                root.label,
+                root.path.display()
+            );
+            notify_daemon(paths, "");
+        }
         RootsCommand::DenyCommands { root } => {
             let root = cww::roots::set_commands(&mut config, &root, false, false)?;
             config.save(paths)?;
@@ -645,6 +693,21 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
             },
             str(&r["local_path"]),
         );
+        for loan in r["bots"].as_array().cloned().unwrap_or_default() {
+            println!(
+                "    lent to bot {}{}{}",
+                str(&loan["id"]),
+                Some(str(&loan["name"]))
+                    .filter(|n| !n.is_empty())
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default(),
+                if loan["unattended"] == Value::Bool(true) {
+                    ", its commands unattended"
+                } else {
+                    ""
+                }
+            );
+        }
     }
     Ok(())
 }

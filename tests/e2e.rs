@@ -1019,6 +1019,58 @@ impl Session {
         self.response(id).await
     }
 
+    /// As [`request`](Self::request), from a chat of the bot with ID `bot`.
+    async fn request_as_bot(&mut self, method: &str, mut params: Value, bot: &str) -> Value {
+        self.next_id += 1;
+        let id = self.next_id;
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": { "name": "chatwithwork", "version": "test" },
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "com.chatwithwork/chatId": "chat-9",
+            "com.chatwithwork/botId": bot,
+        });
+        self.send_raw(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await;
+        self.response(id).await
+    }
+
+    /// A bot's `run` that nobody approved.
+    #[cfg(target_os = "linux")]
+    async fn unattended_run(&mut self, arguments: Value, bot: &str) -> Value {
+        self.next_id += 1;
+        let id = self.next_id;
+        let params = json!({
+            "name": "run",
+            "arguments": arguments,
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": { "name": "chatwithwork", "version": "test" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "com.chatwithwork/chatId": "chat-9",
+                "com.chatwithwork/botId": bot,
+                "com.chatwithwork/unattended": true,
+            },
+        });
+        self.send_raw(
+            json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params }),
+        )
+        .await;
+        self.response(id).await["result"].clone()
+    }
+
+    async fn bot_call(&mut self, tool: &str, arguments: Value, bot: &str) -> Value {
+        let response = self
+            .request_as_bot(
+                "tools/call",
+                json!({ "name": tool, "arguments": arguments }),
+                bot,
+            )
+            .await;
+        assert!(response.get("error").is_none(), "{response}");
+        response["result"].clone()
+    }
+
     async fn send_raw(&mut self, message: Value) {
         self.ws
             .send(Message::text(
@@ -1115,6 +1167,7 @@ fn pair(fixture: &Fixture, server: &FakeServer) {
         }),
         secret_store: Some("file".into()),
         roots: vec![Root {
+            bots: Vec::new(),
             id: "docs".into(),
             label: "Work docs".into(),
             path: fixture.base.join("work/docs"),
@@ -3608,6 +3661,7 @@ fn pair_for_changes(fx: &Fixture, server: &FakeServer, writable: bool, limits: O
     let mut config = Config::load(&fx.paths).unwrap();
     config.roots[0].writable = writable;
     config.roots.push(Root {
+        bots: Vec::new(),
         id: "ro".into(),
         label: "Read only".into(),
         path: ro,
@@ -4244,6 +4298,175 @@ async fn allowing_changes_is_a_local_switch() {
         .unwrap();
 }
 
+/// A bot's chat reaches only the folders this computer lends it, and only
+/// this computer lends them, over the control channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bot_reaches_only_the_folders_lent_to_it() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let roots = s.bot_call("roots", json!({}), "42").await;
+    assert_eq!(roots["structuredContent"]["roots"], json!([]), "{roots}");
+    let search = s.bot_call("search", json!({ "query": "keep" }), "42").await;
+    assert_eq!(error_code(&search), "not_lent");
+    let search = s
+        .bot_call("search", json!({ "query": "keep", "root": null }), "42")
+        .await;
+    assert_eq!(error_code(&search), "not_lent", "a null root is no root");
+    let read = s
+        .bot_call("read", json!({ "path": "ro:keep.md" }), "42")
+        .await;
+    assert_eq!(error_code(&read), "not_lent");
+    let person = s.call("read", json!({ "path": "ro:keep.md" })).await;
+    assert_eq!(
+        person["isError"], false,
+        "a person's call reaches every shared folder"
+    );
+
+    let lent = control(
+        &fx.paths,
+        ControlRequest::RootsBot {
+            root: "ro".into(),
+            bot: "42".into(),
+            name: Some("Issue fixer".into()),
+            lent: true,
+            unattended: false,
+        },
+    )
+    .await;
+    assert_eq!(lent["root"]["bots"][0]["id"], "42", "{lent}");
+    assert_eq!(
+        Config::load(&fx.paths).unwrap().roots[1].bots[0].name,
+        "Issue fixer",
+        "saved"
+    );
+
+    let mut s = connect_or_keep(&mut server, s).await;
+    let roots = s.bot_call("roots", json!({}), "42").await;
+    let listed = roots["structuredContent"]["roots"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(listed.len(), 1, "{roots}");
+    assert_eq!(listed[0]["id"], "ro");
+    assert_eq!(listed[0]["unattended"], false);
+    let read = s
+        .bot_call("read", json!({ "path": "ro:keep.md" }), "42")
+        .await;
+    assert_eq!(read["isError"], false, "{read}");
+    let other = s
+        .bot_call("read", json!({ "path": "ro:keep.md" }), "7")
+        .await;
+    assert_eq!(
+        error_code(&other),
+        "not_lent",
+        "another bot doesn't reach it"
+    );
+    let docs = s
+        .bot_call(
+            "create",
+            json!({ "path": "docs:x.md", "content": "x" }),
+            "42",
+        )
+        .await;
+    assert_eq!(error_code(&docs), "not_lent");
+
+    let log = control(&fx.paths, ControlRequest::AuditTail { lines: Some(200) }).await;
+    let entries = log["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|e| e["event"] == "root_bot_lent"),
+        "{log}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["code"] == "not_lent" && e["detail"] == "for bot 42"),
+        "{log}"
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
+/// A bot's command starts without anyone approving it only where this
+/// computer said so for that bot and folder.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bots_unattended_commands_need_this_computers_yes() {
+    if !command_sandbox_works() {
+        return;
+    }
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.save(&fx.paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let s = connect(&mut server).await;
+
+    let lend = |unattended| ControlRequest::RootsBot {
+        root: "docs".into(),
+        bot: "42".into(),
+        name: None,
+        lent: true,
+        unattended,
+    };
+    control(&fx.paths, lend(false)).await;
+    let mut s = connect_or_keep(&mut server, s).await;
+    let refused = s
+        .unattended_run(json!({ "command": "true", "path": "docs:" }), "42")
+        .await;
+    assert_eq!(error_code(&refused), "needs_approval", "{refused}");
+
+    control(&fx.paths, lend(true)).await;
+    let mut s = connect_or_keep(&mut server, s).await;
+    let ran = s
+        .unattended_run(json!({ "command": "true", "path": "docs:" }), "42")
+        .await;
+    assert_eq!(ran["isError"], false, "{ran}");
+
+    let run = ran["structuredContent"]["id"].as_str().unwrap().to_string();
+    let own = s.bot_call("run_status", json!({ "run": run }), "42").await;
+    assert_eq!(own["isError"], false, "{own}");
+    let other = s.bot_call("run_status", json!({ "run": run }), "7").await;
+    assert_eq!(
+        error_code(&other),
+        "not_lent",
+        "another bot can't follow it"
+    );
+    let stop = s.bot_call("run_stop", json!({ "run": run }), "7").await;
+    assert_eq!(error_code(&stop), "not_lent", "or stop it");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
+/// The session again, or the daemon's new one if it reconnected after a
+/// settings change.
+async fn connect_or_keep(server: &mut FakeServer, session: Session) -> Session {
+    match tokio::time::timeout(Duration::from_secs(2), server.sockets.recv()).await {
+        Ok(Some(ws)) => Session {
+            ws,
+            next_id: 0,
+            legacy: false,
+        },
+        _ => session,
+    }
+}
+
 /// `path` as the Recycle Bin records it: without the `\\?\` prefix that
 /// `canonicalize` adds.
 #[cfg(windows)]
@@ -4347,6 +4570,7 @@ async fn changes_files_on_windows() {
     std::fs::write(docs.join("tool.dat"), b"MZ\x90\x00not really a program").unwrap();
     let mut config = Config::load(&fx.paths).unwrap();
     config.roots.push(Root {
+        bots: Vec::new(),
         id: "private".into(),
         label: "Private".into(),
         path: docs.join("Private"),

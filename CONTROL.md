@@ -112,6 +112,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `roots[].index` is `pending`, `indexing`, `ready`, `error` or `disabled`. During the first pass, `indexed_files` counts files seen so far. `available` is false when the folder is missing, for example on an unmounted drive.
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
+- `bots` lists the Chat with Work bots the folder is lent to (see `roots_bot`), empty when none.
 
 ### `pause` and `resume`
 
@@ -230,6 +231,18 @@ Answers with the updated `root` and writes a `root_changes_allowed` or `root_cha
 Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on Windows. While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
+
+### `roots_bot`
+
+```json
+{"cmd": "roots_bot", "root": "app", "bot": "42", "name": "Issue fixer", "lent": true, "unattended": false}
+```
+
+Lends a shared folder to a Chat with Work bot (`lent: true`), or stops lending it (`false`), and says whether the bot's commands there may start without a person approving each one (`unattended`). `bot` is the bot's ID, the number in its address in Chat with Work (`/bots/42`); `name` is shown only here, to recognize it, and is kept when left out. Lending again replaces the loan, so the same request changes `unattended`. `unattended: true` is refused where the folder doesn't allow commands. While a folder is lent to a bot, that bot's chats reach it as the folder allows (PROTOCOL.md 7.2.1), and no other folder: reads, changes where changes are allowed, and commands where commands are allowed, each change and command approved in Chat with Work unless the bot's own policy there, and for commands this loan, let it run. Clients should say that, and ask, before lending a folder or turning `unattended` on; stopping needs no question, and takes effect at the next call. Only this channel and `config.toml` can change it, never the server.
+
+Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots lend <root> <bot> [--name <name>] [--unattended]` and `cww roots stop-lending <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
+
+The desktop app doesn't show loans yet. Its settings page is to list each shared folder's loans with a switch for unattended commands per bot, and let the owner lend a folder to a bot by its ID (the bot's page in Chat with Work shows it, with the command to type here).
 
 ### `commands`, `command_output` and `command_stop`
 
