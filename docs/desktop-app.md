@@ -2,7 +2,7 @@
 
 `cww-app` is the desktop app: the Chat with Work web app in a window of its own, the tray item for the `cww` daemon, and the background agent's settings. It lives in `app/` and is built with [Tauri 2](https://tauri.app) on the system's web view: WebKitGTK 4.1 on Linux, WKWebView on macOS, WebView2 on Windows. The daemon doesn't need it: servers and people who prefer the command line keep using `cww` and `cww tui`.
 
-Until 0.3.1 the app was native, drawn with egui, with a chat window of its own that had to follow every change to the web app. That code is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, with its docs (`docs/settings-app.md`, `docs/chat-window.md`, `docs/native-parity.md`). The measurements that led here are in [tauri-prototype.md](tauri-prototype.md).
+Until 0.3.1 the app was native, drawn with egui, with a chat window of its own that had to follow every change to the web app. That code is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, with its docs (`docs/settings-app.md`, `docs/chat-window.md`, `docs/native-parity.md`). The prototype and measurements that led here are kept at the [`tauri-prototype-final`](https://github.com/crmne/chatwithwork-desktop/blob/tauri-prototype-final/docs/tauri-prototype.md) tag.
 
 ## Three parts
 
