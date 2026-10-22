@@ -75,6 +75,8 @@ const state = {
   sending: false,
   progress: null,
   dragging: null,
+  saving: false,
+  menuOpen: false,
 };
 
 // ---- Talking to the app ---------------------------------------------------
@@ -430,10 +432,15 @@ function sheets(pages, kept) {
     state.scanning && kept ? h("li", { class: "sheet sheet--placeholder", "aria-hidden": "true" }, h("div", { class: "sheet__paper" }, h("span", { class: "state state--live" }, "Scanning"))) : null);
 }
 
+// Whether this computer can send to Chat with Work now: paired, and allowed
+// to use its owner's chats (the server answered where scans can go).
+// Until the server answers, Send stays the main action.
+const canReachChatWithWork = () => !state.destinationsError;
+
 function bar(kept) {
   const busy = state.scanning || state.sending;
+  const signedIn = canReachChatWithWork();
   const destinations = state.destinations || [];
-  const canSend = kept.length > 0 && !busy && !state.destinationsError;
   const choice = h("select", {
     class: "select", "aria-label": "Send to", "data-key": "destination", disabled: busy || !kept.length,
     onchange: (event) => { state.destination = event.target.value; render(); },
@@ -445,20 +452,84 @@ function bar(kept) {
   return h("footer", { class: "scan__bar" },
     h("button", { type: "button", class: "btn", disabled: busy || !state.device || !state.pages.length, "data-key": "rescan",
       onclick: () => scan(false) }, "Rescan"),
-    h("button", { type: "button", class: "btn", disabled: busy || !kept.length, "data-key": "save", onclick: save },
-      icon("download-simple"), state.saving ? "Saving…" : "Save to Computer"),
     h("span", { class: "spacer" }),
     state.progress ? h("span", { class: "scan__progress", role: "status" }, state.progress) : null,
-    state.destinationsError && kept.length ? h("span", { class: "scan__progress" }, state.destinationsError) : null,
-    !state.progress && state.destination === "chat" ? h("input", {
+    !state.progress && signedIn && state.destination === "chat" ? h("input", {
       class: "input", type: "text", placeholder: "Add a message (optional)", value: state.message, "data-key": "message",
       disabled: busy || !kept.length, maxlength: 2000, oninput: (event) => { state.message = event.target.value; },
       "aria-label": "Message to send with the scan",
     }) : null,
-    !state.progress ? choice : null,
-    h("button", { type: "button", class: "btn btn-primary", disabled: !canSend, "data-key": "send", onclick: send },
-      icon("paper-plane-tilt"), state.sending && !state.saving ? "Sending…" : "Send to Chat with Work"));
+    !state.progress && signedIn ? choice : null,
+    finishButton(kept, signedIn, busy));
 }
+
+// One way to finish, two outcomes: Send to Chat with Work, or Save to
+// Computer. The main part is Send while the computer can reach Chat with
+// Work, and Save otherwise, with Send in the menu saying what it needs.
+function finishButton(kept, signedIn, busy) {
+  const disabled = busy || !kept.length;
+  const sendLabel = state.sending && !state.saving ? "Sending…" : "Send to Chat with Work";
+  const saveLabel = state.saving ? "Saving…" : "Save to Computer";
+  const main = signedIn
+    ? h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "send", onclick: send },
+        icon("paper-plane-tilt"), sendLabel)
+    : h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "save", onclick: save },
+        icon("download-simple"), saveLabel);
+  const item = signedIn
+    ? h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-save",
+        onclick: () => { closeMenu(); save(); } }, icon("download-simple"), h("span", {}, "Save to Computer"))
+    : h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-send",
+        onclick: () => { closeMenu(); call("scan_open_account"); } },
+        icon("paper-plane-tilt"),
+        h("span", {}, "Send to Chat with Work",
+          h("small", {}, `${state.destinationsError || "This computer can't reach Chat with Work."} Set it up in Settings.`)));
+  return h("div", { class: "split", onkeydown: menuKeys },
+    main,
+    h("button", {
+      type: "button", class: "btn btn-primary split__toggle", disabled, "data-key": "finish-menu",
+      "aria-haspopup": "menu", "aria-expanded": state.menuOpen ? "true" : "false", "aria-controls": "finish-menu",
+      "aria-label": "More ways to finish", title: "More ways to finish",
+      onclick: () => (state.menuOpen ? closeMenu() : openMenu()),
+    }, icon("caret-down")),
+    state.menuOpen ? h("div", { class: "split__menu", id: "finish-menu", role: "menu", "aria-label": "More ways to finish" }, item) : null);
+}
+
+function openMenu() {
+  state.menuOpen = true;
+  render();
+  document.querySelector(".split__menu [role=menuitem]")?.focus();
+}
+
+function closeMenu({ refocus = false } = {}) {
+  if (!state.menuOpen) return;
+  state.menuOpen = false;
+  render();
+  if (refocus) document.querySelector('[data-key="finish-menu"]')?.focus();
+}
+
+// The menu's keys: arrows move between items, Escape and Tab close it.
+function menuKeys(event) {
+  const items = [...document.querySelectorAll(".split__menu [role=menuitem]")];
+  if (event.key === "ArrowDown" && !state.menuOpen && event.target.dataset.key === "finish-menu") {
+    event.preventDefault();
+    openMenu();
+  } else if (state.menuOpen && event.key === "Escape") {
+    event.preventDefault();
+    closeMenu({ refocus: true });
+  } else if (state.menuOpen && event.key === "Tab") {
+    closeMenu();
+  } else if (state.menuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp") && items.length) {
+    event.preventDefault();
+    const at = items.indexOf(document.activeElement);
+    const next = (at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+    items[next].focus();
+  }
+}
+
+// A click anywhere else closes the menu.
+document.addEventListener("pointerdown", (event) => {
+  if (state.menuOpen && !event.target.closest?.(".split")) closeMenu();
+});
 
 // ---- The crop view --------------------------------------------------------
 

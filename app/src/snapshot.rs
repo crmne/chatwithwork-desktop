@@ -192,7 +192,8 @@ fn bridge_check(app: &AppHandle) {
 /// One step of the scan window, then its picture (`scan-<step>-<theme>.png`):
 /// `scanned` presses Scan and waits for the feeder to empty, `blank` opens
 /// the blank pages left out, `crop` opens the first page's crop view,
-/// `cropped` crops the first page, `turned` turns the second, and `send`
+/// `cropped` crops the first page, `saved` saves the PDF (`CWW_DEMO_SAVE_TO`),
+/// `menu` opens the finish button's menu, `turned` turns the second, and `send`
 /// sends to the first bot (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
 /// the PDF).
 fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
@@ -227,8 +228,12 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
             4,
         ),
         "saved" => (
-            r#"document.querySelector('[data-key="save"]')?.click()"#,
+            r#"(() => { const main = document.querySelector('[data-key="save"]'); if (main) { main.click(); return; } document.querySelector('[data-key="finish-menu"]')?.click(); setTimeout(() => document.querySelector('[data-key="menu-save"]')?.click(), 200); })()"#,
             10,
+        ),
+        "menu" => (
+            r#"document.querySelector('[data-key="finish-menu"]')?.click()"#,
+            2,
         ),
         "turned" => (
             r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,

@@ -19,6 +19,7 @@
     "allow-scan-send",
     "allow-scan-open",
     "allow-scan-save",
-    "allow-scan-reveal"
+    "allow-scan-reveal",
+    "allow-scan-open-account"
   ]
 }

@@ -14,6 +14,7 @@ Choose **Scan…** in the tray menu (or run `cww-app --scan`).
 - **Scan** reads the feeder until it's empty (or one page from a flatbed). Pages appear as they arrive. Blank pages are left out but kept below the pages, where **Keep** brings one back.
 - **Each page** can be moved earlier or later (or dragged), turned, cropped, or deleted. Black and white pages show as they'll be sent.
 - **Rescan** replaces the pages; **Scan More Pages** adds to them.
+- **Finishing** is one split button. Its main part is **Send to Chat with Work**, and its arrow opens **Save to Computer**. On a computer that isn't paired with Chat with Work, or may not use your chats, the main part is Save to Computer and Send waits in the menu, saying what it needs and opening Settings.
 - **Save to Computer** makes the PDF (reading each page's text first, a second or two a page) and saves it where you pick, named after the date and the page count (`Scan 2026-10-22 14.05, 3 pages.pdf`). The dialog starts in the folder you saved to last. It needs no Chat with Work account: the computer doesn't have to be paired.
 - **Send to Chat with Work** makes the same PDF and sends it to a new chat, with an optional message, or to a bot. Sending needs the computer paired and allowed to use your chats.
 - The pages stay until you scan again or close the window, so a scan can be saved and sent, or sent to more than one place. Sending the same pages to the same bot again is recognized as the same scan.

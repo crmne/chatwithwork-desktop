@@ -826,6 +826,18 @@ pub async fn scan_save(
     Ok(json!({ "saved": path, "name": path.file_name().map(|n| n.to_string_lossy().into_owned()) }))
 }
 
+/// Opens the settings on Account, where the computer is paired, for a scan
+/// page that can't send yet.
+#[tauri::command]
+pub fn scan_open_account(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    scan_page_only(&webview)?;
+    let app = desktop.app();
+    std::thread::spawn(move || {
+        let _ = crate::windows::show_settings(&app, Some("account"));
+    });
+    Ok(json!({}))
+}
+
 /// Shows a saved scan's folder: only the folder the window saved to last.
 #[tauri::command]
 pub fn scan_reveal(webview: Webview, desktop: State<'_, Arc<Desktop>>, path: PathBuf) -> Answer {
