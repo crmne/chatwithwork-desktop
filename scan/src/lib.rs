@@ -30,6 +30,8 @@ pub mod sane;
 pub mod twain;
 #[cfg(target_os = "macos")]
 pub mod vision;
+#[cfg(windows)]
+pub mod windows_ocr;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

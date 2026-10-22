@@ -60,7 +60,7 @@ pub fn system_engine() -> Result<Box<dyn Engine>, String> {
     }
     #[cfg(windows)]
     {
-        Err("Reading text isn't available on this system yet.".into())
+        Ok(Box::new(crate::windows_ocr::WindowsOcr))
     }
 }
 

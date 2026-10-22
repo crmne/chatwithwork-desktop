@@ -50,6 +50,16 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Memory",
   "Win32_UI_WindowsAndMessaging",
 ] }
+# Windows' own OCR (Windows.Media.Ocr), built into Windows 10 and 11.
+windows = { version = "0.62", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
+  "Win32_System_WinRT",
+] }
 
 # The scanner's helper as a program of its own. On Windows it's built for
 # 32-bit x86 too, since most TWAIN drivers are 32-bit and load only into a
