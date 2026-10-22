@@ -8,6 +8,7 @@ interface PopupState {
   stopped: boolean;
   stoppedOnComputer: boolean;
   sites: string[];
+  changes: boolean;
   tabs: number;
 }
 
@@ -17,7 +18,9 @@ function render(state: PopupState): void {
   const box = $("state");
   let tone = "positive";
   let text = "Ready";
-  let detail = "Chat with Work can use the tabs in its tab group, on the sites below, when you ask it to.";
+  let detail = state.changes
+    ? "Chat with Work can read and act in its tab group, on the sites below. Each action asks you first."
+    : "Chat with Work can read the tabs in its tab group, on the sites below.";
   if (state.stopped) {
     tone = "negative";
     text = "Stopped";

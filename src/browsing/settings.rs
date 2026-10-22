@@ -14,6 +14,7 @@ pub fn policy(config: &Config) -> Policy {
     Policy {
         sites: config.browser.sites.clone(),
         stopped: config.browser.stopped || config.paused,
+        changes: config.browser.changes,
     }
 }
 
@@ -71,6 +72,7 @@ pub fn set_bot(config: &mut Config, bot: &str, name: Option<&str>, lent: bool) -
 pub fn status(browser: &BrowserConfig, extension: Option<Extension>) -> Value {
     json!({
         "enabled": browser.enabled,
+        "changes": browser.changes,
         "stopped": browser.stopped,
         "sites": browser.sites,
         "bots": browser.bots,

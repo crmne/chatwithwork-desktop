@@ -10,12 +10,22 @@ use serde_json::{Value, json};
 use super::bridge::{Bridge, stopped};
 use super::sites;
 use crate::error::{ErrorCode, ToolError};
+use crate::limits::Limiter;
 use crate::tools::Caller;
+use crate::writer::Writer;
 
 /// How a tool is offered: its annotations and approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Read,
+    /// Changes something; asks, and may be allowed for the rest of a chat.
+    Write,
+    /// May send, buy, post or delete something: always asks, unless the
+    /// call's arguments match `write_when` (PROTOCOL.md 8.7), which the
+    /// extension checks are true.
+    Destructive {
+        write_when: Option<Value>,
+    },
 }
 
 pub struct Definition {
@@ -27,6 +37,20 @@ pub struct Definition {
 }
 
 const TAB: &str = "A tab's id from `browser_tabs`. Default: the group's tab used last.";
+const REF: &str = "The element's ref from `browser_read`, like `e123`.";
+const DRY_RUN: &str = "Check the action and describe it, with a screenshot, without doing it.";
+
+/// The tools that act on pages, offered only while the person allowed
+/// actions on this computer.
+pub const CHANGE_TOOLS: [&str; 7] = [
+    "browser_open",
+    "browser_back",
+    "browser_close",
+    "browser_click",
+    "browser_type",
+    "browser_select",
+    "browser_download",
+];
 
 pub fn definitions() -> Vec<Definition> {
     vec![
@@ -108,6 +132,139 @@ pub fn definitions() -> Vec<Definition> {
             }),
             kind: Kind::Read,
         },
+        Definition {
+            name: "browser_open",
+            title: "Open a page in the browser",
+            description: "Open `url` (on a site the person allowed) in a new background tab in \
+                 the \"Chat with Work\" group, or in `tab`. Answers where the tab ended up.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "The full address, like https://github.com/." },
+                    "tab": { "type": "integer", "description": "Open it in this tab of the group instead of a new one." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Write,
+        },
+        Definition {
+            name: "browser_back",
+            title: "Go back in a browser tab",
+            description: "Go back one page in a tab in the \"Chat with Work\" group.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "additionalProperties": false
+            }),
+            kind: Kind::Write,
+        },
+        Definition {
+            name: "browser_close",
+            title: "Close a browser tab",
+            description: "Close a tab in the \"Chat with Work\" group.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": "A tab's id from `browser_tabs`." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["tab"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Write,
+        },
+        Definition {
+            name: "browser_click",
+            title: "Click in the browser",
+            description: "Click an element of a tab in the \"Chat with Work\" group, by its ref \
+                 from `browser_read`. Say `submits: false` only for a click that just navigates \
+                 or opens something (a link, a tab, a menu): a click that sends a form, buys, \
+                 pays, posts, publishes, sends a message or deletes is `submits: true` (the \
+                 default), and the person sees a screenshot of it first. A click said not to \
+                 submit that would is refused (`would_submit`).",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "ref": { "type": "string", "description": REF },
+                    "submits": { "type": "boolean", "default": true, "description": "Whether the click sends, buys, posts or deletes something. Default true." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["ref"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Destructive {
+                write_when: Some(json!({ "submits": false })),
+            },
+        },
+        Definition {
+            name: "browser_type",
+            title: "Type in the browser",
+            description: "Type `text` into a field of a tab in the \"Chat with Work\" group, by \
+                 its ref, replacing what's there (`clear: false` adds to it). `submit: true` \
+                 presses Enter after, which usually sends the form. Never types into password, \
+                 payment or one-time code fields (`sensitive_field`): the person fills those in.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "ref": { "type": "string", "description": REF },
+                    "text": { "type": "string", "maxLength": 10000 },
+                    "clear": { "type": "boolean", "default": true, "description": "Replace the field's text. Default true." },
+                    "submit": { "type": "boolean", "default": false, "description": "Press Enter after typing. Default false." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["ref", "text"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Destructive {
+                write_when: Some(json!({ "submit": false })),
+            },
+        },
+        Definition {
+            name: "browser_select",
+            title: "Choose in the browser",
+            description: "Choose options of a list (`<select>`) in a tab in the \"Chat with Work\" \
+                 group, by their values or labels.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "ref": { "type": "string", "description": REF },
+                    "values": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 50 },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["ref", "values"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Write,
+        },
+        Definition {
+            name: "browser_download",
+            title: "Save a file from the browser",
+            description: "Fetch a file from an allowed site, with the person's sign-in there, \
+                 by `url` or by the `ref` of a link, and save it on their computer as `path` \
+                 (`<root_id>:relative/path`, a new file in a shared folder that allows \
+                 changes). Up to 10 MB; programs and launchers are never saved.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "ref": { "type": "string", "description": REF },
+                    "url": { "type": "string", "description": "The file's full address." },
+                    "path": { "type": "string", "description": "`<root_id>:relative/path` of the new file." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Write,
+        },
     ]
 }
 
@@ -131,11 +288,46 @@ pub struct Image {
 #[derive(Clone)]
 pub struct BrowserTools {
     bridge: Arc<Bridge>,
+    /// Where downloads are saved; none in tests that save nothing.
+    writer: Option<Arc<Writer>>,
+    limiter: Arc<Limiter>,
+    /// Actions were allowed when the tools were listed.
+    changes: bool,
 }
 
 impl BrowserTools {
-    pub fn new(bridge: Arc<Bridge>) -> Self {
-        Self { bridge }
+    pub fn new(
+        bridge: Arc<Bridge>,
+        writer: Option<Arc<Writer>>,
+        limiter: Arc<Limiter>,
+        changes: bool,
+    ) -> Self {
+        Self {
+            bridge,
+            writer,
+            limiter,
+            changes,
+        }
+    }
+
+    /// The definitions offered: the reads, and the actions while allowed
+    /// (saving a file only while a folder allows changes).
+    pub fn offered(&self) -> Vec<Definition> {
+        definitions()
+            .into_iter()
+            .filter(|d| match d.kind {
+                Kind::Read => true,
+                _ if !self.changes => false,
+                _ => {
+                    d.name != "browser_download"
+                        || self.writer.as_ref().is_some_and(|writer| writer.enabled())
+                }
+            })
+            .collect()
+    }
+
+    pub fn offers(&self, name: &str) -> bool {
+        self.offered().iter().any(|d| d.name == name)
     }
 
     /// Run `name`. `read_allowance` caps the characters `browser_read`
@@ -165,6 +357,22 @@ impl BrowserTools {
                 ErrorCode::NotLent,
                 "the browser on this computer isn't lent to this bot",
             ));
+        }
+        let is_change = definition.kind != Kind::Read;
+        let dry_run = args.get("dry_run") == Some(&Value::Bool(true));
+        if is_change && !policy.changes {
+            return Err(ToolError::new(
+                ErrorCode::NotWritable,
+                "the person allowed Chat with Work only to read in the browser; they can allow \
+                 actions on their computer",
+            ));
+        }
+        if name == "browser_download" {
+            return self.download(args, &policy).await;
+        }
+        if is_change && !dry_run {
+            // Actions count against this computer's change budgets.
+            self.limiter.check_change(0)?;
         }
         let mut params = args;
         if name == "browser_read"
@@ -220,6 +428,82 @@ impl BrowserTools {
             ));
         }
         Ok(Answer { value, image, site })
+    }
+
+    /// Fetch a file in the browser and save it through the writer, with
+    /// every rule a new file follows.
+    async fn download(
+        &self,
+        mut args: Value,
+        policy: &super::bridge::Policy,
+    ) -> Result<Answer, ToolError> {
+        let path = args
+            .as_object_mut()
+            .and_then(|object| object.remove("path"))
+            .and_then(|path| path.as_str().map(str::to_string))
+            .ok_or_else(|| ToolError::invalid_argument("path is required"))?;
+        let dry_run = args.get("dry_run") == Some(&Value::Bool(true));
+        // The folder and the name first, so a refused call fetches nothing.
+        let Some(writer) = self.writer.clone() else {
+            return Err(ToolError::new(
+                ErrorCode::NotWritable,
+                "no shared folder on this computer allows changes",
+            ));
+        };
+        let check_path = path.clone();
+        let checker = Arc::clone(&writer);
+        let mut checked =
+            tokio::task::spawn_blocking(move || checker.save_file(&check_path, &[], true))
+                .await
+                .map_err(|_| ToolError::internal("the writer crashed on this request"))??;
+        let fetched = self.bridge.call("fetch", args).await?;
+        let url = fetched
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !sites::allowed(&url, &policy.sites) {
+            return Err(ToolError::new(
+                ErrorCode::SiteNotAllowed,
+                format!(
+                    "{} isn't on the sites the person allowed for Chat with Work on this computer",
+                    sites::host(&url)
+                ),
+            ));
+        }
+        let site = Some(sites::host(&url));
+        if dry_run {
+            checked.size = None;
+            checked.sha256 = None;
+            let mut value = serde_json::to_value(&checked).unwrap_or_default();
+            value["url"] = json!(url);
+            value["name"] = fetched.get("name").cloned().unwrap_or(Value::Null);
+            return Ok(Answer {
+                value,
+                image: None,
+                site,
+            });
+        }
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                fetched
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .map_err(|_| ToolError::new(ErrorCode::PageError, "the browser sent a damaged file"))?;
+        let saved = tokio::task::spawn_blocking(move || writer.save_file(&path, &bytes, false))
+            .await
+            .map_err(|_| ToolError::internal("the writer crashed on this request"))??;
+        let mut value = serde_json::to_value(&saved).unwrap_or_default();
+        value["url"] = json!(url);
+        value["mime_type"] = fetched.get("mime_type").cloned().unwrap_or(Value::Null);
+        Ok(Answer {
+            value,
+            image: None,
+            site,
+        })
     }
 }
 
@@ -319,6 +603,7 @@ mod bridge_tests {
             Policy {
                 sites: sites.iter().map(|s| s.to_string()).collect(),
                 stopped: false,
+                changes: true,
             },
             vec![origin(EXTENSION_ID)],
             || {},
@@ -366,6 +651,11 @@ mod bridge_tests {
 
     use tokio_util::sync::CancellationToken;
 
+    fn tools_for(bridge: Arc<Bridge>) -> BrowserTools {
+        let limiter = Arc::new(Limiter::new(crate::config::Limits::default()));
+        BrowserTools::new(bridge, None, limiter, true)
+    }
+
     #[tokio::test]
     async fn reads_through_the_extension_within_the_budget() {
         let (bridge, _extension) = attached(&["github.com"], |method, params| {
@@ -373,7 +663,7 @@ mod bridge_tests {
             json!({ "tab": 1, "url": "https://github.com/crmne", "title": "crmne", "text": "x", "max": params["max_chars"] })
         })
         .await;
-        let tools = BrowserTools::new(bridge);
+        let tools = tools_for(bridge);
         let answer = tools
             .call("browser_read", json!({}), &Caller::Person, Some(500))
             .await
@@ -389,7 +679,7 @@ mod bridge_tests {
             |_, _| json!({ "tab": 1, "url": "https://mail.google.com/", "text": "Re: salary" }),
         )
         .await;
-        let error = BrowserTools::new(bridge)
+        let error = tools_for(bridge)
             .call("browser_read", json!({}), &Caller::Person, None)
             .await
             .err()
@@ -401,7 +691,7 @@ mod bridge_tests {
     #[tokio::test]
     async fn the_kill_switch_and_bots_are_checked_before_the_extension() {
         let (bridge, _extension) = attached(&["github.com"], |_, _| panic!("never asked")).await;
-        let tools = BrowserTools::new(Arc::clone(&bridge));
+        let tools = tools_for(Arc::clone(&bridge));
         let bot = Caller::Bot {
             id: "42".into(),
             unattended: false,
@@ -416,6 +706,7 @@ mod bridge_tests {
             Policy {
                 sites: vec!["github.com".into()],
                 stopped: true,
+                changes: true,
             },
             vec![origin(EXTENSION_ID)],
             vec!["42".into()],
@@ -429,12 +720,76 @@ mod bridge_tests {
     }
 
     #[tokio::test]
+    async fn actions_need_the_persons_switch_on_the_computer() {
+        let (bridge, _extension) = attached(&["github.com"], |method, params| {
+            assert_eq!(method, "click");
+            assert_eq!(params["dry_run"], true);
+            json!({ "tab": 1, "url": "https://github.com/", "dry_run": true, "submits": true,
+                    "image": { "mime_type": "image/jpeg", "data": "/9j/" } })
+        })
+        .await;
+        let tools = tools_for(Arc::clone(&bridge));
+        let preview = tools
+            .call(
+                "browser_click",
+                json!({ "ref": "e5", "dry_run": true }),
+                &Caller::Person,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(preview.image.is_some(), "the card gets a picture");
+        bridge.configure(
+            Policy {
+                sites: vec!["github.com".into()],
+                stopped: false,
+                changes: false,
+            },
+            vec![origin(EXTENSION_ID)],
+            vec![],
+        );
+        let error = tools
+            .call(
+                "browser_click",
+                json!({ "ref": "e5" }),
+                &Caller::Person,
+                None,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::NotWritable);
+        let read_only = BrowserTools::new(
+            bridge,
+            None,
+            Arc::new(Limiter::new(crate::config::Limits::default())),
+            false,
+        );
+        let offered: Vec<_> = read_only.offered().iter().map(|d| d.name).collect();
+        assert_eq!(
+            offered,
+            [
+                "browser_tabs",
+                "browser_read",
+                "browser_screenshot",
+                "browser_scroll",
+                "browser_wait"
+            ]
+        );
+        assert!(
+            !tools.offers("browser_download"),
+            "no folder allows changes"
+        );
+        assert!(tools.offers("browser_click"));
+    }
+
+    #[tokio::test]
     async fn screenshots_come_back_as_pictures() {
         let (bridge, _extension) = attached(&["github.com"], |_, _| {
             json!({ "tab": 1, "url": "https://github.com/", "image": { "mime_type": "image/jpeg", "data": "/9j/" } })
         })
         .await;
-        let answer = BrowserTools::new(bridge)
+        let answer = tools_for(bridge)
             .call("browser_screenshot", json!({}), &Caller::Person, None)
             .await
             .unwrap();
@@ -445,7 +800,7 @@ mod bridge_tests {
     #[tokio::test]
     async fn without_a_browser_calls_say_so() {
         let bridge = Arc::new(Bridge::new(Policy::default(), vec![], || {}));
-        let error = BrowserTools::new(bridge)
+        let error = tools_for(bridge)
             .call("browser_tabs", json!({}), &Caller::Person, None)
             .await
             .err()
