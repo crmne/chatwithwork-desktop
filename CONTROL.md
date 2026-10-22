@@ -242,7 +242,7 @@ Lends a shared folder to a Chat with Work bot (`lent: true`), or stops lending i
 
 Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots lend <root> <bot> [--name <name>] [--unattended]` and `cww roots stop-lending <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
 
-A settings page shows each shared folder's loans with a switch for unattended commands per bot, and lets the owner lend a folder to a bot by its ID (the bot's page in Chat with Work shows it, with the command to type here).
+The desktop app doesn't show loans yet. Its settings page is to list each shared folder's loans with a switch for unattended commands per bot, and let the owner lend a folder to a bot by its ID (the bot's page in Chat with Work shows it, with the command to type here).
 
 ### `commands`, `command_output` and `command_stop`
 

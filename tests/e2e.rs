@@ -4312,6 +4312,10 @@ async fn a_bot_reaches_only_the_folders_lent_to_it() {
     assert_eq!(roots["structuredContent"]["roots"], json!([]), "{roots}");
     let search = s.bot_call("search", json!({ "query": "keep" }), "42").await;
     assert_eq!(error_code(&search), "not_lent");
+    let search = s
+        .bot_call("search", json!({ "query": "keep", "root": null }), "42")
+        .await;
+    assert_eq!(error_code(&search), "not_lent", "a null root is no root");
     let read = s
         .bot_call("read", json!({ "path": "ro:keep.md" }), "42")
         .await;
@@ -4392,6 +4396,7 @@ async fn a_bot_reaches_only_the_folders_lent_to_it() {
 
 /// A bot's command starts without anyone approving it only where this
 /// computer said so for that bot and folder.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_bots_unattended_commands_need_this_computers_yes() {
     if !command_sandbox_works() {
@@ -4427,6 +4432,18 @@ async fn a_bots_unattended_commands_need_this_computers_yes() {
         .unattended_run(json!({ "command": "true", "path": "docs:" }), "42")
         .await;
     assert_eq!(ran["isError"], false, "{ran}");
+
+    let run = ran["structuredContent"]["id"].as_str().unwrap().to_string();
+    let own = s.bot_call("run_status", json!({ "run": run }), "42").await;
+    assert_eq!(own["isError"], false, "{own}");
+    let other = s.bot_call("run_status", json!({ "run": run }), "7").await;
+    assert_eq!(
+        error_code(&other),
+        "not_lent",
+        "another bot can't follow it"
+    );
+    let stop = s.bot_call("run_stop", json!({ "run": run }), "7").await;
+    assert_eq!(error_code(&stop), "not_lent", "or stop it");
 
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(10), daemon)

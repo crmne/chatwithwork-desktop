@@ -224,12 +224,14 @@ impl LocalFiles {
             .and_then(Value::as_str)
             .map(|s| s.chars().take(256).collect());
 
-        if let Caller::Bot { id, .. } = &caller {
-            entry.detail = Some(format!("for bot {id}"));
-        }
+        let for_bot = match &caller {
+            Caller::Bot { id, .. } => Some(format!("for bot {id}")),
+            Caller::Person => None,
+        };
+        entry.detail = for_bot.clone();
 
         let started = std::time::Instant::now();
-        let outcome = match self.admit(name, &args, &caller) {
+        let outcome = match self.admit(name, &args, &caller).await {
             Ok(only) => {
                 let output = self
                     .run(name, args, chat_id.as_deref().unwrap_or(""), progress, only)
@@ -258,7 +260,10 @@ impl LocalFiles {
                         "run_stop" => Some("stopped".into()),
                         _ => None,
                     };
-                    entry.detail = detail.clone();
+                    entry.detail = match (detail, &for_bot) {
+                        (Some(detail), Some(bot)) => Some(format!("{detail}, {bot}")),
+                        (detail, bot) => detail.clone().or_else(|| bot.clone()),
+                    };
                 }
                 let (result, bytes, results) = output.into_result(self.budget());
                 entry.decision = Some(Decision::Allowed);
@@ -286,8 +291,10 @@ impl LocalFiles {
     /// to it: every path it names must be in one, a search looks only in
     /// them, and a command it runs without anyone approving it must be in a
     /// folder whose loan lets it.
+    /// A command it follows or stops (`run_status`, `run_output`,
+    /// `run_stop`) must be running in one of them too.
     /// Returns the folders a bot's search may look in, or `None` for all.
-    fn admit(
+    async fn admit(
         &self,
         name: &str,
         args: &Value,
@@ -322,7 +329,33 @@ impl LocalFiles {
                 ));
             }
         }
-        if name == "search" && args.get("root").is_none() {
+        if matches!(name, "run_status" | "run_output" | "run_stop") {
+            let run = args.get("run").and_then(Value::as_str).unwrap_or_default();
+            let root = match self.commands() {
+                Some(commands) => commands
+                    .runner
+                    .list()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|summary| summary.status.id == run)
+                    .map(|summary| summary.root),
+                None => None,
+            };
+            // A run it can't see is one it didn't start: say so as the
+            // runner would, without naming the folder.
+            if root
+                .as_deref()
+                .and_then(|root| reader.loan(root, id))
+                .is_none()
+            {
+                return Err(ToolError::new(
+                    ErrorCode::NotLent,
+                    format!("no command {run} in a folder lent to this bot"),
+                ));
+            }
+        }
+        if name == "search" && args.get("root").is_none_or(Value::is_null) {
             let lent = reader.lent_to(id);
             if lent.is_empty() {
                 return Err(ToolError::new(

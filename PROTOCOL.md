@@ -306,7 +306,8 @@ A Chat with Work bot (an assistant an organization sets up to work by itself) re
 For such a call the daemon:
 
 - answers `roots` with only the folders lent to that bot, each with `"unattended": true` or `false` (whether its commands may start without a person approving each one there);
-- refuses, with `not_lent`, any call whose `path`, `from`, `to` or `root` names a folder not lent to it, and a `search` without a `root` when nothing is lent to it; a `search` without a `root` looks only in the lent folders;
+- refuses, with `not_lent`, any call whose `path`, `from`, `to` or `root` names a folder not lent to it, and a `search` without a `root` (or with `"root": null`) when nothing is lent to it; such a `search` looks only in the lent folders;
+- refuses, with `not_lent`, `run_status`, `run_output` and `run_stop` for a command that isn't running in a folder lent to it;
 - refuses, with `needs_approval`, a `run` (not a dry run) that also carries `"com.chatwithwork/unattended": true` in a folder whose loan doesn't allow unattended commands. The server sends that flag when it runs the bot's command without asking anyone, which it does only where `roots` said `"unattended": true`.
 
 Each folder still allows only what it allows anyone: changes where changes are allowed, commands where commands are allowed. Calls without `com.chatwithwork/botId` are a person's, as before. The audit log's entries for a bot's calls say `for bot <id>`. Lending a folder, stopping, and changing whether its commands run unattended write `root_bot_lent` and `root_bot_withdrawn` entries. Stopping commands in a folder, or making it read-only, ends every loan's unattended commands there.
@@ -651,7 +652,7 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
 | `not_changeable` | A kind of file the daemon never makes or changes: a program or launcher, an executable file, a binary file as text, an Office file as text. |
 | `trash_unavailable` | The system trash can't take the old version or the item, so nothing changed. |
 | `conflict` | The file changed since the caller looked (`expected_sha256`, or during the change). |
-| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, or searched with nothing lent to it. |
+| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it. |
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
 | `internal` | Unexpected failure. |
 
