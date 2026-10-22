@@ -136,6 +136,11 @@ enum BrowserCommand {
     Allow { site: String },
     /// Stop allowing a site.
     Disallow { site: String },
+    /// Let Chat with Work also act on pages: open, click, type, choose,
+    /// close tabs and save files, each approved in Chat with Work.
+    AllowChanges,
+    /// Let Chat with Work only read pages again.
+    DenyChanges,
     /// Stop Chat with Work using the browser now, until `resume`.
     Stop,
     /// Let Chat with Work use the browser again.
@@ -943,8 +948,13 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
                 return Ok(());
             }
             println!(
-                "Browser: {}{}",
+                "Browser: {}{}{}",
                 if config.browser.enabled { "on" } else { "off" },
+                if config.browser.changes {
+                    ", reads and acts"
+                } else {
+                    ", reads only"
+                },
                 if config.browser.stopped {
                     ", stopped"
                 } else {
@@ -1004,6 +1014,20 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
             let site = settings::disallow_site(&mut config, &site)?;
             config.save(paths)?;
             println!("Chat with Work may no longer use {site}.");
+        }
+        BrowserCommand::AllowChanges => {
+            config.browser.changes = true;
+            config.save(paths)?;
+            println!(
+                "Chat with Work can now also open pages, click, type and choose in its tab \
+                 group, on the sites you allow. Each action asks you first in Chat with Work, \
+                 and anything that may send, buy, post or delete shows you a screenshot."
+            );
+        }
+        BrowserCommand::DenyChanges => {
+            config.browser.changes = false;
+            config.save(paths)?;
+            println!("Chat with Work only reads pages in your browser now.");
         }
         BrowserCommand::Stop => {
             config.browser.stopped = true;

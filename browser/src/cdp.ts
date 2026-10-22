@@ -2,6 +2,7 @@
 // while they're being used: it detaches after a minute without a call, so
 // Chrome's "started debugging this browser" bar doesn't stay.
 
+import { pageStartedDownload } from "./downloads.js";
 import { ToolError } from "./errors.js";
 
 const IDLE_DETACH_MS = 60_000;
@@ -44,10 +45,6 @@ async function attach(tabId: number): Promise<void> {
     await chrome.debugger.sendCommand(target, "Page.enable").catch(() => {});
     await chrome.debugger
       .sendCommand(target, "Emulation.setFocusEmulationEnabled", { enabled: true })
-      .catch(() => {});
-    // Downloads only go where `browser_download` puts them.
-    await chrome.debugger
-      .sendCommand(target, "Page.setDownloadBehavior", { behavior: "deny" })
       .catch(() => {});
   })();
   attaching.set(tabId, work);
@@ -122,6 +119,10 @@ export function takeDialog(tabId: number): string | undefined {
 chrome.debugger.onEvent.addListener((source, method, params: any) => {
   const tabId = source.tabId;
   if (tabId === undefined || !sessions.has(tabId)) return;
+  if (method === "Page.downloadWillBegin" && typeof params?.url === "string") {
+    pageStartedDownload(params.url);
+    return;
+  }
   if (method === "Page.javascriptDialogOpening") {
     const session = sessions.get(tabId)!;
     session.dialog = `${params?.type ?? "dialog"}: ${String(params?.message ?? "").slice(0, 300)}`;

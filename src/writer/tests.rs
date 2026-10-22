@@ -1255,3 +1255,34 @@ fn stopping_changes_holds_at_once() {
     f.writer.stop_changes(&[]);
     assert!(!f.writer.enabled());
 }
+
+#[test]
+fn saves_downloaded_files_as_new_files_only() {
+    let f = fixture();
+    let bytes = b"%PDF-1.7 not really";
+    let checked = f.writer.save_file("docs:report.pdf", bytes, true).unwrap();
+    assert!(checked.dry_run);
+    assert!(
+        !f.docs.join("report.pdf").exists(),
+        "a dry run saves nothing"
+    );
+    let saved = f.writer.save_file("docs:report.pdf", bytes, false).unwrap();
+    assert_eq!(saved.effect, Effect::Created);
+    assert_eq!(std::fs::read(f.docs.join("report.pdf")).unwrap(), bytes);
+    assert_eq!(
+        code(f.writer.save_file("docs:report.pdf", bytes, false)),
+        ErrorCode::Exists
+    );
+    assert_eq!(
+        code(f.writer.save_file("docs:setup.exe", b"MZ", false)),
+        ErrorCode::NotChangeable
+    );
+    assert_eq!(
+        code(f.writer.save_file("ro:report.pdf", bytes, false)),
+        ErrorCode::NotWritable
+    );
+    assert_eq!(
+        code(f.writer.save_file("docs:../x.pdf", bytes, false)),
+        ErrorCode::InvalidPath
+    );
+}

@@ -623,6 +623,24 @@ Offered only while the person turned the browser on on this computer (`[browser]
 | `browser_scroll` | true | true | `tab`, `direction` (`up` or `down`), `pages` (1 to 10), or `ref` | `tab`, `url`, `title`, `scroll_y`, `page_height`, `view_height`, `at_end` |
 | `browser_wait` | true | true | `tab`, `text` (1 to 500 characters), `seconds` (1 to 15) | `tab`, `url`, `title`, `found`, `waited_ms` |
 
+While the person also allowed actions (`[browser] changes`, `cww browser allow-changes`, or the desktop app), these follow, all `readOnlyHint: false` and `openWorldHint: true`, each taking `dry_run`:
+
+| Tool | `destructiveHint` | `writeWhen` | Arguments | Answer |
+|---|---|---|---|---|
+| `browser_open` | false | | `url` (required, on an allowed site), `tab` | where the tab ended up, `new_tab` |
+| `browser_back` | false | | `tab` | where the tab ended up |
+| `browser_close` | false | | `tab` (required) | `closed` |
+| `browser_select` | false | | `ref`, `values` (1 to 50 option values or labels), `tab` | `target`, `chosen` |
+| `browser_click` | **true** | `{"submits": false}` | `ref`, `submits` (default true), `tab` | `target`, `submits`, `reason`, where the tab ended up |
+| `browser_type` | **true** | `{"submit": false}` | `ref`, `text` (up to 10 000 characters), `clear` (default true), `submit` (press Enter, default false), `tab` | `target`, `submit`, where the tab ended up |
+| `browser_download` | false | | `path` (required: `<root_id>:relative/path`, a new file in a folder that allows changes), `url` or `ref`, `tab` | the change result (8.7) with `url` and `mime_type` |
+
+`browser_download` is listed only while a shared folder allows changes. A click is a plain write only when the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the element submits a form, is a submit button, sends a non-GET request (`data-method`, `data-turbo-method`), or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). `browser_type` refuses password, payment and one-time code fields (`sensitive_field`). A click is refused when something else is drawn over its element (`page_error`).
+
+A dry run checks the call and answers what it would do without doing it; for `browser_click`, `browser_type` and `browser_select` it adds an `image` content block, a screenshot with the element outlined (at most about 120 KB), for the approval card. For `browser_download` it checks the path and the address, fetches nothing, and answers as a change's dry run, with `url` and the file's `name`. Actions that aren't dry runs count against the change budgets (section 10, one change each; a download, its size). `browser_download` fetches with the person's sign-in to the site, follows redirects only within the allowed sites, takes at most 10 MB, and saves through the same rules as every new file (8.7): never over anything, never a program or launcher, with the system's download mark.
+
+An action that leaves the tab on a site that isn't allowed answers `{"tab", "allowed": false, "site", "note"}`, with nothing from the page. `browser_back` and `browser_close` work from such a page; nothing else does until it's back.
+
 `tab` is a tab's id from `browser_tabs`; without it, the group's tab used last. `browser_read`'s text is the page's accessibility tree, one line per item (`- heading "Inbox" [level=1]`, `- link "Compose" [ref=e41]`, `- textbox "Search" [ref=e110]: budget`, `- paragraph: text`), indented by nesting; things that can be clicked or typed in carry `[ref=e<n>]`. Password, card and one-time code fields show `[sensitive]: (hidden)`, and are blurred in screenshots. `max_chars` is lowered by the read budget (section 10), and the characters returned count against it like a `read`. An answer whose `url` isn't on an allowed site is dropped by the daemon (`site_not_allowed`). When the page opened a JavaScript dialog, the extension dismissed it and the answer's `dialog` says what it was.
 
 Errors (section 9) the browser adds: `browser_unavailable` (no browser with the extension is connected), `browser_stopped` (the person stopped it, in the extension or on the computer, or paused the computer), `site_not_allowed`, `not_in_group` (the tab isn't in the group), `no_tab` (the group is empty), `sensitive_field`, `would_submit`, and `page_error` (the page or the browser failed). A bot's call to a browser not lent to it is `not_lent`.
@@ -670,7 +688,7 @@ Errors (section 9) the browser adds: `browser_unavailable` (no browser with the 
 | `conflict` | The file changed since the caller looked (`expected_sha256`, or during the change). |
 | `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it, or used a browser not lent to it. |
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
-| `browser_unavailable`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `no_tab`, `sensitive_field`, `would_submit`, `page_error` | The browser tools' refusals and failures (8.16). |
+| `browser_unavailable`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `no_tab`, `sensitive_field`, `would_submit`, `page_error` | The browser tools' refusals and failures (8.16). A browser action while the person allows only reading is `not_writable`. |
 | `internal` | Unexpected failure. |
 
 Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in Chat with Work Desktop on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `paused`, `not_lent`, `needs_approval`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `sensitive_field` and `would_submit` are logged as refusals, the others as errors.
