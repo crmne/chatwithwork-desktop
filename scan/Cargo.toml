@@ -38,3 +38,22 @@ tempfile = "3.27"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-vision = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+# TWAIN: the data source manager is loaded at run time, the hidden window
+# and message loop a TWAIN source needs come from Win32.
+libloading = "0.8"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# The scanner's helper as a program of its own. On Windows it's built for
+# 32-bit x86 too, since most TWAIN drivers are 32-bit and load only into a
+# 32-bit process; the 64-bit app starts it and talks to it over a pipe.
+[[bin]]
+name = "cww-scan-helper"
+path = "src/bin/cww-scan-helper.rs"

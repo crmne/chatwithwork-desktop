@@ -26,6 +26,8 @@ pub mod pdf;
 pub mod sample;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod sane;
+#[cfg(windows)]
+pub mod twain;
 #[cfg(target_os = "macos")]
 pub mod vision;
 
@@ -203,7 +205,11 @@ pub fn system_backend() -> Result<Box<dyn Backend>, ScanError> {
     {
         Ok(Box::new(sane::Sane::load()?))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        Ok(Box::new(twain::Twain::load()?))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         Err(ScanError::new(
             "unsupported",

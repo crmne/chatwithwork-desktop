@@ -133,6 +133,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: mkdir -p dist && cp target/release/cww-app.exe dist/
+      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
+      # and load only into a 32-bit process. The scan and devices examples
+      # try a real scanner without the app.
+      - name: Build the 32-bit scanner helper
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rustup target add i686-pc-windows-msvc
+          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
+          cp target/i686-pc-windows-msvc/release/cww-scan-helper.exe dist/
+          mkdir -p dist/scan-tools
+          cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
 
       - uses: actions/upload-artifact@v7
         with:

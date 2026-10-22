@@ -166,11 +166,7 @@ impl Scans {
     ) -> Result<T, ScanError> {
         let mut slot = self.helper.lock().expect("helper");
         if slot.is_none() {
-            let exe = std::env::current_exe()
-                .map_err(|e| ScanError::new("helper_stopped", e.to_string()))?;
-            let mut command = std::process::Command::new(exe);
-            command.arg("--scan-helper");
-            *slot = Some(Helper::spawn(command)?);
+            *slot = Some(Helper::spawn(helper_command()?)?);
         }
         let result = work(slot.as_mut().expect("just started"));
         // A helper that stopped is started again next time.
@@ -191,6 +187,36 @@ impl Scans {
         cww::paths::ensure_private_dir(&dir).map_err(std::io::Error::other)?;
         session.dir = Some(dir.clone());
         Ok(dir)
+    }
+}
+
+/// How the scanner's helper starts. On Windows it's `cww-scan-helper.exe`
+/// beside the app, a 32-bit program, since most TWAIN drivers are 32-bit and
+/// load only into a 32-bit process; elsewhere the app itself, as
+/// `cww-app --scan-helper`.
+fn helper_command() -> Result<std::process::Command, ScanError> {
+    let exe =
+        std::env::current_exe().map_err(|e| ScanError::new("helper_stopped", e.to_string()))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let helper = exe.with_file_name("cww-scan-helper.exe");
+        if !helper.is_file() {
+            return Err(ScanError::new(
+                "helper_stopped",
+                "This copy of the app is missing its scanner helper (cww-scan-helper.exe). Install the app again.",
+            ));
+        }
+        let mut command = std::process::Command::new(helper);
+        // No console window for the helper.
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        Ok(command)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new(exe);
+        command.arg("--scan-helper");
+        Ok(command)
     }
 }
 
