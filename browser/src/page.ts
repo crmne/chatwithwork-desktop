@@ -55,10 +55,15 @@ function blurSensitive(on: boolean, autocomplete: string, words: string): number
   const autocompleteRe = new RegExp(autocomplete);
   const wordsRe = new RegExp(words, "i");
   let count = 0;
-  document.querySelectorAll("input, textarea, [contenteditable]").forEach((el) => {
+  document.querySelectorAll('input, textarea, [contenteditable], [role="textbox"], [role="spinbutton"]').forEach((el) => {
     const type = (el.getAttribute("type") ?? "").toLowerCase();
+    const labels = Array.from((el as HTMLInputElement).labels ?? []).map((l) => l.textContent ?? "");
+    const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .map((id) => (id ? document.getElementById(id)?.textContent ?? "" : ""));
     const text = ["name", "id", "aria-label", "placeholder", "data-testid"]
       .map((a) => el.getAttribute(a) ?? "")
+      .concat(labels, labelledBy)
       .join(" ");
     const sensitive =
       (el.tagName === "INPUT" && type === "password") ||

@@ -31,7 +31,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
 
 ## Safety
 
-Each rule holds in the extension **and** the daemon, whatever the server sends:
+All of it holds on the computer, whatever the server sends. The extension enforces every rule below; the daemon enforces again the ones it can check from its side (the kill switch, the sites on every answer's address and in the tab list, bots, and the budgets), so a fault in one doesn't open those:
 
 - **Sites.** The person allows sites on the computer (`cww browser allow github.com`, the desktop app's settings). An entry allows the host and its subdomains over HTTPS (`http://` only when written out, for `localhost`). The extension refuses to open, read, screenshot or act on a tab whose page isn't on the list (`site_not_allowed`); a tab that navigates off the list is left alone until it comes back. The daemon checks the URL every answer carries and drops the content of one that isn't allowed.
 - **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something always asks, with the screenshot. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat.

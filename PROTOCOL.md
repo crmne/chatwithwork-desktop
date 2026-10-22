@@ -614,7 +614,7 @@ Without `background` it waits up to 15 seconds, under the server's 20-second wai
 
 ### 8.16 Browser
 
-Offered only while the person turned the browser on on this computer (`[browser] enabled` in `config.toml`, `cww browser enable`, or the desktop app), never from the server, and only to a person's chats or a bot's the browser is lent to. The daemon then lists these tools after the others; turning the browser on or off reconnects, as for folders. They act through the Chat with Work extension in the person's own Chromium-family browser, only on tabs in its "Chat with Work" tab group, and only on the sites the person allowed on the computer (`[browser] sites`, `cww browser allow`). Every rule is enforced by the extension and again by the daemon; see [docs/browser.md](docs/browser.md).
+Offered only while the person turned the browser on on this computer (`[browser] enabled` in `config.toml`, `cww browser enable`, or the desktop app), never from the server, and only to a person's chats or a bot's the browser is lent to. The daemon then lists these tools after the others; turning the browser on or off reconnects, as for folders. They act through the Chat with Work extension in the person's own Chromium-family browser, only on tabs in its "Chat with Work" tab group, and only on the sites the person allowed on the computer (`[browser] sites`, `cww browser allow`). The extension enforces every rule, and the daemon again those it can check (the kill switch, the sites, bots, budgets); see [docs/browser.md](docs/browser.md).
 
 | Tool | `readOnlyHint` | `openWorldHint` | Arguments | Answer |
 |---|---|---|---|---|

@@ -2,7 +2,7 @@
 // that the tab is in the Chat with Work group and on a site the person
 // allowed, whatever the daemon decided.
 
-import { evaluate, send, takeDialog } from "./cdp.js";
+import { callOn, evaluate, send, takeDialog } from "./cdp.js";
 import { isSensitiveField, SENSITIVE_PATTERNS, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { groupTabs, resolveTab } from "./group.js";
@@ -107,17 +107,7 @@ const read: Method = async (params, policy) => {
   const maxChars = integer(params.max_chars, "max_chars", 1, READ_MAX_CHARS, READ_MAX_CHARS);
   const tab = await tabFor(params, policy);
   const tabId = tab.id!;
-  const { nodes } = await send<{ nodes: AXNode[] }>(tabId, "Accessibility.getFullAXTree");
-  const sensitive = new Set<number>();
-  for (const node of nodes) {
-    const role = String(node.role?.value ?? "");
-    if (node.ignored || node.backendDOMNodeId === undefined || !EDITABLE_ROLES.has(role)) continue;
-    const facts = await elementFacts(tabId, node.backendDOMNodeId, role, String(node.name?.value ?? "")).catch(
-      () => null,
-    );
-    // A field the extension can't look at is treated as sensitive.
-    if (!facts || isSensitiveField(facts)) sensitive.add(node.backendDOMNodeId);
-  }
+  const { nodes, sensitive } = await sensitiveFields(tabId);
   const text = snapshotText(nodes, { sensitive });
   const now = await still(tabId, policy);
   return withDialog(tabId, { ...about(now), ...page(text, offset, maxChars) });
@@ -133,6 +123,10 @@ const screenshot: Method = async (params, policy) => {
   }>(tabId, "Page.getLayoutMetrics");
   const view = metrics.cssVisualViewport;
   await prepareForCapture(tabId, SENSITIVE_PATTERNS);
+  // Also every field browser_read hides, found the same way, including
+  // those named only by a label and those in shadow roots.
+  const { sensitive } = await sensitiveFields(tabId).catch(() => ({ sensitive: new Set<number>() }));
+  for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR).catch(() => {});
   let data = "";
   let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / Math.max(1, view.clientWidth));
   let quality = 70;
@@ -199,6 +193,29 @@ const scroll: Method = async (params, policy) => {
     at_end: position.y + position.view >= position.height - 2,
   });
 };
+
+// The page's accessibility tree, and the fields in it the extension never
+// reads or shows: passwords, payment cards, one-time codes, judged by their
+// attributes and accessible names (a label "Card number" included).
+async function sensitiveFields(tabId: number): Promise<{ nodes: AXNode[]; sensitive: Set<number> }> {
+  const { nodes } = await send<{ nodes: AXNode[] }>(tabId, "Accessibility.getFullAXTree");
+  const sensitive = new Set<number>();
+  for (const node of nodes) {
+    const role = String(node.role?.value ?? "");
+    if (node.ignored || node.backendDOMNodeId === undefined || !EDITABLE_ROLES.has(role)) continue;
+    const facts = await elementFacts(tabId, node.backendDOMNodeId, role, String(node.name?.value ?? "")).catch(
+      () => null,
+    );
+    // A field the extension can't look at is treated as sensitive.
+    if (!facts || isSensitiveField(facts)) sensitive.add(node.backendDOMNodeId);
+  }
+  return { nodes, sensitive };
+}
+
+const BLUR = `function () {
+  this.setAttribute("data-chat-with-work-blur", "");
+  this.style.setProperty("filter", "blur(8px)", "important");
+}`;
 
 export function refId(ref: unknown): number {
   const match = typeof ref === "string" ? /^e(\d{1,12})$/.exec(ref) : null;

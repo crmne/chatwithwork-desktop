@@ -40,7 +40,7 @@ export async function resolveTab(tab: unknown): Promise<chrome.tabs.Tab> {
   if (tabs.length === 0) {
     throw new ToolError(
       "no_tab",
-      "there's no tab in the Chat with Work tab group yet; open one with browser_open",
+      "there's no tab in the Chat with Work tab group yet; ask the person to drag a tab into a group named “Chat with Work”",
     );
   }
   return tabs.reduce((a, b) => ((b.lastAccessed ?? 0) > (a.lastAccessed ?? 0) ? b : a));
