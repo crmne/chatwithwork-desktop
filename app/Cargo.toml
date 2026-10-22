@@ -78,11 +78,11 @@ tokio-util = { version = "0.7", features = ["io-util"], optional = true }
 # helper; no model weights or inference libraries enter the daemon/CLI.
 whisper-rs = { version = "0.16.0", default-features = false }
 
-# Pictures of the windows in --demo builds (snapshot.rs): WebKitGTK paints
-# them itself, so they work on a hidden workspace. Already in the tree
-# through Tauri.
 [target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "2.0", optional = true }
+# Failed loads, for the offline page (offline.rs), and pictures of the
+# windows in --demo builds (snapshot.rs). Already in the tree through Tauri.
+webkit2gtk = "2.0"
+# Saves those pictures as PNG.
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
 [features]
@@ -92,7 +92,7 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 # --demo: runs against a built-in fake daemon with sample folders and
 # activity, for screenshots and trying the window. Never in release builds.
-demo = ["tokio/rt-multi-thread", "dep:tokio-util", "dep:webkit2gtk", "dep:cairo-rs"]
+demo = ["tokio/rt-multi-thread", "dep:tokio-util", "dep:cairo-rs"]
 
 [dev-dependencies]
 tempfile = "3.27"

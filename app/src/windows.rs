@@ -56,16 +56,48 @@ fn bring_forward(window: &WebviewWindow) {
 pub fn show_main(app: &AppHandle, url: Option<Url>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN) {
         if let Some(url) = url {
-            window.navigate(url)?;
+            navigate_main(app, url)?;
         }
         bring_forward(&window);
         return Ok(());
     }
     let desktop = app.state::<std::sync::Arc<Desktop>>();
     let url = url.unwrap_or_else(|| desktop.server().start_url());
-    let window = remote_window(app, MAIN, url)?;
-    bring_forward(&window);
+    navigate_main(app, url)?;
+    if let Some(window) = app.get_webview_window(MAIN) {
+        bring_forward(&window);
+    }
     Ok(())
+}
+
+/// Takes the Chat with Work window to `url`, or to the offline page while the
+/// server can't be reached (it goes on to `url` once it can). Blocks for up
+/// to a few seconds on the check, so never call it on the main thread.
+pub fn navigate_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
+    let desktop = app.state::<std::sync::Arc<Desktop>>().inner().clone();
+    let target = if crate::offline::reachable(&desktop.server()) {
+        url
+    } else {
+        log::info!("the server can't be reached; showing the offline page");
+        desktop.set_wanted(url);
+        local_url(crate::offline::PAGE)
+    };
+    match app.get_webview_window(MAIN) {
+        Some(window) => window.navigate(target),
+        None => remote_window(app, MAIN, target).map(drop),
+    }
+}
+
+/// A bundled page's address in a web view on this platform.
+pub fn local_url(page: &str) -> Url {
+    let base = if cfg!(windows) {
+        "http://tauri.localhost/"
+    } else {
+        "tauri://localhost/"
+    };
+    Url::parse(base)
+        .and_then(|base| base.join(page))
+        .expect("a bundled page has an address")
 }
 
 /// The web app in a window: its pages get the bridge script and nothing
@@ -76,7 +108,12 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
     let navigation = desktop.clone();
     let page_load = desktop.clone();
     let new_window = desktop.clone();
-    WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+    let webview_url = if crate::offline::is_page(&url) {
+        WebviewUrl::App(crate::offline::PAGE.into())
+    } else {
+        WebviewUrl::External(url)
+    };
+    let window = WebviewWindowBuilder::new(app, label, webview_url)
         .title("Chat with Work")
         .inner_size(1200.0, 820.0)
         .min_inner_size(380.0, 480.0)
@@ -86,17 +123,23 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
         // composer takes them as uploads, as in a browser.
         .disable_drag_drop_handler()
         .zoom_hotkeys_enabled(true)
-        .on_navigation(
-            move |url| match policy::navigation(&navigation.server(), url) {
+        .on_navigation(move |url| {
+            if crate::offline::is_page(url) {
+                return true;
+            }
+            match policy::navigation(&navigation.server(), url) {
                 Decision::Allow => true,
                 Decision::External(url) => {
                     open_externally(&url);
                     false
                 }
                 Decision::Deny => false,
-            },
-        )
+            }
+        })
         .on_page_load(move |window, payload| {
+            if crate::offline::is_page(payload.url()) {
+                return;
+            }
             let decision = policy::top_level(&page_load.server(), payload.url());
             if decision == Decision::Allow {
                 return;
@@ -137,7 +180,48 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
                 title
             });
         })
-        .build()
+        .build()?;
+    #[cfg(target_os = "linux")]
+    watch_failed_loads(&window, desktop);
+    Ok(window)
+}
+
+/// Shows the offline page when one of the server's pages fails to load and
+/// the server can't be reached, in place of WebKitGTK's error page.
+#[cfg(target_os = "linux")]
+fn watch_failed_loads(window: &WebviewWindow, desktop: std::sync::Arc<Desktop>) {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    let _ = window.with_webview(move |webview| {
+        use webkit2gtk::{NetworkError, PolicyError, WebViewExt};
+        webview
+            .inner()
+            .connect_load_failed(move |_view, _event, uri, error| {
+                let ours = Url::parse(uri).is_ok_and(|url| desktop.server().owns(&url));
+                let ignored =
+                    error.matches(NetworkError::Cancelled) || error.kind::<PolicyError>().is_some();
+                if !ours || ignored || label != MAIN {
+                    return false;
+                }
+                let (app, desktop, url) = (
+                    app.clone(),
+                    desktop.clone(),
+                    Url::parse(uri).expect("checked above"),
+                );
+                std::thread::spawn(move || {
+                    if crate::offline::reachable(&desktop.server()) {
+                        return;
+                    }
+                    desktop.set_wanted(url);
+                    if let Some(window) = app.get_webview_window(MAIN) {
+                        let _ = window.navigate(local_url(crate::offline::PAGE));
+                    }
+                });
+                // WebKitGTK's page shows until the check decides; while the
+                // server answers, that page is the right one.
+                false
+            });
+    });
 }
 
 /// Hands an event to the settings pages (`status`, `pairing`, `navigate`,

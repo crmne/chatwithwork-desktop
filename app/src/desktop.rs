@@ -29,6 +29,9 @@ pub struct Desktop {
     pub account: Arc<dyn crate::pairing::Account>,
     pub pairing: Mutex<Option<crate::pairing::Cancel>>,
     pub download: crate::local::Download,
+    /// Where the Chat with Work window was headed when the server couldn't
+    /// be reached; the offline page goes there once it can.
+    wanted: Mutex<Option<tauri::Url>>,
     status: Mutex<Option<Status>>,
     /// The watcher has reported at least once.
     status_known: AtomicBool,
@@ -70,6 +73,14 @@ impl Desktop {
         }
     }
 
+    pub fn set_wanted(&self, url: tauri::Url) {
+        *self.wanted.lock().expect("wanted lock") = Some(url);
+    }
+
+    pub fn take_wanted(&self) -> Option<tauri::Url> {
+        self.wanted.lock().expect("wanted lock").take()
+    }
+
     pub fn quit(&self) {
         self.quitting.store(true, Ordering::SeqCst);
         self.app().exit(0);
@@ -97,8 +108,14 @@ impl Desktop {
             if let Err(e) = add_remote_capability(&app, &server) {
                 log::warn!("couldn't allow the bridge on the new server: {e}");
             }
+            // The window's bridge script names its server, so the window is
+            // made again for the new one.
             if let Some(window) = app.get_webview_window(MAIN) {
-                let _ = window.navigate(server.start_url());
+                let _ = window.destroy();
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let _ = windows::show_main(&app, None);
+                });
             }
         }
     }
@@ -226,6 +243,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         account,
         pairing: Mutex::new(None),
         download: Default::default(),
+        wanted: Mutex::new(None),
         status: Mutex::new(None),
         status_known: AtomicBool::new(false),
         tray: Mutex::new(None),
@@ -300,6 +318,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::download_model,
             crate::local::cancel_download,
             crate::local::remove_model,
+            crate::offline::offline_info,
+            crate::offline::offline_retry,
+            crate::offline::offline_settings,
         ])
         .setup(move |app| {
             let desktop = setup_desktop;

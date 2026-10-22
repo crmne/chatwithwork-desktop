@@ -850,3 +850,43 @@ code,
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* The offline page, in the Chat with Work window (offline.html) */
+
+body.offline {
+  display: grid;
+  place-items: center;
+  min-block-size: 100vh;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.offline__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  max-inline-size: 26rem;
+  text-align: center;
+}
+
+.offline__card h1 {
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-heading);
+}
+
+.offline__card p {
+  color: var(--ink-muted);
+}
+
+.offline__mark {
+  inline-size: 3rem;
+  block-size: 3rem;
+  margin-block-end: 0.25rem;
+}
+
+.offline__actions {
+  justify-content: center;
+  margin-block: 0.5rem;
+}

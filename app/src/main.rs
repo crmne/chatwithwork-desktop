@@ -38,6 +38,7 @@ mod linux;
 mod local;
 mod loopback;
 mod model;
+mod offline;
 mod pairing;
 mod paths;
 mod policy;

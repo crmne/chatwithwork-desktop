@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "offline",
+  "description": "The bundled offline page in the Chat with Work window: what it shows, Retry, and opening the settings. Only bundled pages get it (no remote URL); the server's pages in the same window get only the bridge.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": ["allow-offline-info", "allow-offline-retry", "allow-offline-settings"]
+}

@@ -92,7 +92,11 @@ pub fn run(app: AppHandle, dir: PathBuf) {
                 };
                 let path = dir.join(format!("{name}-{theme}.png"));
                 match capture(&main, &path) {
-                    Ok(()) => println!("{}", path.display()),
+                    Ok(()) => println!(
+                        "{} ({})",
+                        path.display(),
+                        main.url().map(|u| u.to_string()).unwrap_or_default()
+                    ),
                     Err(e) => log::error!("snapshot of the main window: {e}"),
                 }
             }
