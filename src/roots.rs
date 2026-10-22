@@ -466,7 +466,8 @@ mod tests {
         );
         assert!(set_bot(&mut config, "app", "issue-fixer", None, true, false).is_err());
 
-        set_commands(&mut config, "app", true, false).unwrap();
+        // As set_commands would where commands run (not on Windows yet).
+        config.roots[0].commands = true;
         let root = set_bot(&mut config, "app", "42", None, true, true).unwrap();
         assert_eq!(root.bots.len(), 1, "lending again replaces the loan");
         assert_eq!(
