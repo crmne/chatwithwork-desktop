@@ -90,9 +90,16 @@ impl Desktop {
     fn status_changed(&self, status: Option<Status>) {
         let app = self.app();
         let view = TrayView::new(status.as_ref());
-        if let Some(tray) = self.tray.lock().expect("tray lock").as_mut() {
-            tray.update(&view);
-        }
+        // Tauri's menu and tray setters, called from another thread, wait for
+        // the main thread; on it, they don't, so the tray's lock is never held
+        // while waiting for a thread that may want it.
+        let tray_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let desktop = tray_app.state::<Arc<Desktop>>();
+            if let Some(tray) = desktop.tray.lock().expect("tray lock").as_mut() {
+                tray.update(&view);
+            }
+        });
         let paired = status.as_ref().and_then(|s| s.server.clone());
         *self.status.lock().expect("status lock") = status;
         self.status_known.store(true, Ordering::SeqCst);
@@ -320,6 +327,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::remove_model,
             crate::offline::offline_info,
             crate::offline::offline_retry,
+            crate::offline::offline_open_anyway,
             crate::offline::offline_settings,
         ])
         .setup(move |app| {

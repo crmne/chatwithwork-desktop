@@ -208,8 +208,13 @@ async function start() {
     app.health = payload.health;
   };
   take(app.info.status);
+  // Redraw only when the status really changed: compare each payload with
+  // the one before, as the app serialized them.
+  let previous = JSON.stringify(app.info.status);
   await on("status", (payload) => {
-    const changed = JSON.stringify(payload) !== JSON.stringify({ known: app.known, status: app.status, health: app.health });
+    const serialized = JSON.stringify(payload);
+    const changed = serialized !== previous;
+    previous = serialized;
     take(payload);
     if (changed) {
       for (const page of Object.values(PAGES)) page.statusChanged?.(app);

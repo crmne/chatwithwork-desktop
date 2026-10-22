@@ -75,7 +75,7 @@ pub fn show_main(app: &AppHandle, url: Option<Url>) -> tauri::Result<()> {
 /// to a few seconds on the check, so never call it on the main thread.
 pub fn navigate_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
     let desktop = app.state::<std::sync::Arc<Desktop>>().inner().clone();
-    let target = if crate::offline::reachable(&desktop.server()) {
+    let target = if crate::offline::reachable(&desktop.server(), &desktop.paths.daemon) {
         url
     } else {
         log::info!("the server can't be reached; showing the offline page");
@@ -107,6 +107,9 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
     let server = desktop.server();
     let navigation = desktop.clone();
     let page_load = desktop.clone();
+    // The last page sent to the browser: Started and Finished can both
+    // report the same one (WebView2 reports a stopped load as finished).
+    let handed_off: std::sync::Mutex<Option<Url>> = std::sync::Mutex::new(None);
     let new_window = desktop.clone();
     let webview_url = if crate::offline::is_page(&url) {
         WebviewUrl::App(crate::offline::PAGE.into())
@@ -142,6 +145,7 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
             }
             let decision = policy::top_level(&page_load.server(), payload.url());
             if decision == Decision::Allow {
+                *handed_off.lock().expect("handoff lock") = None;
                 return;
             }
             // Stop a page from elsewhere as it starts, or leave it once it
@@ -152,7 +156,11 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
             };
             let _ = window.eval(script);
             if let Decision::External(url) = decision {
-                open_externally(&url);
+                let mut last = handed_off.lock().expect("handoff lock");
+                if last.as_ref() != Some(&url) {
+                    open_externally(&url);
+                    *last = Some(url);
+                }
             }
         })
         .on_new_window(move |url, _features| {
@@ -209,7 +217,7 @@ fn watch_failed_loads(window: &WebviewWindow, desktop: std::sync::Arc<Desktop>) 
                     Url::parse(uri).expect("checked above"),
                 );
                 std::thread::spawn(move || {
-                    if crate::offline::reachable(&desktop.server()) {
+                    if crate::offline::reachable(&desktop.server(), &desktop.paths.daemon) {
                         return;
                     }
                     desktop.set_wanted(url);

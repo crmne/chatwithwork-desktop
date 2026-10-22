@@ -145,7 +145,10 @@ impl Tray {
                     ..
                 } = event
                 {
-                    crate::desktop::tray_action(tray.app_handle(), ids::OPEN);
+                    // On macOS the same click opens the menu.
+                    if !cfg!(target_os = "macos") {
+                        crate::desktop::tray_action(tray.app_handle(), ids::OPEN);
+                    }
                 }
             })
             .build(app)?;

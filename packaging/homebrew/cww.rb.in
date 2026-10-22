@@ -40,7 +40,13 @@ class Cww < Formula
       bin.install_symlink prefix/"Chat with Work.app/Contents/MacOS/cww-app"
     else
       bin.install "cww"
-      bin.install "cww-app"
+      libexec.install "cww-app"
+      # cww-app finds cww beside itself.
+      libexec.install_symlink bin/"cww"
+      # The terminal's dictation records through Homebrew's ALSA and PipeWire.
+      audio = %w[alsa-lib pipewire]
+      (bin/"cww-app").write_env_script libexec/"cww-app",
+        LD_LIBRARY_PATH: audio.map { |name| Formula[name].opt_lib }.join(":")
       # A desktop launcher does not inherit Homebrew's shell environment.
       inreplace "cww-app.desktop", "Exec=cww-app", "Exec=#{opt_bin}/cww-app"
       (share/"applications").install "cww-app.desktop"

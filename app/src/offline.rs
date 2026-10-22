@@ -26,21 +26,69 @@ const TIMEOUT: Duration = Duration::from_secs(4);
 /// The page, relative to the bundled pages.
 pub const PAGE: &str = "offline.html";
 
-/// Whether the server answers a TCP connection on its port.
-pub fn reachable(server: &Server) -> bool {
+/// Whether the window should try the server: it answers a TCP connection
+/// on its port, or a proxy stands between (the check can't see through one,
+/// and the web view uses it). The check is advisory: the offline page also
+/// offers to open Chat with Work anyway, for a system proxy this misses.
+pub fn reachable(server: &Server, paths: &cww::paths::Paths) -> bool {
+    if behind_proxy(server, paths) {
+        return true;
+    }
+    answers(server, TIMEOUT)
+}
+
+/// A proxy from config.toml or the environment, as the daemon reads them.
+fn behind_proxy(server: &Server, paths: &cww::paths::Paths) -> bool {
+    let setting = cww::config::Config::load(paths)
+        .ok()
+        .and_then(|config| config.proxy);
+    cww::auth::client::ServerUrl::parse(&server.origin())
+        .ok()
+        .and_then(|origin| {
+            cww::proxy::for_server(setting.as_deref(), &origin)
+                .ok()
+                .flatten()
+        })
+        .is_some()
+}
+
+/// Whether the server answers within `budget`, name lookup included, across
+/// all its addresses.
+pub fn answers(server: &Server, budget: Duration) -> bool {
     let Ok(url) = Url::parse(&server.origin()) else {
         return false;
     };
     let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
         return false;
     };
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let Ok(addresses) = (host, port).to_socket_addrs() else {
-        return false;
-    };
-    addresses
-        .into_iter()
-        .any(|address| TcpStream::connect_timeout(&address, TIMEOUT).is_ok())
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = std::time::Instant::now();
+    // The lookup has no timeout of its own, so it runs on a thread the
+    // check stops waiting for.
+    let spawned = std::thread::Builder::new()
+        .name("cww-reachable".into())
+        .spawn(move || {
+            let Ok(addresses) = (host.as_str(), port).to_socket_addrs() else {
+                let _ = tx.send(false);
+                return;
+            };
+            for address in addresses {
+                let left = budget.saturating_sub(started.elapsed());
+                if left.is_zero() {
+                    break;
+                }
+                if TcpStream::connect_timeout(&address, left).is_ok() {
+                    let _ = tx.send(true);
+                    return;
+                }
+            }
+            let _ = tx.send(false);
+        });
+    spawned.is_ok() && rx.recv_timeout(budget).unwrap_or(false)
 }
 
 /// Whether `url` is the bundled offline page.
@@ -80,8 +128,8 @@ pub async fn offline_retry(
     desktop: State<'_, Arc<Desktop>>,
 ) -> Result<Value, Value> {
     offline_page(&webview)?;
-    let server = desktop.server();
-    let online = tauri::async_runtime::spawn_blocking(move || reachable(&server))
+    let (server, paths) = (desktop.server(), desktop.paths.daemon.clone());
+    let online = tauri::async_runtime::spawn_blocking(move || reachable(&server, &paths))
         .await
         .unwrap_or(false);
     log::info!(
@@ -97,6 +145,23 @@ pub async fn offline_retry(
         }
     }
     Ok(json!({ "online": online }))
+}
+
+/// Goes where the window was headed without checking: the check can miss a
+/// system proxy the web view uses.
+#[tauri::command]
+pub async fn offline_open_anyway(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+) -> Result<Value, Value> {
+    offline_page(&webview)?;
+    let target = desktop
+        .take_wanted()
+        .unwrap_or_else(|| desktop.server().start_url());
+    webview
+        .navigate(target)
+        .map(|()| json!({}))
+        .map_err(|e| json!({ "code": "failed", "message": e.to_string() }))
 }
 
 /// Opens the settings window from the offline page.
@@ -134,9 +199,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let open = Server::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-        assert!(reachable(&open));
+        assert!(answers(&open, TIMEOUT));
         drop(listener);
         let closed = Server::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-        assert!(!reachable(&closed));
+        assert!(!answers(&closed, TIMEOUT));
     }
 }

@@ -24,6 +24,8 @@ async function check(byHand) {
 
 retry.addEventListener("click", () => check(true));
 document.getElementById("settings").addEventListener("click", () => invoke("offline_settings"));
+// The check can miss a proxy the system uses; the web view may still get through.
+document.getElementById("anyway").addEventListener("click", () => invoke("offline_open_anyway"));
 window.addEventListener("online", () => check(false));
 // A connection attempt to one host, so cheap enough to make even while the
 // window is hidden.

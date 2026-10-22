@@ -411,9 +411,19 @@ pub fn download_model(webview: Webview, desktop: State<'_, Arc<Desktop>>, model:
     download.cancelled.store(false, Ordering::SeqCst);
     download.bytes.store(0, Ordering::SeqCst);
     let desktop = desktop.inner().clone();
+    let spawning = desktop.clone();
     std::thread::Builder::new()
         .name("cww-model-download".into())
         .spawn(move || {
+            // Clears `running` however this ends, a panic included, so a
+            // later download isn't refused as already running.
+            struct Running(Arc<Desktop>);
+            impl Drop for Running {
+                fn drop(&mut self) {
+                    self.0.download.running.store(false, Ordering::SeqCst);
+                }
+            }
+            let _running = Running(desktop.clone());
             let app = desktop.app();
             let total = model.bytes();
             let last = AtomicU64::new(0);
@@ -443,7 +453,10 @@ pub fn download_model(webview: Webview, desktop: State<'_, Arc<Desktop>>, model:
                 json!({ "model": model.id(), "done": true, "error": error }),
             );
         })
-        .map_err(|e| refusal("failed", e.to_string()))?;
+        .map_err(|e| {
+            spawning.download.running.store(false, Ordering::SeqCst);
+            refusal("failed", e.to_string())
+        })?;
     Ok(json!({}))
 }
 

@@ -104,9 +104,14 @@ fn reveal(path: Option<&Path>) {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let mut command = std::process::Command::new("explorer");
         match path {
-            Some(path) if path.is_file() => command.arg(format!("/select,{}", path.display())),
+            // Explorer wants the quotes around the path only, not the whole
+            // argument, which `arg` would quote for a path with spaces.
+            Some(path) if path.is_file() => {
+                command.raw_arg(format!("/select,\"{}\"", path.display()))
+            }
             _ => match &folder {
                 Some(folder) => command.arg(folder),
                 None => return,

@@ -36,6 +36,7 @@ const COMMANDS: &[&str] = &[
     // The offline page in the Chat with Work window (offline.rs).
     "offline_info",
     "offline_retry",
+    "offline_open_anyway",
     "offline_settings",
 ];
 
