@@ -156,7 +156,7 @@ Individual developer accounts are free. Microsoft signs Store packages itself, s
 
 **The desktop app** is included in every package recipe alongside the terminal agent. Updating the existing package upgrades users to the complete installation; there is no separate Linux GUI package to discover.
 
-**WinGet.** Unpack the release's packaging archive and copy `recipes/winget/*.yaml` to `manifests/c/ChatWithWork/LocalAgent/X.Y.Z/` in a `winget-pkgs` fork. On Windows, run `winget validate --manifest <dir>` and `winget install --manifest <dir>`, then open the pull request (or `wingetcreate submit <dir>`). The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version.
+**WinGet.** `packaging/windows/winget-submit.sh X.Y.Z` downloads the release's packaging archive, checks that every manifest names `ChatWithWork.Desktop` and the version and that each installer URL matches its hash, and prepares a branch in `crmne/winget-pkgs` with `manifests/c/ChatWithWork/Desktop/X.Y.Z/`. Validate it on Windows (`winget validate --manifest <dir>` and `winget install --manifest <dir>`), then run it again with `--open` to push and open the pull request. The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version, 0.3 installs included.
 
 **Scoop.** Put `recipes/scoop/cww.json` in a bucket (for example `crmne/scoop-bucket`, as `bucket/cww.json`). Its `checkver` and `autoupdate` keep it current: `scoop install crmne/cww` once the bucket is added with `scoop bucket add crmne https://github.com/crmne/scoop-bucket`.
 
