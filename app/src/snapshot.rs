@@ -213,7 +213,11 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
     let (script, wait) = match step {
         "scanned" => (
             r#"document.querySelector('[data-key="scan"]')?.click()"#,
-            12,
+            // A real scanner and its feeder take longer than the sample one.
+            std::env::var("CWW_APP_SNAPSHOT_SCAN_WAIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(12),
         ),
         "blank" => (
             r#"document.querySelector('details.left-out')?.setAttribute('open', '')"#,
