@@ -52,6 +52,30 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// `cww browser enable` or `disable`. Returns what it printed.
+pub fn browser(enabled: bool) -> Result<String> {
+    let cww = cww_binary()
+        .context("Couldn't find the cww command. Install the background agent, then try again.")?;
+    let mut command = Command::new(&cww);
+    command.args(["browser", if enabled { "enable" } else { "disable" }]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let output = command.output().context("running cww browser")?;
+    let said = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() {
+        bail!(
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .trim_start_matches("error: ")
+        );
+    }
+    Ok(said)
+}
+
 /// Register and start the daemon's service. Returns what `cww` printed.
 pub fn start() -> Result<String> {
     let cww = cww_binary()

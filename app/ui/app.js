@@ -5,14 +5,15 @@
 import { ICONS } from "./icons.js";
 import welcome from "./pages/welcome.js";
 import folders from "./pages/folders.js";
+import browser from "./pages/browser.js";
 import privacy from "./pages/privacy.js";
 import activity from "./pages/activity.js";
 import account from "./pages/account.js";
 import notifications from "./pages/notifications.js";
 import general from "./pages/general.js";
 
-const PAGES = { welcome, folders, privacy, activity, account, notifications, general };
-const NAV = ["folders", "privacy", "activity", "account", "notifications", "general"];
+const PAGES = { welcome, folders, browser, privacy, activity, account, notifications, general };
+const NAV = ["folders", "browser", "privacy", "activity", "account", "notifications", "general"];
 
 // The app's commands. A refusal comes back as { code, message }.
 const internals = window.__TAURI_INTERNALS__;
