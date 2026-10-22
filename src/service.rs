@@ -169,7 +169,7 @@ pub const PACKAGED_UNIT: &str = "/usr/lib/systemd/user/cww.service";
 /// symlink (`/opt/homebrew/bin/cww`) pointing into a versioned directory
 /// that disappears on upgrade, so prefer a well-known path that resolves to
 /// this same binary.
-fn stable_exe() -> Result<PathBuf> {
+pub fn stable_exe() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("finding the cww binary")?;
     if cfg!(windows) {
         return crate::roots::canonical(&exe);

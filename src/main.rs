@@ -104,11 +104,51 @@ enum Command {
         #[arg(long, allow_hyphen_values = true)]
         organization: Option<String>,
     },
+    /// Let Chat with Work use your own browser, through the Chat with Work
+    /// extension, on sites you allow.
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// List organization sign-ins saved on this computer.
     Organizations {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum BrowserCommand {
+    /// Show whether the browser is on, its sites and the connected browser.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Offer the browser tools, and register cww with Chrome, Chromium,
+    /// Edge and Brave so the extension can reach it.
+    Enable,
+    /// Stop offering the browser tools, and remove the registration.
+    Disable,
+    /// Register cww with the browsers again (after installing a browser).
+    Register,
+    /// Allow a site: a host like github.com (with its subdomains, over
+    /// HTTPS) or an origin like http://localhost:3000.
+    Allow { site: String },
+    /// Stop allowing a site.
+    Disallow { site: String },
+    /// Stop Chat with Work using the browser now, until `resume`.
+    Stop,
+    /// Let Chat with Work use the browser again.
+    Resume,
+    /// Let a Chat with Work bot's chats use the browser, by the number in
+    /// the bot's address in Chat with Work.
+    Lend {
+        bot: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop lending the browser to a bot.
+    StopLending { bot: String },
 }
 
 #[derive(Subcommand)]
@@ -226,6 +266,8 @@ enum DaemonCommand {
 }
 
 fn main() {
+    // Started by the browser as the extension's native messaging host.
+    cww::browsing::host_if_invoked();
     if let Err(e) = run(Cli::parse()) {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -258,6 +300,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Tui { organization } => {
             cww::tui::run_organization(paths, organization.as_deref())?
         }
+        Command::Browser { command } => browser(&paths, command)?,
         Command::Organizations { json } => {
             let profiles = auth::organizations::list(&paths)?;
             if json {
@@ -867,6 +910,144 @@ fn login_json(
 }
 
 /// Ask a running daemon to re-read the config.
+/// `cww browser ...`: edit `config.toml`, then tell the daemon.
+fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
+    use cww::browsing::{bridge, install, settings};
+    let mut config = Config::load(paths)?;
+    let register = |config: &Config| -> Result<()> {
+        let exe = host_exe()?;
+        let done = install::register(paths, &exe, &bridge::origins(&config.browser.extension_ids))?;
+        if done.is_empty() {
+            println!(
+                "No Chrome, Chromium, Edge or Brave found for this user. Install one and run                  `cww browser register`."
+            );
+        }
+        for registered in done {
+            println!(
+                "Registered with {} ({}).",
+                registered.browser, registered.location
+            );
+        }
+        Ok(())
+    };
+    match command {
+        BrowserCommand::Status { json } => {
+            let live = control::request(&paths.socket_path(), ControlRequest::Browser)
+                .ok()
+                .flatten();
+            let status = live
+                .map(|v| v["browser"].clone())
+                .unwrap_or_else(|| settings::status(&config.browser, None));
+            if json {
+                println!("{status}");
+                return Ok(());
+            }
+            println!(
+                "Browser: {}{}",
+                if config.browser.enabled { "on" } else { "off" },
+                if config.browser.stopped {
+                    ", stopped"
+                } else {
+                    ""
+                }
+            );
+            match status["extension"].as_object() {
+                Some(ext) => println!(
+                    "Connected: {} with extension {}{}",
+                    ext.get("browser")
+                        .and_then(Value::as_str)
+                        .unwrap_or("a browser"),
+                    ext.get("version").and_then(Value::as_str).unwrap_or("?"),
+                    if ext.get("stopped") == Some(&Value::Bool(true)) {
+                        " (stopped in the extension)"
+                    } else {
+                        ""
+                    }
+                ),
+                None => println!("Connected: no browser"),
+            }
+            if config.browser.sites.is_empty() {
+                println!("Sites: none yet (`cww browser allow github.com`)");
+            } else {
+                println!("Sites: {}", config.browser.sites.join(", "));
+            }
+            for loan in &config.browser.bots {
+                println!("Lent to bot {} {}", loan.id, loan.name);
+            }
+            return Ok(());
+        }
+        BrowserCommand::Enable => {
+            register(&config)?;
+            config.browser.enabled = true;
+            config.save(paths)?;
+            println!(
+                "Chat with Work can now use the tabs in the \"Chat with Work\" group of your \
+                 browser, on the sites you allow, once the Chat with Work extension is installed."
+            );
+        }
+        BrowserCommand::Disable => {
+            install::unregister(paths)?;
+            config.browser.enabled = false;
+            config.save(paths)?;
+            println!("Chat with Work doesn't use your browser now.");
+        }
+        BrowserCommand::Register => {
+            register(&config)?;
+            return Ok(());
+        }
+        BrowserCommand::Allow { site } => {
+            let site = settings::allow_site(&mut config, &site)?;
+            config.save(paths)?;
+            println!("Chat with Work may use {site} in its tab group.");
+        }
+        BrowserCommand::Disallow { site } => {
+            let site = settings::disallow_site(&mut config, &site)?;
+            config.save(paths)?;
+            println!("Chat with Work may no longer use {site}.");
+        }
+        BrowserCommand::Stop => {
+            config.browser.stopped = true;
+            config.save(paths)?;
+            println!(
+                "Chat with Work has stopped using your browser. `cww browser resume` lets it again."
+            );
+        }
+        BrowserCommand::Resume => {
+            config.browser.stopped = false;
+            config.save(paths)?;
+            println!("Chat with Work may use your browser again.");
+        }
+        BrowserCommand::Lend { bot, name } => {
+            settings::set_bot(&mut config, &bot, name.as_deref(), true)?;
+            config.save(paths)?;
+            println!(
+                "Bot {bot}'s chats may use your browser, on the same sites. Each change still \
+                 waits for approval in Chat with Work."
+            );
+        }
+        BrowserCommand::StopLending { bot } => {
+            settings::set_bot(&mut config, &bot, None, false)?;
+            config.save(paths)?;
+            println!("Bot {bot} can't use your browser now.");
+        }
+    }
+    notify_daemon(paths, "");
+    Ok(())
+}
+
+/// The program the browsers start: this `cww`, or on Windows `cww-agent`
+/// beside it, which opens no console window.
+fn host_exe() -> Result<PathBuf> {
+    let exe = service::stable_exe()?;
+    if cfg!(windows) {
+        let agent = exe.with_file_name("cww-agent.exe");
+        if agent.is_file() {
+            return Ok(agent);
+        }
+    }
+    Ok(exe)
+}
+
 fn notify_daemon(paths: &Paths, if_not_running: &str) {
     match control::request(&paths.socket_path(), ControlRequest::Reload) {
         Ok(Some(_)) => println!("The daemon picked up the change."),

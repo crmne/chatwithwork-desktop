@@ -42,6 +42,45 @@ pub struct Config {
     pub tui: TuiConfig,
     #[serde(skip_serializing_if = "DesktopConfig::is_default")]
     pub desktop: DesktopConfig,
+    /// Chat with Work in the person's own browser, through the extension
+    /// (docs/browser.md). Off until they turn it on here.
+    #[serde(skip_serializing_if = "BrowserConfig::is_default")]
+    pub browser: BrowserConfig,
+}
+
+/// The browser: whether Chat with Work may use it, on which sites, and for
+/// which bots. Only this file and the control channel change it, never the
+/// server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserConfig {
+    /// Offer the browser tools. The person's choice, on this computer.
+    pub enabled: bool,
+    /// Stopped from the tray, `cww browser stop` or the extension: the
+    /// tools stay listed and every call is refused until resumed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
+    /// Sites the extension may open, read and act on: a host (`github.com`,
+    /// with its subdomains, over HTTPS) or an origin
+    /// (`http://localhost:3000`). See `crate::browsing::sites`.
+    pub sites: Vec<String>,
+    /// Bots whose chats may use the browser, like folders lent to them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bots: Vec<BotLoan>,
+    /// More extension IDs allowed to connect, besides the published one:
+    /// a development build loaded unpacked with another key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extension_ids: Vec<String>,
+}
+
+impl BrowserConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn loan(&self, bot: &str) -> Option<&BotLoan> {
+        self.bots.iter().find(|loan| loan.id == bot)
+    }
 }
 
 /// The desktop app's own settings.

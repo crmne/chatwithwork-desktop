@@ -287,6 +287,10 @@ Chat with Work asks before every command. See [docs/commands.md](docs/commands.m
 
 A Chat with Work bot (an assistant your organization sets up to work by itself, like one that fixes issues) reaches this computer only through the folders you lend it, here: `cww roots lend <root> <bot-id>`, with the number in the bot's address in Chat with Work. Its chats then reach that folder as the folder allows, and no other, and each of its commands asks you first in Chat with Work. Where the folder allows commands, `--unattended` lets the bot's commands there start without anyone approving each one, in the same sandbox and limits, which is how a bot runs tests on a server or a spare Mac by itself. `cww roots stop-lending <root> <bot-id>` ends a loan, and stopping commands in a folder ends its unattended commands. See PROTOCOL.md 7.2.1.
 
+### Your browser
+
+With the Chat with Work browser extension in Chrome, Chromium, Edge or Brave, Chat with Work can also use your own browser, with your sign-ins, on sites you allow: `cww browser enable`, then `cww browser allow github.com`. It works only in its own tab group, "Chat with Work", in the background, so you keep using your other tabs. It reads pages as accessible text (`browser_tabs`, `browser_read`, `browser_screenshot`, `browser_scroll`, `browser_wait`), never types into or reads password and payment fields, and stops at once with Stop in the extension's menu or `cww browser stop`. See [docs/browser.md](docs/browser.md).
+
 Paths always look like `work-docs:plans/q3.pdf`.
 
 ## Performance
@@ -454,7 +458,8 @@ The rule behind the design: **every control that must hold against a compromised
 - **Results do reach Chat with Work and the model provider.** "Private" means your files and the index stay on your computer, and only the snippets and chunks needed for an answer leave it. Once they leave, the server's retention and sharing rules apply.
 - **A malicious file could exploit a parser** (PDF, Office). Extraction runs with size caps and panic isolation, inside the kernel sandbox, which keeps it to the shared folders. The sandboxed daemon can still use the network, so an exploit could send what it can read to someone else; a separate reader process without network access is planned, and the `reader` module is structured for that split.
 - **Windows has no kernel sandbox yet.** The path checks hold there as everywhere, but nothing stops a bug at the kernel level.
-- **Local malware running as your user** can read your files directly and doesn't need cww.
+- **Local malware running as your user** can read your files directly and doesn't need cww. It could also attach to the control socket as the browser extension's host, but it can already drive your browser without cww.
+- **The browser reaches the web.** While the browser is on, what pages on the allowed sites show can reach Chat with Work, and the sites' own rules apply to what is done there with your sign-ins. The site list, the tab group, the kill switch and the refusal of password and payment fields hold in the extension and the daemon, whatever the server sends; a site that hides an action behind an innocent name is the case the approval of each change is for.
 - **Content-based secret redaction** (API keys inside ordinary text files) and "ask before every read" approvals are planned, not built.
 
 ### The sandbox

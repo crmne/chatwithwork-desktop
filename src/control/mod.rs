@@ -177,6 +177,36 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         chat: Option<String>,
     },
+    /// The browser extension's native messaging host attaches: after the
+    /// answer, the connection carries the extension's messages both ways
+    /// (`crate::browsing::bridge`). Only the extension IDs this computer
+    /// allows may attach.
+    BrowserAttach {
+        origin: String,
+    },
+    /// The browser settings and the attached browser, if any.
+    Browser,
+    /// Offer the browser tools, or stop offering them. Clients register the
+    /// native messaging host first (`cww::browsing::install`).
+    BrowserEnabled {
+        enabled: bool,
+    },
+    /// Allow a site, or stop allowing it.
+    BrowserSite {
+        site: String,
+        allowed: bool,
+    },
+    /// The kill switch: refuse every browser call until resumed.
+    BrowserStopped {
+        stopped: bool,
+    },
+    /// Lend the browser to a Chat with Work bot, or stop.
+    BrowserBot {
+        bot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        lent: bool,
+    },
     /// The owner's chats, newest first, as the server lists them.
     Chats,
     NotificationPreferences,
@@ -502,6 +532,11 @@ pub trait ControlHandler: Send + Sync + 'static {
     }
 
     fn unwatch_chats(&self) {}
+
+    /// Where an attached browser extension is served, if anywhere.
+    fn browser(&self) -> Option<Arc<crate::browsing::bridge::Bridge>> {
+        None
+    }
 }
 
 /// Bind the control endpoint, refusing if another daemon is already
@@ -588,6 +623,19 @@ where
                 continue;
             }
         };
+        if let ControlRequest::BrowserAttach { origin } = request {
+            let Some(bridge) = handler.browser() else {
+                write_line(
+                    &mut write,
+                    &json!({ "ok": false, "code": "unavailable", "error": "this daemon doesn't serve the browser" }),
+                )
+                .await?;
+                return Ok(());
+            };
+            return bridge
+                .serve(origin, &mut write, lines.get_mut(), shutdown)
+                .await;
+        }
         if let ControlRequest::Subscribe { topics, chat } = request {
             let client = Subscriber {
                 write: &mut write,
@@ -936,6 +984,47 @@ impl Iterator for Events {
         }
         self.client.next_line().transpose()
     }
+}
+
+/// How attaching the browser extension went.
+pub enum BrowserAttach {
+    NotRunning,
+    Refused {
+        code: String,
+        message: String,
+    },
+    /// The connection, to read the daemon's lines from and write the
+    /// extension's to.
+    Attached {
+        reader: BufReader<transport::ClientStream>,
+        writer: transport::ClientStream,
+    },
+}
+
+/// Attach the browser extension with `origin` to the daemon, for the
+/// native messaging host.
+pub fn attach_browser(path: &Path, origin: &str) -> Result<BrowserAttach> {
+    let Some(mut client) = Client::connect(path)? else {
+        return Ok(BrowserAttach::NotRunning);
+    };
+    let response = client.call_raw(&ControlRequest::BrowserAttach {
+        origin: origin.to_string(),
+    })?;
+    if response["ok"] != json!(true) {
+        return Ok(BrowserAttach::Refused {
+            code: response["code"].as_str().unwrap_or_default().to_string(),
+            message: response["error"]
+                .as_str()
+                .unwrap_or("the daemon refused the browser")
+                .to_string(),
+        });
+    }
+    transport::clear_timeout(client.reader.get_ref());
+    let writer = client.reader.get_ref().try_clone()?;
+    Ok(BrowserAttach::Attached {
+        reader: client.reader,
+        writer,
+    })
 }
 
 /// Send one request to the running daemon. `Ok(None)` means no daemon is

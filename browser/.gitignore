@@ -1,0 +1,6 @@
+node_modules/
+build/
+build-tests/
+chatwithwork-browser.zip
+test-results/
+playwright-report/

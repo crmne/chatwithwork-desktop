@@ -46,6 +46,22 @@ pub enum ErrorCode {
     /// A bot's command was to start without anyone approving it where its
     /// loan doesn't let it.
     NeedsApproval,
+    /// The browser with the extension isn't connected to the daemon.
+    BrowserUnavailable,
+    /// The person stopped the browser, in the extension or on the computer.
+    BrowserStopped,
+    /// The page isn't on a site the person allowed.
+    SiteNotAllowed,
+    /// The tab isn't in the Chat with Work tab group.
+    NotInGroup,
+    /// The Chat with Work tab group has no tab.
+    NoTab,
+    /// A password, payment or one-time code field, never typed into or read.
+    SensitiveField,
+    /// A click said not to submit would submit, send, buy or delete.
+    WouldSubmit,
+    /// The page or the browser failed to do what was asked.
+    PageError,
     Internal,
 }
 
@@ -71,6 +87,14 @@ impl ErrorCode {
             Self::Conflict => "conflict",
             Self::NotLent => "not_lent",
             Self::NeedsApproval => "needs_approval",
+            Self::BrowserUnavailable => "browser_unavailable",
+            Self::BrowserStopped => "browser_stopped",
+            Self::SiteNotAllowed => "site_not_allowed",
+            Self::NotInGroup => "not_in_group",
+            Self::NoTab => "no_tab",
+            Self::SensitiveField => "sensitive_field",
+            Self::WouldSubmit => "would_submit",
+            Self::PageError => "page_error",
             Self::Internal => "internal",
         }
     }
@@ -90,6 +114,11 @@ impl ErrorCode {
                 | Self::NotChangeable
                 | Self::NotLent
                 | Self::NeedsApproval
+                | Self::BrowserStopped
+                | Self::SiteNotAllowed
+                | Self::NotInGroup
+                | Self::SensitiveField
+                | Self::WouldSubmit
         )
     }
 }

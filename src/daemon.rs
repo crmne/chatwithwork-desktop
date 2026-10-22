@@ -62,6 +62,8 @@ struct Daemon {
     events: broadcast::Sender<ControlEvent>,
     /// Bumped whenever something in `status` changes.
     changes: Changes,
+    /// The browser extension, when one is attached (docs/browser.md).
+    browser: Arc<crate::browsing::bridge::Bridge>,
     /// Cancelled by a `shutdown` request.
     shutdown: CancellationToken,
     /// The chats terminal UIs follow over the tunnel.
@@ -500,6 +502,24 @@ async fn run_with_notifications(
         Arc::clone(&limiter),
         crate::trash::Trash::new(paths.home_trash.clone()),
     ));
+    let browser = Arc::new(crate::browsing::bridge::Bridge::new(
+        crate::browsing::settings::policy(&config),
+        crate::browsing::bridge::origins(&config.browser.extension_ids),
+        {
+            let changes = changes.clone();
+            move || changes.bump()
+        },
+    ));
+    browser.configure(
+        crate::browsing::settings::policy(&config),
+        crate::browsing::bridge::origins(&config.browser.extension_ids),
+        config
+            .browser
+            .bots
+            .iter()
+            .map(|loan| loan.id.clone())
+            .collect(),
+    );
     let daemon = Arc::new(Daemon {
         organization,
         runner,
@@ -510,6 +530,7 @@ async fn run_with_notifications(
         reader,
         audit,
         status: SharedStatus::new(changes.clone()),
+        browser,
         tunnel_token: Mutex::new(shutdown.child_token()),
         reloaded: Notify::new(),
         chats: Arc::new(ChatHub::new(events.clone())),
@@ -616,7 +637,11 @@ impl Daemon {
                 Arc::clone(&self.paused),
                 max_message_bytes,
             )
-            .with_commands(commands);
+            .with_commands(commands)
+            .with_browser(
+                (self.organization.is_none() && self.config.lock().await.browser.enabled)
+                    .then(|| crate::browsing::tools::BrowserTools::new(Arc::clone(&self.browser))),
+            );
             let proxy_setting = self.config.lock().await.proxy.clone();
             let tunnel = crate::proxy::for_server(proxy_setting.as_deref(), &credentials.server)
                 .and_then(|proxy| {
@@ -714,7 +739,9 @@ impl Daemon {
             || config.secret_store != new.secret_store
             || config.proxy != new.proxy
             || writable_roots(&config) != writable_roots(&new)
-            || command_roots(&config) != command_roots(&new);
+            || command_roots(&config) != command_roots(&new)
+            || config.browser.enabled != new.browser.enabled;
+        self.configure_browser(&new);
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
@@ -952,6 +979,41 @@ impl Daemon {
         .await?
     }
 
+    fn configure_browser(&self, config: &Config) {
+        self.browser.configure(
+            crate::browsing::settings::policy(config),
+            crate::browsing::bridge::origins(&config.browser.extension_ids),
+            config
+                .browser
+                .bots
+                .iter()
+                .map(|loan| loan.id.clone())
+                .collect(),
+        );
+    }
+
+    /// Change the browser settings in `config.toml`, write `event` to the
+    /// audit log, and reload: the extension hears the new rules at once,
+    /// and turning the browser on or off reconnects for a new tool list.
+    async fn edit_browser(
+        &self,
+        event: &str,
+        detail: Option<String>,
+        edit: impl FnOnce(&mut Config) -> Result<()> + Send + 'static,
+    ) -> Result<Value> {
+        self.edit_config(move |config, _| edit(config)).await?;
+        let mut entry = AuditEntry::event(event);
+        entry.detail = detail;
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(self.browser_json().await)
+    }
+
+    async fn browser_json(&self) -> Value {
+        let config = self.config.lock().await.browser.clone();
+        json!({ "browser": crate::browsing::settings::status(&config, self.browser.extension()) })
+    }
+
     async fn set_paused(&self, paused: bool) -> Result<()> {
         self.paused.store(paused, Ordering::SeqCst);
         // Edited on disk, not saved from memory: a folder just added may
@@ -962,6 +1024,8 @@ impl Daemon {
         })
         .await?;
         self.config.lock().await.paused = paused;
+        let config = self.config.lock().await.clone();
+        self.configure_browser(&config);
         // Commands stop with the computer.
         if paused {
             self.runner.prune().await;
@@ -1029,6 +1093,7 @@ impl Daemon {
             "proxy": proxy_info(&config),
             "paused": self.paused.load(Ordering::SeqCst),
             "roots": roots,
+            "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
         })
     }
 
@@ -1105,6 +1170,12 @@ impl ControlHandler for Daemon {
         Some(self.events.subscribe())
     }
 
+    fn browser(&self) -> Option<Arc<crate::browsing::bridge::Bridge>> {
+        self.organization
+            .is_none()
+            .then(|| Arc::clone(&self.browser))
+    }
+
     async fn initial_status(&self) -> Option<Value> {
         Some(self.status_json().await)
     }
@@ -1156,6 +1227,11 @@ impl ControlHandler for Daemon {
                     | ControlRequest::Resume
                     | ControlRequest::SuggestedRoots
                     | ControlRequest::Deny
+                    | ControlRequest::Browser
+                    | ControlRequest::BrowserEnabled { .. }
+                    | ControlRequest::BrowserSite { .. }
+                    | ControlRequest::BrowserStopped { .. }
+                    | ControlRequest::BrowserBot { .. }
             )
         {
             return Err(Refusal::new(
@@ -1231,6 +1307,81 @@ impl ControlHandler for Daemon {
                 lent,
                 unattended,
             } => self.set_bot(root, bot, name, lent, unattended).await,
+            ControlRequest::Browser => Ok(self.browser_json().await),
+            ControlRequest::BrowserEnabled { enabled } => {
+                self.edit_browser(
+                    if enabled {
+                        "browser_enabled"
+                    } else {
+                        "browser_disabled"
+                    },
+                    None,
+                    move |config| {
+                        config.browser.enabled = enabled;
+                        Ok(())
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserSite { site, allowed } => {
+                let saved = {
+                    let mut probe = self.config.lock().await.clone();
+                    if allowed {
+                        crate::browsing::settings::allow_site(&mut probe, &site)?
+                    } else {
+                        crate::browsing::settings::disallow_site(&mut probe, &site)?
+                    }
+                };
+                self.edit_browser(
+                    if allowed {
+                        "browser_site_allowed"
+                    } else {
+                        "browser_site_removed"
+                    },
+                    Some(saved),
+                    move |config| {
+                        if allowed {
+                            crate::browsing::settings::allow_site(config, &site).map(drop)
+                        } else {
+                            crate::browsing::settings::disallow_site(config, &site).map(drop)
+                        }
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserStopped { stopped } => {
+                self.edit_browser(
+                    if stopped {
+                        "browser_stopped"
+                    } else {
+                        "browser_resumed"
+                    },
+                    None,
+                    move |config| {
+                        config.browser.stopped = stopped;
+                        Ok(())
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserBot { bot, name, lent } => {
+                let detail = Some(format!("bot {bot}"));
+                self.edit_browser(
+                    if lent {
+                        "browser_bot_lent"
+                    } else {
+                        "browser_bot_withdrawn"
+                    },
+                    detail,
+                    move |config| {
+                        crate::browsing::settings::set_bot(config, &bot, name.as_deref(), lent)
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserAttach { .. } => {
+                bail!("bad request: browser_attach takes over its connection")
+            }
             ControlRequest::Commands => self.commands_json().await,
             ControlRequest::CommandOutput { run, offset, max } => {
                 let max = max.unwrap_or(crate::commands::MAX_OUTPUT_CHUNK);
