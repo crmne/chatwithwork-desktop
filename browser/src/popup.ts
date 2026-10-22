@@ -42,6 +42,10 @@ function render(state: PopupState): void {
     tone = "attention";
     text = "Connecting…";
     detail = "";
+  } else if (state.sites.length === 0) {
+    tone = "attention";
+    text = "No sites allowed yet";
+    detail = "Allow the sites Chat with Work may use in Chat with Work Desktop's settings.";
   }
   box.className = `state state--${tone}`;
   $("state-text").textContent = text;
@@ -69,3 +73,5 @@ async function ask(type: string): Promise<void> {
 $("stop").addEventListener("click", () => void ask("stop"));
 $("resume").addEventListener("click", () => void ask("resume"));
 void ask("state");
+// The connection can change while the menu is open.
+setInterval(() => void ask("state"), 1000);
