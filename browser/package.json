@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node scripts/build.mjs && node --test "build-tests/tests/*.test.js"",
+    "test": "node scripts/build.mjs && node --test \"build-tests/tests/*.test.js\"",
     "e2e": "node scripts/build.mjs && playwright test",
     "package": "node scripts/build.mjs --store"
   },
