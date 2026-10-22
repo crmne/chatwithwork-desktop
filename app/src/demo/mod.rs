@@ -1883,11 +1883,7 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
     std::fs::create_dir_all(&paths.daemon.runtime_dir)?;
     if scenario == Scenario::Sample {
         // A paired sample has been through the welcome page.
-        crate::ui::AppState {
-            onboarded: true,
-            ..Default::default()
-        }
-        .save(&paths);
+        crate::state::AppState { onboarded: true }.save(&paths)?;
     }
     let demo = Arc::new(Demo {
         state: Mutex::new(match scenario {

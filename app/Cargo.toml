@@ -2,10 +2,9 @@
 name = "cww-app"
 version = "0.3.1"
 edition = "2024"
-# fastframe needs 1.98 (eframe 0.36 alone needs 1.95); the daemon itself
-# builds with 1.90.
+# fastframe needs 1.98; the daemon itself builds with 1.90.
 rust-version = "1.98"
-description = "Chat with Work Local Agent: the menu bar app and settings window for the cww daemon"
+description = "Chat with Work Desktop: the web app in a native window, the tray item and the Local Agent's settings"
 license = "MIT OR Apache-2.0"
 authors = ["Carmine Paolino <carmine@paolino.me>"]
 repository = "https://github.com/crmne/chatwithwork-local-agent"
@@ -17,135 +16,86 @@ publish = false
 name = "cww-app"
 path = "src/main.rs"
 
+[build-dependencies]
+# Tauri's build step: the context generate_context! embeds (tauri.conf.json,
+# the bundled local pages, capabilities) and the commands' permissions. On
+# Windows it also embeds the executable's icon and version information.
+tauri-build = { version = "2.7", features = [] }
+
 [dependencies]
-arboard = { version = "3.6.1", default-features = false }
-# The daemon's paths and control client, so the app finds its socket or pipe
-# exactly where it listens and checks the pipe's owner on Windows. Only the
-# control client and paths are linked in.
+# The daemon's paths, config and control client, so the app finds its socket
+# or pipe exactly where it listens and checks the pipe's owner on Windows,
+# and reads which server this computer is paired with.
 cww = { path = ".." }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
-# The settings window. glow keeps the binary and the dependency tree small;
-# a settings window needs no wgpu. AccessKit connects the controls to the
-# platform screen readers.
-eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "glow", "default_fonts", "wayland", "x11"] }
-egui = "0.36.2"
-# Decodes the title bar’s SVG icons through egui’s image loader.
-egui_extras = { version = "0.36.2", default-features = false, features = ["svg", "datepicker"] }
-# The event loop the tray and the window share. eframe already compiles it.
-winit = { version = "0.30", default-features = false }
-# PNG decoding for the icons and encoding for --screenshot. eframe already
-# compiles it with png.
-image = { version = "0.25", default-features = false, features = ["png"] }
+url = "2.5"
+# The window, the tray and the bundled local pages. Tauri uses the system
+# web view: WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows.
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+# A second launch (a notification's chat, the applications menu) hands its
+# arguments to the running app instead of starting another.
+tauri-plugin-single-instance = "2"
+# The windows' size, position and maximized state across launches.
+tauri-plugin-window-state = "2"
 # The native folder picker: NSOpenPanel, IFileDialog, or the XDG portal.
-# The dialog is built on the main thread and awaited on another with
-# pollster, so the window keeps drawing and AppKit runs no nested loop.
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
-pollster = "0.4"
+tauri-plugin-dialog = "2"
 # Microphone capture stays in the app; the daemon remains a static binary.
-# Every app plays and records through fastframe-audio: on Linux it goes to
-# PipeWire, then PulseAudio, then ALSA, so building needs libpipewire's
-# headers and clang, and the binary links libpipewire-0.3.so.0. Same
-# release as the other fastframe crates.
+# `cww tui` records through `cww-app --record-audio-progress`, through
+# fastframe-audio: on Linux it goes to PipeWire, then PulseAudio, then ALSA,
+# so building needs libpipewire's headers and clang, and the binary links
+# libpipewire-0.3.so.0.
 fastframe-audio = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # The recorder's lock-free queue from the capture callback, which must not
-# wait. Already in the tree through tray-icon's muda.
+# wait.
 crossbeam-channel = "0.5"
-# The Documents folder of each platform (XDG user dirs, Known Folders).
-directories = "6"
-# Opens the config file and the log in their default apps.
+# Opens links, the config file and the log in their default apps.
 open = "5"
-# Local times in the activity log.
+# Local times in the tray's last access line.
 jiff = "0.2"
-# Every Fastframe crate comes from the same release, v0.12.1 (its tag's
-# commit). Move them together.
-# Follows the desktop's font rendering (hinting, sub-pixel positions, and
-# linear coverage on Linux), shared with the other fastframe apps.
-fastframe-text = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# Reveals a switch between light and dark from the middle of the window
-# outwards, as Omarchy does.
-fastframe-theme = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# Draws color emoji in the platform's own style in every egui text, such
-# as folder and file names.
-fastframe-emoji = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# Native traffic lights and desktop caption controls, drag, and resizing.
-fastframe-titlebar = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# One running copy per user: a second launch asks it to open its window.
-fastframe-instance = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# Scrolling that feels like the platform's: a wheel notch scrolls as far
-# as in other apps, and on Linux touchpad gestures keep their speed and
-# glide on after the fingers lift.
-fastframe-scroll = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-# The tray item with the platform's own menu: a StatusNotifierItem on
-# Linux (Waybar, KDE, GNOME with the AppIndicator extension), the
-# notification area on Windows, and the menu bar on macOS.
-fastframe-tray = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Start at login in the tray: the XDG autostart entry on Linux, a login
-# item with the bundle's launch agent on macOS, the Run key on Windows.
+# item with the bundle's launch agent on macOS, the Run key on Windows. Same
+# release as fastframe-audio.
 fastframe-autostart = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
-# Maps the system UI font instead of reading it: San Francisco is 8 MB.
-memmap2 = "0.9"
 # Waits for the daemon's socket to appear instead of polling for it.
 notify = "8.2"
-# The web's logos and file-type icons, fetched from the paired server as
-# SVG (most file types and the big services) or PNG (the rest of the
-# connectors), drawn once into textures. No text, fonts or embedded rasters:
-# the web's images use none.
-resvg = { version = "0.48", default-features = false }
-# Answers in chats are Markdown (CommonMark with GitHub's tables and
-# strikethrough), parsed here and drawn as the web app draws them.
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# Random nonces for the loopback callback.
+ring = "0.17"
+base64 = "0.22"
+# The Downloads folder for files the page downloads, and their names.
+dirs = "6"
+percent-encoding = "2.3"
 # Shared async control and demo support.
 tokio = { version = "1.53", features = ["sync", "macros"] }
 # Only for --demo, whose stand-in daemon uses the real listener.
 tokio-util = { version = "0.7", features = ["io-util"], optional = true }
-# CPU-only local speech inference lives in a short-lived app helper; no model
-# weights or inference libraries enter the native-free daemon/CLI package.
+# CPU-only local speech inference for `cww tui` lives in a short-lived app
+# helper; no model weights or inference libraries enter the daemon/CLI.
 whisper-rs = { version = "0.16.0", default-features = false }
 
+# Pictures of the windows in --demo builds (snapshot.rs): WebKitGTK paints
+# them itself, so they work on a hidden workspace. Already in the tree
+# through Tauri.
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
-# Not used directly. zbus runs AccessKit's screen reader bridge on this
-# pool, and in blocking 1.7.0 an idle pool thread never exits: its exit test
-# needs the pool to be over its 500-thread limit as well as idle, so it
-# wakes every 500 ms for the life of the process once the window has been
-# opened. 1.6.2 lets idle threads exit. Drop this once a fixed release is out.
-blocking = "=1.6.2"
-# Reads the accent color and dark mode through the desktop portal, which
-# works inside a Flatpak and starts no gsettings process. Same release as
-# the other fastframe crates.
-fastframe-desktop = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSAccessibility", "NSApplication", "NSColor", "NSColorSpace", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
-
-[target.'cfg(windows)'.build-dependencies]
-# The icon and version information Windows shows for the executable.
-winresource = "0.1"
+webkit2gtk = { version = "2.0", optional = true }
+cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
 [features]
+default = ["custom-protocol"]
+# Embeds ui/ (the bundled local pages) in the binary and serves it from
+# tauri://. Without the Tauri CLI, cargo build needs it on for a release.
+custom-protocol = ["tauri/custom-protocol"]
 # --demo: runs against a built-in fake daemon with sample folders and
 # activity, for screenshots and trying the window. Never in release builds.
-demo = ["tokio/rt-multi-thread", "dep:tokio-util"]
+demo = ["tokio/rt-multi-thread", "dep:tokio-util", "dep:webkit2gtk", "dep:cairo-rs"]
 
 [dev-dependencies]
-# Drives the window through its accessibility tree. The chat page's tests
-# also render it offscreen with wgpu (a software rasterizer where there is
-# one) and save PNG snapshots.
-egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot"] }
 tempfile = "3.27"
-
 # The stand-in daemon, and a test that runs the real one.
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
 tokio-util = { version = "0.7", features = ["io-util"] }
-

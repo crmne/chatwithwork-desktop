@@ -8,7 +8,9 @@ use std::time::Duration;
 use cww::control::{self as api, ControlRequest, Topic};
 use serde_json::Value;
 
-use crate::model::{AuditEntry, DenyList, Status};
+#[cfg(test)]
+use crate::model::DenyList;
+use crate::model::{AuditEntry, Status};
 
 /// How long to wait for the daemon's socket before trying again anyway,
 /// in case a file-system notification was missed.
@@ -99,6 +101,7 @@ impl Client {
         self.request(&request).map(drop)
     }
 
+    #[cfg(test)]
     pub fn add_root(&self, path: &Path, label: Option<&str>) -> Result<Value> {
         self.request(&ControlRequest::RootsAdd {
             path: path.to_path_buf(),
@@ -109,31 +112,13 @@ impl Client {
         })
     }
 
+    #[cfg(test)]
     pub fn remove_root(&self, id: &str) -> Result<()> {
         self.request(&ControlRequest::RootsRemove { root: id.into() })
             .map(drop)
     }
 
-    /// Allow changes in a shared folder, or make it read-only again.
-    pub fn set_writable(&self, id: &str, writable: bool) -> Result<()> {
-        self.request(&ControlRequest::RootsWritable {
-            i_know: false,
-            root: id.into(),
-            writable,
-        })
-        .map(drop)
-    }
-
-    /// Allow commands in a folder that allows changes, or stop them.
-    pub fn set_commands(&self, id: &str, commands: bool, network: bool) -> Result<()> {
-        self.request(&ControlRequest::RootsCommands {
-            root: id.into(),
-            commands,
-            network,
-        })
-        .map(drop)
-    }
-
+    #[cfg(test)]
     pub fn label_root(&self, id: &str, label: &str) -> Result<()> {
         self.request(&ControlRequest::RootsLabel {
             root: id.into(),
@@ -142,6 +127,7 @@ impl Client {
         .map(drop)
     }
 
+    #[cfg(test)]
     pub fn deny(&self) -> Result<DenyList> {
         Ok(serde_json::from_value(
             self.request(&ControlRequest::Deny)?,

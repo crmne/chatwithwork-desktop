@@ -50,19 +50,6 @@ pub fn documents_dir() -> Option<PathBuf> {
     cww::paths::documents_dir().filter(|p| p.is_dir())
 }
 
-/// Show `path` with `~` for the home folder, as people know it.
-pub fn display(path: &Path) -> String {
-    if let Some(home) = home_dir()
-        && let Ok(rest) = path.strip_prefix(&home)
-    {
-        if rest.as_os_str().is_empty() {
-            return "~".into();
-        }
-        return format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display());
-    }
-    path.display().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,16 +68,5 @@ mod tests {
             ..paths
         };
         assert_eq!(moved.socket_path(), base.join("elsewhere.sock"));
-    }
-
-    #[test]
-    fn home_is_shown_as_a_tilde() {
-        let Some(home) = home_dir() else { return };
-        assert_eq!(display(&home), "~");
-        let docs = home.join("Documents");
-        assert_eq!(
-            display(&docs),
-            format!("~{}Documents", std::path::MAIN_SEPARATOR)
-        );
     }
 }

@@ -29,10 +29,6 @@ pub enum PairEvent {
     Paired {
         daemon_error: Option<String>,
     },
-    OrganizationPaired {
-        profile: cww::auth::organizations::SavedOrganization,
-        daemon_error: Option<String>,
-    },
     Failed(String),
 }
 
@@ -44,15 +40,6 @@ pub type Cancel = Box<dyn FnOnce() + Send + 'static>;
 pub trait Account: Send + Sync {
     /// Start pairing; `report` gets the code, then the outcome.
     fn pair(&self, server: Option<String>, report: Report) -> Cancel;
-    fn pair_organization(&self, _server: Option<String>, report: Report) -> Cancel {
-        report(PairEvent::Failed(
-            "Organization sign-in is unavailable.".into(),
-        ));
-        Box::new(|| {})
-    }
-    fn logout_organization(&self, _id: &str) -> Result<(), String> {
-        Err("Organization sign-out is unavailable.".into())
-    }
     /// Forget the pairing on this computer.
     fn logout(&self) -> Result<(), String>;
 }
@@ -77,7 +64,7 @@ fn quiet(command: &mut Command) -> &mut Command {
 }
 
 impl Cli {
-    fn login(&self, server: Option<String>, report: Report, organization: bool) -> Cancel {
+    fn login(&self, server: Option<String>, report: Report) -> Cancel {
         let child: Arc<Mutex<Option<Child>>> = Arc::default();
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (running, stop) = (Arc::clone(&child), Arc::clone(&cancelled));
@@ -88,9 +75,6 @@ impl Cli {
             };
             let mut command = Command::new(cww);
             command.args(["login", "--json"]);
-            if organization {
-                command.arg("--organization");
-            }
             if let Some(server) = &server {
                 command.args(["--server", server]);
             }
@@ -145,12 +129,9 @@ impl Cli {
         })
     }
 
-    fn sign_out(&self, organization: Option<&str>) -> Result<(), String> {
+    fn sign_out(&self) -> Result<(), String> {
         let mut command = Command::new(cww()?);
         command.arg("logout");
-        if let Some(id) = organization {
-            command.args(["--organization", id]);
-        }
         let out = quiet(&mut command)
             .stdin(Stdio::null())
             .output()
@@ -166,16 +147,10 @@ impl Cli {
 
 impl Account for Cli {
     fn pair(&self, server: Option<String>, report: Report) -> Cancel {
-        self.login(server, report, false)
-    }
-    fn pair_organization(&self, server: Option<String>, report: Report) -> Cancel {
-        self.login(server, report, true)
+        self.login(server, report)
     }
     fn logout(&self) -> Result<(), String> {
-        self.sign_out(None)
-    }
-    fn logout_organization(&self, id: &str) -> Result<(), String> {
-        self.sign_out(Some(id))
+        self.sign_out()
     }
 }
 
@@ -189,19 +164,7 @@ fn read_event(event: serde_json::Value) -> Option<PairEvent> {
                     "Paired, but the Local Agent didn't pick it up: {e}"
                 ))
             });
-            if let Some(profile) = event.get("organization") {
-                Some(match serde_json::from_value(profile.clone()) {
-                    Ok(profile) => PairEvent::OrganizationPaired {
-                        profile,
-                        daemon_error,
-                    },
-                    Err(_) => {
-                        PairEvent::Failed("The sign-in returned an invalid organization.".into())
-                    }
-                })
-            } else {
-                Some(PairEvent::Paired { daemon_error })
-            }
+            Some(PairEvent::Paired { daemon_error })
         }
         "error" => {
             let error = event["error"].as_str().unwrap_or("pairing failed");
@@ -254,25 +217,5 @@ mod tests {
             Some(PairEvent::Code(Code { user_code, .. })) if user_code == "WDJB-MJHT"
         ));
         assert_eq!(read_event(json!({ "event": "later" })), None);
-    }
-}
-
-#[cfg(test)]
-mod organization_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn organization_sign_in_is_distinct_from_the_folder_pairing() {
-        let profile = json!({"id":"a".repeat(43), "server":{"url":"https://example.com", "device_id":"second-device"},
-            "account":{"id":"123456789", "name":"Second organization", "role":"member"}, "secret_store":"file"});
-        assert!(
-            matches!(read_event(json!({"event":"paired", "organization": profile})),
-            Some(PairEvent::OrganizationPaired {profile, daemon_error: None}) if profile.account.name == "Second organization")
-        );
-        assert!(matches!(
-            read_event(json!({"event":"paired", "organization":{}})),
-            Some(PairEvent::Failed(_))
-        ));
     }
 }
