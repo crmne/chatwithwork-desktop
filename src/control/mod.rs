@@ -301,6 +301,24 @@ pub enum ControlRequest {
         content_type: Option<String>,
         data: String,
     },
+    /// Where a scan from the desktop app can go: a new chat, and the bots
+    /// whose triggers take scans.
+    ScanDestinations,
+    /// A searchable PDF the desktop app made, sent as the device's owner
+    /// to a new chat or a bot (PROTOCOL.md, section 13).
+    ScanSend {
+        destination: crate::scans::Destination,
+        filename: String,
+        /// The PDF, base64.
+        data: String,
+        pages: u32,
+        scan_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scanner: Option<String>,
+        /// Words to go with it into a new chat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     /// A signed file path from a transcript, fetched without the token.
     ChatDownload {
         path: String,
@@ -563,6 +581,7 @@ where
                 if line.len() > MAX_REQUEST_BYTES
                     && !match &request {
                         ControlRequest::ChatUpload { .. }
+                        | ControlRequest::ScanSend { .. }
                         | ControlRequest::Dictate { .. }
                         | ControlRequest::TemplateUpload { .. } => true,
                         // Allow the server's full instruction size, including JSON escaping.

@@ -18,6 +18,7 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
 10. [Limits](#10-limits)
 11. [Decisions this spec makes](#11-decisions-this-spec-makes)
 12. [Chats for the terminal UI](#12-chats-for-the-terminal-ui)
+13. [Scans](#13-scans)
 
 ## 1. Roles and overview
 
@@ -757,3 +758,17 @@ The server confirms it only for a device allowed to chat and a chat its owner ma
 ```
 
 The server confirms it for a device allowed to chat whose owner is an active member of its organization (never a guest), and rejects it otherwise. After the confirmation the terminal lists the chats once, then applies each `message` on that identifier: `{"event":"chat","chat":{…}}` (a chat started, renamed, starting or stopping being answered, switching model, getting or losing its public link, or moving in or out of a project: the same JSON as the list's, inserted by `number` or replaced, sorted by `updated_at`), `{"event":"removed","number":42}` (deleted, or out of the owner's sight), `{"event":"projects","projects":[…]}` (the whole list again), and `{"event":"account","account":{…},"user":{…},"credits":{…},"locked_reason":…}` (the list's header again). When the owner leaves a project, the server closes the socket instead; the daemon reconnects, subscribes again, and the terminal lists again on the confirmation. A rejected list channel never ends the session, and the next terminal to watch the list asks again. The daemon unsubscribes when the last terminal stops watching. A server without the channel never confirms it, and the terminal reads the list after each change it makes, as before.
+
+## 13. Scans
+
+The desktop app's scan page (docs/scanning.md) makes a searchable PDF on the computer and hands it to the daemon over the control socket (CONTROL.md, `scan_destinations` and `scan_send`); the daemon sends it as the device's owner, with the same DPoP-bound token and the same chat permission as section 12. A scan goes to one of two places:
+
+- **A new chat**: `POST /local_agent/uploads` with the PDF, then `POST /local_agent/chats` with its `signed_id` in `attachments` and the person's message, if any, as `content` (which may be empty with a file), exactly as section 12.
+- **A bot**, through a trigger of its that takes scans ("A scan from Chat with Work Desktop", `Trigger::Scan` on the server):
+
+| Request | Answers |
+|---|---|
+| `GET /local_agent/scans/new` | `{"destinations": [{"id", "name", "bot", "paused", "project"}]}`: the scan triggers the owner may send to (their own, and those of bots they handle); `id` is the trigger's |
+| `POST /local_agent/scans` (multipart: `file`, `trigger_id`, `pages`, `scan_id`, optional `scanner`) | `202 {"event": {"id", "state"}, "destination": {...}}` |
+
+`file` is the PDF (its first bytes `%PDF-`, at most 25 MB). `pages` is 1 to 500. `scan_id` is the app's id for the scan (8 to 64 letters, digits and hyphens): the server records a scan once per computer and id, so a retry after a lost answer is the same event, and the app makes a new id whenever the pages change. Refusals: `404 not_found` (no such trigger, or not one the owner may send to), `409 paused`, `413 too_large`, `415 unsupported` (not a PDF), `422 invalid`, `429 rate_limited`, and section 12's `403`s. The PDF becomes the bot's run's file, malware-scanned like any upload; the server records `local_agent.scan_sent` with the trigger, the page count and the size, never the scan. Nothing on the server can ask the computer to scan.

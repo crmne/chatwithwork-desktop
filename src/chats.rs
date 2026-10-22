@@ -726,6 +726,39 @@ impl ChatClient {
         )
     }
 
+    /// Where a scan can go: `{"destinations": [...]}`.
+    pub fn scan_destinations(&self) -> Result<Value> {
+        newer(
+            self.call("GET", "local_agent/scans/new", Body::Empty),
+            "doesn't take scans from here yet",
+        )
+    }
+
+    /// A scan to a bot's trigger, as a trigger event.
+    pub fn send_scan(&self, trigger: u64, scan: &crate::scans::Scan) -> Result<Value> {
+        let upload = Upload {
+            filename: scan.filename.clone(),
+            content_type: "application/pdf".into(),
+            data: scan.pdf.clone(),
+        };
+        let mut fields = vec![
+            ("trigger_id", trigger.to_string()),
+            ("pages", scan.pages.to_string()),
+            ("scan_id", scan.scan_id.clone()),
+        ];
+        if let Some(scanner) = &scan.scanner {
+            fields.push(("scanner", scanner.clone()));
+        }
+        newer(
+            self.call(
+                "POST",
+                "local_agent/scans",
+                multipart_with(&fields, "file", &upload)?,
+            ),
+            "doesn't take scans from here yet",
+        )
+    }
+
     pub fn dictation(&self) -> Result<Value> {
         newer(
             self.call("GET", "local_agent/dictations/new", Body::Empty),
@@ -1121,11 +1154,30 @@ fn boundary() -> Result<String> {
 }
 
 fn multipart(field: &str, upload: &Upload) -> Result<Body<'static>> {
+    multipart_with(&[], field, upload)
+}
+
+/// A multipart body: plain `fields` first, then the file.
+fn multipart_with(
+    fields: &[(&str, String)],
+    field: &str,
+    upload: &Upload,
+) -> Result<Body<'static>> {
     let boundary = boundary()?;
-    let mut data = format!(
+    let mut data = Vec::new();
+    for (name, value) in fields {
+        data.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{}\r\n",
+                value.replace(['\r', '\n'], " ")
+            )
+            .as_bytes(),
+        );
+    }
+    data.extend_from_slice(&format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
         upload.filename.replace(['"', '\\', '\r', '\n'], "_"), upload.content_type
-    ).into_bytes();
+    ).into_bytes());
     data.extend_from_slice(&upload.data);
     data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     Ok(Body::Bytes {
