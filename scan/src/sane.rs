@@ -784,7 +784,9 @@ impl Backend for Sane {
     fn devices(&mut self) -> Result<Vec<Device>, ScanError> {
         let mut list: *const *const RawDevice = std::ptr::null();
         // SAFETY: an out pointer; the list stays valid until the next call.
-        let status = unsafe { (self.api.get_devices)(&mut list, 0) };
+        // Local devices only: SANE's network backends (net, escl) look around
+        // the network for seconds; network scanners get a backend of their own.
+        let status = unsafe { (self.api.get_devices)(&mut list, 1) };
         if status != GOOD {
             return Err(self.failure(status, "looking for scanners"));
         }
