@@ -82,9 +82,15 @@ pub fn navigate_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
         desktop.set_wanted(url);
         local_url(crate::offline::PAGE)
     };
+    go_main(app, target)
+}
+
+/// Takes the Chat with Work window to `url` without checking the server,
+/// making the window if it isn't open.
+pub fn go_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
     match app.get_webview_window(MAIN) {
-        Some(window) => window.navigate(target),
-        None => remote_window(app, MAIN, target).map(drop),
+        Some(window) => window.navigate(url),
+        None => remote_window(app, MAIN, url).map(drop),
     }
 }
 
@@ -144,8 +150,12 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
                 return;
             }
             let decision = policy::top_level(&page_load.server(), payload.url());
-            if decision == Decision::Allow {
+            // Each new load may hand its page off again; only a load's own
+            // Finished repeats its Started.
+            if decision == Decision::Allow || payload.event() == PageLoadEvent::Started {
                 *handed_off.lock().expect("handoff lock") = None;
+            }
+            if decision == Decision::Allow {
                 return;
             }
             // Stop a page from elsewhere as it starts, or leave it once it

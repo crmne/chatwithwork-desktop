@@ -140,7 +140,8 @@ pub async fn offline_retry(
         let target = desktop
             .take_wanted()
             .unwrap_or_else(|| desktop.server().start_url());
-        if let Err(e) = crate::windows::navigate_main(&app, target) {
+        // Just checked: go without checking again.
+        if let Err(e) = crate::windows::go_main(&app, target) {
             return Err(json!({ "code": "failed", "message": e.to_string() }));
         }
     }

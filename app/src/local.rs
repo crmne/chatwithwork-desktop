@@ -333,7 +333,9 @@ pub async fn show_main(
         ),
         None => None,
     };
-    crate::windows::show_main(&app, url)
+    // The window checks the server first, which can take seconds.
+    blocking(move || crate::windows::show_main(&app, url))
+        .await?
         .map(|()| json!({}))
         .map_err(|e| refusal("failed", e.to_string()))
 }
