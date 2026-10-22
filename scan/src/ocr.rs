@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use image::DynamicImage;
+use image::{DynamicImage, GrayImage};
 use serde::{Deserialize, Serialize};
 
 /// A language an engine reads.
@@ -139,7 +139,7 @@ impl Engine for Tesseract {
             return Err("That isn't a language Tesseract knows.".into());
         }
         let mut png = Vec::new();
-        page.to_luma8()
+        despeckle(&page.to_luma8())
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .map_err(|e| e.to_string())?;
         let mut child = self
@@ -179,6 +179,33 @@ impl Engine for Tesseract {
         }
         Ok(parse_tsv(&tsv))
     }
+}
+
+/// The copy of a page Tesseract reads, never the one in the PDF: a 3 by 3
+/// median, which takes out isolated dots (the halftone of a printed gray
+/// paper tone, toner specks, scanner noise) and keeps strokes, which are
+/// wider. Without it Tesseract took a letter printed on gray for a picture
+/// and read two words of it; with it, every word.
+pub fn despeckle(gray: &GrayImage) -> GrayImage {
+    let (w, h) = gray.dimensions();
+    if w < 3 || h < 3 {
+        return gray.clone();
+    }
+    let src = gray.as_raw();
+    let width = w as usize;
+    let mut out = src.clone();
+    for y in 1..h as usize - 1 {
+        for x in 1..width - 1 {
+            let mut window = [0u8; 9];
+            for (i, dy) in [y - 1, y, y + 1].into_iter().enumerate() {
+                window[i * 3..i * 3 + 3]
+                    .copy_from_slice(&src[dy * width + x - 1..dy * width + x + 2]);
+            }
+            window.sort_unstable();
+            out[y * width + x] = window[4];
+        }
+    }
+    GrayImage::from_raw(w, h, out).expect("same size")
 }
 
 /// Words from Tesseract's TSV, each given its line's top and height so the
@@ -310,6 +337,20 @@ mod tests {
         assert_eq!((words[1].y, words[1].height), (400, 50));
         // A tab inside the text column stays text.
         assert_eq!(words[2].text, "Damen\tund");
+    }
+
+    #[test]
+    fn despeckling_takes_out_dots_and_keeps_strokes() {
+        // Gray paper printed as a halftone: a dark dot every third pixel, and
+        // a stroke three pixels wide.
+        let page = GrayImage::from_fn(30, 30, |x, y| {
+            let stroke = (10..13).contains(&x);
+            let dot = x % 3 == 0 && y % 3 == 0;
+            image::Luma([if stroke || dot { 20 } else { 230 }])
+        });
+        let clean = despeckle(&page);
+        assert_eq!(clean.get_pixel(21, 21)[0], 230, "a dot is gone");
+        assert_eq!(clean.get_pixel(11, 15)[0], 20, "the stroke stays");
     }
 
     #[test]
