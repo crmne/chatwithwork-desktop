@@ -1036,6 +1036,7 @@ impl Session {
     }
 
     /// A bot's `run` that nobody approved.
+    #[cfg(target_os = "linux")]
     async fn unattended_run(&mut self, arguments: Value, bot: &str) -> Value {
         self.next_id += 1;
         let id = self.next_id;
