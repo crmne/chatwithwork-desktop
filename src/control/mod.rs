@@ -191,6 +191,11 @@ pub enum ControlRequest {
     BrowserEnabled {
         enabled: bool,
     },
+    /// Allow actions on pages (open, click, type, choose, close, save
+    /// files), or only reading.
+    BrowserChanges {
+        changes: bool,
+    },
     /// Allow a site, or stop allowing it.
     BrowserSite {
         site: String,

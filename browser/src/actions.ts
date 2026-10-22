@@ -14,10 +14,13 @@ export interface Policy {
   sites: string[];
   // Stopped from the tray or `cww browser stop`.
   stopped: boolean;
+  // The person allowed actions (clicking, typing, opening pages), not
+  // only reading.
+  changes: boolean;
 }
 
-type Params = Record<string, unknown>;
-type Method = (params: Params, policy: Policy) => Promise<unknown>;
+export type Params = Record<string, unknown>;
+export type Method = (params: Params, policy: Policy) => Promise<unknown>;
 
 const READ_MAX_CHARS = 32_000;
 const SCREENSHOT_MAX_BYTES = 180_000;
@@ -26,13 +29,13 @@ const WAIT_MAX_SECONDS = 15;
 
 const EDITABLE_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton", "textarea"]);
 
-function only(params: Params, allowed: string[]): void {
+export function only(params: Params, allowed: string[]): void {
   for (const key of Object.keys(params)) {
     if (!allowed.includes(key)) throw new ToolError("invalid_argument", `unknown argument ${key}`);
   }
 }
 
-function integer(value: unknown, name: string, min: number, max: number, fallback: number): number {
+export function integer(value: unknown, name: string, min: number, max: number, fallback: number): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
     throw new ToolError("invalid_argument", `${name} must be a whole number from ${min} to ${max}`);
@@ -40,7 +43,7 @@ function integer(value: unknown, name: string, min: number, max: number, fallbac
   return value;
 }
 
-function allowedTab(tab: chrome.tabs.Tab, policy: Policy): void {
+export function allowedTab(tab: chrome.tabs.Tab, policy: Policy): void {
   const url = tab.url ?? tab.pendingUrl ?? "";
   if (!siteAllowed(url, policy.sites)) {
     const host = hostOfUrl(url);
@@ -54,7 +57,7 @@ function allowedTab(tab: chrome.tabs.Tab, policy: Policy): void {
 }
 
 // The tab a call acts on, checked, with the indicator showing.
-async function tabFor(params: Params, policy: Policy): Promise<chrome.tabs.Tab> {
+export async function tabFor(params: Params, policy: Policy): Promise<chrome.tabs.Tab> {
   const tab = await resolveTab(params.tab);
   allowedTab(tab, policy);
   await indicate(tab.id!);
@@ -63,24 +66,26 @@ async function tabFor(params: Params, policy: Policy): Promise<chrome.tabs.Tab> 
 
 // After reading: the tab must still be in the group and on an allowed site,
 // or nothing read goes out.
-async function still(tabId: number, policy: Policy): Promise<chrome.tabs.Tab> {
+export async function still(tabId: number, policy: Policy): Promise<chrome.tabs.Tab> {
   const tab = await resolveTab(tabId);
   allowedTab(tab, policy);
   return tab;
 }
 
-function about(tab: chrome.tabs.Tab): { tab: number; url: string; title: string } {
+export function about(tab: chrome.tabs.Tab): { tab: number; url: string; title: string } {
   return { tab: tab.id!, url: tab.url ?? "", title: tab.title ?? "" };
 }
 
-function withDialog<T extends object>(tabId: number, result: T): T & { dialog?: string } {
+export function withDialog<T extends object>(tabId: number, result: T): T & { dialog?: string } {
   const dialog = takeDialog(tabId);
   return dialog ? { ...result, dialog: `dismissed ${dialog}` } : result;
 }
 
-async function elementFacts(tabId: number, backendNodeId: number, role = "", name = ""): Promise<ElementFacts> {
+export async function elementFacts(tabId: number, backendNodeId: number, role = "", name = ""): Promise<ElementFacts> {
   const { node } = await send<{ node: { nodeName: string; attributes?: string[] } }>(tabId, "DOM.describeNode", {
     backendNodeId,
+  }).catch(() => {
+    throw new ToolError("not_found", `e${backendNodeId} isn't on the page any more; read the page again`);
   });
   const attrs: Record<string, string> = {};
   const list = node.attributes ?? [];
@@ -118,6 +123,17 @@ const screenshot: Method = async (params, policy) => {
   const maxBytes = integer(params.max_bytes, "max_bytes", 20_000, SCREENSHOT_MAX_BYTES, SCREENSHOT_MAX_BYTES);
   const tab = await tabFor(params, policy);
   const tabId = tab.id!;
+  const shot = await capture(tabId, maxBytes);
+  const now = await still(tabId, policy);
+  return withDialog(tabId, { ...about(now), ...shot });
+};
+
+// A JPEG of what the tab shows, at most `maxBytes` of base64, with
+// sensitive fields blurred and the indicator hidden.
+export async function capture(
+  tabId: number,
+  maxBytes: number,
+): Promise<{ width: number; height: number; image: { mime_type: string; data: string } }> {
   const metrics = await send<{
     cssVisualViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
   }>(tabId, "Page.getLayoutMetrics");
@@ -171,14 +187,12 @@ const screenshot: Method = async (params, policy) => {
   if (data.length > maxBytes) {
     throw new ToolError("too_large", "the screenshot doesn't fit in a tool result");
   }
-  const now = await still(tabId, policy);
-  return withDialog(tabId, {
-    ...about(now),
+  return {
     width: Math.round(view.clientWidth * scale),
     height: Math.round(view.clientHeight * scale),
     image: { mime_type: "image/jpeg", data },
-  });
-};
+  };
+}
 
 function scrollPage(direction: string, pages: number): { y: number; height: number; view: number } {
   const amount = Math.round(window.innerHeight * 0.85 * pages) * (direction === "up" ? -1 : 1);

@@ -25,9 +25,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{ErrorCode, ToolError};
 
-/// Longest line the extension may send: a screenshot is at most about
-/// 180 KB, a page of text 32 000 characters.
-const MAX_LINE: usize = 4 * 1024 * 1024;
+/// Longest line the extension may send: a downloaded file of up to 10 MB,
+/// in base64.
+const MAX_LINE: usize = 16 * 1024 * 1024;
 
 /// How long a call waits for the extension, under the server's 20 seconds.
 const CALL_TIMEOUT: Duration = Duration::from_secs(18);
@@ -37,6 +37,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(18);
 pub struct Policy {
     pub sites: Vec<String>,
     pub stopped: bool,
+    /// Actions are allowed, not only reading.
+    pub changes: bool,
 }
 
 /// The browser that is attached, as it said in its `hello`.
@@ -425,6 +427,7 @@ fn tool_error(error: &Value) -> ToolError {
         "would_submit" => ErrorCode::WouldSubmit,
         "browser_stopped" => ErrorCode::BrowserStopped,
         "not_found" => ErrorCode::NotFound,
+        "not_writable" => ErrorCode::NotWritable,
         "internal" => ErrorCode::Internal,
         _ => ErrorCode::PageError,
     };

@@ -1,6 +1,6 @@
 # Using the browser
 
-Status: **reading built and tested on Linux with Chromium; changes, the desktop app's settings and the Web Store listing are next.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details will be in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
+Status: **reading and acting built and tested on Linux with Chromium; the desktop app's settings and tray switch, the server side, and the Web Store listing are next.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details will be in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
 
 ## Shape
 
@@ -27,6 +27,8 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
   | `browser_close` | write | Close a tab in the group |
   | `browser_download` | write | Save a link's file into a shared folder that allows changes |
 
+  The reads are offered while the browser is on; the rest only while the person also allows actions on the computer (`cww browser allow-changes`), like a folder's "Allow changes", and `browser_download` only while a folder allows changes. Each action takes `dry_run`, which checks it and describes it without doing it.
+
   Reads run without asking. Writes ask on the approval card and can be allowed for the rest of a chat. Destructive calls always ask, and their card shows a screenshot of the page with what will be clicked outlined (from a dry run, as for file changes).
 
 ## Safety
@@ -37,7 +39,7 @@ All of it holds on the computer, whatever the server sends. The extension enforc
 - **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something always asks, with the screenshot. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat.
 - **Passwords and payments.** The extension never types into, and never reads, password fields, card fields (`autocomplete="cc-*"`, card number, expiry, security code) or one-time codes (`sensitive_field`). `browser_read` leaves their values out, and screenshots blur them: a screenshot is refused (`page_error`) unless every such field it finds is blurred.
 - **Outside text.** What a page says is outside text for the taint rule: after a chat reads a page, every change asks again, and browser changes never count as "writes to the computer's own files", since they leave the computer.
-- **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, the change budgets). Downloads a page starts by itself in the group are denied.
+- **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, the change budgets). A download a page starts by itself while the extension acts on its tab (until it detaches, a minute after its last call) is cancelled and removed; the person's own downloads elsewhere are untouched.
 - **Visible.** While the agent acts on a tab, the tab shows a "Chat with Work is using this tab" bar, the group's title says so, and the extension's icon has a badge. Chrome also shows its own "started debugging this browser" bar while the debugger is attached; the extension detaches after a minute without a call, so the bar doesn't stay.
 - **Kill switch.** "Stop" in the extension's menu and `cww browser stop` (and, with the desktop app's settings, next, "Stop using the browser" in the tray) detach at once and refuse every browser call (`browser_stopped`) until the person resumes. Pausing the computer stops it too.
 - **Bots.** A bot's chats reach the browser only when the person lends it on the computer (`cww browser lend <bot>`), like a folder, and only the sites allowed there.

@@ -56,6 +56,11 @@ pub struct Config {
 pub struct BrowserConfig {
     /// Offer the browser tools. The person's choice, on this computer.
     pub enabled: bool,
+    /// Also offer the tools that act on pages: open, click, type, choose,
+    /// close, and save files into a folder that allows changes. Each still
+    /// waits for approval in Chat with Work.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub changes: bool,
     /// Stopped from the tray, `cww browser stop` or the extension: the
     /// tools stay listed and every call is refused until resumed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]

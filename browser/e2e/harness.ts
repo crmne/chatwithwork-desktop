@@ -37,13 +37,13 @@ export class FakeDaemon {
   readonly events: any[] = [];
   attachedOrigin = "";
   private attachedWaiters: (() => void)[] = [];
-  policy: { sites: string[]; stopped: boolean };
+  policy: { sites: string[]; stopped: boolean; changes: boolean };
 
   constructor(
     readonly path: string,
     sites: string[],
   ) {
-    this.policy = { sites, stopped: false };
+    this.policy = { sites, stopped: false, changes: false };
     this.server = createServer((socket) => this.accept(socket));
   }
 
@@ -97,7 +97,7 @@ export class FakeDaemon {
     this.socket?.write(`${JSON.stringify({ method: "policy", params: this.policy })}\n`);
   }
 
-  setPolicy(policy: Partial<{ sites: string[]; stopped: boolean }>): void {
+  setPolicy(policy: Partial<{ sites: string[]; stopped: boolean; changes: boolean }>): void {
     this.policy = { ...this.policy, ...policy };
     this.sendPolicy();
   }

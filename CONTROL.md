@@ -253,7 +253,7 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 ```
 
 ```json
-{"ok": true, "browser": {"enabled": true, "stopped": false, "sites": ["github.com"], "bots": [],
+{"ok": true, "browser": {"enabled": true, "changes": false, "stopped": false, "sites": ["github.com"], "bots": [],
   "connected": true, "extension": {"origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/",
   "version": "0.1.0", "browser": "Chrome 141", "stopped": false, "since": "2026-10-22T08:14:03Z"}}}
 ```
@@ -263,11 +263,12 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 | Request | Does |
 |---|---|
 | `{"cmd": "browser_enabled", "enabled": true}` | Offers the browser tools, or stops offering them, and reconnects so the server lists them again. Clients register the native messaging host first, with `cww::browsing::install::register` (as `cww browser enable` does): the confined daemon can't write the browsers' folders. Writes `browser_enabled` or `browser_disabled`. |
+| `{"cmd": "browser_changes", "changes": true}` | Also offers the tools that act on pages (open, click, type, choose, close, save files), or only the reads. Clients should say what that means, and ask, before turning it on; turning it off needs no question. Reconnects for a new tool list. Writes `browser_changes_allowed` or `browser_changes_stopped`. |
 | `{"cmd": "browser_site", "site": "github.com", "allowed": true}` | Allows a site, or stops allowing it: a host (it and its subdomains, over HTTPS) or an origin (`http://localhost:3000`, exactly). Refused for anything else. Writes `browser_site_allowed` or `browser_site_removed` with the site. |
 | `{"cmd": "browser_stopped", "stopped": true}` | The kill switch: every browser call is refused (`browser_stopped`) and the extension detaches from its tabs at once, until `false`. Pausing the computer does the same. Writes `browser_stopped` or `browser_resumed`. |
 | `{"cmd": "browser_bot", "bot": "42", "name": "Researcher", "lent": true}` | Lends the browser to a bot (its chats may use it on the same sites, each change still approved in Chat with Work), or stops. Writes `browser_bot_lent` or `browser_bot_withdrawn`. |
 
-Each answers like `browser`. `cww browser enable|disable|allow|disallow|stop|resume|lend|stop-lending|status` edit `config.toml` the same way and send `reload`.
+Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|stop|resume|lend|stop-lending|status` edit `config.toml` the same way and send `reload`.
 
 **`browser_attach`** is for the native messaging host only (`cww` started by the browser with the extension's origin as its argument):
 
@@ -275,7 +276,7 @@ Each answers like `browser`. `cww browser enable|disable|allow|disallow|stop|res
 {"cmd": "browser_attach", "origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/"}
 ```
 
-The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "stopped": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
+The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "stopped": false, "changes": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
 
 ### `commands`, `command_output` and `command_stop`
 

@@ -629,6 +629,7 @@ impl Daemon {
             *self.tunnel_token.lock().await = token.clone();
             let max_message_bytes = self.config.lock().await.limits.max_message_bytes;
             let commands = command_tools(&*self.config.lock().await, &self.runner);
+            let browser_config = self.config.lock().await.browser.clone();
             let files = LocalFiles::new(
                 Arc::clone(&self.reader),
                 Arc::clone(&self.writer),
@@ -639,8 +640,14 @@ impl Daemon {
             )
             .with_commands(commands)
             .with_browser(
-                (self.organization.is_none() && self.config.lock().await.browser.enabled)
-                    .then(|| crate::browsing::tools::BrowserTools::new(Arc::clone(&self.browser))),
+                (self.organization.is_none() && browser_config.enabled).then(|| {
+                    crate::browsing::tools::BrowserTools::new(
+                        Arc::clone(&self.browser),
+                        Some(Arc::clone(&self.writer)),
+                        Arc::clone(&self.limiter),
+                        browser_config.changes,
+                    )
+                }),
             );
             let proxy_setting = self.config.lock().await.proxy.clone();
             let tunnel = crate::proxy::for_server(proxy_setting.as_deref(), &credentials.server)
@@ -740,7 +747,8 @@ impl Daemon {
             || config.proxy != new.proxy
             || writable_roots(&config) != writable_roots(&new)
             || command_roots(&config) != command_roots(&new)
-            || config.browser.enabled != new.browser.enabled;
+            || config.browser.enabled != new.browser.enabled
+            || config.browser.changes != new.browser.changes;
         self.configure_browser(&new);
         *config = new;
         drop(config);
@@ -1290,6 +1298,7 @@ impl ControlHandler for Daemon {
                     | ControlRequest::Browser
                     | ControlRequest::BrowserEnabled { .. }
                     | ControlRequest::BrowserSite { .. }
+                    | ControlRequest::BrowserChanges { .. }
                     | ControlRequest::BrowserStopped { .. }
                     | ControlRequest::BrowserBot { .. }
             )
@@ -1378,6 +1387,21 @@ impl ControlHandler for Daemon {
                     None,
                     move |config| {
                         config.browser.enabled = enabled;
+                        Ok(())
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserChanges { changes } => {
+                self.edit_browser(
+                    if changes {
+                        "browser_changes_allowed"
+                    } else {
+                        "browser_changes_stopped"
+                    },
+                    None,
+                    move |config| {
+                        config.browser.changes = changes;
                         Ok(())
                     },
                 )

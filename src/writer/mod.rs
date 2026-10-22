@@ -622,6 +622,39 @@ impl Writer {
         self.create_file(&t, req.content.as_bytes(), req.dry_run)
     }
 
+    /// Save a file the browser downloaded as the new file `path`, as it
+    /// came: never over anything, never a program or launcher (the name
+    /// rules of every change), within the size cap and the change budgets,
+    /// with the system's download mark.
+    pub fn save_file(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        dry_run: bool,
+    ) -> Result<ChangeResult, ToolError> {
+        let _one = self.one_at_a_time();
+        let view = self.reader.change_view();
+        let t = self.target(&view, path)?;
+        kinds::check_new_name(&t.name)?;
+        if bytes.len() as u64 > view.limits.max_change_file_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "The file is {} bytes; files up to {} bytes can be saved.",
+                    bytes.len(),
+                    view.limits.max_change_file_bytes
+                ),
+            ));
+        }
+        if t.dir.entry(t.name())?.is_some() {
+            return Err(ToolError::new(
+                ErrorCode::Exists,
+                format!("{} already exists. Pick another name.", t.tool_path),
+            ));
+        }
+        self.create_file(&t, bytes, dry_run)
+    }
+
     /// Write `bytes` as the new file `t`.
     fn create_file(
         &self,
