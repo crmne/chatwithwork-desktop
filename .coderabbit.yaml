@@ -4,7 +4,7 @@ reviews:
   # While the move to Tauri is reviewed: the egui app's files it removes
   # (kept at the egui-final tag), and what it copies in unchanged (the web
   # app's tokens, Geist, Phosphor's icon data, the logo). Drop these once
-  # it's merged.
+  # it's merged (the icons and terminal snapshots too).
   path_filters:
     - "!app/src/ui/**"
     - "!app/src/clipboard.rs"
@@ -21,6 +21,8 @@ reviews:
     - "!app/ui/tokens.css"
     - "!app/ui/icons.js"
     - "!app/ui/mark.svg"
+    - "!app/icons/**"
+    - "!src/tui/snapshots/**"
   request_changes_workflow: true
   pre_merge_checks:
     custom_checks:
