@@ -44,6 +44,9 @@ test("a download the page starts by itself doesn't happen", async () => {
       chromium.executablePath(),
       [
         "--headless=new",
+        // As Playwright launches it: CI's Ubuntu forbids the sandbox's
+        // user namespaces.
+        "--no-sandbox",
         `--user-data-dir=${profile}`,
         "--no-first-run",
         "--no-default-browser-check",
