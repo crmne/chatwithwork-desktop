@@ -4,7 +4,7 @@
 //! selects from the two the daemon offers:
 //!
 //! - `actioncable-v1-json` (default): the Action Cable protocol that Rails
-//!   speaks. The daemon subscribes to `LocalAgent::Channel`; the server sends
+//!   speaks. The daemon subscribes to `Desktop::Channel`; the server sends
 //!   each JSON-RPC message as the `message` of a channel broadcast, and the
 //!   daemon sends each JSON-RPC message as the `data` string of a `message`
 //!   command.
@@ -12,8 +12,8 @@
 //!   relays that don't use Action Cable.
 //!
 //! With Action Cable framing the daemon may also subscribe to
-//! `LocalAgent::ChatChannel`, once per chat the terminal UI follows, and
-//! receive that chat's updates, and to `LocalAgent::ChatsChannel`, once, for
+//! `Desktop::ChatChannel`, once per chat the terminal UI follows, and
+//! receive that chat's updates, and to `Desktop::ChatsChannel`, once, for
 //! the chat list's. Those never reach the MCP server.
 
 use serde_json::{Value, json};
@@ -23,13 +23,13 @@ pub const SUBPROTOCOL_MCP: &str = "mcp";
 /// Offered in this order; the server picks one.
 pub const OFFERED_SUBPROTOCOLS: &str = "actioncable-v1-json, mcp";
 /// The Action Cable channel identifier, byte for byte.
-pub const CHANNEL_IDENTIFIER: &str = r#"{"channel":"LocalAgent::Channel"}"#;
+pub const CHANNEL_IDENTIFIER: &str = r#"{"channel":"Desktop::Channel"}"#;
 /// The channel for one followed chat: `{"channel":…,"chat":"42"}`.
-pub const CHAT_CHANNEL: &str = "LocalAgent::ChatChannel";
+pub const CHAT_CHANNEL: &str = "Desktop::ChatChannel";
 /// The channel that keeps the chat list current. It takes no parameters.
-pub const CHATS_CHANNEL: &str = "LocalAgent::ChatsChannel";
-pub const CHATS_IDENTIFIER: &str = r#"{"channel":"LocalAgent::ChatsChannel"}"#;
-pub const NOTIFICATIONS_IDENTIFIER: &str = r#"{"channel":"LocalAgent::NotificationsChannel"}"#;
+pub const CHATS_CHANNEL: &str = "Desktop::ChatsChannel";
+pub const CHATS_IDENTIFIER: &str = r#"{"channel":"Desktop::ChatsChannel"}"#;
+pub const NOTIFICATIONS_IDENTIFIER: &str = r#"{"channel":"Desktop::NotificationsChannel"}"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framing {
@@ -187,9 +187,7 @@ fn decode_action_cable(mut value: Value) -> Inbound {
     let list = is_chat_list(identifier);
     let notifications = identifier
         .and_then(|identifier| serde_json::from_str::<Value>(identifier).ok())
-        .is_some_and(|identifier| {
-            identifier == json!({"channel":"LocalAgent::NotificationsChannel"})
-        });
+        .is_some_and(|identifier| identifier == json!({"channel":"Desktop::NotificationsChannel"}));
     match value.get("type").and_then(Value::as_str) {
         Some("welcome") => return Inbound::Welcome,
         Some("ping") => return Inbound::Ping,
@@ -273,7 +271,7 @@ mod tests {
             framing.decode(&refused.to_string()),
             Inbound::NotificationsRejected
         );
-        let parameterized = json!({"identifier": r#"{"channel":"LocalAgent::NotificationsChannel","account":"other"}"#, "message": {"type":"ready"}});
+        let parameterized = json!({"identifier": r#"{"channel":"Desktop::NotificationsChannel","account":"other"}"#, "message": {"type":"ready"}});
         assert_eq!(framing.decode(&parameterized.to_string()), Inbound::Ignored);
     }
 
@@ -282,7 +280,7 @@ mod tests {
         let f = Framing::ActionCable;
         assert_eq!(
             f.opening_frames(),
-            vec![r#"{"command":"subscribe","identifier":"{\"channel\":\"LocalAgent::Channel\"}"}"#]
+            vec![r#"{"command":"subscribe","identifier":"{\"channel\":\"Desktop::Channel\"}"}"#]
         );
         let out: Value =
             serde_json::from_str(&f.encode(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)).unwrap();
@@ -370,12 +368,12 @@ mod tests {
             Inbound::ChatList(json!({ "event": "removed", "number": 42 }))
         );
         // The same channel, with the keys the other way round, is still it.
-        let spaced = json!({ "identifier": "{ \"channel\": \"LocalAgent::ChatsChannel\" }", "type": "confirm_subscription" });
+        let spaced = json!({ "identifier": "{ \"channel\": \"Desktop::ChatsChannel\" }", "type": "confirm_subscription" });
         assert_eq!(f.decode(&spaced.to_string()), Inbound::ChatListConfirmed);
         let rejected = json!({ "identifier": CHATS_IDENTIFIER, "type": "reject_subscription" });
         assert_eq!(f.decode(&rejected.to_string()), Inbound::ChatListRejected);
         // With a parameter it's no channel the daemon subscribed to.
-        let other = json!({ "identifier": "{\"channel\":\"LocalAgent::ChatsChannel\",\"x\":1}", "message": { "event": "removed", "number": 1 } });
+        let other = json!({ "identifier": "{\"channel\":\"Desktop::ChatsChannel\",\"x\":1}", "message": { "event": "removed", "number": 1 } });
         assert_eq!(f.decode(&other.to_string()), Inbound::Ignored);
         // Shaped like a tool call, it's still a list event.
         let sneaky = json!({ "identifier": CHATS_IDENTIFIER, "message": { "jsonrpc": "2.0", "id": 1, "method": "tools/call" } });

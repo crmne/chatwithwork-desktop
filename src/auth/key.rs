@@ -159,14 +159,14 @@ mod tests {
 
         let proof = key.proof_at(
             "GET",
-            "https://example.com/local_agent",
+            "https://example.com/desktop",
             Some("n1"),
             Some("tok"),
             1000,
         );
         let claims = verify_proof(&proof, &key.public_key()).unwrap();
         assert_eq!(claims["htm"], "GET");
-        assert_eq!(claims["htu"], "https://example.com/local_agent");
+        assert_eq!(claims["htu"], "https://example.com/desktop");
         assert_eq!(claims["nonce"], "n1");
         assert_eq!(claims["iat"], 1000);
         // ath = base64url(sha256("tok"))

@@ -24,16 +24,16 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
 - The **daemon** runs on the user's computer. It is an MCP *server* that lets Chat with Work read, and with the user's approval change files and run commands, in folders the user shares: four read-only tools, seven change tools while at least one shared folder allows changes (section 8.7), and the command tools while one also allows commands, on Linux and macOS (section 8.15).
 - The **server** is Chat with Work. It is the MCP *client*: the model loop runs there and calls the tools.
-- The daemon opens the only connection, outbound, to `wss://<server>/local_agent`. The server never connects to the daemon.
+- The daemon opens the only connection, outbound, to `wss://<server>/desktop`. The server never connects to the daemon.
 - Over that socket the server sends JSON-RPC requests and the daemon answers them. The daemon never sends requests: no sampling, no elicitation, no roots.
 
 ```
-cww login        POST /local_agent/device_authorizations   (DPoP)
+cww login        POST /desktop/device_authorizations   (DPoP)
                  user approves at /device
-                 POST /local_agent/token  device_code grant (DPoP) -> device_id + refresh_token
+                 POST /desktop/token  device_code grant (DPoP) -> device_id + refresh_token
 
-cww daemon run   POST /local_agent/token  refresh_token grant (DPoP) -> access_token (10 min)
-                 GET  /local_agent  Upgrade: websocket
+cww daemon run   POST /desktop/token  refresh_token grant (DPoP) -> access_token (10 min)
+                 GET  /desktop  Upgrade: websocket
                       Authorization: DPoP <access_token>
                       DPoP: <proof bound to the token>
                  <- MCP requests / -> MCP responses, until the socket closes
@@ -45,8 +45,8 @@ cww daemon run   POST /local_agent/token  refresh_token grant (DPoP) -> access_t
 The user gives the server as an origin, for example `https://chatwithwork.com` (the default). The daemon rejects URLs with a path, query, fragment or credentials.
 
 - `https://` is required. Plain `http://` is accepted only when the host is `localhost` or a loopback IP, for development.
-- HTTP endpoints are `<origin>/local_agent/device_authorizations` and `<origin>/local_agent/token`.
-- The WebSocket URL is `wss://<host[:port]>/local_agent` (`ws://` for the loopback exception).
+- HTTP endpoints are `<origin>/desktop/device_authorizations` and `<origin>/desktop/token`.
+- The WebSocket URL is `wss://<host[:port]>/desktop` (`ws://` for the loopback exception).
 - TLS uses rustls. The daemon trusts the operating system's certificate store (macOS keychains, the Windows certificate store, the distribution's CA bundle on Linux, or `SSL_CERT_FILE`/`SSL_CERT_DIR` when set) plus Mozilla's root certificates, so servers behind private CAs work. The daemon never follows redirects: a 3xx from any endpoint is an error.
 
 ## 3. Device key and DPoP proofs
@@ -67,7 +67,7 @@ Every call to the token endpoints and the WebSocket upgrade carries a **`DPoP`**
 |---|---|
 | `jti` | 16 random bytes, base64url. Unique per proof. |
 | `htm` | `POST` for the token endpoints, `GET` for the WebSocket upgrade. |
-| `htu` | The full HTTP(S) URL of the request, without query: `https://<host>/local_agent/token`, `https://<host>/local_agent/device_authorizations`, or `https://<host>/local_agent` for the upgrade (the HTTPS form, even though the socket URL is `wss://`). |
+| `htu` | The full HTTP(S) URL of the request, without query: `https://<host>/desktop/token`, `https://<host>/desktop/device_authorizations`, or `https://<host>/desktop` for the upgrade (the HTTPS form, even though the socket URL is `wss://`). |
 | `iat` | Current Unix time in seconds. |
 | `nonce` | The latest `DPoP-Nonce` the server sent, if the daemon has one. |
 | `ath` | Only on the WebSocket upgrade: base64url(SHA-256(access token)). |
@@ -83,13 +83,13 @@ The JWK thumbprint ([RFC 7638](https://www.rfc-editor.org/rfc/rfc7638)) is `base
 ### 4.1 Device authorization request
 
 ```
-POST /local_agent/device_authorizations
+POST /desktop/device_authorizations
 Content-Type: application/x-www-form-urlencoded
 Accept: application/json
-DPoP: <proof, htm=POST, htu=https://<host>/local_agent/device_authorizations>
+DPoP: <proof, htm=POST, htu=https://<host>/desktop/device_authorizations>
 
 client_id=cww
-&scope=local_agent:serve local_agent:chat
+&scope=desktop:serve desktop:chat
 &public_key=<base64url Ed25519 public key>
 &name=<device name, defaults to the hostname>
 &platform=<linux | macos | windows>
@@ -118,9 +118,9 @@ The server stores the public key with the pending authorization, together with t
 The daemon waits `interval` seconds, then polls until it is approved, denied, or `expires_in` passes:
 
 ```
-POST /local_agent/token
+POST /desktop/token
 Content-Type: application/x-www-form-urlencoded
-DPoP: <proof, htm=POST, htu=https://<host>/local_agent/token>
+DPoP: <proof, htm=POST, htu=https://<host>/desktop/token>
 
 grant_type=urn:ietf:params:oauth:grant-type:device_code
 &device_code=<device_code>
@@ -144,7 +144,7 @@ The proof MUST be signed by the key registered in 4.1.
   "access_token": "…",
   "token_type": "DPoP",
   "expires_in": 600,
-  "scope": "local_agent:serve",
+  "scope": "desktop:serve",
   "refresh_token": "…",
   "device_id": "42"
 }
@@ -157,9 +157,9 @@ The proof MUST be signed by the key registered in 4.1.
 Before connecting, the daemon exchanges its refresh credential for a short-lived access token:
 
 ```
-POST /local_agent/token
+POST /desktop/token
 Content-Type: application/x-www-form-urlencoded
-DPoP: <proof, htm=POST, htu=https://<host>/local_agent/token>
+DPoP: <proof, htm=POST, htu=https://<host>/desktop/token>
 
 grant_type=refresh_token
 &refresh_token=<refresh_token>
@@ -173,12 +173,12 @@ grant_type=refresh_token
   "access_token": "…",
   "token_type": "DPoP",
   "expires_in": 600,
-  "scope": "local_agent:serve",
+  "scope": "desktop:serve",
   "refresh_token": "…"
 }
 ```
 
-- The access token is opaque to the daemon. The design calls for a signed token with a 10-minute lifetime, `aud` equal to the server origin, `scope=local_agent:serve`, and binding to the device key (`cnf.jkt`). That scope MUST NOT grant access to any other API. While the owner lets the computer use their chats, the scope also carries `local_agent:chat`, which opens the chat API of section 12 and nothing else.
+- The access token is opaque to the daemon. The design calls for a signed token with a 10-minute lifetime, `aud` equal to the server origin, `scope=desktop:serve`, and binding to the device key (`cnf.jkt`). That scope MUST NOT grant access to any other API. While the owner lets the computer use their chats, the scope also carries `desktop:chat`, which opens the chat API of section 12 and nothing else.
 - `refresh_token` in the response is OPTIONAL. If present and different, the daemon replaces the stored one (rotation). Servers that rotate SHOULD accept the previous refresh token for a short grace period, because the daemon may crash between receiving and storing it.
 - The daemon caches the access token in memory and refreshes it 60 seconds before `expires_in` runs out, or after the server rejects it.
 - The refresh request MUST be rejected with `400 {"error":"invalid_grant"}` once the device is revoked. On `invalid_grant`, `unauthorized_client` or `access_denied`, the daemon marks itself **revoked**, closes the tunnel, stops reconnecting, and waits for the user to run `cww login`. Any other failure (network error, 5xx, other error codes) is retried with backoff.
@@ -188,7 +188,7 @@ grant_type=refresh_token
 ### 6.1 Upgrade request
 
 ```
-GET /local_agent HTTP/1.1
+GET /desktop HTTP/1.1
 Host: chatwithwork.com
 Upgrade: websocket
 Connection: Upgrade
@@ -196,7 +196,7 @@ Sec-WebSocket-Version: 13
 Sec-WebSocket-Key: …
 Sec-WebSocket-Protocol: actioncable-v1-json, mcp
 Authorization: DPoP <access_token>
-DPoP: <proof, htm=GET, htu=https://<host>/local_agent, ath=…, nonce=…>
+DPoP: <proof, htm=GET, htu=https://<host>/desktop, ath=…, nonce=…>
 Origin: https://chatwithwork.com
 User-Agent: cww/0.1.0
 ```
@@ -205,7 +205,7 @@ User-Agent: cww/0.1.0
 - `Origin` is the server's own origin, so Action Cable's same-origin check (`allow_same_origin_as_host`) accepts it.
 - Behind an HTTP proxy, the daemon first opens a tunnel with `CONNECT <host>:<port>` and runs TLS and this request inside it, as it does for the pairing and token requests. The server sees the same bytes either way.
 
-**The server MUST**, before accepting the upgrade: validate the access token (signature, expiry, audience, scope `local_agent:serve`, device not revoked), validate the DPoP proof as in section 3, including `ath`, and check that the proof key is the one the token is bound to.
+**The server MUST**, before accepting the upgrade: validate the access token (signature, expiry, audience, scope `desktop:serve`, device not revoked), validate the DPoP proof as in section 3, including `ath`, and check that the proof key is the one the token is bound to.
 
 **Rejection.** Respond `401` (or `403`) instead of `101`, with a fresh `DPoP-Nonce` header. The daemon retries once right away with the new nonce, or with a freshly refreshed token if no nonce came back. After that it falls back to the normal backoff.
 
@@ -223,21 +223,21 @@ Any other selection is an error, and the daemon disconnects.
 **Action Cable framing.** The channel identifier is this exact string:
 
 ```
-{"channel":"LocalAgent::Channel"}
+{"channel":"Desktop::Channel"}
 ```
 
 1. The server MAY send `{"type":"welcome"}`.
-2. The daemon sends `{"command":"subscribe","identifier":"{\"channel\":\"LocalAgent::Channel\"}"}`.
+2. The daemon sends `{"command":"subscribe","identifier":"{\"channel\":\"Desktop::Channel\"}"}`.
 3. The server answers `{"identifier":"…","type":"confirm_subscription"}`, or `reject_subscription`, which the daemon treats as unauthorized (see 6.4). Only this channel's rejection counts: a refused chat channel (section 12) is just a chat that can't be followed.
 4. **Server to daemon:** each JSON-RPC message is the `message` of a channel transmission:
-   `{"identifier":"{\"channel\":\"LocalAgent::Channel\"}","message":{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{…}}}`.
+   `{"identifier":"{\"channel\":\"Desktop::Channel\"}","message":{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{…}}}`.
    `message` SHOULD be a JSON object. A string containing serialized JSON is also accepted. Frames for other identifiers are ignored, except the chat channels of section 12, whose messages go to the terminal UI and never to the MCP server.
 5. **Daemon to server:** each JSON-RPC message is sent as a `message` command whose `data` is the serialized JSON-RPC message:
-   `{"command":"message","identifier":"{\"channel\":\"LocalAgent::Channel\"}","data":"{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{…}}"}`.
-   JSON-RPC messages never contain an `action` key, so Rails dispatches them to `LocalAgent::Channel#receive(data)`, where `data` is the parsed JSON-RPC message.
+   `{"command":"message","identifier":"{\"channel\":\"Desktop::Channel\"}","data":"{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{…}}"}`.
+   JSON-RPC messages never contain an `action` key, so Rails dispatches them to `Desktop::Channel#receive(data)`, where `data` is the parsed JSON-RPC message.
 6. `{"type":"ping"}` frames are accepted and ignored (they count as traffic). `{"type":"disconnect","reason":…,"reconnect":…}` is handled as in 6.4.
 
-In Rails terms: authenticate in the `LocalAgent` connection's `connect` from the request headers. `transmit(jsonrpc_hash)` sends a request to the daemon. `receive(data)` gets each response.
+In Rails terms: authenticate in the `Desktop` connection's `connect` from the request headers. `transmit(jsonrpc_hash)` sends a request to the daemon. `receive(data)` gets each response.
 
 ### 6.3 Heartbeats and liveness
 
@@ -684,9 +684,9 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 
 ## 11. Decisions this spec makes
 
-`docs/local-agent.md` left these points open or ambiguous. This is what the daemon does:
+`docs/desktop.md` left these points open or ambiguous. This is what the daemon does:
 
-1. **Framing.** The design says both "JSON-RPC frames on a WebSocket" and "terminated by an Action Cable channel". The daemon speaks Action Cable (`actioncable-v1-json`, channel `LocalAgent::Channel`) by default, with bare JSON-RPC (`mcp`) as a negotiated alternative for relays and other servers.
+1. **Framing.** The design says both "JSON-RPC frames on a WebSocket" and "terminated by an Action Cable channel". The daemon speaks Action Cable (`actioncable-v1-json`, channel `Desktop::Channel`) by default, with bare JSON-RPC (`mcp`) as a negotiated alternative for relays and other servers.
 2. **Tool names** are `roots`, `search`, `list` and `read`, without the `local_` prefix the design's table shows. The server adds `local_<device_id>_`, which would otherwise produce `local_7_local_read`.
 3. **DPoP.** Standard RFC 9449 proofs with `alg: EdDSA` on every token call and on the upgrade, with `ath` on the upgrade. "Signs a server nonce" is implemented as the RFC 9449 `DPoP-Nonce` mechanism, not as a custom challenge frame.
 4. **`htu` for the upgrade** is the `https://` form of the socket URL, which is what Rails sees as `request.url`.
@@ -708,34 +708,34 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 
 `cww tui` shows the owner's chats and asks questions. It never talks to the server: it asks the daemon over the control socket (CONTROL.md), and the daemon calls the server as the device.
 
-**Permission.** Chats are a second permission, apart from answering tools. `cww login` asks for `local_agent:chat` in its scope (`--no-chats` leaves it out), and the approval page lets the user decline it. A computer paired without it asks on first use with `POST /local_agent/chat_access_request`, and the owner answers in the server's settings. The owner can take chats back at any time without unpairing; the server then refuses the chat API and closes the socket with 4001, so followed chats stop.
+**Permission.** Chats are a second permission, apart from answering tools. `cww login` asks for `desktop:chat` in its scope (`--no-chats` leaves it out), and the approval page lets the user decline it. A computer paired without it asks on first use with `POST /desktop/chat_access_request`, and the owner answers in the server's settings. The owner can take chats back at any time without unpairing; the server then refuses the chat API and closes the socket with 4001, so followed chats stop.
 
 **Requests.** JSON over HTTPS, each with `Authorization: DPoP <access token>` and a `DPoP` proof for that method and URL with `ath`, exactly as the upgrade in 6.1. Errors are `{"error": <code>, "error_description": <sentence>, ...}`.
 
 | Request | Answers |
 |---|---|
-| `GET /local_agent/chats` | `chats` (newest first: `number`, `title`, `state`, `project`, `mine`, `updated_at`, `url`, `model`, `can`), `projects` (`id`, `name`, `icon`, `hq`, `all_access`, `url`), `account`, `user`, `credits` (`left`, `capacity`, `running_low`), `locked_reason`, `pins` (`projects`, `chats`), `links` (`new_chat`, `chats`, `projects`, `settings`: `tab`, `label`, `icon`, `url`) |
-| `GET /local_agent/chats/<number>` | `chat`, `locked_reason`, `entries` (`user` with `attachments`, `activity` with title, details, `pending`, steps with file names and `waiting`, `assistant` with Markdown and `sources`, `notice`), `approvals`, and `questions` |
-| `GET /local_agent/models` | `{"default_model_id", "models": [{"id","name","provider","description","rate","selectable","reason"}]}` |
-| `POST /local_agent/chats` `{"content":…}` | `201 {"chat":…}`: a new chat with its first question |
-| `POST /local_agent/chats/<number>/messages` `{"content":…, "steer":…}` | `202 {"chat":…}`; while an answer is written, `202 {"chat":…, "queued":…}` (older servers: `409 chat_busy`) |
-| `DELETE /local_agent/chats/<number>/queued_messages/<id>` | `204`: takes back a queued message; `403 forbidden` for someone else's, `404 not_found` once the answer took it |
-| `POST /local_agent/chats/<number>/cancellation` | `202`: stops the answer |
-| `POST /local_agent/chats/<number>/tool_calls/<id>/approval` `{"for_rest_of_chat":…}` | `202 {"chat":…}` |
-| `POST /local_agent/chats/<number>/tool_calls/<id>/denial` `{"reason":…}` | `202 {"chat":…}` |
-| `POST /local_agent/chats/<number>/tool_calls/<id>/input` `{"input":{…}}` | `202 {"chat":…}`: answers a question (no `input` for a page to visit) |
-| `DELETE /local_agent/chats/<number>/tool_calls/<id>/input` | `202 {"chat":…}`: declines it |
-| `POST /local_agent/uploads` (multipart, one `file`) | `{"signed_id","filename","byte_size","content_type"}`, or `422 attachment_refused` |
-| `POST /local_agent/chats/<number>/retry` `{"message_id":…}` | `202 {"chat":…}`, or `409 chat_busy` |
-| `POST /local_agent/chats/<number>/branches` `{"message_id":…}` | `201 {"chat":…}`: the new chat |
-| `PATCH /local_agent/chats/<number>` `{"title":…}` | `{"chat":…}` |
-| `DELETE /local_agent/chats/<number>` | `204` |
-| `POST /local_agent/chats/<number>/share` | `201 {"url","expires_at","chat"}` |
-| `DELETE /local_agent/chats/<number>/share` | `{"chat":…}`: stops sharing |
-| `POST /local_agent/chat_access_request` | `202 {"granted","requested","approve_url"}` |
+| `GET /desktop/chats` | `chats` (newest first: `number`, `title`, `state`, `project`, `mine`, `updated_at`, `url`, `model`, `can`), `projects` (`id`, `name`, `icon`, `hq`, `all_access`, `url`), `account`, `user`, `credits` (`left`, `capacity`, `running_low`), `locked_reason`, `pins` (`projects`, `chats`), `links` (`new_chat`, `chats`, `projects`, `settings`: `tab`, `label`, `icon`, `url`) |
+| `GET /desktop/chats/<number>` | `chat`, `locked_reason`, `entries` (`user` with `attachments`, `activity` with title, details, `pending`, steps with file names and `waiting`, `assistant` with Markdown and `sources`, `notice`), `approvals`, and `questions` |
+| `GET /desktop/models` | `{"default_model_id", "models": [{"id","name","provider","description","rate","selectable","reason"}]}` |
+| `POST /desktop/chats` `{"content":…}` | `201 {"chat":…}`: a new chat with its first question |
+| `POST /desktop/chats/<number>/messages` `{"content":…, "steer":…}` | `202 {"chat":…}`; while an answer is written, `202 {"chat":…, "queued":…}` (older servers: `409 chat_busy`) |
+| `DELETE /desktop/chats/<number>/queued_messages/<id>` | `204`: takes back a queued message; `403 forbidden` for someone else's, `404 not_found` once the answer took it |
+| `POST /desktop/chats/<number>/cancellation` | `202`: stops the answer |
+| `POST /desktop/chats/<number>/tool_calls/<id>/approval` `{"for_rest_of_chat":…}` | `202 {"chat":…}` |
+| `POST /desktop/chats/<number>/tool_calls/<id>/denial` `{"reason":…}` | `202 {"chat":…}` |
+| `POST /desktop/chats/<number>/tool_calls/<id>/input` `{"input":{…}}` | `202 {"chat":…}`: answers a question (no `input` for a page to visit) |
+| `DELETE /desktop/chats/<number>/tool_calls/<id>/input` | `202 {"chat":…}`: declines it |
+| `POST /desktop/uploads` (multipart, one `file`) | `{"signed_id","filename","byte_size","content_type"}`, or `422 attachment_refused` |
+| `POST /desktop/chats/<number>/retry` `{"message_id":…}` | `202 {"chat":…}`, or `409 chat_busy` |
+| `POST /desktop/chats/<number>/branches` `{"message_id":…}` | `201 {"chat":…}`: the new chat |
+| `PATCH /desktop/chats/<number>` `{"title":…}` | `{"chat":…}` |
+| `DELETE /desktop/chats/<number>` | `204` |
+| `POST /desktop/chats/<number>/share` | `201 {"url","expires_at","chat"}` |
+| `DELETE /desktop/chats/<number>/share` | `{"chat":…}`: stops sharing |
+| `POST /desktop/chat_access_request` | `202 {"granted","requested","approve_url"}` |
 | `GET /assets/<path>` (no token, no proof) | The image a logo or icon names, served to anyone: only images, at most 1 MiB, never through a redirect |
 
-Both ways of asking take an optional `model_id` (from `/local_agent/models`) and `attachments`, a list of `signed_id`s from uploads; a new chat also takes `project_id`. An unknown or unselectable model fails with `422 model_unavailable`. `message_id` is optional for retry and branch (the latest question or answer without one). Every chat's JSON carries `model` (`{"id","name"}` or null), `share` (`{"url","expires_at"}` or null) and `can` (`retry`, `branch`, `rename`, `delete`, `share`); a client treats a missing `can` as allowing none of them. `approvals` lists the changes the answer stopped at: `id`, `service`, `effect`, and either `decidable: true` with `summary`, `details` (`label`, `value`) and `allow_for_rest_of_chat`, or `decidable: false` with `waiting_for`. `questions` lists what a tool's server asked the person (MCP elicitation): `id`, `service`, and either `decidable: true` with `message`, `kind` (`form` with `fields`, or `url` with `url` and `host`) and a `note`, or `decidable: false` with `waiting_for`; a missing required field is `422 invalid`. Only the person who drove that turn decides, only while the call waits (`409 already_decided` otherwise). The upload is `multipart/form-data` and can take longer than other calls; files are at most 25 MB.
+Both ways of asking take an optional `model_id` (from `/desktop/models`) and `attachments`, a list of `signed_id`s from uploads; a new chat also takes `project_id`. An unknown or unselectable model fails with `422 model_unavailable`. `message_id` is optional for retry and branch (the latest question or answer without one). Every chat's JSON carries `model` (`{"id","name"}` or null), `share` (`{"url","expires_at"}` or null) and `can` (`retry`, `branch`, `rename`, `delete`, `share`); a client treats a missing `can` as allowing none of them. `approvals` lists the changes the answer stopped at: `id`, `service`, `effect`, and either `decidable: true` with `summary`, `details` (`label`, `value`) and `allow_for_rest_of_chat`, or `decidable: false` with `waiting_for`. `questions` lists what a tool's server asked the person (MCP elicitation): `id`, `service`, and either `decidable: true` with `message`, `kind` (`form` with `fields`, or `url` with `url` and `host`) and a `note`, or `decidable: false` with `waiting_for`; a missing required field is `422 invalid`. Only the person who drove that turn decides, only while the call waits (`409 already_decided` otherwise). The upload is `multipart/form-data` and can take longer than other calls; files are at most 25 MB.
 
 **Queued messages.** While an answer is written, a message to `/messages` waits in the chat's queue instead of being refused. `"steer": true` (the default) lets the running answer take it at its next step and answer it too; `false` waits for the answer to end and makes it the next question. The answer keeps its model and web search, so `model_id` and `web_search` are ignored then, and where the server scans files it refuses them with `422 attachment_refused` until the answer finishes. The transcript lists the queue as `queued`, oldest first: `id`, `content`, `steer`, `queued_at`, plus `author` when someone else in a project chat sent it, `attachments` (a count) when it has files, and `unqueue_path` (the `DELETE` above) only for its sender. A server from before the queue sends no `queued`, and the terminal treats that as empty. Every change to the queue reaches a follower as `{"type":"changed"}`; stopping the answer leaves the queue alone, and once nothing answers, the next question takes the queued messages in first.
 
@@ -746,7 +746,7 @@ Both ways of asking take an optional `model_id` (from `/local_agent/models`) and
 **Streaming.** With Action Cable framing, the daemon follows a chat by subscribing to one more channel on the same socket:
 
 ```
-{"command":"subscribe","identifier":"{\"channel\":\"LocalAgent::ChatChannel\",\"chat\":\"42\"}"}
+{"command":"subscribe","identifier":"{\"channel\":\"Desktop::ChatChannel\",\"chat\":\"42\"}"}
 ```
 
 The server confirms it only for a device allowed to chat and a chat its owner may watch, and then sends updates as the channel's `message`: `{"type":"chunk","message_id":5,"text":"…"}` (answer text as it's written), `{"type":"progress","text":"…"}` (what the running step does), and `{"type":"changed"}` (anything else: read the chat again). The daemon subscribes once per chat however many terminals follow it, unsubscribes when the last one stops, and subscribes again after a reconnect. A refused chat channel never ends the session. With `mcp` framing there are no chat channels.
@@ -754,7 +754,7 @@ The server confirms it only for a device allowed to chat and a chat its owner ma
 **The chat list.** While a terminal shows the list, the daemon also subscribes, once, to the list's channel, which takes no parameters:
 
 ```
-{"command":"subscribe","identifier":"{\"channel\":\"LocalAgent::ChatsChannel\"}"}
+{"command":"subscribe","identifier":"{\"channel\":\"Desktop::ChatsChannel\"}"}
 ```
 
 The server confirms it for a device allowed to chat whose owner is an active member of its organization (never a guest), and rejects it otherwise. After the confirmation the terminal lists the chats once, then applies each `message` on that identifier: `{"event":"chat","chat":{…}}` (a chat started, renamed, starting or stopping being answered, switching model, getting or losing its public link, or moving in or out of a project: the same JSON as the list's, inserted by `number` or replaced, sorted by `updated_at`), `{"event":"removed","number":42}` (deleted, or out of the owner's sight), `{"event":"projects","projects":[…]}` (the whole list again), and `{"event":"account","account":{…},"user":{…},"credits":{…},"locked_reason":…}` (the list's header again). When the owner leaves a project, the server closes the socket instead; the daemon reconnects, subscribes again, and the terminal lists again on the confirmation. A rejected list channel never ends the session, and the next terminal to watch the list asks again. The daemon unsubscribes when the last terminal stops watching. A server without the channel never confirms it, and the terminal reads the list after each change it makes, as before.

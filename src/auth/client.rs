@@ -16,11 +16,11 @@ use super::key::DeviceKey;
 use crate::proxy::Proxy;
 
 pub const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-pub const SCOPE: &str = "local_agent:serve";
+pub const SCOPE: &str = "desktop:serve";
 /// Asked for as well when pairing, unless the user opts out: the terminal
 /// UI's chats, relayed by the daemon. The server asks the user about it
 /// separately and may leave it out.
-pub const CHAT_SCOPE: &str = "local_agent:chat";
+pub const CHAT_SCOPE: &str = "desktop:chat";
 
 /// A validated server origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +82,7 @@ impl ServerUrl {
         format!("{}/{}", self.origin(), path.trim_start_matches('/'))
     }
 
-    /// `wss://host/local_agent` (or `ws://` on loopback).
+    /// `wss://host/desktop` (or `ws://` on loopback).
     pub fn websocket_url(&self) -> String {
         let scheme = if self.is_secure() { "wss" } else { "ws" };
         let rest = self
@@ -90,12 +90,12 @@ impl ServerUrl {
             .split_once("://")
             .map(|(_, r)| r.to_string())
             .unwrap_or_default();
-        format!("{scheme}://{rest}/local_agent")
+        format!("{scheme}://{rest}/desktop")
     }
 
     /// The `htu` for the WebSocket upgrade: the HTTP(S) form of its URL.
     pub fn websocket_htu(&self) -> String {
-        self.endpoint("local_agent")
+        self.endpoint("desktop")
     }
 }
 
@@ -367,7 +367,7 @@ impl AuthClient {
             ("platform", info.platform.as_str()),
             ("client_version", info.client_version.as_str()),
         ];
-        let (status, body) = self.post(key, "local_agent/device_authorizations", &form)?;
+        let (status, body) = self.post(key, "desktop/device_authorizations", &form)?;
         if status != 200 {
             return Err(oauth_error(status, &body));
         }
@@ -381,7 +381,7 @@ impl AuthClient {
             ("device_code", device_code),
             ("client_id", "cww"),
         ];
-        let (status, body) = self.post(key, "local_agent/token", &form)?;
+        let (status, body) = self.post(key, "desktop/token", &form)?;
         if status == 200 {
             let token: TokenResponse =
                 serde_json::from_value(body).context("unexpected token response")?;
@@ -552,7 +552,7 @@ impl AuthClient {
             ("refresh_token", refresh_token),
             ("client_id", "cww"),
         ];
-        let (status, body) = self.post(key, "local_agent/token", &form)?;
+        let (status, body) = self.post(key, "desktop/token", &form)?;
         if status == 200 {
             return serde_json::from_value(body)
                 .context("unexpected token response")
@@ -597,14 +597,14 @@ mod tests {
     fn validates_server_urls() {
         let s = ServerUrl::parse("chatwithwork.com").unwrap();
         assert_eq!(s.origin(), "https://chatwithwork.com");
-        assert_eq!(s.websocket_url(), "wss://chatwithwork.com/local_agent");
-        assert_eq!(s.websocket_htu(), "https://chatwithwork.com/local_agent");
+        assert_eq!(s.websocket_url(), "wss://chatwithwork.com/desktop");
+        assert_eq!(s.websocket_htu(), "https://chatwithwork.com/desktop");
         assert_eq!(
-            s.endpoint("local_agent/token"),
-            "https://chatwithwork.com/local_agent/token"
+            s.endpoint("desktop/token"),
+            "https://chatwithwork.com/desktop/token"
         );
         let local = ServerUrl::parse("http://127.0.0.1:3000/").unwrap();
-        assert_eq!(local.websocket_url(), "ws://127.0.0.1:3000/local_agent");
+        assert_eq!(local.websocket_url(), "ws://127.0.0.1:3000/desktop");
         assert!(ServerUrl::parse("http://localhost:3000").is_ok());
         for bad in [
             "http://example.com",

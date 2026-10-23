@@ -3984,7 +3984,7 @@ fn queued(id: u64, content: &str, steer: bool, mine: bool) -> super::chat::Queue
         queued_at: "2026-09-25T08:19:00Z".into(),
         author: (!mine).then(|| "Ada".into()),
         attachments: None,
-        unqueue_path: mine.then(|| format!("/local_agent/chats/42/queued_messages/{id}")),
+        unqueue_path: mine.then(|| format!("/desktop/chats/42/queued_messages/{id}")),
     }
 }
 

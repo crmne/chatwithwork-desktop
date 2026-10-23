@@ -124,7 +124,7 @@ async fn trusts_a_private_ca_from_the_os_store() {
             .build()
             .into();
         agent
-            .get(&format!("https://localhost:{port}/local_agent/token"))
+            .get(&format!("https://localhost:{port}/desktop/token"))
             .call()
             .map(|r| r.status().as_u16())
     })

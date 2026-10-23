@@ -40,7 +40,7 @@ Each app download carries `cww` beside the GUI (inside the bundle on macOS), so 
 
 ## Crash reports
 
-The background agent's opt-in crash reports (README, "Crash reports") go to the `cww-local-agent` project on our Bugsink server. Its address is compiled in from `src/crash_reports.rs`. Set `CWW_CRASH_REPORTS_DSN` at build time to send them somewhere else, or to an empty value to build a version that can't send them and never asks. Release builds need nothing set.
+The background agent's opt-in crash reports (README, "Crash reports") go to the `cww-desktop` project on our Bugsink server. Its address is compiled in from `src/crash_reports.rs`. Set `CWW_CRASH_REPORTS_DSN` at build time to send them somewhere else, or to an empty value to build a version that can't send them and never asks. Release builds need nothing set.
 
 ## Releasing
 
