@@ -278,7 +278,7 @@ fn no_languages(error: &Option<String>) -> String {
     } else if cfg!(target_os = "macos") {
         "This Mac lists no language it reads text in.".into()
     } else {
-        cww_scan::ocr::TESSERACT_MISSING.into()
+        cww_scan::ocr::Distro::here().tesseract_missing()
     }
 }
 
@@ -379,9 +379,7 @@ fn add_language_hint(code: &str) -> String {
     } else if cfg!(target_os = "macos") {
         format!("This Mac's text recognition doesn't read {name}.")
     } else {
-        format!(
-            "Install Tesseract's {name} data (tesseract-data-{code} on Arch, tesseract-ocr-{code} on Debian and Ubuntu, tesseract-langpack-{code} on Fedora), then check again."
-        )
+        cww_scan::ocr::Distro::here().language_hint(code, &name)
     }
 }
 

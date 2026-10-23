@@ -25,9 +25,9 @@ Chat with Work takes files of at most 25 MB: about 30 letter pages in grayscale 
 
 | | Scanner | Searchable text |
 |---|---|---|
-| Linux | SANE (`sane` on Arch, `libsane1` on Debian and Ubuntu, `sane-backends-libs` and `sane-backends-drivers-scanners` on Fedora), with your scanner's backend; the packages recommend it | Tesseract and a language (`tesseract` and `tesseract-data-deu` on Arch, `tesseract-ocr` and `tesseract-ocr-deu` on Debian and Ubuntu, `tesseract` and `tesseract-langpack-deu` on Fedora) |
+| Linux | SANE (`sane` on Arch, `libsane1` on Debian and Ubuntu, `sane-backends-libs` and `sane-backends-drivers-scanners` on Fedora), with your scanner's backend; the packages recommend it | Tesseract and a language (`tesseract` and `tesseract-data-deu` on Arch, `tesseract-ocr` and `tesseract-ocr-deu` on Debian and Ubuntu, `tesseract` and `tesseract-langpack-deu` on Fedora). When the language you pick is missing, the scan window names the one command that adds it on your distribution (read from `/etc/os-release`), or every family's package elsewhere |
 | macOS | SANE from Homebrew (`brew install sane-backends`), with your scanner's backend; ImageCaptureCore (ICA) drivers are next | Built in (Vision) |
-| Windows | The scanner's TWAIN driver from its maker (32-bit or 64-bit drivers that a 32-bit program can load, which is most); WIA is next | Built in (`Windows.Media.Ocr`), in the languages whose OCR Windows has: Settings, Time & language, Language & region adds one. When the language you pick isn't there, the scan window says so and opens that setting |
+| Windows | The scanner's 32-bit TWAIN driver from its maker (the helper is 32-bit, so a maker that ships only a 64-bit TWAIN driver isn't supported yet; most ship a 32-bit one, often beside a 64-bit one); WIA is next | Built in (`Windows.Media.Ocr`), in the languages whose OCR Windows has: Settings, Time & language, Language & region adds one. When the language you pick isn't there, the scan window says so and opens that setting |
 
 `scanimage -L` lists the scanners SANE sees. A Canon P-208 II works with SANE's `canon_dr` backend once its "Auto Start" switch is off. If SANE sees a scanner but the app says you can't use it, your user may need to be in the `scanner` group, or the scanner plugged in again after installing SANE.
 

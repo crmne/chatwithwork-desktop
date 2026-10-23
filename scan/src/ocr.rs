@@ -69,15 +69,108 @@ pub struct Tesseract {
     program: std::path::PathBuf,
 }
 
-/// What to say when Tesseract is missing.
-pub const TESSERACT_MISSING: &str = "Making scans searchable needs Tesseract. Install your distribution's tesseract package with the languages you read (for example tesseract-data-deu on Arch, tesseract-ocr-deu on Debian and Ubuntu, tesseract-langpack-deu on Fedora).";
+/// The Linux families we package for, each naming Tesseract's packages its
+/// own way, read from `/etc/os-release` so a hint shows the one command
+/// that works here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Distro {
+    /// Arch and its derivatives: `tesseract-data-deu`.
+    Arch,
+    /// Debian, Ubuntu and theirs: `tesseract-ocr-deu`.
+    Debian,
+    /// Fedora, RHEL and theirs: `tesseract-langpack-deu`.
+    Fedora,
+    /// Anything else: every family's names.
+    Other,
+}
+
+impl Distro {
+    /// The family an `os-release` file names, by `ID`, then `ID_LIKE`.
+    pub fn from_os_release(text: &str) -> Self {
+        let field = |key: &str| -> Vec<String> {
+            text.lines()
+                .filter_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))
+                .flat_map(|value| {
+                    value
+                        .trim_matches(|c| c == '"' || c == '\'')
+                        .split_whitespace()
+                        .map(str::to_ascii_lowercase)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        for id in field("ID").into_iter().chain(field("ID_LIKE")) {
+            match id.as_str() {
+                "arch" | "archarm" => return Self::Arch,
+                "debian" | "ubuntu" => return Self::Debian,
+                "fedora" | "rhel" | "centos" => return Self::Fedora,
+                _ => {}
+            }
+        }
+        Self::Other
+    }
+
+    /// This computer's, from `/etc/os-release` (or `/usr/lib/os-release`).
+    pub fn here() -> Self {
+        ["/etc/os-release", "/usr/lib/os-release"]
+            .iter()
+            .find_map(|path| std::fs::read_to_string(path).ok())
+            .map_or(Self::Other, |text| Self::from_os_release(&text))
+    }
+
+    /// The package with Tesseract's data for a language code (`deu`,
+    /// `chi_sim`), as this family names it.
+    pub fn language_package(self, code: &str) -> Option<String> {
+        match self {
+            Self::Arch => Some(format!("tesseract-data-{code}")),
+            // Debian spells chi_sim as chi-sim.
+            Self::Debian => Some(format!("tesseract-ocr-{}", code.replace('_', "-"))),
+            Self::Fedora => Some(format!("tesseract-langpack-{code}")),
+            Self::Other => None,
+        }
+    }
+
+    fn install(self, packages: &str) -> String {
+        match self {
+            Self::Arch => format!("sudo pacman -S {packages}"),
+            Self::Debian => format!("sudo apt install {packages}"),
+            Self::Fedora => format!("sudo dnf install {packages}"),
+            Self::Other => packages.to_string(),
+        }
+    }
+
+    /// How to add the language `code` (called `name`) to Tesseract.
+    pub fn language_hint(self, code: &str, name: &str) -> String {
+        match self.language_package(code) {
+            Some(package) => format!(
+                "Install Tesseract's {name} data with `{}`, then check again.",
+                self.install(&package)
+            ),
+            None => format!(
+                "Install Tesseract's {name} data with your distribution's package manager (tesseract-data-{code} on Arch, tesseract-ocr-{} on Debian and Ubuntu, tesseract-langpack-{code} on Fedora), then check again.",
+                code.replace('_', "-")
+            ),
+        }
+    }
+
+    /// What to say when Tesseract itself is missing.
+    pub fn tesseract_missing(self) -> String {
+        match self.language_package("deu") {
+            Some(german) => format!(
+                "Making scans searchable needs Tesseract. Install it with the languages you read, for German `{}`.",
+                self.install(&format!("tesseract {german}"))
+            ),
+            None => "Making scans searchable needs Tesseract. Install your distribution's tesseract package with the languages you read (for example tesseract-data-deu on Arch, tesseract-ocr-deu on Debian and Ubuntu, tesseract-langpack-deu on Fedora).".into(),
+        }
+    }
+}
 
 impl Tesseract {
     pub fn find() -> Result<Self, String> {
         let program = std::env::var_os("CWW_TESSERACT")
             .map(std::path::PathBuf::from)
             .or_else(|| find_on_path("tesseract"))
-            .ok_or_else(|| TESSERACT_MISSING.to_string())?;
+            .ok_or_else(|| Distro::here().tesseract_missing())?;
         Ok(Self { program })
     }
 
@@ -311,6 +404,59 @@ pub fn tesseract_name(code: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn distro_comes_from_os_release() {
+        let arch = "NAME=\"Arch Linux\"\nID=arch\n";
+        let omarchy = "NAME=\"EndeavourOS\"\nID=\"endeavouros\"\nID_LIKE=\"arch\"\n";
+        let ubuntu = "NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n";
+        let mint = "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
+        let fedora = "NAME=\"Fedora Linux\"\nID=fedora\n";
+        let alma = "ID=\"almalinux\"\nID_LIKE=\"rhel centos fedora\"\n";
+        assert_eq!(Distro::from_os_release(arch), Distro::Arch);
+        assert_eq!(Distro::from_os_release(omarchy), Distro::Arch);
+        assert_eq!(Distro::from_os_release(ubuntu), Distro::Debian);
+        assert_eq!(Distro::from_os_release(mint), Distro::Debian);
+        assert_eq!(Distro::from_os_release(fedora), Distro::Fedora);
+        assert_eq!(Distro::from_os_release(alma), Distro::Fedora);
+        assert_eq!(Distro::from_os_release("ID=nixos\n"), Distro::Other);
+        assert_eq!(Distro::from_os_release(""), Distro::Other);
+    }
+
+    #[test]
+    fn language_hint_names_this_distros_command() {
+        assert_eq!(
+            Distro::Arch.language_hint("deu", "German"),
+            "Install Tesseract's German data with `sudo pacman -S tesseract-data-deu`, then check again."
+        );
+        assert_eq!(
+            Distro::Debian.language_hint("chi_sim", "Chinese (Simplified)"),
+            "Install Tesseract's Chinese (Simplified) data with `sudo apt install tesseract-ocr-chi-sim`, then check again."
+        );
+        assert_eq!(
+            Distro::Fedora.language_hint("deu", "German"),
+            "Install Tesseract's German data with `sudo dnf install tesseract-langpack-deu`, then check again."
+        );
+        let other = Distro::Other.language_hint("deu", "German");
+        for package in [
+            "tesseract-data-deu",
+            "tesseract-ocr-deu",
+            "tesseract-langpack-deu",
+        ] {
+            assert!(other.contains(package), "{other}");
+        }
+        assert!(!other.contains("sudo"), "{other}");
+        assert!(
+            Distro::Arch
+                .tesseract_missing()
+                .contains("`sudo pacman -S tesseract tesseract-data-deu`")
+        );
+        assert!(
+            Distro::Other
+                .tesseract_missing()
+                .contains("tesseract-langpack-deu")
+        );
+    }
+
     use super::*;
 
     const TSV: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext

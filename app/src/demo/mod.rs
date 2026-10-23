@@ -1946,6 +1946,18 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
         // A paired sample has been through the welcome page.
         crate::state::AppState { onboarded: true }.save(&paths)?;
     }
+    // A scan language chosen before, which this computer may not have
+    // (`CWW_DEMO_SCAN_LANGUAGE=spa`), for the window's missing-language note.
+    if let Some(language) = std::env::var_os("CWW_DEMO_SCAN_LANGUAGE") {
+        crate::scan::Preferences {
+            settings: Some(cww_scan::Settings {
+                ocr: Some(language.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .save(&paths)?;
+    }
     let demo = Arc::new(Demo {
         state: Mutex::new(match scenario {
             Scenario::Sample => sample(),

@@ -35,6 +35,11 @@ function h(tag, props = {}, ...children) {
   return element;
 }
 
+// A message with `commands` in backticks, those as code people can copy.
+function withCode(text) {
+  return String(text ?? "").split("`").map((part, i) => (i % 2 ? h("code", { class: "command" }, part) : part));
+}
+
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 256 256");
@@ -363,7 +368,7 @@ function renderSettings() {
   const ocrOn = Boolean(s.ocr) && state.ocr.available;
   const ocr = h("label", { class: "toggle" },
     h("span", {}, "Make text searchable",
-      h("small", {}, state.ocr.available ? "Read on this computer, as a text layer you can select" : state.ocr.reason)),
+      h("small", {}, state.ocr.available ? "Read on this computer, as a text layer you can select" : withCode(state.ocr.reason))),
     h("input", { type: "checkbox", role: "switch", class: "switch", checked: ocrOn, disabled: busy || !state.ocr.available, "data-key": "ocr",
       onchange: (event) => {
         if (!event.target.checked && s.ocr) state.lastLanguage = s.ocr;
@@ -381,7 +386,7 @@ function renderSettings() {
   missing ? h("option", { value: missing.code, selected: true }, `${missing.name} (not available)`) : null,
   state.languages.map((l) => h("option", { value: l.code, selected: l.code === s.ocr }, l.name))), "language") : null;
   const missingNote = ocrOn && missing ? h("div", { class: "notice notice--attention scan__missing", role: "status" },
-    h("p", {}, `This computer can't read ${missing.name} yet. ${missing.how}`),
+    h("p", {}, `This computer can't read ${missing.name} yet. `, withCode(missing.how)),
     h("div", { class: "inline" },
       state.ocr.can_add ? h("button", { type: "button", class: "btn", "data-key": "add-language", onclick: () => call("scan_add_language") }, "Open Language Settings") : null,
       h("button", { type: "button", class: "btn", "data-key": "check-languages", onclick: checkLanguages }, "Check Again"))) : null;
@@ -416,7 +421,7 @@ function renderMain() {
       state.scanning
         ? h("span", { class: "state state--live", role: "status" }, `Scanning… ${kept.length} ${kept.length === 1 ? "page" : "pages"}`)
         : kept.length ? h("span", { class: "state" }, `${kept.length} ${kept.length === 1 ? "page" : "pages"}`) : null),
-    state.error ? h("div", { class: "notice notice--negative", role: "alert" }, state.error) : null,
+    state.error ? h("div", { class: "notice notice--negative", role: "alert" }, withCode(state.error)) : null,
     state.notice ? h("div", { class: `notice notice--${state.notice.tone}`, role: "status" }, state.notice.text,
       state.notice.action ? [" ", h("button", { type: "button", class: "link", onclick: state.notice.action[1] }, state.notice.action[0])] : null) : null,
     kept.length || state.scanning ? sheets(kept, true) : emptyState(),

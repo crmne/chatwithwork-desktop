@@ -672,7 +672,7 @@ impl Twain {
             return;
         };
         trace!("capabilities: {:x?}", caps);
-        for cap in caps.into_iter().filter(|c| *c >= 0x8000 && *c <= 0xffff) {
+        for cap in caps.into_iter().filter(|c| (0x8000..=0xffff).contains(c)) {
             let values = self.get_values(source, cap as u16);
             trace!("custom cap={cap:#06x}: {values:?}");
         }

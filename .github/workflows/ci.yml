@@ -151,6 +151,7 @@ jobs:
         shell: bash
         run: |
           cp target/release/cww-scan-helper.exe target/release/TWAINDSM.dll dist/
+          cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt dist/
           mkdir -p dist/scan-tools
           cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
 
