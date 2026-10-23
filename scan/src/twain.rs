@@ -86,6 +86,7 @@ const ICAP_XFERMECH: u16 = 0x0103;
 const CAP_FEEDERENABLED: u16 = 0x1002;
 const CAP_AUTOFEED: u16 = 0x1007;
 const CAP_INDICATORS: u16 = 0x100b;
+const CAP_SUPPORTEDCAPS: u16 = 0x1005;
 const CAP_DUPLEX: u16 = 0x1012;
 const CAP_DUPLEXENABLED: u16 = 0x1013;
 const ICAP_XRESOLUTION: u16 = 0x1118;
@@ -624,7 +625,26 @@ impl Twain {
                 (&mut capability as *mut Capability).cast(),
             );
             GlobalFree(handle);
+            trace!("set cap={cap:#06x} to {value}: rc={rc}");
             rc == TWRC_SUCCESS
+        }
+    }
+
+    /// For CWW_SCAN_TRACE: every capability the driver says it has, with
+    /// the values of its own (from 0x8000), where a driver keeps settings
+    /// TWAIN has no name for, like a progress panel of its own.
+    fn trace_capabilities(&mut self, source: &mut Identity) {
+        if std::env::var_os("CWW_SCAN_TRACE").is_none() {
+            return;
+        }
+        let Some((_, caps)) = self.get_values(source, CAP_SUPPORTEDCAPS) else {
+            trace!("no list of capabilities");
+            return;
+        };
+        trace!("capabilities: {:x?}", caps);
+        for cap in caps.into_iter().filter(|c| *c >= 0x8000 && *c <= 0xffff) {
+            let values = self.get_values(source, cap as u16);
+            trace!("custom cap={cap:#06x}: {values:?}");
         }
     }
 
@@ -1004,6 +1024,7 @@ impl Backend for Twain {
 
     fn capabilities(&mut self, device: &str) -> Result<Capabilities, ScanError> {
         let mut source = self.open(device)?;
+        self.trace_capabilities(&mut source);
         let pixel = self
             .get_values(&mut source, ICAP_PIXELTYPE)
             .map(|(_, v)| v)
