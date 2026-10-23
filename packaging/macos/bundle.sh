@@ -27,7 +27,7 @@ sed "s/__VERSION__/$numeric_version/g" "$here/Info.plist" > "$app/Contents/Info.
 # Start at login runs this agent, which opens the app with --background (a
 # login item cannot pass arguments). Named after CFBundleIdentifier.
 mkdir -p "$app/Contents/Library/LaunchAgents"
-install -m 644 "$here/autostart.plist" "$app/Contents/Library/LaunchAgents/com.chatwithwork.local-agent.autostart.plist"
+install -m 644 "$here/autostart.plist" "$app/Contents/Library/LaunchAgents/com.chatwithwork.desktop.autostart.plist"
 
 iconset="$(mktemp -d)/cww-app.iconset"
 mkdir -p "$iconset"

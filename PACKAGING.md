@@ -40,7 +40,7 @@ Each app download carries `cww` beside the GUI (inside the bundle on macOS), so 
 
 ## Crash reports
 
-The background agent's opt-in crash reports (README, "Crash reports") go to the `cww-local-agent` project on our Bugsink server. Its address is compiled in from `src/crash_reports.rs`. Set `CWW_CRASH_REPORTS_DSN` at build time to send them somewhere else, or to an empty value to build a Local Agent that can't send them and never asks. Release builds need nothing set.
+The background agent's opt-in crash reports (README, "Crash reports") go to the `cww-local-agent` project on our Bugsink server. Its address is compiled in from `src/crash_reports.rs`. Set `CWW_CRASH_REPORTS_DSN` at build time to send them somewhere else, or to an empty value to build a version that can't send them and never asks. Release builds need nothing set.
 
 ## Releasing
 
@@ -50,7 +50,7 @@ The background agent's opt-in crash reports (README, "Crash reports") go to the 
 
 `release.yml` checks the tag matches `Cargo.toml` and is on `main`, builds every target and the desktop app, signs what it has credentials for (the app bundle and its disk image are notarized and stapled too), attests the archives (`gh attestation verify <file> --repo crmne/chatwithwork-desktop`), and publishes the release with `checksums.txt` and the installers. Tags with a `-` (`v1.2.0-beta.1`) become draft prereleases and skip the package managers.
 
-For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.10.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. The rendered recipes are attached as `chatwithwork-local-agent-X.Y.Z-packaging.tar.xz`.
+For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.10.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. The rendered recipes are attached as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`.
 
 ### Trying changes before a tag
 
@@ -147,7 +147,7 @@ Individual developer accounts are free. Microsoft signs Store packages itself, s
 |---|---|---|
 | GitHub release (`.deb`, `.rpm`, recipes) | Automatic | Nothing |
 | Homebrew, `crmne/homebrew-tap` `Formula/cww.rb` and `Casks/chat-with-work.rb` | Automatic when `PUBLISH_HOMEBREW=true` | `HOMEBREW_TAP_SSH_KEY` (a deploy key with write access to the tap only) or `HOMEBREW_TAP_GITHUB_TOKEN` |
-| AUR `chatwithwork-local-agent`, `-bin`, `-git` | Automatic when `PUBLISH_AUR=true` | `AUR_SSH_KEY`, `AUR_KNOWN_HOSTS`, and the three AUR packages registered to that key |
+| AUR `chatwithwork-desktop`, `-bin`, `-git` | Automatic when `PUBLISH_AUR=true` | `AUR_SSH_KEY`, `AUR_KNOWN_HOSTS`, and the three AUR packages registered to that key (the publish step clones them, so a new package needs a first push by hand) |
 | WinGet, `ChatWithWork.Desktop` | By hand, below | A fork of `microsoft/winget-pkgs` |
 | Scoop | By hand, below | A bucket repository |
 | Nix | `nix profile install github:crmne/chatwithwork-desktop` works from the repository; nixpkgs is a separate submission | - |
@@ -166,7 +166,7 @@ Starting with v0.3.0, packages include the desktop app. The published v0.2.0 Lin
 
 ## Startup and removal
 
-- **Windows MSI:** per-user install to `%LOCALAPPDATA%\Programs\Chat with Work Local Agent`, on PATH, with separate **Chat with Work** and **Chat with Work (Terminal)** Start menu entries. It runs `cww daemon install`, registering and starting the logon task with `cww-agent.exe`, or a per-user Startup shortcut if Task Scheduler is unavailable. Neither path requires elevation. CI exercises installation, immediate startup, the fallback login shortcut, repeated startup and removal under a fresh standard account while a protected task with the same name exists. Uninstall runs `cww daemon uninstall` and keeps keys and settings. Preserve the UpgradeCode `{FBC69B33-161E-40DC-9D83-5B54DB1A9821}` so upgrades replace earlier versions. WinGet and PowerShell use this MSI.
+- **Windows MSI:** per-user install to `%LOCALAPPDATA%\Programs\Chat with Work Desktop`, on PATH, with separate **Chat with Work** and **Chat with Work (Terminal)** Start menu entries. It runs `cww daemon install`, registering and starting the logon task with `cww-agent.exe`, or a per-user Startup shortcut if Task Scheduler is unavailable. Neither path requires elevation. CI exercises installation, immediate startup, the fallback login shortcut, repeated startup and removal under a fresh standard account while a protected task with the same name exists. Uninstall runs `cww daemon uninstall` and keeps keys and settings. Preserve the UpgradeCode `{FBC69B33-161E-40DC-9D83-5B54DB1A9821}` so upgrades replace earlier versions. WinGet and PowerShell use this MSI.
 - **Windows runtime:** the Windows binaries link the C runtime statically (`.cargo/config.toml`), since a fresh Windows install has no Visual C++ Redistributable. CI and the release check every Windows executable with `packaging/windows/check-runtime.ps1`, because GitHub's runners have the Redistributable installed and the installer tests there wouldn't notice.
 - **Scoop:** installs all three executables and both shortcuts. Per-user installs try to start the daemon; global installs ask each user to run `cww daemon install`. Uninstall removes the daemon task before removing the binaries.
 - **macOS `.pkg`:** installs `/Applications/Chat with Work.app`, `/usr/local/bin/cww` and the `cww-app` command. It tries to register and start the LaunchAgent for the console user. The completion page explains `cww daemon install` when no user session is available or startup fails. To remove it, run `cww daemon uninstall` before deleting the app and commands.

@@ -6,7 +6,7 @@ tool:
   version: 0.10.0
   nfpm: 2.47.0
 nfpm:
-  name: chatwithwork-local-agent
+  name: chatwithwork-desktop
   maintainer: Carmine Paolino <carmine@paolino.me>
   vendor: Plenty
   homepage: https://chatwithwork.com
@@ -27,23 +27,23 @@ nfpm:
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/README.md"
-    dst: /usr/share/doc/chatwithwork-local-agent/README.md
+    dst: /usr/share/doc/chatwithwork-desktop/README.md
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/PROTOCOL.md"
-    dst: /usr/share/doc/chatwithwork-local-agent/PROTOCOL.md
+    dst: /usr/share/doc/chatwithwork-desktop/PROTOCOL.md
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/SECURITY.md"
-    dst: /usr/share/doc/chatwithwork-local-agent/SECURITY.md
+    dst: /usr/share/doc/chatwithwork-desktop/SECURITY.md
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/LICENSE-MIT"
-    dst: /usr/share/licenses/chatwithwork-local-agent/LICENSE-MIT
+    dst: /usr/share/licenses/chatwithwork-desktop/LICENSE-MIT
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/LICENSE-APACHE"
-    dst: /usr/share/licenses/chatwithwork-local-agent/LICENSE-APACHE
+    dst: /usr/share/licenses/chatwithwork-desktop/LICENSE-APACHE
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/cww-app"
@@ -161,19 +161,19 @@ assets:
     file: cww-v@VERSION@-aarch64-pc-windows-msvc.zip
     local: dist/cww-v@VERSION@-aarch64-pc-windows-msvc.zip
   SOURCE:
-    file: chatwithwork-local-agent-@VERSION@.tar.gz
+    file: chatwithwork-desktop-@VERSION@.tar.gz
     url: https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v@VERSION@.tar.gz
     checksummed: false
-    local: dist/chatwithwork-local-agent-@VERSION@.tar.gz
+    local: dist/chatwithwork-desktop-@VERSION@.tar.gz
 templates:
   homebrew/Formula/cww.rb: packaging/homebrew/cww.rb.in
   homebrew/Casks/chat-with-work.rb: packaging/homebrew/chat-with-work.rb.in
-  arch/chatwithwork-local-agent/PKGBUILD: packaging/arch/chatwithwork-local-agent/PKGBUILD.in
-  arch/chatwithwork-local-agent/chatwithwork-local-agent.install: packaging/arch/cww.install
-  arch/chatwithwork-local-agent-bin/PKGBUILD: packaging/arch/chatwithwork-local-agent-bin/PKGBUILD.in
-  arch/chatwithwork-local-agent-bin/chatwithwork-local-agent-bin.install: packaging/arch/cww.install
-  arch/chatwithwork-local-agent-git/PKGBUILD: packaging/arch/chatwithwork-local-agent-git/PKGBUILD.in
-  arch/chatwithwork-local-agent-git/chatwithwork-local-agent-git.install: packaging/arch/cww.install
+  arch/chatwithwork-desktop/PKGBUILD: packaging/arch/chatwithwork-desktop/PKGBUILD.in
+  arch/chatwithwork-desktop/chatwithwork-desktop.install: packaging/arch/cww.install
+  arch/chatwithwork-desktop-bin/PKGBUILD: packaging/arch/chatwithwork-desktop-bin/PKGBUILD.in
+  arch/chatwithwork-desktop-bin/chatwithwork-desktop-bin.install: packaging/arch/cww.install
+  arch/chatwithwork-desktop-git/PKGBUILD: packaging/arch/chatwithwork-desktop-git/PKGBUILD.in
+  arch/chatwithwork-desktop-git/chatwithwork-desktop-git.install: packaging/arch/cww.install
   winget/ChatWithWork.Desktop.yaml: packaging/winget/ChatWithWork.Desktop.yaml.in
   winget/ChatWithWork.Desktop.installer.yaml: packaging/winget/ChatWithWork.Desktop.installer.yaml.in
   winget/ChatWithWork.Desktop.locale.en-US.yaml: packaging/winget/ChatWithWork.Desktop.locale.en-US.yaml.in
@@ -192,34 +192,34 @@ repositories:
     publish: push
   aur-source:
     group: aur
-    url: https://aur.archlinux.org/chatwithwork-local-agent.git
-    push_url: ssh://aur@aur.archlinux.org/chatwithwork-local-agent.git
+    url: https://aur.archlinux.org/chatwithwork-desktop.git
+    push_url: ssh://aur@aur.archlinux.org/chatwithwork-desktop.git
     branch: master
     package_path: "."
     files:
-      arch/chatwithwork-local-agent: "."
+      arch/chatwithwork-desktop: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push
   aur-bin:
     group: aur
-    url: https://aur.archlinux.org/chatwithwork-local-agent-bin.git
-    push_url: ssh://aur@aur.archlinux.org/chatwithwork-local-agent-bin.git
+    url: https://aur.archlinux.org/chatwithwork-desktop-bin.git
+    push_url: ssh://aur@aur.archlinux.org/chatwithwork-desktop-bin.git
     branch: master
     package_path: "."
     files:
-      arch/chatwithwork-local-agent-bin: "."
+      arch/chatwithwork-desktop-bin: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push
   aur-git:
     group: aur
-    url: https://aur.archlinux.org/chatwithwork-local-agent-git.git
-    push_url: ssh://aur@aur.archlinux.org/chatwithwork-local-agent-git.git
+    url: https://aur.archlinux.org/chatwithwork-desktop-git.git
+    push_url: ssh://aur@aur.archlinux.org/chatwithwork-desktop-git.git
     branch: master
     package_path: "."
     files:
-      arch/chatwithwork-local-agent-git: "."
+      arch/chatwithwork-desktop-git: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push

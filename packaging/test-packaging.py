@@ -90,13 +90,11 @@ exit "${TEST_DAEMON_EXIT:-0}"
         source.mkdir()
         with tarfile.open(archive) as tar:
             tar.extractall(source, filter="data")
-        for variant in ("chatwithwork-local-agent-bin", "chatwithwork-local-agent",
-                        "chatwithwork-local-agent-git"):
+        for variant in ("chatwithwork-desktop-bin", "chatwithwork-desktop",
+                        "chatwithwork-desktop-git"):
             with self.subTest(variant=variant):
                 recipe = ROOT / "packaging/arch" / variant / "PKGBUILD.in"
-                # The source archive's folder is named after the repository.
-                folder = {"chatwithwork-local-agent": "chatwithwork-desktop"}.get(variant, variant)
-                tree = source / (variant if variant.endswith("-git") else f"{folder}-9.8.7")
+                tree = source / (variant if variant.endswith("-git") else f"{variant}-9.8.7")
                 if not variant.endswith("-bin"):
                     shutil.copytree(source / "cww-app-v9.8.7-x86_64-unknown-linux-gnu", tree)
                     (tree / "target/release").mkdir(parents=True)

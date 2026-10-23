@@ -16,13 +16,13 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 |---|---|---|
 | macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
 | Windows 10 and 11 | `winget install ChatWithWork.Desktop`, or download the `.msi` from the latest release | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
-| Arch | `yay -S chatwithwork-local-agent-bin` (or `chatwithwork-local-agent` to build from source, `chatwithwork-local-agent-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
-| Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-local-agent_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
-| Fedora, RHEL, openSUSE | Download the `.rpm`, then `sudo dnf install ./chatwithwork-local-agent-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
+| Arch | `yay -S chatwithwork-desktop-bin` (or `chatwithwork-desktop` to build from source, `chatwithwork-desktop-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
+| Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-desktop_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
+| Fedora, RHEL, openSUSE | Download the `.rpm`, then `sudo dnf install ./chatwithwork-desktop-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
 | NixOS, Nix (Linux, Apple silicon macOS) | `nix profile install github:crmne/chatwithwork-desktop` | `cww-app` or `cww`; the package also carries desktop integration. |
 | Linux, Homebrew | `brew install crmne/tap/cww` | `cww-app` or `cww`. Add the Homebrew prefix's `share` directory to your desktop session's `XDG_DATA_DIRS` for menu discovery. |
 
-The Linux, Arch and Windows packages, the `cww` command and the `cww-app` program keep their names from before the app was called Chat with Work Desktop, so existing installs upgrade in place. Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
+Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
 
 **Starting the background agent**
 

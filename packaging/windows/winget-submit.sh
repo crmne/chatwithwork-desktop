@@ -15,11 +15,10 @@ repo="crmne/chatwithwork-desktop"
 work="$(mktemp -d)"
 
 gh release view "v$version" -R "$repo" >/dev/null || { echo "v$version isn't released yet"; exit 1; }
-# The archive is named after the package, which kept its name.
-gh release download "v$version" -R "$repo" -p "chatwithwork-local-agent-$version-packaging.tar.xz" -D "$work"
+gh release download "v$version" -R "$repo" -p "chatwithwork-desktop-$version-packaging.tar.xz" -D "$work"
 mkdir "$work/pkg" && tar -xJf "$work"/*.tar.xz -C "$work/pkg"
 recipes="$(dirname "$(find "$work/pkg" -name "$id.installer.yaml" | head -1)")"
-[ -f "$recipes/$id.yaml" ] || { echo "the archive has no $id manifests (still ChatWithWork.LocalAgent?)"; exit 1; }
+[ -f "$recipes/$id.yaml" ] || { echo "the archive has no $id manifests"; exit 1; }
 
 # Each manifest must name this id and version, and every installer URL must load
 # and match its hash.

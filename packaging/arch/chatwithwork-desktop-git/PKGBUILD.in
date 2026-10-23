@@ -1,37 +1,36 @@
 # Maintainer: Carmine Paolino <carmine@paolino.me>
-pkgname=chatwithwork-local-agent
+pkgname=chatwithwork-desktop-git
 pkgver=@VERSION@
-pkgrel=@PKGREL@
-pkgdesc="Chat with Work Desktop: the desktop app, terminal interface and background agent"
+pkgrel=1
+pkgdesc="Chat with Work Desktop: the desktop app, terminal interface and background agent (development version)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/crmne/chatwithwork-desktop"
 license=('MIT OR Apache-2.0')
 install="${pkgname}.install"
 depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'dbus')
-makedepends=('cargo' 'pkgconf' 'cmake' 'clang')
+makedepends=('git' 'cargo' 'pkgconf' 'cmake' 'clang')
 optdepends=('org.freedesktop.secrets: store the device key in your keyring'
             'xdg-desktop-portal: native folder picker'
             'systemd: start the agent now and at login with cww daemon install')
-provides=('cww' 'cww-app')
-conflicts=('cww' 'chatwithwork-local-agent-bin' 'chatwithwork-local-agent-git')
-# !lto because ring compiles its own C and Arch's default CFLAGS put LTO
-# objects in the archive, which the linker then cannot resolve. !debug
-# because the release profile strips symbols, so a debug package would be
-# empty.
+provides=('cww' 'cww-app' 'chatwithwork-desktop')
+conflicts=('cww' 'chatwithwork-desktop' 'chatwithwork-desktop-bin')
 options=('!debug' '!lto')
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('@SOURCE_SHA256@')
+source=("${pkgname}::git+https://github.com/crmne/chatwithwork-desktop.git")
+sha256sums=('SKIP')
 
-# GitHub names the archive's folder after the repository, which was renamed
-# chatwithwork-desktop; the package keeps its name, so upgrades follow.
+pkgver() {
+  cd "${srcdir}/${pkgname}"
+  git describe --long --tags --abbrev=7 | sed 's/^v//;s/\-/.r/;s/\-g/./'
+}
+
 prepare() {
-  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
+  cd "${srcdir}/${pkgname}"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
+  cd "${srcdir}/${pkgname}"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${srcdir}=/"
@@ -39,14 +38,14 @@ build() {
 }
 
 check() {
-  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
+  cd "${srcdir}/${pkgname}"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo test --frozen --release --workspace
 }
 
 package() {
-  cd "${srcdir}/chatwithwork-desktop-${pkgver}"
+  cd "${srcdir}/${pkgname}"
   install -Dm755 target/release/cww "${pkgdir}/usr/bin/cww"
   install -Dm755 target/release/cww-app "${pkgdir}/usr/bin/cww-app"
   install -Dm644 packaging/linux/cww-app.desktop "${pkgdir}/usr/share/applications/cww-app.desktop"

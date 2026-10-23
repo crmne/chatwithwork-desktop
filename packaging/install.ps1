@@ -47,7 +47,7 @@ try {
     -ArgumentList "/i", "`"$msi`"", "/qb!", "/norestart", "/l*v", "`"$log`""
   if ($process.ExitCode -ne 0) { throw "msiexec failed ($($process.ExitCode)); see $log" }
 
-  $dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Local Agent"
+  $dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop"
   $env:Path = "$env:Path;$dir"
   Write-Host ""
   Write-Host "Installed $(& (Join-Path $dir 'cww.exe') --version) to $dir"

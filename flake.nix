@@ -66,7 +66,7 @@
               png2icns "$app/Contents/Resources/cww-app.icns" app/assets/icon-1024.png
               # The launch agent that starts the app at login with --background.
               install -Dm644 packaging/macos/autostart.plist \
-                "$app/Contents/Library/LaunchAgents/com.chatwithwork.local-agent.autostart.plist"
+                "$app/Contents/Library/LaunchAgents/com.chatwithwork.desktop.autostart.plist"
               # Native notifications require the real executable in the bundle.
               for binary in cww cww-app; do
                 mv "$out/bin/$binary" "$app/Contents/MacOS/$binary"

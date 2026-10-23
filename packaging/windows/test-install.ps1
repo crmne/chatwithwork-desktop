@@ -12,9 +12,9 @@ if ($StandardUser) {
   }
 }
 $Msi = (Resolve-Path $Msi).Path
-$dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Local Agent"
+$dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop"
 $programs = [Environment]::GetFolderPath("Programs", "DoNotVerify")
-$startup = Join-Path ([Environment]::GetFolderPath('Startup', 'DoNotVerify')) 'Chat with Work Local Agent.lnk'
+$startup = Join-Path ([Environment]::GetFolderPath('Startup', 'DoNotVerify')) 'Chat with Work Desktop.lnk'
 function Run-Msi([string] $action) {
   Write-Host "Running msiexec $action for $env:USERNAME"
   New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null

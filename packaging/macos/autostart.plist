@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.chatwithwork.local-agent.autostart</string>
+    <string>com.chatwithwork.desktop.autostart</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/open</string>
         <string>-g</string>
         <string>-b</string>
-        <string>com.chatwithwork.local-agent</string>
+        <string>com.chatwithwork.desktop</string>
         <string>--args</string>
         <string>--background</string>
     </array>

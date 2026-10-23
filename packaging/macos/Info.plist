@@ -4,7 +4,7 @@
 <dict>
     <key>CFBundleName</key><string>Chat with Work</string>
     <key>CFBundleDisplayName</key><string>Chat with Work</string>
-    <key>CFBundleIdentifier</key><string>com.chatwithwork.local-agent</string>
+    <key>CFBundleIdentifier</key><string>com.chatwithwork.desktop</string>
     <key>CFBundleExecutable</key><string>cww-app</string>
     <key>CFBundleIconFile</key><string>cww-app</string>
     <key>CFBundlePackageType</key><string>APPL</string>
