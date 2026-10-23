@@ -131,7 +131,9 @@ impl Identity {
     fn app() -> Self {
         let mut id = Self::empty();
         id.version.major = 1;
-        id.version.language = 13; // TWLG_ENGLISH_USA
+        // TWLG_ENGLISH, as NAPS2 sends: Canon's driver makes a C++ locale
+        // from it and throws "bad locale name" for TWLG_USA (13).
+        id.version.language = 2;
         id.version.country = 1; // TWCY_USA
         copy_str(&mut id.version.info, env!("CARGO_PKG_VERSION"));
         id.protocol_major = 1;
@@ -240,6 +242,16 @@ fn unfix32(raw: u32) -> f64 {
     f64::from((raw & 0xffff) as u16 as i16) + f64::from((raw >> 16) as u16) / 65536.0
 }
 
+/// Each TWAIN step on stderr, with CWW_SCAN_TRACE=1: drivers differ, and
+/// a step that hangs or fails shows where.
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        if std::env::var_os("CWW_SCAN_TRACE").is_some() {
+            eprintln!("twain: {}", format!($($arg)*));
+        }
+    };
+}
+
 type Entry =
     unsafe extern "system" fn(*mut Identity, *mut Identity, u32, u16, u16, *mut c_void) -> u16;
 
@@ -268,17 +280,143 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// With CWW_SCAN_TRACE=1, the windows this process has, every few seconds:
+/// a driver that stops answering is usually showing a window of its own.
+fn trace_windows() {
+    use windows_sys::Win32::Foundation::{LPARAM, TRUE};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    };
+    unsafe extern "system" fn each(hwnd: HWND, _: LPARAM) -> i32 {
+        // SAFETY: reading a window's owner and title.
+        unsafe {
+            let mut pid = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == GetCurrentProcessId() {
+                let mut title = [0u16; 256];
+                let n = GetWindowTextW(hwnd, title.as_mut_ptr(), 256).max(0) as usize;
+                trace!(
+                    "window {:?} visible={} title={:?}",
+                    hwnd,
+                    IsWindowVisible(hwnd) != 0,
+                    String::from_utf16_lossy(&title[..n])
+                );
+            }
+        }
+        TRUE
+    }
+    if std::env::var_os("CWW_SCAN_TRACE").is_none() {
+        return;
+    }
+    // Exceptions a driver raises, with the module they come from: one that
+    // escapes the driver unwinds through us.
+    unsafe extern "system" fn exception(
+        info: *mut windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+    ) -> i32 {
+        // SAFETY: the system hands over valid exception pointers.
+        unsafe {
+            let record = &*(*info).ExceptionRecord;
+            let mut module = [0u16; 260];
+            let mut handle = std::ptr::null_mut();
+            let found = windows_sys::Win32::System::LibraryLoader::GetModuleHandleExW(
+                0x4 | 0x2, // FROM_ADDRESS | UNCHANGED_REFCOUNT
+                record.ExceptionAddress as *const u16,
+                &mut handle,
+            );
+            let n = if found != 0 {
+                windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW(
+                    handle,
+                    module.as_mut_ptr(),
+                    260,
+                ) as usize
+            } else {
+                0
+            };
+            trace!(
+                "exception {:#010x} at {:?} in {} (params {:?})",
+                record.ExceptionCode as u32,
+                record.ExceptionAddress,
+                String::from_utf16_lossy(&module[..n]),
+                &record.ExceptionInformation[..(record.NumberParameters as usize).min(4)]
+            );
+            // A C++ exception on 32-bit MSVC: its type names, from the throw
+            // information, and what() where it's a std::exception.
+            #[cfg(target_arch = "x86")]
+            if record.ExceptionCode as u32 == 0xe06d_7363 && record.NumberParameters >= 3 {
+                let object = record.ExceptionInformation[1] as *const *const usize;
+                let throw_info = record.ExceptionInformation[2] as *const u32;
+                if !throw_info.is_null() {
+                    let catchable = *throw_info.add(3) as *const u32;
+                    let count = (*catchable).min(8) as usize;
+                    for i in 0..count {
+                        let ty = *catchable.add(1 + i) as *const u32;
+                        let descriptor = *ty.add(1) as *const u8;
+                        let name = std::ffi::CStr::from_ptr(descriptor.add(8).cast());
+                        trace!("  c++ type {}", name.to_string_lossy());
+                    }
+                    let first = *catchable.add(1) as *const u32;
+                    let first_name =
+                        std::ffi::CStr::from_ptr((*first.add(1) as *const u8).add(8).cast())
+                            .to_string_lossy();
+                    if !object.is_null() && (count > 1 || first_name.contains("exception@std")) {
+                        let vtable = *object;
+                        let what: unsafe extern "thiscall" fn(*const *const usize) -> *const i8 =
+                            std::mem::transmute(*vtable.add(1));
+                        let message = what(object);
+                        if !message.is_null() {
+                            trace!(
+                                "  what(): {}",
+                                std::ffi::CStr::from_ptr(message).to_string_lossy()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        0 // EXCEPTION_CONTINUE_SEARCH
+    }
+    // SAFETY: a first-chance handler that only logs.
+    unsafe {
+        windows_sys::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
+            1,
+            Some(exception),
+        )
+    };
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            // SAFETY: enumerating top-level windows with a plain callback.
+            unsafe { EnumWindows(Some(each), 0) };
+        }
+    });
+}
+
 impl Twain {
     pub fn load() -> Result<Self, ScanError> {
-        // 32-bit sources go through Microsoft's twain_32.dll, which every
-        // Windows has; 64-bit ones through the open TWAIN DSM.
-        let names: &[&str] = if cfg!(target_pointer_width = "32") {
-            &["twain_32.dll", "TWAINDSM.dll"]
-        } else {
-            &["TWAINDSM.dll"]
-        };
+        trace_windows();
+        // Drivers expect a single-threaded COM apartment with OLE on the
+        // thread that talks to them, as .NET apps and most scanning programs
+        // have; Canon's throws while opening without it.
+        // SAFETY: once, on the thread that owns the TWAIN session.
+        unsafe { windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null_mut()) };
+        // The open TWAIN DSM 2.x (TWAINDSM.dll) beside this program, then
+        // one installed with Windows or a driver, then, for 32-bit sources,
+        // Microsoft's twain_32.dll. Modern drivers are TWAIN 2 sources
+        // and can fail with Microsoft's 1.x manager (Canon's P-208II
+        // throws while opening), so the open DSM comes first.
+        let beside = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name("TWAINDSM.dll"))
+            .filter(|path| path.is_file());
+        let mut candidates: Vec<std::ffi::OsString> =
+            beside.into_iter().map(|p| p.into_os_string()).collect();
+        candidates.push("TWAINDSM.dll".into());
+        if cfg!(target_pointer_width = "32") {
+            candidates.push("twain_32.dll".into());
+        }
         // SAFETY: the DSM runs no code on load that needs anything from us.
-        let library = names
+        let library = candidates
             .iter()
             .find_map(|n| unsafe { Library::new(n) }.ok())
             .ok_or_else(no_twain)?;
@@ -318,9 +456,16 @@ impl Twain {
         data: *mut c_void,
     ) -> u16 {
         let dest = source.map_or(std::ptr::null_mut(), |s| s as *mut Identity);
+        if dat != DAT_EVENT {
+            trace!("call dg={group} dat={dat:#06x} msg={msg:#06x}");
+        }
         // SAFETY: the app identity lives in a Box for the DSM's lifetime, and
         // `data` points at the structure `dat` names.
-        unsafe { (self.entry)(&mut *self.app, dest, group, dat, msg, data) }
+        let rc = unsafe { (self.entry)(&mut *self.app, dest, group, dat, msg, data) };
+        if dat != DAT_EVENT {
+            trace!("  -> rc={rc}");
+        }
+        rc
     }
 
     fn condition(&mut self, source: Option<&mut Identity>) -> u16 {
@@ -524,6 +669,9 @@ impl Twain {
                     if rc != TWRC_DSEVENT {
                         TranslateMessage(&msg);
                         DispatchMessageW(&msg);
+                    }
+                    if event.message != 0 {
+                        trace!("event message={:#06x}", event.message);
                     }
                     if matches!(
                         event.message,
