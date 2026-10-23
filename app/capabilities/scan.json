@@ -20,6 +20,7 @@
     "allow-scan-open",
     "allow-scan-save",
     "allow-scan-reveal",
-    "allow-scan-open-account"
+    "allow-scan-open-account",
+    "allow-scan-add-language"
   ]
 }

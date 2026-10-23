@@ -338,6 +338,50 @@ fn tell(app: &AppHandle, payload: Value) {
     crate::windows::tell_window(app, SCAN, "scan", payload);
 }
 
+/// A language code in words, for saying it's missing.
+fn language_name(code: &str) -> String {
+    let name = match code.split('-').next().unwrap_or(code) {
+        "de" | "deu" => "German",
+        "en" | "eng" => "English",
+        "fr" | "fra" => "French",
+        "it" | "ita" => "Italian",
+        "es" | "spa" => "Spanish",
+        "nl" | "nld" => "Dutch",
+        "pt" | "por" => "Portuguese",
+        "pl" | "pol" => "Polish",
+        _ => return code.to_string(),
+    };
+    name.to_string()
+}
+
+/// Where a missing language is added on this system, in words.
+fn add_language_hint(code: &str) -> String {
+    let name = language_name(code);
+    if cfg!(windows) {
+        format!(
+            "Add {name} in Windows Settings, Time & language, Language & region, with \"Optical character recognition\" ticked, then check again."
+        )
+    } else if cfg!(target_os = "macos") {
+        format!("This Mac's text recognition doesn't read {name}.")
+    } else {
+        format!(
+            "Install Tesseract's {name} data (tesseract-data-{code} on Arch, tesseract-ocr-{code} on Debian and Ubuntu, tesseract-langpack-{code} on Fedora), then check again."
+        )
+    }
+}
+
+/// Opens the system's language settings, where an OCR language is added
+/// (Windows only; elsewhere it's a package, or not possible).
+#[tauri::command]
+pub fn scan_add_language(webview: Webview) -> Answer {
+    scan_page_only(&webview)?;
+    if cfg!(windows) {
+        open::that_detached("ms-settings:regionlanguage")
+            .map_err(|e| refusal("failed", e.to_string()))?;
+    }
+    Ok(json!({}))
+}
+
 #[tauri::command]
 pub fn scan_info(
     webview: Webview,
@@ -351,19 +395,19 @@ pub fn scan_info(
     };
     let preferences = Preferences::load(&desktop.paths);
     let mut settings = preferences.settings.clone().unwrap_or_default();
-    // A language no longer installed falls back to one that is.
-    if settings
+    // A first scan reads in the system's language where it can.
+    if preferences.settings.is_none() {
+        settings.ocr = default_language(&languages);
+    }
+    // A chosen language this computer can't read any more is kept and said
+    // so, never swapped for another: the page offers to add it.
+    let missing = settings
         .ocr
         .as_ref()
-        .is_some_and(|code| !languages.iter().any(|l| &l.code == code))
-        || preferences.settings.is_none()
-    {
-        let on = preferences
-            .settings
-            .as_ref()
-            .is_none_or(|s| s.ocr.is_some());
-        settings.ocr = default_language(&languages).filter(|_| on);
-    }
+        .filter(|code| !languages.is_empty() && !languages.iter().any(|l| &l.code == *code))
+        .map(|code| {
+            json!({ "code": code, "name": language_name(code), "how": add_language_hint(code) })
+        });
     let session = scans.session.lock().expect("session");
     Ok(json!({
         "settings": settings,
@@ -371,7 +415,7 @@ pub fn scan_info(
         "languages": languages,
         "ocr": match &scans.engine {
             Ok(_) if languages.is_empty() => json!({ "available": false, "reason": cww_scan::ocr::TESSERACT_MISSING }),
-            Ok(_) => json!({ "available": true }),
+            Ok(_) => json!({ "available": true, "missing": missing, "can_add": cfg!(windows) }),
             Err(reason) => json!({ "available": false, "reason": reason }),
         },
         "pages": session.pages.iter().map(Page::json).collect::<Vec<_>>(),

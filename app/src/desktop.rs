@@ -352,6 +352,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::scan::scan_save,
             crate::scan::scan_reveal,
             crate::scan::scan_open_account,
+            crate::scan::scan_add_language,
             crate::offline::offline_info,
             crate::offline::offline_retry,
             crate::offline::offline_open_anyway,

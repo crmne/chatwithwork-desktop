@@ -212,9 +212,37 @@ async function arrange(page, change) {
   render();
 }
 
+// The chosen OCR language when this computer can't read it (scan_info).
+function missingLanguage() {
+  return state.settings.ocr && state.ocr.available && state.ocr.missing?.code === state.settings.ocr ? state.ocr.missing : null;
+}
+
+// Reads the languages again, after the person added one.
+async function checkLanguages() {
+  try {
+    const info = await call("scan_info");
+    state.languages = info.languages;
+    state.ocr = info.ocr;
+    state.notice = missingLanguage() ? null : { tone: "positive", text: "The language is available now." };
+  } catch (error) {
+    state.error = error.message;
+  }
+  render();
+}
+
+// Refuses to finish with searchable text in a language this computer can't
+// read, rather than reading in another one.
+function languageBlocks() {
+  const missing = missingLanguage();
+  if (!missing) return false;
+  state.error = `This computer can't read ${missing.name} yet, so the text can't be made searchable. ${missing.how} Or turn off Make Text Searchable.`;
+  render();
+  return true;
+}
+
 async function send() {
   const kept = state.pages.filter((p) => !p.blank);
-  if (!kept.length || state.sending) return;
+  if (!kept.length || state.sending || languageBlocks()) return;
   const destination = state.destination === "chat" ? { kind: "chat" } : { kind: "trigger", id: Number(state.destination) };
   const target = destinationName();
   state.sending = true;
@@ -246,7 +274,7 @@ async function send() {
 // Saves the PDF on this computer: no Chat with Work, no sign-in.
 async function save() {
   const kept = state.pages.filter((p) => !p.blank);
-  if (!kept.length || state.sending) return;
+  if (!kept.length || state.sending || languageBlocks()) return;
   state.sending = true;
   state.saving = true;
   state.error = null;
@@ -343,10 +371,20 @@ function renderSettings() {
         saveSettings();
         render();
       } }));
+  // A chosen language this computer can't read stays chosen, said so, with
+  // the way to add it; nothing silently reads in another language.
+  const missing = missingLanguage();
   const language = ocrOn ? field("Language", h("select", {
     class: "select", id: "language", "data-key": "language", disabled: busy,
-    onchange: (event) => { s.ocr = event.target.value; state.lastLanguage = s.ocr; saveSettings(); },
-  }, state.languages.map((l) => h("option", { value: l.code, selected: l.code === s.ocr }, l.name))), "language") : null;
+    onchange: (event) => { s.ocr = event.target.value; state.lastLanguage = s.ocr; state.ocr.missing = null; saveSettings(); render(); },
+  },
+  missing ? h("option", { value: missing.code, selected: true }, `${missing.name} (not available)`) : null,
+  state.languages.map((l) => h("option", { value: l.code, selected: l.code === s.ocr }, l.name))), "language") : null;
+  const missingNote = ocrOn && missing ? h("div", { class: "notice notice--attention scan__missing", role: "status" },
+    h("p", {}, `This computer can't read ${missing.name} yet. ${missing.how}`),
+    h("div", { class: "inline" },
+      state.ocr.can_add ? h("button", { type: "button", class: "btn", "data-key": "add-language", onclick: () => call("scan_add_language") }, "Open Language Settings") : null,
+      h("button", { type: "button", class: "btn", "data-key": "check-languages", onclick: checkLanguages }, "Check Again"))) : null;
 
   return [
     h("div", { class: "nav__brand" }, h("img", { src: "mark.svg", alt: "" }), "Scan"),
@@ -357,6 +395,7 @@ function renderSettings() {
     toggle("remove_blank_pages", "Remove blank pages", "Leaves out empty backs; you can bring them back"),
     ocr,
     language,
+    missingNote,
     h("button", {
       type: "button", class: "btn btn-primary scan__go", "data-key": "scan",
       disabled: !state.device || busy || state.looking,

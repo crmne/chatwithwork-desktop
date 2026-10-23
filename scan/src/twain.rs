@@ -396,17 +396,18 @@ fn trace_windows() {
                 if !throw_info.is_null() {
                     let catchable = *throw_info.add(3) as *const u32;
                     let count = (*catchable).min(8) as usize;
+                    let mut is_std_exception = false;
                     for i in 0..count {
                         let ty = *catchable.add(1 + i) as *const u32;
                         let descriptor = *ty.add(1) as *const u8;
-                        let name = std::ffi::CStr::from_ptr(descriptor.add(8).cast());
-                        trace!("  c++ type {}", name.to_string_lossy());
+                        let name =
+                            std::ffi::CStr::from_ptr(descriptor.add(8).cast()).to_string_lossy();
+                        trace!("  c++ type {name}");
+                        // An object deriving from std::exception, never a
+                        // pointer to one (".PAV..."), has what() in its vtable.
+                        is_std_exception |= name == ".?AVexception@std@@";
                     }
-                    let first = *catchable.add(1) as *const u32;
-                    let first_name =
-                        std::ffi::CStr::from_ptr((*first.add(1) as *const u8).add(8).cast())
-                            .to_string_lossy();
-                    if !object.is_null() && (count > 1 || first_name.contains("exception@std")) {
+                    if !object.is_null() && is_std_exception {
                         let vtable = *object;
                         let what: unsafe extern "thiscall" fn(*const *const usize) -> *const i8 =
                             std::mem::transmute(*vtable.add(1));
