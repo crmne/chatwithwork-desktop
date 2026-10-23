@@ -57,7 +57,7 @@ Organizations, people, notification preferences, models and templates are in the
 
 ## The scan window
 
-Scan… in the tray, or `cww-app --scan`, opens it. Its page gets its own commands (`capabilities/scan.json`, for the `scan` window and no remote URL; each command in `scan.rs` checks its caller again), never the settings' `control`: the scanner goes through a helper process the app starts while the window is open, the daemon is asked only for where a scan can go and to send it (`scan_destinations`, `scan_send`), and Save to Computer writes the PDF where the person picks in the system's save dialog, without the daemon. Pages are kept in a private folder under the app's state directory and deleted when they're sent, when the window closes, and when the app starts. The details are in [scanning.md](scanning.md).
+Scan… in the tray, or `cww-app --scan`, opens it. Its page gets its own commands (`capabilities/scan.json`, for the `scan` window and no remote URL; each command in `scan.rs` checks its caller again), never the settings' `control`: the scanner goes through a helper process the app starts while the window is open, the daemon is asked only for where a scan can go and to send it (`scan_destinations`, `scan_send`), and Save to Computer writes the PDF where the person picks in the system's save dialog, without the daemon. Pages are kept in a private folder under the app's state directory and deleted on Rescan, when the window closes, and when the app starts. The details are in [scanning.md](scanning.md).
 
 ## Lending folders to bots
 

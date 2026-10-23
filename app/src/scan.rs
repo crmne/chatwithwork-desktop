@@ -6,8 +6,8 @@
 //!   so a driver that crashes or hangs never takes the app with it. It runs
 //!   while the window is open and goes with it.
 //! - Pages are kept in a private folder of the app's own (0700, under the
-//!   app's state directory) until they're sent or the window closes, then
-//!   deleted. Nothing leaves the computer before Send.
+//!   app's state directory) until Rescan, the window closing, or the app's
+//!   next start deletes them. Nothing leaves the computer before Send.
 //! - Send makes the PDF here (OCR included) and hands it to the daemon,
 //!   which sends it as this computer's owner, with the device's token, to a
 //!   new chat or to a bot (CONTROL.md, `scan_send`).
@@ -267,6 +267,21 @@ async fn blocking<T: Send + 'static>(
 
 /// The language a first scan reads in: the system's, when the engine has
 /// it, else English, else the first it has.
+/// Why the switch for searchable text is off when the engine reads no
+/// language: the engine's own error, else what this system needs.
+fn no_languages(error: &Option<String>) -> String {
+    if let Some(error) = error {
+        return error.clone();
+    }
+    if cfg!(windows) {
+        "Windows has no language it reads text in. Add a language with optical character recognition in Settings, Time & language, Language & region.".into()
+    } else if cfg!(target_os = "macos") {
+        "This Mac lists no language it reads text in.".into()
+    } else {
+        cww_scan::ocr::TESSERACT_MISSING.into()
+    }
+}
+
 fn default_language(languages: &[Language]) -> Option<String> {
     let locale = std::env::var("LC_ALL")
         .or_else(|_| std::env::var("LC_MESSAGES"))
@@ -389,9 +404,12 @@ pub fn scan_info(
     scans: State<'_, Arc<Scans>>,
 ) -> Answer {
     scan_page_only(&webview)?;
-    let languages = match &scans.engine {
-        Ok(engine) => engine.languages().unwrap_or_default(),
-        Err(_) => vec![],
+    let (languages, languages_error) = match &scans.engine {
+        Ok(engine) => match engine.languages() {
+            Ok(languages) => (languages, None),
+            Err(e) => (Vec::new(), Some(e)),
+        },
+        Err(_) => (Vec::new(), None),
     };
     let preferences = Preferences::load(&desktop.paths);
     let mut settings = preferences.settings.clone().unwrap_or_default();
@@ -414,7 +432,7 @@ pub fn scan_info(
         "device": preferences.device,
         "languages": languages,
         "ocr": match &scans.engine {
-            Ok(_) if languages.is_empty() => json!({ "available": false, "reason": cww_scan::ocr::TESSERACT_MISSING }),
+            Ok(_) if languages.is_empty() => json!({ "available": false, "reason": no_languages(&languages_error) }),
             Ok(_) => json!({ "available": true, "missing": missing, "can_add": cfg!(windows) }),
             Err(reason) => json!({ "available": false, "reason": reason }),
         },

@@ -66,7 +66,7 @@ const TWRC_CANCEL: u16 = 3;
 const TWRC_DSEVENT: u16 = 4;
 const TWRC_XFERDONE: u16 = 6;
 
-const TWCC_NOMEDIA: u16 = 31;
+const TWCC_NOMEDIA: u16 = 29;
 const TWCC_PAPERJAM: u16 = 20;
 const TWCC_PAPERDOUBLEFEED: u16 = 21;
 
@@ -263,6 +263,34 @@ pub struct Twain {
     window: HWND,
     sources: Vec<Identity>,
     _library: Library,
+    // Last, so OLE ends after the DSM and the driver are gone.
+    _ole: Ole,
+}
+
+/// OLE on the thread that owns the TWAIN session, ended when the session
+/// is (OleUninitialize balances each OleInitialize that succeeded).
+struct Ole;
+
+impl Ole {
+    fn initialize() -> Result<Self, ScanError> {
+        // SAFETY: on the thread that owns the TWAIN session, balanced by Drop.
+        let hr = unsafe { windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null_mut()) };
+        if hr < 0 {
+            trace!("OleInitialize failed: {hr:#010x}");
+            return Err(ScanError::new(
+                "no_twain",
+                "Scanning couldn't start Windows' OLE, which scanner drivers need.",
+            ));
+        }
+        Ok(Ole)
+    }
+}
+
+impl Drop for Ole {
+    fn drop(&mut self) {
+        // SAFETY: balances the OleInitialize that made this, on its thread.
+        unsafe { windows_sys::Win32::System::Ole::OleUninitialize() };
+    }
 }
 
 fn no_twain() -> ScanError {
@@ -447,8 +475,9 @@ impl Twain {
         // Drivers expect a single-threaded COM apartment with OLE on the
         // thread that talks to them, as .NET apps and most scanning programs
         // have; Canon's throws while opening without it.
-        // SAFETY: once, on the thread that owns the TWAIN session.
-        unsafe { windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null_mut()) };
+        // A thread already in a multithreaded apartment refuses
+        // (RPC_E_CHANGED_MODE), and so does this.
+        let ole = Ole::initialize()?;
         // The open TWAIN DSM 2.x (TWAINDSM.dll) beside this program, then
         // one installed with Windows or a driver, then, for 32-bit sources,
         // Microsoft's twain_32.dll. Modern drivers are TWAIN 2 sources
@@ -484,6 +513,7 @@ impl Twain {
             window,
             sources: Vec::new(),
             _library: library,
+            _ole: ole,
         };
         let mut parent = window;
         let rc = twain.call(

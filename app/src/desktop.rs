@@ -283,9 +283,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             }
         }));
     }
-    // Pages a scan left behind when the app last stopped are deleted.
     let scans = Arc::new(crate::scan::Scans::default());
-    scans.close(&desktop.paths);
+    let startup_scans = scans.clone();
     let setup_desktop = desktop.clone();
     let app = builder
         .plugin(
@@ -360,6 +359,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         ])
         .setup(move |app| {
             let desktop = setup_desktop;
+            // Pages a scan left behind when the app last stopped are deleted,
+            // here, where only the instance that keeps running gets: a second
+            // launch hands its arguments over without touching them.
+            startup_scans.close(&desktop.paths);
             let handle = app.handle().clone();
             let _ = desktop.app.set(handle.clone());
             add_remote_capability(&handle, &desktop.server())?;

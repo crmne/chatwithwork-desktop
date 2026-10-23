@@ -87,6 +87,7 @@ nfpm:
       - xdg-desktop-portal
       - gnome-keyring
       - sane-backends-libs
+      - sane-backends-drivers-scanners
       - tesseract
   rpm:
     buildhost: github-actions

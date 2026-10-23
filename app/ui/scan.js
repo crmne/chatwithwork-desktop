@@ -366,8 +366,8 @@ function renderSettings() {
       h("small", {}, state.ocr.available ? "Read on this computer, as a text layer you can select" : state.ocr.reason)),
     h("input", { type: "checkbox", role: "switch", class: "switch", checked: ocrOn, disabled: busy || !state.ocr.available, "data-key": "ocr",
       onchange: (event) => {
+        if (!event.target.checked && s.ocr) state.lastLanguage = s.ocr;
         s.ocr = event.target.checked ? (state.lastLanguage || state.languages[0]?.code || null) : null;
-        if (!event.target.checked) state.lastLanguage = state.settings.ocr;
         saveSettings();
         render();
       } }));
@@ -461,8 +461,8 @@ function sheets(pages, kept) {
       h("div", { class: "sheet__foot" },
         h("span", { class: "sheet__number" }, kept ? String(n + 1).padStart(2, "0") : "blank"),
         kept ? [
-          iconButton("caret-left", "Move earlier", () => arrange(page, { index: Math.max(0, index - 1) }), { disabled: n === 0 || state.sending, key: `left-${page.id}` }),
-          iconButton("caret-right", "Move later", () => arrange(page, { index: index + 1 }), { disabled: n === pages.length - 1 || state.sending, key: `right-${page.id}` }),
+          iconButton("caret-left", "Move earlier", () => arrange(page, { index: all.indexOf(pages[n - 1]) }), { disabled: n === 0 || state.sending, key: `left-${page.id}` }),
+          iconButton("caret-right", "Move later", () => arrange(page, { index: all.indexOf(pages[n + 1]) }), { disabled: n === pages.length - 1 || state.sending, key: `right-${page.id}` }),
           iconButton("arrow-clockwise", "Turn clockwise", () => edit(page, { turn: true }), { disabled: state.sending, key: `turn-${page.id}` }),
           iconButton("crop", "Crop", () => openCrop(page), { disabled: state.sending, key: `crop-${page.id}` }),
           iconButton("trash", "Delete page", () => arrange(page, { delete: true }), { disabled: state.sending, key: `delete-${page.id}` }),

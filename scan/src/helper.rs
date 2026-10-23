@@ -65,6 +65,11 @@ pub fn run(backend: impl FnOnce() -> Result<Box<dyn Backend>, ScanError>) -> i32
                 match serde_json::from_str::<Op>(&line) {
                     Ok(Op::Cancel) => cancel.store(true, Ordering::SeqCst),
                     Ok(op) => {
+                        // Here, in order with a Cancel read after it: a
+                        // Stop sent just after Start isn't lost.
+                        if matches!(op, Op::Scan { .. }) {
+                            cancel.store(false, Ordering::SeqCst);
+                        }
                         if tx.send(op).is_err() {
                             break;
                         }
@@ -91,7 +96,6 @@ pub fn run(backend: impl FnOnce() -> Result<Box<dyn Backend>, ScanError>) -> i32
         return 0;
     };
     for op in rx.iter() {
-        cancel.store(false, Ordering::SeqCst);
         let ok = match op {
             Op::Devices => say(match backend.devices() {
                 Ok(devices) => json!({ "devices": devices }),
