@@ -25,8 +25,9 @@ pub const LIFETIME: Duration = Duration::from_secs(10 * 60);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the listener checks whether it has been replaced or expired.
 const POLL: Duration = Duration::from_millis(200);
-/// Longest request line read; the server's tokens and messages are short.
-const MAX_LINE: usize = 8 * 1024;
+/// Most of a request read, its line and headers; the server's tokens and
+/// messages are short.
+const MAX_HEAD: usize = 16 * 1024;
 
 /// The page the browser shows once it has come back.
 const DONE_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -114,10 +115,18 @@ fn answer(mut stream: TcpStream, nonce: &str) -> Option<BTreeMap<String, String>
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
+    let mut head = BufReader::new(Read::take(&stream, MAX_HEAD as u64));
     let mut line = String::new();
-    BufReader::new(Read::take(&stream, MAX_LINE as u64))
-        .read_line(&mut line)
-        .ok()?;
+    head.read_line(&mut line).ok()?;
+    // Read the headers too: closing a socket with a request still unread
+    // resets the connection, and the browser could show that instead of
+    // the page.
+    let mut header = String::new();
+    while matches!(head.read_line(&mut header), Ok(n) if n > 0)
+        && !matches!(header.as_str(), "\r\n" | "\n")
+    {
+        header.clear();
+    }
     let query = callback_query(&line, nonce);
     let response = match &query {
         Some(_) => format!(
@@ -129,6 +138,7 @@ fn answer(mut stream: TcpStream, nonce: &str) -> Option<BTreeMap<String, String>
     };
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     query
 }
 
