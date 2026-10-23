@@ -3,9 +3,12 @@
 //! whose OCR packs Windows has (each display language brings its own;
 //! Settings, Time & language, Language adds more).
 //!
-//! The page goes in as a grey SoftwareBitmap (the despeckled copy, as the
-//! other engines get), and each line's words come back with their boxes in
-//! the page's pixels from the top left, as the PDF writer takes them.
+//! The page goes in as a grey SoftwareBitmap, as scanned: not the despeckled
+//! copy Tesseract and Vision get. Windows reads a letter printed on grey
+//! halftone well by itself, and the median filter took the dots off its
+//! umlauts ("fur", "fallig" on half the tries; every umlaut without it). Each
+//! line's words come back with their boxes in the page's pixels from the top
+//! left, as the PDF writer takes them.
 
 use image::DynamicImage;
 use windows::Globalization::Language;
@@ -14,7 +17,7 @@ use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows::core::HSTRING;
 
-use crate::ocr::{Engine, Language as OcrLanguage, Word, despeckle};
+use crate::ocr::{Engine, Language as OcrLanguage, Word};
 
 pub struct WindowsOcr;
 
@@ -62,7 +65,7 @@ impl Engine for WindowsOcr {
         let engine = OcrEngine::TryCreateFromLanguage(&tag).map_err(|_| {
             format!("Windows can't read {language}: add its language (with OCR) in Settings, Time & language, Language.")
         })?;
-        let mut gray = despeckle(&page.to_luma8());
+        let mut gray = page.to_luma8();
         // Windows reads pages up to MaxImageDimension pixels on a side.
         let max = OcrEngine::MaxImageDimension().unwrap_or(10_000);
         let scale = f64::from(max) / f64::from(gray.width().max(gray.height()));
