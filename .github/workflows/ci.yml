@@ -97,10 +97,23 @@ jobs:
           bash packaging/macos/test-install.sh dist/cww-test.pkg
           rm -rf "dist/Chat with Work.app" dist/cww-test.pkg
 
+      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
+      # and load only into a 32-bit process. It goes beside cww-app.exe with
+      # the TWAIN Working Group's TWAINDSM.dll, as the installer has them.
+      # The scan and devices examples try a real scanner without the app.
+      - name: Build the 32-bit scanner helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
+          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/release
       - name: Check the Windows binaries need no Visual C++ Redistributable
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe
+        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe target/release/cww-scan-helper.exe target/release/TWAINDSM.dll
       - name: Build the Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -133,16 +146,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: mkdir -p dist && cp target/release/cww-app.exe dist/
-      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
-      # and load only into a 32-bit process. The scan and devices examples
-      # try a real scanner without the app.
-      - name: Build the 32-bit scanner helper
+      - name: Collect the scanner helper and its tools
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          rustup target add i686-pc-windows-msvc
-          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
-          cp target/i686-pc-windows-msvc/release/cww-scan-helper.exe dist/
+          cp target/release/cww-scan-helper.exe target/release/TWAINDSM.dll dist/
           mkdir -p dist/scan-tools
           cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
 

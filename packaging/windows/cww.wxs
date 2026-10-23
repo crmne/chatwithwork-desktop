@@ -3,6 +3,8 @@
 
   - Installs cww.exe, cww-app.exe and cww-agent.exe to %LOCALAPPDATA%\Programs\Chat with Work Desktop
     and adds that folder to the user's PATH. Per-user, so no UAC prompt.
+  - Installs the app's 32-bit scanner helper beside it, with the TWAIN Working
+    Group's TWAINDSM.dll (LGPL-2.1, its licence and notice beside it).
   - Registers the daemon's logon Scheduled Task (`cww daemon install`) and
     starts it; it stays idle until the computer is paired. Uninstalling
     removes the task (`cww daemon uninstall`) but keeps keys and settings.
@@ -58,6 +60,15 @@
         <File Id="CwwAppExe" Name="cww-app.exe" Source="$(SourceDir)\cww-app.exe" KeyPath="no" />
         <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="DesktopApp" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="Scanning" Guid="{2E0B7C51-6A4D-4F0E-9C3B-8D17F5A2E964}">
+        <!-- 32-bit, as most scanners' TWAIN drivers are, on x64 and arm64 alike. -->
+        <File Id="ScanHelperExe" Name="cww-scan-helper.exe" Source="$(SourceDir)\cww-scan-helper.exe" KeyPath="no" />
+        <File Id="TwainDsm" Name="TWAINDSM.dll" Source="$(SourceDir)\TWAINDSM.dll" KeyPath="no" />
+        <File Id="TwainDsmLicense" Name="TWAINDSM-LICENSE.txt" Source="$(SourceDir)\TWAINDSM-LICENSE.txt" KeyPath="no" />
+        <File Id="TwainDsmNotice" Name="TWAINDSM-NOTICE.txt" Source="$(SourceDir)\TWAINDSM-NOTICE.txt" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
+          Name="Scanning" Type="integer" Value="1" KeyPath="yes" />
       </Component>
       <Component Id="Documents" Guid="{B62401DF-87F3-4E51-AEB2-16FBAB6544BF}">
         <File Id="Readme" Name="README.md" Source="$(SourceDir)\README.md" KeyPath="no" />
