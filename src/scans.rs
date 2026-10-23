@@ -9,7 +9,7 @@
 //! - a new chat, with the PDF attached (an upload, then a new chat, as the
 //!   terminal's composer asks), or
 //! - a bot whose trigger listens for scans from Chat with Work Desktop, as a
-//!   trigger event (`POST /local_agent/scans`).
+//!   trigger event (`POST /desktop/scans`).
 //!
 //! The daemon keeps nothing: the bytes go from the request to the server.
 

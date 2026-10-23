@@ -723,7 +723,7 @@ impl ChatClient {
     /// Where a scan can go: `{"destinations": [...]}`.
     pub fn scan_destinations(&self) -> Result<Value> {
         newer(
-            self.call("GET", "local_agent/scans/new", Body::Empty),
+            self.call("GET", "desktop/scans/new", Body::Empty),
             "doesn't take scans from here yet",
         )
     }
@@ -746,7 +746,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                "local_agent/scans",
+                "desktop/scans",
                 multipart_with(&fields, "file", &upload)?,
             ),
             "doesn't take scans from here yet",
