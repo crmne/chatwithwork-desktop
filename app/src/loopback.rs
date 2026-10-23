@@ -120,14 +120,21 @@ fn answer(mut stream: TcpStream, nonce: &str) -> Option<BTreeMap<String, String>
     head.read_line(&mut line).ok()?;
     // Read the headers too: closing a socket with a request still unread
     // resets the connection, and the browser could show that instead of
-    // the page.
+    // the page. A head cut short by the limit, an error or a hang-up isn't
+    // a request.
     let mut header = String::new();
-    while matches!(head.read_line(&mut header), Ok(n) if n > 0)
-        && !matches!(header.as_str(), "\r\n" | "\n")
-    {
+    let complete = loop {
         header.clear();
-    }
-    let query = callback_query(&line, nonce);
+        match head.read_line(&mut header) {
+            Ok(n) if n > 0 && header.ends_with('\n') => {
+                if matches!(header.as_str(), "\r\n" | "\n") {
+                    break true;
+                }
+            }
+            _ => break false,
+        }
+    };
+    let query = complete.then(|| callback_query(&line, nonce)).flatten();
     let response = match &query {
         Some(_) => format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncache-control: no-store\r\n\
@@ -242,6 +249,33 @@ mod tests {
         assert_eq!(url, started.callback);
         assert_eq!(query["status"], "connected");
         assert_eq!(query["return_to"], "/x");
+    }
+
+    #[test]
+    fn a_request_cut_short_is_not_the_callback() {
+        let callbacks = Callbacks::default();
+        let (tx, rx) = mpsc::channel::<()>();
+        let started = callbacks.start(move |_, _| tx.send(()).unwrap()).unwrap();
+        let path = started.callback.splitn(4, '/').nth(3).unwrap().to_string();
+        let address = started
+            .callback
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap();
+        // The right line, but the head never ends: the sender hangs up first.
+        let mut stream = TcpStream::connect(address).unwrap();
+        write!(
+            stream,
+            "GET /{path}?status=connected HTTP/1.1\r\nHost: {address}\r\n"
+        )
+        .unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 404"));
+        assert!(rx.recv_timeout(POLL * 3).is_err());
     }
 
     #[test]
