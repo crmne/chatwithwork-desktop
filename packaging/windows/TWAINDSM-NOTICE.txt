@@ -1,0 +1,16 @@
+TWAINDSM.dll
+
+The scanner helper (cww-scan-helper.exe) loads TWAINDSM.dll, the TWAIN Data
+Source Manager, to talk to scanners' TWAIN drivers. It is the TWAIN Working
+Group's own 32-bit build, release 2.5.1, unmodified and signed by them:
+
+  https://github.com/twain/twain-dsm/releases/tag/v2.5.1 (dsm_020501.zip,
+  windows/32/TWAINDSM.dll)
+
+Its source code is at https://github.com/twain/twain-dsm.
+
+The TWAIN Data Source Manager is free software, licensed under the GNU Lesser
+General Public License, version 2.1 (TWAINDSM-LICENSE.txt beside this file).
+Chat with Work loads it as a separate library: you may replace TWAINDSM.dll
+in this folder with another build of it, including one you made from its
+source, and the scanner helper will use it.

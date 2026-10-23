@@ -161,6 +161,15 @@ jobs:
       # No compiler cache: these binaries are published as a prerelease.
 
       - run: cargo build --locked --release --target ${{ matrix.target }} -p cww -p cww-app --bin cww --bin cww-agent --bin cww-app
+      # The scanner helper is 32-bit on both targets, as most TWAIN drivers are.
+      - name: Build the 32-bit scanner helper
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo build --locked --release --target i686-pc-windows-msvc -p cww-scan --bin cww-scan-helper
+          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/${{ matrix.target }}/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/${{ matrix.target }}/release
 
       - name: Package
         shell: bash
@@ -169,6 +178,7 @@ jobs:
           release="target/${{ matrix.target }}/release"
           mkdir -p "dist/$name"
           cp "$release/cww-app.exe" "$release/cww.exe" "$release/cww-agent.exe" "dist/$name/"
+          cp "$release/cww-scan-helper.exe" "$release/TWAINDSM.dll" packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt "dist/$name/"
           cp README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           (cd dist && 7z a "$name.zip" "$name")
           rm -rf "dist/$name"

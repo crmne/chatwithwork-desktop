@@ -62,6 +62,11 @@ jobs:
           $app = Get-ChildItem $payload -Filter cww-app.exe -Recurse | Select-Object -First 1
           if (-not $app) { throw 'The downloaded installer has no desktop app' }
           Copy-Item -LiteralPath $app.FullName -Destination target/release/cww-app.exe
+          rustup target add i686-pc-windows-msvc
+          mbx build --release --locked --target i686-pc-windows-msvc -p cww-scan --bin cww-scan-helper
+          if ($LASTEXITCODE -ne 0) { throw 'Scanner helper build failed' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/release
           dotnet tool install --global wix --version 5.0.2
           $version = ((Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$').Matches.Groups[1].Value)
           Remove-Item -LiteralPath $msi

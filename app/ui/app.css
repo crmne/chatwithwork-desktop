@@ -635,14 +635,39 @@ code,
 
 /* Fields */
 
+/* One height for every control on a row: buttons, fields and selects are
+   2rem. Selects are drawn here rather than by the web view, whose own box
+   sits inside the border with a radius of its own and grows taller. */
 .input,
 .select {
-  min-block-size: 2rem;
-  padding: 0.3125rem 0.625rem;
+  block-size: 2rem;
+  padding: 0 0.625rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   background-color: var(--surface);
   font-size: 0.875rem;
+  line-height: 1;
+}
+
+.select {
+  appearance: none;
+  padding-inline-end: 1.75rem;
+  /* The chevron, in the ink's own color, from two half-squares. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-muted) 50%),
+    linear-gradient(135deg, var(--ink-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 0.9375rem) 52%,
+    calc(100% - 0.625rem) 52%;
+  background-size: 0.3125rem 0.3125rem;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.select:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .input {

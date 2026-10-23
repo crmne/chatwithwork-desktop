@@ -11,6 +11,8 @@ depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'li
 makedepends=('git' 'cargo' 'pkgconf' 'cmake' 'clang')
 optdepends=('org.freedesktop.secrets: store the device key in your keyring'
             'xdg-desktop-portal: native folder picker'
+            'sane: scan with a USB scanner'
+            'tesseract: make scans searchable (with tesseract-data-<language>)'
             'systemd: start the agent now and at login with cww daemon install')
 provides=('cww' 'cww-app' 'chatwithwork-desktop')
 conflicts=('cww' 'chatwithwork-desktop' 'chatwithwork-desktop-bin')

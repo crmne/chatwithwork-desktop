@@ -1,6 +1,7 @@
 //! Pictures of the windows, for docs and reviews, in `--demo` builds on
-//! Linux only. WebKitGTK paints the snapshot itself, so it works while the
-//! window is on a hidden workspace where the compositor shows nothing.
+//! Linux and macOS. The web view paints the snapshot itself (WebKitGTK, or
+//! WKWebView), so it works on a hidden workspace where the compositor shows
+//! nothing, and from a process without screen-recording permission.
 //!
 //! `CWW_APP_SNAPSHOT=<dir>` takes the settings window's pages one by one
 //! (or `CWW_APP_SNAPSHOT_PAGES=folders,general`, where `main` is the web
@@ -102,6 +103,12 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             }
             continue;
         }
+        // `scan`, then `scan:<step>`: the scan window, with each step played
+        // in the page itself (no input reaches the system).
+        if let Some(step) = page.strip_prefix("scan") {
+            scan_step(&app, step.trim_start_matches(':'), &dir, &theme);
+            continue;
+        }
         crate::windows::tell_settings(&app, "navigate", &page);
         std::thread::sleep(Duration::from_millis(1500));
         let path = dir.join(format!("{page}-{theme}.png"));
@@ -113,6 +120,7 @@ pub fn run(app: AppHandle, dir: PathBuf) {
     app.exit(0);
 }
 
+#[cfg(target_os = "linux")]
 fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
@@ -133,6 +141,49 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
                     let _ = tx.send(saved);
                 },
             );
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv_timeout(Duration::from_secs(20))
+        .map_err(|_| "timed out".to_string())?
+}
+
+/// On macOS, WKWebView draws its own content into an image, which needs no
+/// screen-recording permission (a process started over SSH has none).
+#[cfg(target_os = "macos")]
+fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_foundation::{NSDictionary, NSError};
+    use objc2_web_kit::WKWebView;
+
+    let (tx, rx) = mpsc::channel();
+    let path = path.to_path_buf();
+    window
+        .with_webview(move |webview| {
+            // SAFETY: on macOS, wry's inner view is its WKWebView, used on
+            // the main thread, where with_webview runs this.
+            let view: &WKWebView = unsafe { &*(webview.inner() as *const WKWebView) };
+            let handler = block2::RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+                // SAFETY: WebKit hands over an image or null.
+                let saved = match unsafe { image.as_ref() } {
+                    None => Err("no image".to_string()),
+                    Some(image) => image
+                        .TIFFRepresentation()
+                        .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
+                        .and_then(|rep| unsafe {
+                            rep.representationUsingType_properties(
+                                NSBitmapImageFileType::PNG,
+                                &NSDictionary::new(),
+                            )
+                        })
+                        .ok_or_else(|| "couldn't make a PNG".to_string())
+                        .and_then(|png| {
+                            std::fs::write(&path, png.to_vec()).map_err(|e| e.to_string())
+                        }),
+                };
+                let _ = tx.send(saved);
+            });
+            // SAFETY: a snapshot of the visible page, delivered to the block.
+            unsafe { view.takeSnapshotWithConfiguration_completionHandler(None, &handler) };
         })
         .map_err(|e| e.to_string())?;
     rx.recv_timeout(Duration::from_secs(20))
@@ -180,5 +231,101 @@ fn bridge_check(app: &AppHandle) {
         }
         std::thread::sleep(Duration::from_secs(2));
         println!("{}", main.title().unwrap_or_default());
+    }
+}
+
+/// One step of the scan window, then its picture (`scan-<step>-<theme>.png`):
+/// `scanned` presses Scan and waits for the feeder to empty, `blank` opens
+/// the blank pages left out, `crop` opens the first page's crop view,
+/// `cropped` crops the first page, `saved` saves the PDF (`CWW_DEMO_SAVE_TO`),
+/// `menu` opens the finish button's menu, `turned` turns the second, and `send`
+/// sends to the first bot (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
+/// the PDF).
+fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
+    let Ok(()) = crate::windows::show_scan(app) else {
+        log::error!("snapshot: no scan window");
+        return;
+    };
+    std::thread::sleep(Duration::from_secs(if step.is_empty() { 4 } else { 1 }));
+    let Some(window) = app.get_webview_window(crate::windows::SCAN) else {
+        return;
+    };
+    let _ = window.set_theme(Some(if theme == "dark" {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    }));
+    let (script, wait) = match step {
+        "scanned" => (
+            r#"document.querySelector('[data-key="scan"]')?.click()"#,
+            // A real scanner and its feeder take longer than the sample one.
+            std::env::var("CWW_APP_SNAPSHOT_SCAN_WAIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(12),
+        ),
+        "blank" => (
+            r#"document.querySelector('details.left-out')?.setAttribute('open', '')"#,
+            1,
+        ),
+        "crop" => (
+            r#"document.querySelector('[data-key^="crop-"]')?.click()"#,
+            3,
+        ),
+        "cropped" => (
+            r#"(async () => { document.getElementById('crop').close(); const { pages } = await window.__TAURI_INTERNALS__.invoke('scan_info'); await window.__TAURI_INTERNALS__.invoke('scan_edit', { id: pages[0].id, crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.55 } }); location.reload(); })()"#,
+            4,
+        ),
+        "saved" => (
+            r#"(() => { const main = document.querySelector('[data-key="save"]'); if (main) { main.click(); return; } document.querySelector('[data-key="finish-menu"]')?.click(); setTimeout(() => document.querySelector('[data-key="menu-save"]')?.click(), 200); })()"#,
+            10,
+        ),
+        "menu" => (
+            r#"document.querySelector('[data-key="finish-menu"]')?.click()"#,
+            2,
+        ),
+        "turned" => (
+            r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,
+            3,
+        ),
+        "send" => (
+            r#"(() => { const s = document.querySelector('[data-key="destination"]'); if (s && s.options.length > 1) { s.value = s.options[1].value; s.dispatchEvent(new Event('change')); } setTimeout(() => document.querySelector('[data-key="send"]')?.click(), 300); })()"#,
+            15,
+        ),
+        _ => ("", 0),
+    };
+    if !script.is_empty() {
+        let _ = window.eval(script);
+    }
+    std::thread::sleep(Duration::from_secs(wait));
+    // Saving reads the pages first; the first page on a Mac waits for
+    // Vision's model, so wait for the file rather than a fixed time.
+    if step == "saved"
+        && let Some(file) = std::env::var_os("CWW_DEMO_SAVE_TO").map(std::path::PathBuf::from)
+    {
+        for _ in 0..120 {
+            if file.exists() {
+                std::thread::sleep(Duration::from_secs(2));
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+    // WebKitGTK takes prefers-color-scheme from GTK, not the window's theme,
+    // so the picture's theme is set on the page.
+    let _ = window.eval(format!(
+        "document.documentElement.style.colorScheme = {}",
+        serde_json::json!(theme)
+    ));
+    std::thread::sleep(Duration::from_millis(400));
+    let name = if step.is_empty() {
+        "scan".to_string()
+    } else {
+        format!("scan-{step}")
+    };
+    let path = dir.join(format!("{name}-{theme}.png"));
+    match capture(&window, &path) {
+        Ok(()) => println!("{}", path.display()),
+        Err(e) => log::error!("snapshot of {name}: {e}"),
     }
 }

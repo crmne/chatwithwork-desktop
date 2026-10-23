@@ -20,7 +20,7 @@ publish = false
 # channel (CONTROL.md).
 # Native notification code is shared with a separate headless helper; the
 # CLI/daemon package keeps its existing dependencies and Rust requirement.
-members = [".", "app", "notification-broker"]
+members = [".", "app", "notification-broker", "scan"]
 
 [lib]
 name = "cww"

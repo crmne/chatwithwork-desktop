@@ -13,9 +13,9 @@
 //! - While no window is open the app is its tray item and a thread watching
 //!   the daemon; the web views and their processes go with their windows.
 //!
-//! The same binary is also three pipe-only helpers that the daemon and
-//! `cww tui` start: the notification broker, the microphone recorder and
-//! local speech recognition.
+//! The same binary is also pipe-only helpers: the notification broker, the
+//! microphone recorder and local speech recognition, which the daemon and
+//! `cww tui` start, and the scanner's driver, which the scan window starts.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -42,8 +42,9 @@ mod offline;
 mod pairing;
 mod paths;
 mod policy;
+mod scan;
 mod server;
-#[cfg(all(target_os = "linux", feature = "demo"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]
 mod snapshot;
 mod speech;
 mod state;
@@ -79,6 +80,11 @@ fn main() {
     // single-instance handling, or log may write to its protocol.
     if std::env::args().skip(1).eq(["--record-audio"]) {
         std::process::exit(audio::record(false));
+    }
+    // The scanner's driver, in a process of its own (scan.rs): a driver
+    // that crashes or hangs takes only this helper with it.
+    if std::env::args().skip(1).eq(["--scan-helper"]) {
+        std::process::exit(cww_scan::helper::run(cww_scan::system_backend));
     }
     if std::env::args().skip(1).eq(["--record-audio-progress"]) {
         std::process::exit(audio::record(true));

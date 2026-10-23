@@ -732,6 +732,8 @@ impl Demo {
             | "notification_preferences"
             | "notification_preferences_update"
             | "notification_browser_link"
+            | "scan_destinations"
+            | "scan_send"
             | "chat_unqueue" => {
                 let answer = self.chat_request(cmd, request);
                 self.sync_list();
@@ -1156,6 +1158,14 @@ impl Demo {
                 json!({"ok": true, "data": "VmVuZG9yLFRvdGFsCkFjbWUsNDIwMDAK", "content_type": "text/csv"})
             }
             "chat_upload" => self.upload(request),
+            "scan_destinations" => json!({
+                "ok": true,
+                "destinations": [
+                    { "id": 41, "name": "Mail scanner", "bot": "Mail scanner" },
+                    { "id": 42, "name": "Bills from the post", "bot": "Bills from the post" },
+                ],
+            }),
+            "scan_send" => Self::scan_send(request),
             "chat_approve" | "chat_deny" | "chat_answer" | "chat_decline" => {
                 let Some(number) = number else {
                     return json!({ "ok": false, "code": "bad_request", "error": "No chat" });
@@ -1327,6 +1337,26 @@ impl Demo {
     }
 
     /// `chat_upload`: what the server takes, refused with its sentences.
+    /// A scan from the scan page. With `CWW_DEMO_SCAN_OUT=<file>`, the PDF
+    /// is saved there, to look at what the page made.
+    fn scan_send(request: &Value) -> Value {
+        use base64::Engine as _;
+        let pdf = base64::engine::general_purpose::STANDARD
+            .decode(request["data"].as_str().unwrap_or_default())
+            .unwrap_or_default();
+        if !pdf.starts_with(b"%PDF-") {
+            return json!({ "ok": false, "code": "invalid", "error": "A scan must be a PDF" });
+        }
+        if let Some(out) = std::env::var_os("CWW_DEMO_SCAN_OUT") {
+            let _ = std::fs::write(out, &pdf);
+        }
+        if request["destination"]["kind"] == "chat" {
+            json!({ "ok": true, "chat": { "number": 99, "title": "Scan", "url": "https://chatwithwork.com/482139075/chats/99" } })
+        } else {
+            json!({ "ok": true, "event": { "id": 7, "state": "received" } })
+        }
+    }
+
     fn upload(&self, request: &Value) -> Value {
         let name = request["filename"].as_str().unwrap_or_default().to_string();
         if name.is_empty() {
@@ -1915,6 +1945,18 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
     if scenario == Scenario::Sample {
         // A paired sample has been through the welcome page.
         crate::state::AppState { onboarded: true }.save(&paths)?;
+    }
+    // A scan language chosen before, which this computer may not have
+    // (`CWW_DEMO_SCAN_LANGUAGE=spa`), for the window's missing-language note.
+    if let Some(language) = std::env::var_os("CWW_DEMO_SCAN_LANGUAGE") {
+        crate::scan::Preferences {
+            settings: Some(cww_scan::Settings {
+                ocr: Some(language.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .save(&paths)?;
     }
     let demo = Arc::new(Demo {
         state: Mutex::new(match scenario {

@@ -3,7 +3,8 @@
 #   pwsh packaging/windows/build-msi.ps1 -Version 1.2.3 -Arch x64 `
 #     -Binary target\x86_64-pc-windows-msvc\release\cww.exe -Output dist\cww.msi
 #
-# cww-agent.exe and cww-app.exe must sit next to -Binary.
+# cww-agent.exe, cww-app.exe, the 32-bit scanner helper (cww-scan-helper.exe)
+# and TWAINDSM.dll (packaging/windows/twain-dsm.ps1) must sit next to -Binary.
 #
 # Needs the WiX Toolset 5 command-line tool (`dotnet tool install --global
 # wix --version 5.0.2`); the Util extension is added on first use.
@@ -25,7 +26,12 @@ New-Item -ItemType Directory -Path $source | Out-Null
 try {
   Copy-Item $Binary (Join-Path $source "cww.exe")
   Copy-Item (Join-Path (Split-Path -Parent $Binary) "cww-agent.exe") (Join-Path $source "cww-agent.exe")
-  Copy-Item (Join-Path (Split-Path -Parent $Binary) "cww-app.exe") (Join-Path $source "cww-app.exe")
+  foreach ($name in "cww-app.exe", "cww-scan-helper.exe", "TWAINDSM.dll") {
+    Copy-Item (Join-Path (Split-Path -Parent $Binary) $name) (Join-Path $source $name)
+  }
+  foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt") {
+    Copy-Item (Join-Path $PSScriptRoot $notice) $source
+  }
   foreach ($doc in "README.md", "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE") {
     Copy-Item (Join-Path $root $doc) $source
   }

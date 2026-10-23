@@ -13,6 +13,7 @@ Options:
   --background         Start in the tray without opening a window (how the
                        app starts at login)
   --settings           Open the settings window instead of Chat with Work
+  --scan               Open the scan window
   --page <name>        Open the settings window on a page: welcome, folders,
                        privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
@@ -42,6 +43,8 @@ pub enum Open {
     Chat(Target),
     /// The settings window, on a page or the one it opens on.
     Settings(Option<&'static str>),
+    /// The scan window.
+    Scan,
     /// Nothing: the tray only.
     Nothing,
 }
@@ -86,6 +89,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 options.open = Open::Nothing;
             }
             "--settings" => options.open = Open::Settings(None),
+            "--scan" => options.open = Open::Scan,
             "--page" => {
                 let name = args.next().ok_or("--page needs a name")?;
                 let page = page(&name).ok_or_else(|| format!("unknown page {name:?}"))?;
@@ -132,6 +136,7 @@ mod tests {
         assert!(login.background);
         assert_eq!(login.open, Open::Nothing);
         assert_eq!(args(&["--settings"]).unwrap().open, Open::Settings(None));
+        assert_eq!(args(&["--scan"]).unwrap().open, Open::Scan);
         assert_eq!(
             args(&["--page", "activity"]).unwrap().open,
             Open::Settings(Some("activity"))

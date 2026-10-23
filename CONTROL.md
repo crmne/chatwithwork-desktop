@@ -482,6 +482,23 @@ permission never do. An unsuccessful delivery leaves browser fallback eligible.
 Explicit browser linking deduplicates only that browser and organization. Actual
 foreground visibility suppresses notifications globally, matching the website.
 
+### Scans
+
+The desktop app's scan page sends what it scanned through these (PROTOCOL.md, section 13). They need the computer paired and allowed to use the owner's chats, like the chat requests.
+
+```json
+{"cmd": "scan_destinations"}
+```
+
+Where a scan can go besides a new chat: `{"destinations": [{"id": 41, "name": "Mail scanner", "bot": "Mail scanner", "paused": false, "project": "Post"}]}`, the bots' scan triggers the owner may send to. An older server fails with `unsupported`.
+
+```json
+{"cmd": "scan_send", "destination": {"kind": "chat"}, "filename": "Scan 2026-10-22 14.05.pdf", "data": "<base64>", "pages": 2, "scan_id": "0f8d2c1e-4b7a-4c55-9e10-2a6b3c4d5e6f", "scanner": "Canon P-208II", "message": "What do I need to do?"}
+{"cmd": "scan_send", "destination": {"kind": "trigger", "id": 41}, "filename": "…", "data": "<base64>", "pages": 2, "scan_id": "…"}
+```
+
+Sends a PDF the client made: into a new chat (`"kind": "chat"`, optionally with a `project`, and a `message` of at most 2,000 characters; answers `{"chat": {...}}` as `chat_send` does), or to a trigger from `scan_destinations` (answers `{"event": {"id", "state"}, "destination"}`). The daemon checks it's a PDF of at most 25 MB with 1 to 500 pages and a `scan_id` of 8 to 64 letters, digits and hyphens, and keeps nothing. Like `chat_upload`, the line may be longer than 16 KiB, and the answer may take a while.
+
 ### `asset`
 
 ```json

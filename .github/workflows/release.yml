@@ -123,6 +123,18 @@ jobs:
         if: runner.os == 'Windows'
         run: mbx build --locked --release --target ${{ matrix.target }} -p cww-app --bin cww-app
 
+      # The desktop app's scanner helper, 32-bit on both Windows targets
+      # (most TWAIN drivers are), with the TWAIN Working Group's TWAINDSM.dll.
+      - name: Build the 32-bit scanner helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          mbx build --locked --release --target i686-pc-windows-msvc -p cww-scan --bin cww-scan-helper
+          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/${{ matrix.target }}/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/${{ matrix.target }}/release
+
       - name: Build the CLI notification helper
         if: runner.os == 'Linux'
         run: mbx build --locked --release --target ${{ matrix.target }} -p cww-notification-broker --bin cww-notify
@@ -150,7 +162,7 @@ jobs:
         shell: pwsh
         run: |
           $release = "target\${{ matrix.target }}\release"
-          ./packaging/windows/check-runtime.ps1 "$release\cww.exe" "$release\cww-agent.exe" "$release\cww-app.exe"
+          ./packaging/windows/check-runtime.ps1 "$release\cww.exe" "$release\cww-agent.exe" "$release\cww-app.exe" "$release\cww-scan-helper.exe" "$release\TWAINDSM.dll"
 
       - name: Sign binaries (Azure Artifact Signing)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
@@ -166,6 +178,7 @@ jobs:
             ${{ github.workspace }}\target\${{ matrix.target }}\release\cww.exe
             ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-agent.exe
             ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-app.exe
+            ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-scan-helper.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -177,7 +190,8 @@ jobs:
           ./packaging/windows/sign.ps1 `
             "target\${{ matrix.target }}\release\cww.exe" `
             "target\${{ matrix.target }}\release\cww-agent.exe" `
-            "target\${{ matrix.target }}\release\cww-app.exe"
+            "target\${{ matrix.target }}\release\cww-app.exe" `
+            "target\${{ matrix.target }}\release\cww-scan-helper.exe"
 
       - name: Package
         shell: bash
@@ -197,6 +211,9 @@ jobs:
             # agent keep their names.
             cp "$release/cww-app.exe" "dist/$app/Chat with Work.exe"
             cp "$release/cww.exe" "$release/cww-agent.exe" "dist/$app/"
+            # The scanner helper and the TWAIN DSM it loads, with its notices.
+            cp "$release/cww-scan-helper.exe" "$release/TWAINDSM.dll" "dist/$app/"
+            cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt "dist/$app/"
             cp README.md LICENSE-MIT LICENSE-APACHE "dist/$app/"
             (cd dist && 7z a "$app.zip" "$app")
             rm -rf "dist/$app"

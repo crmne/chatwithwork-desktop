@@ -62,6 +62,10 @@ jiff = "0.2"
 fastframe-autostart = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
+# Scanning: scanners through the system (in a helper process), blank
+# pages, OCR on the computer and the searchable PDF.
+cww-scan = { path = "../scan" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "pnm"] }
 # Waits for the daemon's socket to appear instead of polling for it.
 notify = "8.2"
 # Random nonces for the loopback callback.
@@ -87,6 +91,14 @@ whisper-rs = { version = "0.16.0", default-features = false }
 webkit2gtk = "2.0"
 # Saves those pictures as PNG.
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Pictures of the windows in --demo builds (snapshot.rs): WKWebView draws its
+# own content. Already in the tree through Tauri and wry.
+objc2-web-kit = "0.3"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+block2 = "0.6"
 
 [features]
 default = ["custom-protocol"]

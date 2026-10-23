@@ -40,6 +40,21 @@ jobs:
       - run: mbx test --locked --no-run
       - run: mbx test --locked
         timeout-minutes: 5
+      # Scanning: on Linux against SANE's own test device (a fake feeder of
+      # ten pages, enabled in a dll.conf of its own) and the system Tesseract.
+      - name: Install SANE and Tesseract
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu
+          mkdir -p "$RUNNER_TEMP/sane.d"
+          echo test > "$RUNNER_TEMP/sane.d/dll.conf"
+          echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"
+          echo "CWW_SCAN_REQUIRE_SANE=1" >> "$GITHUB_ENV"
+      - run: cargo fmt -p cww-scan --check
+      - run: mbx clippy -p cww-scan --all-targets --locked -- -D warnings
+      - run: mbx test -p cww-scan --locked
+        timeout-minutes: 5
 
   # The desktop app, on the three platforms it runs on.
   app:
@@ -82,10 +97,23 @@ jobs:
           bash packaging/macos/test-install.sh dist/cww-test.pkg
           rm -rf "dist/Chat with Work.app" dist/cww-test.pkg
 
+      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
+      # and load only into a 32-bit process. It goes beside cww-app.exe with
+      # the TWAIN Working Group's TWAINDSM.dll, as the installer has them.
+      # The scan and devices examples try a real scanner without the app.
+      - name: Build the 32-bit scanner helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
+          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/release
       - name: Check the Windows binaries need no Visual C++ Redistributable
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe
+        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe target/release/cww-scan-helper.exe target/release/TWAINDSM.dll
       - name: Build the Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -118,6 +146,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: mkdir -p dist && cp target/release/cww-app.exe dist/
+      - name: Collect the scanner helper and its tools
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cp target/release/cww-scan-helper.exe target/release/TWAINDSM.dll dist/
+          cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt dist/
+          mkdir -p dist/scan-tools
+          cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
 
       - uses: actions/upload-artifact@v7
         with:

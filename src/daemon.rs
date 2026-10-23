@@ -923,6 +923,66 @@ impl Daemon {
         self.chat(move |client| client.send(&question)).await
     }
 
+    /// Sends a scan the desktop app made: into a new chat (an upload, then
+    /// the chat), or to a bot's trigger.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_scan(
+        &self,
+        destination: crate::scans::Destination,
+        filename: String,
+        data: String,
+        pages: u32,
+        scan_id: String,
+        scanner: Option<String>,
+        message: Option<String>,
+    ) -> Result<Value> {
+        use crate::scans::{Destination, MAX_MESSAGE_CHARS, Scan};
+        let upload = decode_upload(filename, Some("application/pdf".into()), data)?;
+        let scan = Scan {
+            filename: upload.filename,
+            pdf: upload.data,
+            pages,
+            scan_id,
+            scanner,
+        }
+        .check()?;
+        match destination {
+            Destination::Chat { project } => {
+                let text = message.unwrap_or_default().trim().to_string();
+                if text.chars().count() > MAX_MESSAGE_CHARS {
+                    return Err(Refusal::new(
+                        "invalid",
+                        format!("Say it in at most {MAX_MESSAGE_CHARS} characters"),
+                    )
+                    .into());
+                }
+                self.chat(move |client| {
+                    let uploaded = client.upload(&Upload {
+                        filename: scan.filename,
+                        content_type: "application/pdf".into(),
+                        data: scan.pdf,
+                    })?;
+                    let signed_id = uploaded["signed_id"]
+                        .as_str()
+                        .ok_or_else(|| {
+                            Refusal::new("unsupported", "The server didn't take the scan")
+                        })?
+                        .to_string();
+                    client.send(&Question {
+                        text,
+                        project,
+                        attachments: vec![signed_id],
+                        ..Question::default()
+                    })
+                })
+                .await
+            }
+            Destination::Trigger { id } => {
+                self.chat(move |client| client.send_scan(id, &scan)).await
+            }
+        }
+    }
+
     /// Upload a file a client read for a question.
     async fn upload(
         &self,
@@ -1402,6 +1462,29 @@ impl ControlHandler for Daemon {
                 content_type,
                 data,
             } => self.upload(filename, content_type, data).await,
+            ControlRequest::ScanDestinations => {
+                self.chat(|client| client.scan_destinations()).await
+            }
+            ControlRequest::ScanSend {
+                destination,
+                filename,
+                data,
+                pages,
+                scan_id,
+                scanner,
+                message,
+            } => {
+                self.send_scan(
+                    destination,
+                    filename,
+                    data,
+                    pages,
+                    scan_id,
+                    scanner,
+                    message,
+                )
+                .await
+            }
             ControlRequest::ChatDownload { path } => {
                 self.chat(move |client| client.download(&path)).await
             }

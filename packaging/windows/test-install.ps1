@@ -44,7 +44,7 @@ $installed = $false
 try {
   Run-Msi "/i"
   $installed = $true
-  foreach ($binary in "cww.exe", "cww-app.exe", "cww-agent.exe") {
+  foreach ($binary in "cww.exe", "cww-app.exe", "cww-agent.exe", "cww-scan-helper.exe", "TWAINDSM.dll", "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt") {
     if (-not (Test-Path (Join-Path $dir $binary))) { throw "Missing $binary" }
   }
   foreach ($shortcut in "Chat with Work.lnk", "Chat with Work (Terminal).lnk") {
@@ -54,6 +54,18 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "cww failed" }
   & (Join-Path $dir "cww-app.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "cww-app failed" }
+  # The 32-bit scanner helper starts and loads TWAINDSM.dll beside it: a
+  # runner has no scanners, so it lists none rather than an error.
+  $request = Join-Path $env:TEMP 'cww-scan-request.json'
+  $answer = Join-Path $env:TEMP 'cww-scan-answer.json'
+  Set-Content -LiteralPath $request -Value '{"op":"devices"}' -Encoding ascii
+  $helper = Start-Process -FilePath (Join-Path $dir 'cww-scan-helper.exe') -PassThru -NoNewWindow `
+    -RedirectStandardInput $request -RedirectStandardOutput $answer
+  if (-not $helper.WaitForExit(60000)) { $helper.Kill(); throw 'The scanner helper did not answer' }
+  $reply = Get-Content -LiteralPath $answer -Raw
+  Write-Host "Scanner helper: $reply"
+  if ($reply -notmatch '"devices"') { throw "The scanner helper did not list devices: $reply" }
+  Remove-Item -LiteralPath $request, $answer
   # The MSI must actually start the per-user daemon, not merely ship it.
   $running = $false
   for ($i = 0; $i -lt 30; $i++) {

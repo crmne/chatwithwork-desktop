@@ -1,7 +1,7 @@
 //! The menu bar item (macOS), notification-area icon (Windows) or tray item
 //! (Linux, through the AppIndicator library), with the platform's own menu:
 //! the daemon's state as two greyed-out lines, then Open Chat with Work,
-//! Pause Sharing, Settings and Quit.
+//! Pause Sharing, Scan, Settings and Quit.
 
 use tauri::AppHandle;
 use tauri::image::Image;
@@ -16,8 +16,11 @@ mod ids {
     pub const OPEN: &str = "open";
     pub const PAUSE: &str = "pause";
     pub const SETTINGS: &str = "settings";
+    pub const SCAN: &str = "scan";
     pub const QUIT: &str = "quit";
 }
+
+pub const SCAN_LABEL: &str = "Scan…";
 
 pub const OPEN_LABEL: &str = "Open Chat with Work";
 
@@ -45,6 +48,7 @@ pub enum Action {
     Open,
     TogglePause,
     Settings,
+    Scan,
     Quit,
 }
 
@@ -53,6 +57,7 @@ pub fn action(id: &str) -> Option<Action> {
         ids::OPEN => Action::Open,
         ids::PAUSE => Action::TogglePause,
         ids::SETTINGS => Action::Settings,
+        ids::SCAN => Action::Scan,
         ids::QUIT => Action::Quit,
         _ => return None,
     })
@@ -114,6 +119,7 @@ impl Tray {
             true,
             None::<&str>,
         )?;
+        let scan = MenuItem::with_id(app, ids::SCAN, SCAN_LABEL, true, None::<&str>)?;
         let quit = MenuItem::with_id(app, ids::QUIT, platform.quit_item(), true, None::<&str>)?;
         let menu = Menu::with_items(
             app,
@@ -123,6 +129,7 @@ impl Tray {
                 &PredefinedMenuItem::separator(app)?,
                 &open,
                 &pause,
+                &scan,
                 &settings,
                 &PredefinedMenuItem::separator(app)?,
                 &quit,
@@ -212,6 +219,7 @@ mod tests {
         assert_eq!(action("open"), Some(Action::Open));
         assert_eq!(action("pause"), Some(Action::TogglePause));
         assert_eq!(action("settings"), Some(Action::Settings));
+        assert_eq!(action("scan"), Some(Action::Scan));
         assert_eq!(action("quit"), Some(Action::Quit));
         assert_eq!(action("headline"), None);
         assert_eq!(action("detail"), None);
