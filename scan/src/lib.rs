@@ -28,6 +28,8 @@ pub mod sample;
 pub mod sane;
 #[cfg(windows)]
 pub mod twain;
+#[cfg(windows)]
+pub mod twain_locale;
 #[cfg(target_os = "macos")]
 pub mod vision;
 #[cfg(windows)]

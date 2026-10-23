@@ -302,6 +302,25 @@ fn trace_windows() {
                     IsWindowVisible(hwnd) != 0,
                     String::from_utf16_lossy(&title[..n])
                 );
+                // A visible window's text: a driver's message.
+                if IsWindowVisible(hwnd) != 0 {
+                    unsafe extern "system" fn child(hwnd: HWND, _: LPARAM) -> i32 {
+                        // SAFETY: reading a child window's text.
+                        unsafe {
+                            let mut text = [0u16; 512];
+                            let n = GetWindowTextW(hwnd, text.as_mut_ptr(), 512).max(0) as usize;
+                            if n > 0 {
+                                trace!("  text {:?}", String::from_utf16_lossy(&text[..n]));
+                            }
+                        }
+                        TRUE
+                    }
+                    windows_sys::Win32::UI::WindowsAndMessaging::EnumChildWindows(
+                        hwnd,
+                        Some(child),
+                        0,
+                    );
+                }
             }
         }
         TRUE
@@ -340,6 +359,34 @@ fn trace_windows() {
                 String::from_utf16_lossy(&module[..n]),
                 &record.ExceptionInformation[..(record.NumberParameters as usize).min(4)]
             );
+            // The stack, as module and offset, to see which part of a driver
+            // raised it.
+            let mut frames = [std::ptr::null_mut::<c_void>(); 40];
+            let count = windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
+                0,
+                frames.len() as u32,
+                frames.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            for frame in &frames[..count as usize] {
+                let mut handle = std::ptr::null_mut();
+                let mut name = [0u16; 260];
+                if windows_sys::Win32::System::LibraryLoader::GetModuleHandleExW(
+                    0x4 | 0x2,
+                    *frame as *const u16,
+                    &mut handle,
+                ) != 0
+                {
+                    let n = windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW(
+                        handle,
+                        name.as_mut_ptr(),
+                        260,
+                    ) as usize;
+                    let module = String::from_utf16_lossy(&name[..n]);
+                    let short = module.rsplit('\\').next().unwrap_or_default().to_string();
+                    trace!("  at {short}+{:#x}", *frame as usize - handle as usize);
+                }
+            }
             // A C++ exception on 32-bit MSVC: its type names, from the throw
             // information, and what() where it's a std::exception.
             #[cfg(target_arch = "x86")]
@@ -420,6 +467,12 @@ impl Twain {
             .iter()
             .find_map(|n| unsafe { Library::new(n) }.ok())
             .ok_or_else(no_twain)?;
+        // Drivers built with old C++ runtimes need a classic locale; give
+        // them one where the person's has none (twain_locale.rs), before
+        // any driver loads.
+        if let Some(shim) = crate::twain_locale::install() {
+            trace!("locale for drivers: {shim}");
+        }
         // SAFETY: DSM_Entry has this signature in every DSM.
         let entry: Entry = unsafe { *library.get(b"DSM_Entry\0").map_err(|_| no_twain())? };
         let window = hidden_window()?;
