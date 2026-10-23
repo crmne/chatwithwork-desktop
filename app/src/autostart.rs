@@ -18,11 +18,11 @@ use fastframe_autostart::{Autostart, Start};
 pub const BACKGROUND: &str = "--background";
 
 /// The app's registration. The Linux entry keeps the path
-/// (`autostart/cww-app.desktop`) and name earlier versions wrote, and the
-/// Windows Run value its name, so existing registrations read back.
+/// (`autostart/cww-app.desktop`) and name earlier versions wrote, so
+/// existing registrations read back.
 fn autostart() -> Autostart {
     let name = if cfg!(windows) {
-        "ChatWithWorkLocalAgent"
+        "ChatWithWorkDesktop"
     } else {
         "Chat with Work"
     };
@@ -172,17 +172,17 @@ mod tests {
         let bundled = include_str!("../../packaging/macos/autostart.plist");
         assert_eq!(
             bundled.replace("\r\n", "\n"),
-            fastframe_autostart::macos_agent_plist("com.chatwithwork.local-agent", BACKGROUND),
+            fastframe_autostart::macos_agent_plist("com.chatwithwork.desktop", BACKGROUND),
             "regenerate packaging/macos/autostart.plist"
         );
         assert!(
             include_str!("../../packaging/macos/Info.plist")
-                .contains("<string>com.chatwithwork.local-agent</string>")
+                .contains("<string>com.chatwithwork.desktop</string>")
         );
         let bundle = include_str!("../../packaging/macos/bundle.sh");
         assert!(bundle.contains(&format!(
             "Contents/Library/LaunchAgents/{}",
-            fastframe_autostart::macos_agent_plist_name("com.chatwithwork.local-agent")
+            fastframe_autostart::macos_agent_plist_name("com.chatwithwork.desktop")
         )));
     }
 

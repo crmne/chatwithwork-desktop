@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build and check the Arch package from the current checkout, the way the AUR
-# recipe builds a release: packaging/arch/chatwithwork-local-agent/PKGBUILD.in
+# recipe builds a release: packaging/arch/chatwithwork-desktop/PKGBUILD.in
 # is rendered with the working tree's version, the committed tree (HEAD) is
 # packed as the source tarball, and makepkg builds, tests and packages it.
 #
@@ -11,7 +11,7 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-pkgname=chatwithwork-local-agent
+pkgname=chatwithwork-desktop
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)
 out="$here/build"
 rm -rf "$out"

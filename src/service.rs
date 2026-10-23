@@ -328,9 +328,7 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
 mod windows_task {
     use super::*;
 
-    // The name from before the app was Chat with Work Desktop, kept so an
-    // upgrade finds, replaces and removes the task it registered.
-    pub const TASK_NAME: &str = "Chat with Work Local Agent";
+    pub const TASK_NAME: &str = "Chat with Work Desktop";
 
     pub fn install(exe: &Path, paths: &Paths) -> Result<PathBuf> {
         let log = paths.daemon_log_file();

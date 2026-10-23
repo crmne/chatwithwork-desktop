@@ -25,8 +25,9 @@ pub const LIFETIME: Duration = Duration::from_secs(10 * 60);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the listener checks whether it has been replaced or expired.
 const POLL: Duration = Duration::from_millis(200);
-/// Longest request line read; the server's tokens and messages are short.
-const MAX_LINE: usize = 8 * 1024;
+/// Most of a request read, its line and headers; the server's tokens and
+/// messages are short.
+const MAX_HEAD: usize = 16 * 1024;
 
 /// The page the browser shows once it has come back.
 const DONE_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -114,11 +115,26 @@ fn answer(mut stream: TcpStream, nonce: &str) -> Option<BTreeMap<String, String>
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
+    let mut head = BufReader::new(Read::take(&stream, MAX_HEAD as u64));
     let mut line = String::new();
-    BufReader::new(Read::take(&stream, MAX_LINE as u64))
-        .read_line(&mut line)
-        .ok()?;
-    let query = callback_query(&line, nonce);
+    head.read_line(&mut line).ok()?;
+    // Read the headers too: closing a socket with a request still unread
+    // resets the connection, and the browser could show that instead of
+    // the page. A head cut short by the limit, an error or a hang-up isn't
+    // a request.
+    let mut header = String::new();
+    let complete = loop {
+        header.clear();
+        match head.read_line(&mut header) {
+            Ok(n) if n > 0 && header.ends_with('\n') => {
+                if matches!(header.as_str(), "\r\n" | "\n") {
+                    break true;
+                }
+            }
+            _ => break false,
+        }
+    };
+    let query = complete.then(|| callback_query(&line, nonce)).flatten();
     let response = match &query {
         Some(_) => format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncache-control: no-store\r\n\
@@ -129,6 +145,7 @@ fn answer(mut stream: TcpStream, nonce: &str) -> Option<BTreeMap<String, String>
     };
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     query
 }
 
@@ -232,6 +249,33 @@ mod tests {
         assert_eq!(url, started.callback);
         assert_eq!(query["status"], "connected");
         assert_eq!(query["return_to"], "/x");
+    }
+
+    #[test]
+    fn a_request_cut_short_is_not_the_callback() {
+        let callbacks = Callbacks::default();
+        let (tx, rx) = mpsc::channel::<()>();
+        let started = callbacks.start(move |_, _| tx.send(()).unwrap()).unwrap();
+        let path = started.callback.splitn(4, '/').nth(3).unwrap().to_string();
+        let address = started
+            .callback
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap();
+        // The right line, but the head never ends: the sender hangs up first.
+        let mut stream = TcpStream::connect(address).unwrap();
+        write!(
+            stream,
+            "GET /{path}?status=connected HTTP/1.1\r\nHost: {address}\r\n"
+        )
+        .unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 404"));
+        assert!(rx.recv_timeout(POLL * 3).is_err());
     }
 
     #[test]

@@ -110,7 +110,7 @@ jobs:
             "target/${{ matrix.app-target }}/release/cww-app" "$VERSION" "${{ matrix.app-target }}" dist
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             git archive --format=tar.gz --prefix="chatwithwork-desktop-${VERSION}/" \
-              -o "dist/chatwithwork-local-agent-${VERSION}.tar.gz" HEAD
+              -o "dist/chatwithwork-desktop-${VERSION}.tar.gz" HEAD
             for stand_in in macos-universal.tar.gz x86_64-pc-windows-msvc.msi aarch64-pc-windows-msvc.msi x86_64-pc-windows-msvc.zip aarch64-pc-windows-msvc.zip; do
               echo "stand-in for packaging tests" > "dist/cww-v${VERSION}-${stand_in}"
             done

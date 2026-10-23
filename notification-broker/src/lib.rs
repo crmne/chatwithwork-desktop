@@ -12,7 +12,7 @@ use cww::notifications::protocol::{self, Command, Event, PermissionState};
 use fastframe_notifications::{App, Client, Error, Notification, Permission};
 use tokio::sync::{mpsc, oneshot};
 
-const APP_ID: &str = "com.chatwithwork.local-agent";
+const APP_ID: &str = "com.chatwithwork.desktop";
 const COMMAND_CAPACITY: usize = 32;
 const EVENT_CAPACITY: usize = 128;
 /// The app's mark, the window icon's PNG, for notifications.

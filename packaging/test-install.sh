@@ -31,14 +31,14 @@ docker run --rm --platform "linux/${target#linux-}" \
     if [ "$FORMAT" = deb ]; then
       apt-get update -qq
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$1"
-      dpkg-query -W chatwithwork-local-agent
+      dpkg-query -W chatwithwork-desktop
     elif [ "$FORMAT" = rpm ]; then
       dnf install -y --setopt=install_weak_deps=False "$1"
-      rpm -q chatwithwork-local-agent
+      rpm -q chatwithwork-desktop
     else
       pacman -Syu --noconfirm
       pacman -U --noconfirm "$1"
-      pacman -Q chatwithwork-local-agent-bin
+      pacman -Q chatwithwork-desktop-bin
     fi
     cww --version
     cww-app --version
@@ -64,11 +64,11 @@ PY
     # Minimal Debian, Ubuntu and Arch images skip /usr/share/doc on install, so
     # check the package lists the docs rather than the disk.
     if [ "$FORMAT" = deb ]; then
-      dpkg -L chatwithwork-local-agent | grep -q /usr/share/doc/chatwithwork-local-agent/README.md
+      dpkg -L chatwithwork-desktop | grep -q /usr/share/doc/chatwithwork-desktop/README.md
     elif [ "$FORMAT" = rpm ]; then
-      test -s /usr/share/doc/chatwithwork-local-agent/README.md
+      test -s /usr/share/doc/chatwithwork-desktop/README.md
     else
-      pacman -Ql chatwithwork-local-agent-bin | grep -q /usr/share/doc/chatwithwork-local-agent-bin/README.md
+      pacman -Ql chatwithwork-desktop-bin | grep -q /usr/share/doc/chatwithwork-desktop-bin/README.md
     fi
 
     # A daemon with a shared folder, no server: status, roots, audit log.
@@ -85,9 +85,9 @@ PY
     cww daemon stop
     wait "$daemon"
 
-    if [ "$FORMAT" = deb ]; then apt-get remove -y chatwithwork-local-agent
-    elif [ "$FORMAT" = rpm ]; then dnf remove -y chatwithwork-local-agent
-    else pacman -R --noconfirm chatwithwork-local-agent-bin; fi
+    if [ "$FORMAT" = deb ]; then apt-get remove -y chatwithwork-desktop
+    elif [ "$FORMAT" = rpm ]; then dnf remove -y chatwithwork-desktop
+    else pacman -R --noconfirm chatwithwork-desktop-bin; fi
     test ! -e /usr/bin/cww
     test ! -e /usr/bin/cww-app
     test ! -e /usr/share/applications/cww-app.desktop

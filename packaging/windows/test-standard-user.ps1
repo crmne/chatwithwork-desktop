@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Use this account-provisioning test only on an isolated GitHub Actions runner' }
 $name = 'cww-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $directory = Join-Path $env:PUBLIC $name
-$taskName = 'Chat with Work Local Agent'
+$taskName = 'Chat with Work Desktop'
 $createdUser = $false
 $createdTask = $false
 $installerPolicy = 'HKLM:\Software\Policies\Microsoft\Windows\Installer'

@@ -1,7 +1,7 @@
 <!--
   Chat with Work Desktop, as a per-user MSI (WiX Toolset 5).
 
-  - Installs cww.exe, cww-app.exe and cww-agent.exe to %LOCALAPPDATA%\Programs\Chat with Work Local Agent
+  - Installs cww.exe, cww-app.exe and cww-agent.exe to %LOCALAPPDATA%\Programs\Chat with Work Desktop
     and adds that folder to the user's PATH. Per-user, so no UAC prompt.
   - Registers the daemon's logon Scheduled Task (`cww daemon install`) and
     starts it; it stays idle until the computer is paired. Uninstalling
@@ -37,36 +37,35 @@
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
-        <!-- The folder from before the rename, so upgrades install over it. -->
-        <Directory Id="INSTALLFOLDER" Name="Chat with Work Local Agent" />
+        <Directory Id="INSTALLFOLDER" Name="Chat with Work Desktop" />
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <!-- Per-user components use an HKCU value as their key path. -->
     <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
-      <Component Id="Binary" Guid="{530F0C9E-77A2-4737-8015-FCFD6650E7B4}">
+      <Component Id="Binary" Guid="{3212593C-0AB5-418F-A9C7-1D81467F287F}">
         <File Id="CwwExe" Name="cww.exe" Source="$(SourceDir)\cww.exe" KeyPath="no" />
         <!-- The daemon without a console window, for the logon task. -->
         <File Id="CwwAgentExe" Name="cww-agent.exe" Source="$(SourceDir)\cww-agent.exe" KeyPath="no" />
-        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Local Agent"
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
         <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]"
           Action="set" Part="last" System="no" Permanent="no" />
         <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
       </Component>
-      <Component Id="DesktopApp" Guid="{88003C63-64D5-4646-AB4A-F53A3F8DCD0A}">
+      <Component Id="DesktopApp" Guid="{6E0392C2-97B4-44DB-B187-FD5ACB2EB2B3}">
         <File Id="CwwAppExe" Name="cww-app.exe" Source="$(SourceDir)\cww-app.exe" KeyPath="no" />
-        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Local Agent"
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="DesktopApp" Type="integer" Value="1" KeyPath="yes" />
       </Component>
-      <Component Id="Documents" Guid="{69A65CF0-1A21-433D-B72A-F1B9EC96AB41}">
+      <Component Id="Documents" Guid="{B62401DF-87F3-4E51-AEB2-16FBAB6544BF}">
         <File Id="Readme" Name="README.md" Source="$(SourceDir)\README.md" KeyPath="no" />
         <File Id="Protocol" Name="PROTOCOL.md" Source="$(SourceDir)\PROTOCOL.md" KeyPath="no" />
         <File Id="Security" Name="SECURITY.md" Source="$(SourceDir)\SECURITY.md" KeyPath="no" />
         <File Id="LicenseMit" Name="LICENSE-MIT" Source="$(SourceDir)\LICENSE-MIT" KeyPath="no" />
         <File Id="LicenseApache" Name="LICENSE-APACHE" Source="$(SourceDir)\LICENSE-APACHE" KeyPath="no" />
-        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Local Agent"
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="Documents" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
@@ -76,14 +75,14 @@
         <Shortcut Id="TuiShortcut" Name="Chat with Work (Terminal)"
           Description="Chat, pair this computer and manage shared folders in the terminal"
           Target="[#CwwExe]" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Local Agent"
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
       <Component Id="DesktopShortcut">
         <Shortcut Id="AppShortcut" Name="Chat with Work"
           Description="Chat with your assistant and manage shared folders"
           Target="[#CwwAppExe]" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Local Agent"
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
