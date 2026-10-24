@@ -138,7 +138,8 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .windows([MAIN.to_string(), format!("{}*", windows::POPUP_PREFIX)])
             .permission("allow-open-external")
             .permission("allow-open-preferences")
-            .permission("allow-listen"),
+            .permission("allow-listen")
+            .permission("allow-confirm"),
     )
 }
 
@@ -313,6 +314,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::bridge::open_external,
             crate::bridge::open_preferences,
             crate::bridge::listen,
+            crate::bridge::confirm,
             crate::local::control,
             crate::local::activity,
             crate::local::app_info,

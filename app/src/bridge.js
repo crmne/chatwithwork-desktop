@@ -16,6 +16,7 @@
     openExternal: (url) => invoke("open_external", { url: String(url) }),
     openPreferences: () => invoke("open_preferences"),
     listen: () => invoke("listen"),
+    confirm: (confirmation) => invoke("confirm", { confirmation }).then(Boolean),
   });
   Object.defineProperty(window, "ChatWithWorkDesktop", {
     value: api,
@@ -63,6 +64,38 @@
     url.search = new URLSearchParams(new FormData(form, submitter)).toString();
     api.openExternal(url.href);
   });
+
+  // Turbo's data-turbo-confirm asks in a native dialog: the web view's own
+  // window.confirm shows nothing in some of them. The button's or form's
+  // data-bridge-* attributes (written for the phone apps) name its buttons.
+  const nativeConfirm = (message, form, submitter) => {
+    const attribute = (name) =>
+      submitter?.getAttribute?.(`data-bridge-${name}`) ?? form?.getAttribute?.(`data-bridge-${name}`);
+    const method = (
+      form?.querySelector?.("input[name=_method]")?.value || form?.getAttribute?.("method") || ""
+    ).toLowerCase();
+    const deletes = method === "delete";
+    const destructive = attribute("destructive") ? attribute("destructive") === "true" : deletes;
+    return api
+      .confirm({
+        title: String(message ?? ""),
+        description: attribute("description") ?? null,
+        confirm: attribute("confirm") || (deletes ? "Delete" : "OK"),
+        dismiss: attribute("dismiss") || "Cancel",
+        destructive,
+      })
+      .catch(() => false);
+  };
+  const useNativeConfirm = () => {
+    const turbo = window.Turbo;
+    if (turbo?.config?.forms) {
+      if (turbo.config.forms.confirm !== nativeConfirm) turbo.config.forms.confirm = nativeConfirm;
+    } else if (typeof turbo?.setConfirmMethod === "function") {
+      turbo.setConfirmMethod(nativeConfirm);
+    }
+  };
+  document.addEventListener("DOMContentLoaded", useNativeConfirm);
+  document.addEventListener("turbo:load", useNativeConfirm);
 
   // Ctrl+, (Cmd+, on macOS) opens the settings, as in most apps.
   window.addEventListener("keydown", (event) => {

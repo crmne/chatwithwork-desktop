@@ -22,7 +22,7 @@ The same binary is also pipe-only helpers, started before any window or tray exi
 - **Which server.** The server this computer is paired with (`config.toml`'s `server.url`), so staging and self-hosted installs open their own site; chatwithwork.com before pairing; `--server <url>` for development (plain `http` only on localhost). When the computer is paired with another server, the window follows.
 - **Where it opens.** `/chats/new`, which leads into the organization used last, as the installed web app does. A notification's chat (`--open-chat`, as the daemon starts it) opens at `/<account>/chats/<number>`, only on that same server.
 - **Staying signed in.** Cookies live in the web view's own data directory (`~/.local/share/com.chatwithwork.desktop` on Linux, the app's WebKit store on macOS, `%LOCALAPPDATA%\com.chatwithwork.desktop` on Windows). A web view drops session cookies when the app quits, so the server signs the desktop in with "remember me" (see the server contract).
-- **Who it is.** The user agent is the platform web view's plus `(Chat with Work Desktop; platform=linux; version=0.3.1; build=301; bridge-components: [external preferences auth-session downloads])`, in parentheses, as a comment: WebKitGTK refuses a user agent that is not RFC 7231 products and comments (`user_agent.rs`). It never matches the phone apps' `Chat with Work; platform=ios|android`, so the server shows the desktop the web app's full layout.
+- **Who it is.** The user agent is the platform web view's plus `(Chat with Work Desktop; platform=linux; version=0.3.1; build=301; bridge-components: [external preferences auth-session downloads confirm])`, in parentheses, as a comment: WebKitGTK refuses a user agent that is not RFC 7231 products and comments (`user_agent.rs`). It never matches the phone apps' `Chat with Work; platform=ios|android`, so the server shows the desktop the web app's full layout.
 - **Leaving the server.** Links and `GET` forms to other sites open in the default browser (the bridge script intercepts them before the web view does); `mailto:` opens the mail app; other schemes go nowhere. A page from elsewhere that loads anyway as the window's page (a redirect, a script) is stopped and opened in the browser. Other sites may load in frames, since the web views give the navigation handler only a URL for the page and its frames alike (the MCP Apps sandbox, the support widget and payment forms are frames). `target="_blank"` on the server's own pages opens another app window, which shares the sign-in (`policy.rs`).
 - **Signing in with Google, Slack or Dropbox, and connecting services.** Google refuses OAuth in web views, and passkeys don't work there, so these run in the default browser and come back through a loopback callback (RFC 8252): the page asks the bridge to `listen()`, which answers `http://127.0.0.1:<port>/<32 random characters>` for ten minutes; the server sends the browser there at the end with a one-time token, which the page redeems with the PKCE verifier only it holds. Anything else that reads the token can't use it. The browser shows "You can close this tab". See the server contract for the flows.
 - **Files.** Dropped on the window, they reach the page as an HTML drop, so the composer takes them as uploads (Tauri's own drop handler is off). Downloads go to the Downloads folder under their own name, never replacing a file there, and the folder is shown.
@@ -34,15 +34,16 @@ The same binary is also pipe-only helpers, started before any window or tray exi
 
 ## The bridge
 
-The web app's pages get exactly three commands, and nothing else Tauri offers (no events, windows, files or shell):
+The web app's pages get exactly four commands, and nothing else Tauri offers (no events, windows, files or shell):
 
 | Command | Page API (`window.ChatWithWorkDesktop`) | Does |
 |---|---|---|
 | `open_external` | `openExternal(url)` | Opens an `http`, `https` or `mailto` URL in the default app |
 | `open_preferences` | `openPreferences()` | Opens the settings window |
 | `listen` | `listen()` | Starts the loopback callback; resolves `{ callback }`, and later dispatches `chatwithwork-desktop:callback` with `{ callback, params }` |
+| `confirm` | `confirm({ title, description, confirm, dismiss, destructive })` | Asks in a native dialog on the page's window; resolves `true` when confirmed. The bridge makes Turbo's `data-turbo-confirm` use it, labelling the buttons from the `data-bridge-confirm`, `-dismiss`, `-description` and `-destructive` attributes the phone apps read, since web views show `window.confirm` inconsistently (WKWebView not at all) |
 
-Two checks enforce it. A capability added at start (`desktop.rs`), for the server's origin as a remote URL and the web app's windows only, allows these three commands; and each command checks again that its caller is a page of the server in one of those windows (`bridge.rs`). The bridge script (`bridge.js`) defines `window.ChatWithWorkDesktop` only on pages of the server.
+Two checks enforce it. A capability added at start (`desktop.rs`), for the server's origin as a remote URL and the web app's windows only, allows these four commands; and each command checks again that its caller is a page of the server in one of those windows (`bridge.rs`). The bridge script (`bridge.js`) defines `window.ChatWithWorkDesktop` only on pages of the server.
 
 ## The settings pages and the daemon
 

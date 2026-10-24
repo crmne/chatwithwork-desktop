@@ -10,6 +10,7 @@ const COMMANDS: &[&str] = &[
     "open_external",
     "open_preferences",
     "listen",
+    "confirm",
     // The bundled settings pages (local.rs).
     "control",
     "activity",
