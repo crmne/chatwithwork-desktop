@@ -10,14 +10,14 @@ The TUI asks the daemon over the control socket, which only your user can open, 
 
 Pairing lets Chat with Work call the background agent's tools: four that read, the change tools in folders where you allow changes, and the command tools where you also allow commands (Mac and Linux), each change and run approved by you. Reading your chats is worth far more, since they quote Drive, Slack and everything else you connected, so it's asked for on its own:
 
-- `cww login` asks for `local_agent:chat` as well as `local_agent:serve`. The approval page shows "Also let it use your chats", checked, and you can clear it to share folders only. `cww login --no-chats` doesn't ask.
+- `cww login` asks for `desktop:chat` as well as `desktop:serve`. The approval page shows "Also let it use your chats", checked, and you can clear it to share folders only. `cww login --no-chats` doesn't ask.
 - A computer paired without it asks the first time you open the TUI (`o`), and you allow or decline it in Chat with Work under Settings, Computers. The TUI notices by itself once you do.
 - You can turn chats off there at any time without unsharing folders or unpairing. The server refuses the chat API at once, even with a live token, and closes the socket, so followed chats stop.
-- The server only ever shows the chats you could see in the browser, in the organization the computer is paired with, and records every use as `local_agent.chat_*` events without their contents.
+- The server only ever shows the chats you could see in the browser, in the organization the computer is paired with, and records every use as `desktop.chat_*` events without their contents.
 
 ## Answers stream over the tunnel
 
-The daemon already holds a WebSocket to the server. To follow a chat, it subscribes to one more Action Cable channel on it, `LocalAgent::ChatChannel`, and relays what arrives to the TUI's `chat` subscription: answer text as it's written, the running tool's progress, and "changed" for everything else, after which the TUI reads the chat again. This beats Server-Sent Events here because the socket is already authenticated and reconnects on its own, it adds no connection per open chat, and on the server it doesn't hold a web worker per watcher. A reconnect subscribes again, and the TUI catches up by reading the chat. The chat list stays current the same way, through one subscription to `LocalAgent::ChatsChannel` however many terminals show it: new chats appear, titles and the answering state update, deleted chats go, and the projects and the header follow.
+The daemon already holds a WebSocket to the server. To follow a chat, it subscribes to one more Action Cable channel on it, `Desktop::ChatChannel`, and relays what arrives to the TUI's `chat` subscription: answer text as it's written, the running tool's progress, and "changed" for everything else, after which the TUI reads the chat again. This beats Server-Sent Events here because the socket is already authenticated and reconnects on its own, it adds no connection per open chat, and on the server it doesn't hold a web worker per watcher. A reconnect subscribes again, and the TUI catches up by reading the chat. The chat list stays current the same way, through one subscription to `Desktop::ChatsChannel` however many terminals show it: new chats appear, titles and the answering state update, deleted chats go, and the projects and the header follow.
 
 ## What the TUI shows
 

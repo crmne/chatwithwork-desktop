@@ -1,4 +1,4 @@
-//! The outbound tunnel: one WebSocket to `wss://<server>/local_agent`,
+//! The outbound tunnel: one WebSocket to `wss://<server>/desktop`,
 //! reconnected with jittered exponential backoff.
 //!
 //! Before each connection the daemon makes sure it holds a live access token

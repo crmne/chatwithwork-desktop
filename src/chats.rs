@@ -8,10 +8,10 @@
 //! take it back at any time without touching the shared folders.
 //!
 //! Answers stream over the tunnel's WebSocket rather than a new connection:
-//! the daemon subscribes to `LocalAgent::ChatChannel` for each chat a TUI
+//! the daemon subscribes to `Desktop::ChatChannel` for each chat a TUI
 //! follows ([`ChatHub`]) and passes its updates to the TUI's subscription.
 //! The chat list stays current the same way, through one subscription to
-//! `LocalAgent::ChatsChannel` however many clients watch it.
+//! `Desktop::ChatsChannel` however many clients watch it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,8 +39,8 @@ pub fn chat_number(chat: &str) -> Result<&str, Refusal> {
 
 fn workspace_path(page: &str, project: Option<u64>) -> String {
     match project {
-        Some(project) => format!("local_agent/{page}?project_id={project}"),
-        None => format!("local_agent/{page}"),
+        Some(project) => format!("desktop/{page}?project_id={project}"),
+        None => format!("desktop/{page}"),
     }
 }
 
@@ -352,7 +352,7 @@ impl ChatClient {
     }
 
     pub fn list(&self) -> Result<Value> {
-        self.call("GET", "local_agent/chats", Body::Empty)
+        self.call("GET", "desktop/chats", Body::Empty)
     }
 
     pub fn workspace(&self, project: Option<u64>) -> Result<Value> {
@@ -360,37 +360,37 @@ impl ChatClient {
     }
 
     pub fn notification_preferences(&self) -> Result<Value> {
-        self.call("GET", "local_agent/notification_preferences", Body::Empty)
+        self.call("GET", "desktop/notification_preferences", Body::Empty)
     }
 
     pub fn update_notification_preferences(&self, preferences: Value) -> Result<Value> {
         self.call(
             "PATCH",
-            "local_agent/notification_preferences",
+            "desktop/notification_preferences",
             Body::Json(&preferences),
         )
     }
 
     pub fn notification_browser_link(&self) -> Result<Value> {
-        self.call("POST", "local_agent/notification_browser_link", Body::Empty)
+        self.call("POST", "desktop/notification_browser_link", Body::Empty)
     }
 
     pub fn memory_preference(&self, enabled: bool) -> Result<Value> {
         self.call(
             "PATCH",
-            "local_agent/memory_preference",
+            "desktop/memory_preference",
             Body::Json(&json!({ "user": { "remembers": enabled } })),
         )
     }
 
     pub fn memory_forget(&self, id: u64) -> Result<Value> {
-        self.call("DELETE", &format!("local_agent/memories/{id}"), Body::Empty)
+        self.call("DELETE", &format!("desktop/memories/{id}"), Body::Empty)
     }
 
     pub fn instruction_count(&self, text: &str) -> Result<Value> {
         self.call(
             "POST",
-            "local_agent/token_count",
+            "desktop/token_count",
             Body::Json(&json!({ "text": text })),
         )
     }
@@ -398,7 +398,7 @@ impl ChatClient {
     pub fn computer_remove(&self, id: u64) -> Result<Value> {
         self.call(
             "DELETE",
-            &format!("local_agent/services/computer/{id}"),
+            &format!("desktop/services/computer/{id}"),
             Body::Empty,
         )
     }
@@ -408,11 +408,7 @@ impl ChatClient {
             .append_pair("q", query)
             .append_pair("category", category.unwrap_or_default())
             .finish();
-        self.call(
-            "GET",
-            &format!("local_agent/connectors?{params}"),
-            Body::Empty,
-        )
+        self.call("GET", &format!("desktop/connectors?{params}"), Body::Empty)
     }
 
     pub fn connector_handoff(
@@ -423,7 +419,7 @@ impl ChatClient {
     ) -> Result<Value> {
         self.call(
             "POST",
-            "local_agent/connector_handoff",
+            "desktop/connector_handoff",
             Body::Json(&json!({ "key": key, "access": access, "connection": connection })),
         )
     }
@@ -442,7 +438,7 @@ impl ChatClient {
         }
         self.call(
             if paused { "POST" } else { "DELETE" },
-            &format!("local_agent/services/{}/{key}/pause", kind.path()),
+            &format!("desktop/services/{}/{key}/pause", kind.path()),
             Body::Empty,
         )
     }
@@ -467,20 +463,20 @@ impl ChatClient {
         };
         self.call(
             "PATCH",
-            &format!("local_agent/instructions/{}", layer.path()),
+            &format!("desktop/instructions/{}", layer.path()),
             Body::Json(&body),
         )
     }
 
     pub fn show(&self, chat: &str) -> Result<Value> {
         let chat = chat_number(chat)?;
-        self.call("GET", &format!("local_agent/chats/{chat}"), Body::Empty)
+        self.call("GET", &format!("desktop/chats/{chat}"), Body::Empty)
     }
 
     /// The models a question can be asked with, and the owner's default.
     pub fn models(&self) -> Result<Value> {
         newer(
-            self.call("GET", "local_agent/models", Body::Empty),
+            self.call("GET", "desktop/models", Body::Empty),
             "doesn't let you pick a model from here yet. Chats use your default model",
         )
     }
@@ -504,7 +500,7 @@ impl ChatClient {
         newer(
             self.call(
                 method,
-                &format!("local_agent/templates{suffix}?{query}"),
+                &format!("desktop/templates{suffix}?{query}"),
                 Body::Empty,
             ),
             "can't manage templates from here yet",
@@ -524,7 +520,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                &format!("local_agent/templates?{}", query.finish()),
+                &format!("desktop/templates?{}", query.finish()),
                 multipart("file", upload)?,
             ),
             "can't upload templates from here yet",
@@ -533,7 +529,7 @@ impl ChatClient {
 
     pub fn model_preferences(&self) -> Result<Value> {
         newer(
-            self.call("GET", "local_agent/model_preferences", Body::Empty),
+            self.call("GET", "desktop/model_preferences", Body::Empty),
             "can't manage default model settings from here yet",
         )
     }
@@ -547,27 +543,27 @@ impl ChatClient {
             self.call("DELETE", &format!("{path}?{query}"), Body::Empty)
         };
         let result = match request {
-            Request::List => self.call("GET", "local_agent/people", Body::Empty),
+            Request::List => self.call("GET", "desktop/people", Body::Empty),
             Request::Organization { account, fields } => self.call(
                 "PATCH",
-                "local_agent/organization",
+                "desktop/organization",
                 Body::Json(&json!({"account": account, "organization": fields})),
             ),
             Request::Role { account, id, role } => self.call(
                 "PATCH",
-                &format!("local_agent/people/{id}/role"),
+                &format!("desktop/people/{id}/role"),
                 Body::Json(&json!({"account": account, "role": role})),
             ),
-            Request::Remove { account, id } => delete(format!("local_agent/people/{id}"), account),
+            Request::Remove { account, id } => delete(format!("desktop/people/{id}"), account),
             Request::Invite { account, fields } => self.call(
                 "POST",
-                "local_agent/invitations",
+                "desktop/invitations",
                 Body::Json(&json!({"account": account, "invitation": fields})),
             ),
             Request::Withdraw { account, id } => {
-                delete(format!("local_agent/invitations/{id}"), account)
+                delete(format!("desktop/invitations/{id}"), account)
             }
-            Request::ResetJoinLink { account } => delete("local_agent/join_code".into(), account),
+            Request::ResetJoinLink { account } => delete("desktop/join_code".into(), account),
         };
         newer(result, "can't manage people from here yet")
     }
@@ -575,16 +571,14 @@ impl ChatClient {
     pub fn schedules(&self, request: &crate::schedules::Request) -> Result<Value> {
         use crate::schedules::Request;
         let result = match request {
-            Request::List => self.call("GET", "local_agent/schedules", Body::Empty),
-            Request::New => self.call("GET", "local_agent/schedules/new", Body::Empty),
-            Request::Edit { id } => self.call(
-                "GET",
-                &format!("local_agent/schedules/{id}/edit"),
-                Body::Empty,
-            ),
+            Request::List => self.call("GET", "desktop/schedules", Body::Empty),
+            Request::New => self.call("GET", "desktop/schedules/new", Body::Empty),
+            Request::Edit { id } => {
+                self.call("GET", &format!("desktop/schedules/{id}/edit"), Body::Empty)
+            }
             Request::Create { account, fields } => self.call(
                 "POST",
-                "local_agent/schedules",
+                "desktop/schedules",
                 Body::Json(&json!({"account":account,"schedule":fields})),
             ),
             Request::Update {
@@ -593,18 +587,18 @@ impl ChatClient {
                 fields,
             } => self.call(
                 "PATCH",
-                &format!("local_agent/schedules/{id}"),
+                &format!("desktop/schedules/{id}"),
                 Body::Json(&json!({"account":account,"schedule":fields})),
             ),
             Request::Pause { account, id } => self.call(
                 "POST",
-                &format!("local_agent/schedules/{id}/pause"),
+                &format!("desktop/schedules/{id}/pause"),
                 Body::Json(&json!({"account":account})),
             ),
             Request::Resume { account, id } => self.call(
                 "DELETE",
                 &format!(
-                    "local_agent/schedules/{id}/pause?{}",
+                    "desktop/schedules/{id}/pause?{}",
                     url::form_urlencoded::Serializer::new(String::new())
                         .append_pair("account", account)
                         .finish()
@@ -614,7 +608,7 @@ impl ChatClient {
             Request::Delete { account, id } => self.call(
                 "DELETE",
                 &format!(
-                    "local_agent/schedules/{id}?{}",
+                    "desktop/schedules/{id}?{}",
                     url::form_urlencoded::Serializer::new(String::new())
                         .append_pair("account", account)
                         .finish()
@@ -623,7 +617,7 @@ impl ChatClient {
             ),
             Request::Run { account, id } => self.call(
                 "POST",
-                &format!("local_agent/schedules/{id}/run"),
+                &format!("desktop/schedules/{id}/run"),
                 Body::Json(&json!({"account":account})),
             ),
         };
@@ -633,10 +627,10 @@ impl ChatClient {
     pub fn account_settings(&self, request: &crate::account_settings::Request) -> Result<Value> {
         use crate::account_settings::Request;
         let result = match request {
-            Request::Read => self.call("GET", "local_agent/account_settings", Body::Empty),
+            Request::Read => self.call("GET", "desktop/account_settings", Body::Empty),
             Request::Update { account, change } => self.call(
                 "PATCH",
-                "local_agent/account_settings",
+                "desktop/account_settings",
                 Body::Json(&json!({"account":account,"user":change.attributes()})),
             ),
         };
@@ -647,7 +641,7 @@ impl ChatClient {
         newer(
             self.call(
                 "PATCH",
-                "local_agent/model_preferences",
+                "desktop/model_preferences",
                 Body::Json(&json!({ "account": account, "model_id": model_id })),
             ),
             "can't manage default model settings from here yet",
@@ -661,11 +655,11 @@ impl ChatClient {
                 let chat = chat_number(chat)?;
                 self.call(
                     "POST",
-                    &format!("local_agent/chats/{chat}/messages"),
+                    &format!("desktop/chats/{chat}/messages"),
                     Body::Json(&body),
                 )
             }
-            None => self.call("POST", "local_agent/chats", Body::Json(&body)),
+            None => self.call("POST", "desktop/chats", Body::Json(&body)),
         }
     }
 
@@ -677,7 +671,7 @@ impl ChatClient {
         newer(
             self.call(
                 "DELETE",
-                &format!("local_agent/chats/{chat}/queued_messages/{queued}"),
+                &format!("desktop/chats/{chat}/queued_messages/{queued}"),
                 Body::Empty,
             ),
             "can't take queued messages back yet",
@@ -688,7 +682,7 @@ impl ChatClient {
         let chat = chat_number(chat)?;
         self.call(
             "POST",
-            &format!("local_agent/chats/{chat}/cancellation"),
+            &format!("desktop/chats/{chat}/cancellation"),
             Body::Empty,
         )
     }
@@ -698,7 +692,7 @@ impl ChatClient {
         let (chat, tool_call) = (chat_number(chat)?, tool_call_id(tool_call)?);
         self.call(
             "POST",
-            &format!("local_agent/chats/{chat}/tool_calls/{tool_call}/approval"),
+            &format!("desktop/chats/{chat}/tool_calls/{tool_call}/approval"),
             Body::Json(&json!({ "for_rest_of_chat": for_rest_of_chat })),
         )
     }
@@ -712,7 +706,7 @@ impl ChatClient {
         }
         self.call(
             "POST",
-            &format!("local_agent/chats/{chat}/tool_calls/{tool_call}/denial"),
+            &format!("desktop/chats/{chat}/tool_calls/{tool_call}/denial"),
             Body::Json(&body),
         )
     }
@@ -721,7 +715,7 @@ impl ChatClient {
     /// content_type}`.
     pub fn upload(&self, upload: &Upload) -> Result<Value> {
         newer(
-            self.call("POST", "local_agent/uploads", multipart("file", upload)?),
+            self.call("POST", "desktop/uploads", multipart("file", upload)?),
             "doesn't take attachments from here yet",
         )
     }
@@ -729,7 +723,7 @@ impl ChatClient {
     /// Where a scan can go: `{"destinations": [...]}`.
     pub fn scan_destinations(&self) -> Result<Value> {
         newer(
-            self.call("GET", "local_agent/scans/new", Body::Empty),
+            self.call("GET", "desktop/scans/new", Body::Empty),
             "doesn't take scans from here yet",
         )
     }
@@ -752,7 +746,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                "local_agent/scans",
+                "desktop/scans",
                 multipart_with(&fields, "file", &upload)?,
             ),
             "doesn't take scans from here yet",
@@ -761,7 +755,7 @@ impl ChatClient {
 
     pub fn dictation(&self) -> Result<Value> {
         newer(
-            self.call("GET", "local_agent/dictations/new", Body::Empty),
+            self.call("GET", "desktop/dictations/new", Body::Empty),
             "doesn't support dictation yet",
         )
     }
@@ -774,7 +768,7 @@ impl ChatClient {
             return Err(Refusal::new("too_large", "Record at most five minutes").into());
         }
         newer(
-            self.call("POST", "local_agent/dictations", multipart("audio", audio)?),
+            self.call("POST", "desktop/dictations", multipart("audio", audio)?),
             "doesn't support dictation yet",
         )
     }
@@ -811,7 +805,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                &format!("local_agent/chats/{chat}/retry"),
+                &format!("desktop/chats/{chat}/retry"),
                 Body::Json(&body),
             ),
             "can't retry answers from here yet",
@@ -825,7 +819,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                &format!("local_agent/chats/{chat}/branches"),
+                &format!("desktop/chats/{chat}/branches"),
                 Body::Json(&body),
             ),
             "can't branch chats from here yet",
@@ -837,7 +831,7 @@ impl ChatClient {
         newer(
             self.call(
                 "PATCH",
-                &format!("local_agent/chats/{chat}"),
+                &format!("desktop/chats/{chat}"),
                 Body::Json(&json!({ "title": title })),
             ),
             "can't rename chats from here yet",
@@ -847,7 +841,7 @@ impl ChatClient {
     pub fn delete(&self, chat: &str) -> Result<Value> {
         let chat = chat_number(chat)?;
         newer(
-            self.call("DELETE", &format!("local_agent/chats/{chat}"), Body::Empty),
+            self.call("DELETE", &format!("desktop/chats/{chat}"), Body::Empty),
             "can't delete chats from here yet",
         )
     }
@@ -857,7 +851,7 @@ impl ChatClient {
         newer(
             self.call(
                 if pinned { "POST" } else { "DELETE" },
-                &format!("local_agent/chats/{chat}/pin"),
+                &format!("desktop/chats/{chat}/pin"),
                 Body::Empty,
             ),
             "can't pin chats from here yet",
@@ -873,7 +867,7 @@ impl ChatClient {
         newer(
             self.call(
                 "GET",
-                &format!("local_agent/chat_history?{}", params.finish()),
+                &format!("desktop/chat_history?{}", params.finish()),
                 Body::Empty,
             ),
             "can't show the full chat history from here yet",
@@ -882,7 +876,7 @@ impl ChatClient {
 
     pub fn move_to(&self, chat: &str, project: Option<u64>) -> Result<Value> {
         let chat = chat_number(chat)?;
-        let path = format!("local_agent/chats/{chat}/project");
+        let path = format!("desktop/chats/{chat}/project");
         newer(
             match project {
                 Some(project) => self.call(
@@ -941,7 +935,7 @@ impl ChatClient {
         newer(
             self.call(
                 method,
-                &format!("local_agent/projects{suffix}"),
+                &format!("desktop/projects{suffix}"),
                 fields.as_ref().map_or(Body::Empty, Body::Json),
             ),
             "can't manage projects from here yet",
@@ -952,11 +946,7 @@ impl ChatClient {
     pub fn share(&self, chat: &str) -> Result<Value> {
         let chat = chat_number(chat)?;
         newer(
-            self.call(
-                "POST",
-                &format!("local_agent/chats/{chat}/share"),
-                Body::Empty,
-            ),
+            self.call("POST", &format!("desktop/chats/{chat}/share"), Body::Empty),
             "can't share chats from here yet",
         )
     }
@@ -967,7 +957,7 @@ impl ChatClient {
         newer(
             self.call(
                 "DELETE",
-                &format!("local_agent/chats/{chat}/share"),
+                &format!("desktop/chats/{chat}/share"),
                 Body::Empty,
             ),
             "can't share chats from here yet",
@@ -985,7 +975,7 @@ impl ChatClient {
         newer(
             self.call(
                 "POST",
-                &format!("local_agent/chats/{chat}/tool_calls/{tool_call}/input"),
+                &format!("desktop/chats/{chat}/tool_calls/{tool_call}/input"),
                 Body::Json(&body),
             ),
             "can't answer questions from here yet",
@@ -998,7 +988,7 @@ impl ChatClient {
         newer(
             self.call(
                 "DELETE",
-                &format!("local_agent/chats/{chat}/tool_calls/{tool_call}/input"),
+                &format!("desktop/chats/{chat}/tool_calls/{tool_call}/input"),
                 Body::Empty,
             ),
             "can't answer questions from here yet",
@@ -1006,7 +996,7 @@ impl ChatClient {
     }
 
     pub fn request_access(&self) -> Result<Value> {
-        self.call("POST", "local_agent/chat_access_request", Body::Empty)
+        self.call("POST", "desktop/chat_access_request", Body::Empty)
     }
 
     /// An image under `/assets/` on the paired server, without the token
@@ -1304,8 +1294,8 @@ mod tests {
             "/assets/",
             "/assets/a/",
             "assets/x.svg",
-            "/local_agent/chats",
-            "/assets/../local_agent/chats",
+            "/desktop/chats",
+            "/assets/../desktop/chats",
             "/assets//evil.example/x.svg",
             "https://evil.example/assets/x.svg",
             "//evil.example/assets/x.svg",
@@ -1427,7 +1417,7 @@ mod download_tests {
         for path in [
             "https://evil.example/report.csv",
             "//evil.example/x",
-            "/local_agent/chats",
+            "/desktop/chats",
             "/rails/active_storage/blobs/redirect/signed-token/a.txt?disposition=attachment",
         ] {
             assert!(download_path(path).is_err(), "{path}");

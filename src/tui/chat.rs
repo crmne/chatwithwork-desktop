@@ -220,7 +220,7 @@ pub struct Can {
     pub r#move: bool,
 }
 
-/// The models a question can be asked with (`GET /local_agent/models`).
+/// The models a question can be asked with (`GET /desktop/models`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Models {
@@ -1839,7 +1839,7 @@ mod tests {
             "entries": [],
             "queued": [
                 { "id": 9, "content": "Use the EU file", "steer": true, "queued_at": "2026-10-17T13:21:20Z",
-                  "unqueue_path": "/local_agent/chats/42/queued_messages/9" },
+                  "unqueue_path": "/desktop/chats/42/queued_messages/9" },
                 { "id": 10, "content": "And Q4?", "steer": false, "queued_at": "2026-10-17T13:21:30Z",
                   "author": "Ada", "attachments": 2 }
             ]

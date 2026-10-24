@@ -323,7 +323,7 @@ mod tests {
         let origin = ServerUrl::parse("https://example.com").unwrap();
         let key = DeviceKey::generate().unwrap();
         let mut old = token("123456789");
-        old.scope = Some("local_agent:serve local_agent:chat".into());
+        old.scope = Some("desktop:serve desktop:chat".into());
         assert!(save_grant(&paths, &origin, &key, old, "file").is_err());
         let mut invalid = token("../escape");
         assert!(save_grant(&paths, &origin, &key, invalid.clone(), "file").is_err());

@@ -420,7 +420,7 @@ mod tests {
         let identifier = subscribe["identifier"].as_str().unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(identifier).unwrap()["channel"],
-            "LocalAgent::ChatChannel"
+            "Desktop::ChatChannel"
         );
         assert_eq!(subscribe["command"], "subscribe");
         let mut received = events.subscribe();

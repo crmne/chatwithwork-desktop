@@ -680,7 +680,7 @@ printf '{"cmd":"status"}\n' | nc -U "$XDG_RUNTIME_DIR/cww/cww.sock"
 ### Complete chat history
 
 `{"cmd":"chat_history","query":"budget","before":null}` asks for a page
-from `GET /local_agent/chat_history`. It returns `items` (each with `chat`,
+from `GET /desktop/chat_history`. It returns `items` (each with `chat`,
 `group`, `age`), `total` (all visible chats) and `next_cursor`. Pass that cursor
 as `before` for the next page. An empty batch with a cursor means search is
 still scanning older encrypted titles, not that there are no matches. Pages

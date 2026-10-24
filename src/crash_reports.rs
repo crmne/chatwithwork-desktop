@@ -42,7 +42,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::paths::{Paths, write_private_file};
 
-/// The `cww-local-agent` project on our Bugsink server. A DSN only lets a
+/// The `cww-desktop` project on our Bugsink server. A DSN only lets a
 /// client submit events, so it ships inside the program like any other
 /// client's.
 const DEFAULT_DSN: &str = "https://872298cbc64440d887ab210dceb83560@errors.plenty.is/8";

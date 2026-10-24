@@ -17,9 +17,9 @@ Every Chat with Work client dictates the same way: the recording is transcribed 
 - **Recording:** `fastframe-audio` (PipeWire, then PulseAudio, then ALSA on Linux; CoreAudio on macOS; WASAPI on Windows), downmixed to mono and resampled to 16 kHz, kept in memory only, and written as WAV (16-bit), which the server accepts: 5 minutes is about 9.6 MB, under its 10 MB limit. Opus could replace it later to make uploads smaller.
 - **Volume mixer:** on PipeWire and PulseAudio the recording shows as "Dictation" under "Chat with Work", with the `cww-app` icon the Linux packages install (`fastframe_audio::set_app_info` at startup). It has no stream role: it isn't call audio, so it lowers nothing else.
 - **Upload:** the app has no web session, so the recording goes through the daemon, as attachments do: the app hands the bytes to the daemon over the control socket (a `dictate` request with the audio and its type), and the daemon sends them with the device's token to Chat with Work. Only a computer whose chats are allowed can dictate. The daemon keeps nothing.
-- **The server's side:** a desktop counterpart of the web's dictation endpoint (`/local_agent/dictations`), with the same checks, limits, refusals and charging, the same DPoP token and the `local_agent:chat` permission:
-  - `GET /local_agent/dictations/new` answers `{ "cloud": bool, "reason": ... }`, so the button can say why before anyone records. `cloud: false` with no reason reads as unavailable.
-  - `POST /local_agent/dictations` with a multipart `audio` part answers `{ "text": ... }`; an empty text means no words were heard.
+- **The server's side:** a desktop counterpart of the web's dictation endpoint (`/desktop/dictations`), with the same checks, limits, refusals and charging, the same DPoP token and the `desktop:chat` permission:
+  - `GET /desktop/dictations/new` answers `{ "cloud": bool, "reason": ... }`, so the button can say why before anyone records. `cloud: false` with no reason reads as unavailable.
+  - `POST /desktop/dictations` with a multipart `audio` part answers `{ "text": ... }`; an empty text means no words were heard.
   - Refusals carry `{ "error", "error_description" }`: 400 `invalid`, 403 `no_credits`, `forbidden`, `chat_access_required` or `insufficient_scope`, 413 `too_large`, 415 `unsupported`, 429 `rate_limited`, 502 `transcription_failed`, 503 `unavailable`.
 
 ## The TUI

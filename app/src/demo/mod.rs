@@ -362,7 +362,7 @@ fn sample() -> State {
     };
     let log = vec![
         json!({ "ts": ago(26 * 3600), "event": "started", "detail": "cww 0.1.0" }),
-        json!({ "ts": ago(26 * 3600 - 2), "event": "connected", "detail": "wss://chatwithwork.com/local_agent as device 42" }),
+        json!({ "ts": ago(26 * 3600 - 2), "event": "connected", "detail": "wss://chatwithwork.com/desktop as device 42" }),
         tool(
             25 * 3600,
             "search",
@@ -1260,7 +1260,7 @@ impl Demo {
                         }
                         let queued = json!({
                             "id": id, "content": text, "steer": steer, "queued_at": ago(0),
-                            "unqueue_path": format!("/local_agent/chats/{number}/queued_messages/{id}"),
+                            "unqueue_path": format!("/desktop/chats/{number}/queued_messages/{id}"),
                         });
                         chat.queued.push(queued.clone());
                         let summary = chat.summary.clone();

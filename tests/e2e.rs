@@ -1,6 +1,6 @@
 //! End to end: a fake Chat with Work server (token endpoint, device
 //! authorization, the chat API, and an Action Cable style WebSocket at
-//! /local_agent) drives a real daemon over the wire, the way the Rails side
+//! /desktop) drives a real daemon over the wire, the way the Rails side
 //! does.
 
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ use cww::config::{Config, Limits, Root, ServerConfig};
 use cww::control::{self, ControlRequest};
 use cww::paths::Paths;
 
-const IDENTIFIER: &str = r#"{"channel":"LocalAgent::Channel"}"#;
+const IDENTIFIER: &str = r#"{"channel":"Desktop::Channel"}"#;
 const ACCESS_TOKEN: &str = "access-1";
 
 /// What the fake server knows and has seen.
@@ -119,7 +119,7 @@ async fn handle(
     let head = String::from_utf8_lossy(&buf[..n]).to_string();
     let request_line = head.lines().next().unwrap_or_default().to_string();
     state.lock().unwrap().log.push(request_line.clone());
-    if request_line.starts_with("GET /local_agent ") {
+    if request_line.starts_with("GET /desktop ") {
         websocket(stream, state, origin, sockets).await;
     } else {
         http(stream, state, origin).await;
@@ -158,7 +158,7 @@ async fn websocket(
             ACCESS_TOKEN.as_bytes(),
         ));
         if claims["htm"] != "GET"
-            || claims["htu"] != format!("{origin}/local_agent")
+            || claims["htu"] != format!("{origin}/desktop")
             || claims["ath"] != ath
             || claims["nonce"] != st.nonce.as_str()
         {
@@ -167,7 +167,7 @@ async fn websocket(
         assert_eq!(header("Origin"), Some(origin.as_str()));
         let offered = header("Sec-WebSocket-Protocol").unwrap_or_default();
         assert!(offered.contains("actioncable-v1-json"), "{offered}");
-        if st.pairing_scope == "local_agent:chat" {
+        if st.pairing_scope == "desktop:chat" {
             assert!(!offered.split(',').any(|p| p.trim() == "mcp"));
         }
         resp.headers_mut().insert(
@@ -184,7 +184,7 @@ async fn websocket(
         .unwrap();
     // Only the folder pairing subscribes to filesystem RPC. Chat-only
     // grants start at notifications, even with every UI closed.
-    let files = state.lock().unwrap().pairing_scope != "local_agent:chat";
+    let files = state.lock().unwrap().pairing_scope != "desktop:chat";
     if files {
         let subscribe = next_text(&mut ws).await.expect("subscribe command");
         let subscribe: Value = serde_json::from_str(&subscribe).unwrap();
@@ -324,29 +324,29 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         return;
     }
     let (status, json) = if [
-        "/local_agent/chat",
-        "/local_agent/models",
-        "/local_agent/model_preferences",
-        "/local_agent/account_settings",
-        "/local_agent/schedules",
-        "/local_agent/people",
-        "/local_agent/organization",
-        "/local_agent/invitations",
-        "/local_agent/join_code",
-        "/local_agent/templates",
-        "/local_agent/uploads",
-        "/local_agent/dictations",
-        "/local_agent/new_chat",
-        "/local_agent/instructions",
-        "/local_agent/token_count",
-        "/local_agent/services/",
-        "/local_agent/connectors",
-        "/local_agent/projects",
-        "/local_agent/connector_handoff",
-        "/local_agent/memory_preference",
-        "/local_agent/memories/",
-        "/local_agent/notification_preferences",
-        "/local_agent/notification_browser_link",
+        "/desktop/chat",
+        "/desktop/models",
+        "/desktop/model_preferences",
+        "/desktop/account_settings",
+        "/desktop/schedules",
+        "/desktop/people",
+        "/desktop/organization",
+        "/desktop/invitations",
+        "/desktop/join_code",
+        "/desktop/templates",
+        "/desktop/uploads",
+        "/desktop/dictations",
+        "/desktop/new_chat",
+        "/desktop/instructions",
+        "/desktop/token_count",
+        "/desktop/services/",
+        "/desktop/connectors",
+        "/desktop/projects",
+        "/desktop/connector_handoff",
+        "/desktop/memory_preference",
+        "/desktop/memories/",
+        "/desktop/notification_preferences",
+        "/desktop/notification_browser_link",
     ]
     .iter()
     .any(|api| path.starts_with(api))
@@ -423,7 +423,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         return (401, json!({ "error": "invalid_token" }));
     }
     let approve_url = format!("{origin}/1000001/settings?tab=connectors#computers");
-    if path == "/local_agent/chat_access_request" {
+    if path == "/desktop/chat_access_request" {
         return (
             202,
             json!({ "granted": st.chat_access, "requested": !st.chat_access, "approve_url": approve_url }),
@@ -452,19 +452,19 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         chat
     };
     // Rails without the route: an HTML 404, not the API's JSON.
-    let newer = path.starts_with("/local_agent/people")
-        || path.starts_with("/local_agent/organization")
-        || path.starts_with("/local_agent/invitations")
-        || path.starts_with("/local_agent/join_code")
-        || path.starts_with("/local_agent/models")
-        || path.starts_with("/local_agent/model_preferences")
-        || path.starts_with("/local_agent/account_settings")
-        || path.starts_with("/local_agent/schedules")
-        || path.starts_with("/local_agent/templates")
-        || path.starts_with("/local_agent/projects")
-        || path.starts_with("/local_agent/chat_history")
-        || path.starts_with("/local_agent/uploads")
-        || path.starts_with("/local_agent/dictations")
+    let newer = path.starts_with("/desktop/people")
+        || path.starts_with("/desktop/organization")
+        || path.starts_with("/desktop/invitations")
+        || path.starts_with("/desktop/join_code")
+        || path.starts_with("/desktop/models")
+        || path.starts_with("/desktop/model_preferences")
+        || path.starts_with("/desktop/account_settings")
+        || path.starts_with("/desktop/schedules")
+        || path.starts_with("/desktop/templates")
+        || path.starts_with("/desktop/projects")
+        || path.starts_with("/desktop/chat_history")
+        || path.starts_with("/desktop/uploads")
+        || path.starts_with("/desktop/dictations")
         || path.ends_with("/retry")
         || path.ends_with("/branches")
         || path.ends_with("/share")
@@ -472,11 +472,11 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || path.ends_with("/project")
         || path.ends_with("/input")
         || path.contains("/queued_messages/")
-        || (path == "/local_agent/chats/7" && matches!(method, "PATCH" | "DELETE"));
+        || (path == "/desktop/chats/7" && matches!(method, "PATCH" | "DELETE"));
     if old_api && newer {
         return (404, Value::Null);
     }
-    if let Some(suffix) = path.strip_prefix("/local_agent/templates") {
+    if let Some(suffix) = path.strip_prefix("/desktop/templates") {
         let params: HashMap<_, _> =
             url::form_urlencoded::parse(suffix.split_once('?').map_or("", |(_, q)| q).as_bytes())
                 .into_owned()
@@ -509,7 +509,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","project":project.map(|number|json!({"id":81,"number":number,"name":"Launch"})),"notice":notice,"groups":[{"layer":if project.is_some(){"project"}else{"personal"},"name":"Templates","editable":true,"templates":[{"kind":"document","label":"Document","app":"Word","extensions":["docx","dotx"],"file":file}]}]}),
         );
     }
-    if let Some(suffix) = path.strip_prefix("/local_agent/projects") {
+    if let Some(suffix) = path.strip_prefix("/desktop/projects") {
         let mut project = json!({"id": 81, "number": 17, "name": "Launch", "description": "Team plan", "icon": "folder-simple", "hq": false, "all_access": false, "archived": false, "member": true, "pinned": false, "audience": "2 people", "summary": "Invite-only · 2 people", "chat_count": 1, "can": {"edit": true, "chat": true}});
         let people = json!([{"id": 1, "name": "Alex", "role": "Owner", "me": true, "creator": true, "email": "alex@example.com", "member": true, "fixed": true}]);
         if method == "GET" && suffix.is_empty() {
@@ -556,7 +556,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             json!({"project": project, "owner": true, "people": people, "chats": [{"chat": chat(7, "Budget", "idle"), "creator": "Alex", "age": "1 day ago", "visible_to_guests": false}], "next_cursor": null}),
         );
     }
-    if let Some(query) = path.strip_prefix("/local_agent/chat_history?") {
+    if let Some(query) = path.strip_prefix("/desktop/chat_history?") {
         let params: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
             .into_owned()
             .collect();
@@ -568,7 +568,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     let posted: Value = serde_json::from_str(body).unwrap_or_default();
-    if path != "/local_agent/model_preferences"
+    if path != "/desktop/model_preferences"
         && let Some(model) = posted.get("model_id")
         && model != "3"
         && model != 3
@@ -591,7 +591,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         "notification_browser_link",
     ]
     .iter()
-    .any(|route| path.starts_with(&format!("/local_agent/{route}")));
+    .any(|route| path.starts_with(&format!("/desktop/{route}")));
     if workspace_api {
         st.workspace_requests
             .push(json!({ "method": method, "path": path, "body": posted }));
@@ -599,18 +599,18 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         return (
             200,
             match (method, path.split('?').next().unwrap()) {
-                ("GET", "/local_agent/instructions") => {
+                ("GET", "/desktop/instructions") => {
                     json!({ "instructions": [], "memory": memory })
                 }
-                ("POST", "/local_agent/token_count") => json!({ "tokens": 7 }),
-                ("GET", "/local_agent/connectors") => json!({ "connectors": [], "categories": [] }),
-                ("POST", "/local_agent/connector_handoff") => {
+                ("POST", "/desktop/token_count") => json!({ "tokens": 7 }),
+                ("GET", "/desktop/connectors") => json!({ "connectors": [], "categories": [] }),
+                ("POST", "/desktop/connector_handoff") => {
                     json!({ "path": "/482139075/native/connector_handoff?token=example" })
                 }
-                ("GET" | "PATCH", "/local_agent/notification_preferences") => {
+                ("GET" | "PATCH", "/desktop/notification_preferences") => {
                     json!({ "account": {"id": "482139075", "name": "Northwind"}, "chat_notifications": [], "notification_content": false, "notification_emails": [] })
                 }
-                ("POST", "/local_agent/notification_browser_link") => {
+                ("POST", "/desktop/notification_browser_link") => {
                     json!({ "path": "/482139075/native/notification_browser_link?token=example" })
                 }
                 (_, path) if path.contains("/memor") => memory,
@@ -619,10 +619,10 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     if [
-        "/local_agent/people",
-        "/local_agent/organization",
-        "/local_agent/invitations",
-        "/local_agent/join_code",
+        "/desktop/people",
+        "/desktop/organization",
+        "/desktop/invitations",
+        "/desktop/join_code",
     ]
     .iter()
     .any(|prefix| path.starts_with(prefix))
@@ -645,14 +645,14 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             .push(json!({"method":method,"path":path,"body":posted}));
         return (
             200,
-            if path == "/local_agent/people/1" && method == "DELETE" {
+            if path == "/desktop/people/1" && method == "DELETE" {
                 json!({"account":{"id":"482139075","name":"Northwind"},"left":true,"notice":"You left Northwind."})
             } else {
                 json!({"account":{"id":"482139075","name":"Northwind"},"email":"alex@example.com","admin":true,"role":"owner","organization":{"name":"Northwind","policies":[]},"people":[],"invitations":[],"projects":[],"roles":["admin","member","guest"],"join_link":"https://example.com/join/test"})
             },
         );
     }
-    if path.starts_with("/local_agent/schedules") {
+    if path.starts_with("/desktop/schedules") {
         let (path, query) = path.split_once('?').unwrap_or((path, ""));
         let mut posted = posted;
         if method == "DELETE" {
@@ -679,7 +679,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         );
     }
     match (method, path) {
-        ("GET" | "PATCH", "/local_agent/account_settings") => {
+        ("GET" | "PATCH", "/desktop/account_settings") => {
             if method == "PATCH" && posted["account"] != "482139075" {
                 return (
                     409,
@@ -695,7 +695,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 "copy_answers_as":posted["user"]["copy_answers_as"].as_str().unwrap_or("rich_text")}),
             )
         }
-        ("GET" | "PATCH", "/local_agent/model_preferences") => {
+        ("GET" | "PATCH", "/desktop/model_preferences") => {
             let body: Value = serde_json::from_str(body).unwrap_or_default();
             if method == "PATCH" && body["account"] != "482139075" {
                 return (
@@ -710,22 +710,22 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 "default_model_id":3,"models":[{"id":3,"name":"Claude Sonnet","selectable":true},{"id":4,"name":"Claude Opus","selectable":false,"reason":"Upgrade to use it"}]}),
             )
         }
-        ("GET", "/local_agent/models") => (
+        ("GET", "/desktop/models") => (
             200,
             json!({ "default_model_id": 3, "models": [
                 { "id": 3, "name": "Claude Sonnet", "provider": "anthropic", "description": "Fast and capable", "selectable": true, "reason": null },
                 { "id": 4, "name": "Claude Opus", "provider": "anthropic", "description": null, "selectable": false, "reason": "Upgrade to use it" }
             ] }),
         ),
-        ("GET", "/local_agent/dictations/new") => (200, json!({ "cloud": true })),
-        ("POST", "/local_agent/dictations") => {
+        ("GET", "/desktop/dictations/new") => (200, json!({ "cloud": true })),
+        ("POST", "/desktop/dictations") => {
             assert!(content_type.starts_with("multipart/form-data; boundary="));
             assert!(body.contains("name=\"audio\""));
             assert!(body.contains("Content-Type: audio/wav"));
             assert!(body.contains("RIFF"));
             (200, json!({ "text": "Make a plan." }))
         }
-        ("POST", "/local_agent/uploads") => {
+        ("POST", "/desktop/uploads") => {
             let Some(boundary) = content_type
                 .strip_prefix("multipart/form-data; boundary=")
                 .map(str::to_string)
@@ -761,21 +761,21 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                         "byte_size": size, "content_type": file_type }),
             )
         }
-        ("POST", "/local_agent/chats/7/tool_calls/12/approval") => {
+        ("POST", "/desktop/chats/7/tool_calls/12/approval") => {
             st.decisions
                 .push(format!("approve 7 12 {}", posted["for_rest_of_chat"]));
             (202, json!({ "chat": chat(7, "Q3 budget", "processing") }))
         }
-        ("POST", "/local_agent/chats/7/tool_calls/12/denial") => {
+        ("POST", "/desktop/chats/7/tool_calls/12/denial") => {
             st.decisions.push(format!("deny 7 12 {}", posted["reason"]));
             (202, json!({ "chat": chat(7, "Q3 budget", "processing") }))
         }
-        ("POST", "/local_agent/chats/7/retry") => {
+        ("POST", "/desktop/chats/7/retry") => {
             st.decisions
                 .push(format!("retry 7 {}", posted["message_id"]));
             (202, json!({ "chat": chat(7, "Q3 budget", "processing") }))
         }
-        ("POST", "/local_agent/chats/7/branches") => {
+        ("POST", "/desktop/chats/7/branches") => {
             st.decisions
                 .push(format!("branch 7 {}", posted["message_id"]));
             (
@@ -783,36 +783,36 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 json!({ "chat": chat(9, "Q3 budget (branch)", "idle") }),
             )
         }
-        ("PATCH", "/local_agent/chats/7") => {
+        ("PATCH", "/desktop/chats/7") => {
             st.decisions.push(format!("rename 7 {}", posted["title"]));
             (
                 200,
                 json!({ "chat": chat(7, posted["title"].as_str().unwrap_or_default(), "idle") }),
             )
         }
-        ("DELETE", "/local_agent/chats/7") => {
+        ("DELETE", "/desktop/chats/7") => {
             st.decisions.push("delete 7".into());
             (204, Value::Null)
         }
-        (method @ ("POST" | "DELETE"), "/local_agent/chats/7/pin") => {
+        (method @ ("POST" | "DELETE"), "/desktop/chats/7/pin") => {
             st.decisions.push(format!("pin 7 {method}"));
             (
                 200,
                 json!({ "pins": { "projects": [5], "chats": if method == "POST" { vec![7] } else { vec![] } } }),
             )
         }
-        ("PATCH", "/local_agent/chats/7/project") => {
+        ("PATCH", "/desktop/chats/7/project") => {
             st.decisions
                 .push(format!("move 7 {}", posted["project_id"]));
             let mut moved = chat(7, "Budget", "idle");
             moved["project"] = json!({ "id": posted["project_id"], "name": "Falcon" });
             (200, json!({ "chat": moved }))
         }
-        ("DELETE", "/local_agent/chats/7/project") => {
+        ("DELETE", "/desktop/chats/7/project") => {
             st.decisions.push("private 7".into());
             (200, json!({ "chat": chat(7, "Budget", "idle") }))
         }
-        ("POST", "/local_agent/chats/7/share") => {
+        ("POST", "/desktop/chats/7/share") => {
             st.decisions.push("share 7".into());
             let url = format!("{origin}/shared/abc");
             let mut shared = chat(7, "Q3 budget", "idle");
@@ -822,11 +822,11 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 json!({ "url": url, "expires_at": "2026-11-01T09:00:00Z", "chat": shared }),
             )
         }
-        ("DELETE", "/local_agent/chats/7/share") => {
+        ("DELETE", "/desktop/chats/7/share") => {
             st.decisions.push("unshare 7".into());
             (200, json!({ "chat": chat(7, "Q3 budget", "idle") }))
         }
-        ("POST", "/local_agent/chats/7/tool_calls/32/input") => {
+        ("POST", "/desktop/chats/7/tool_calls/32/input") => {
             if posted["input"]["environment"].is_null() && !posted["input"].is_null() {
                 return (
                     422,
@@ -837,16 +837,16 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 .push(format!("answer 7 32 {}", posted["input"]));
             (202, json!({ "chat": chat(7, "Q3 budget", "processing") }))
         }
-        ("DELETE", "/local_agent/chats/7/tool_calls/32/input") => {
+        ("DELETE", "/desktop/chats/7/tool_calls/32/input") => {
             st.decisions.push("decline 7 32".into());
             (202, json!({ "chat": chat(7, "Q3 budget", "processing") }))
         }
-        ("GET", "/local_agent/chats") => (
+        ("GET", "/desktop/chats") => (
             200,
             json!({ "account": { "name": "Plenty" }, "user": { "name": "Carmine" }, "locked_reason": null,
                     "projects": [], "chats": [chat(7, "Q3 budget", "idle")] }),
         ),
-        ("GET", "/local_agent/chats/7") => (
+        ("GET", "/desktop/chats/7") => (
             200,
             json!({ "chat": chat(7, "Q3 budget", "idle"), "locked_reason": null, "entries": [
                 { "kind": "user", "id": 1, "content": "What did we budget for Q3?" },
@@ -855,7 +855,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 { "kind": "assistant", "id": 3, "content": "It's **€40k**.", "sources": [{ "title": "Q3 plan.pdf", "url": "https://drive.example/q3" }] }
             ] }),
         ),
-        ("POST", "/local_agent/chats") => {
+        ("POST", "/desktop/chats") => {
             let body: Value = serde_json::from_str(body).unwrap_or_default();
             st.asked_with.push(json!([
                 body["model_id"],
@@ -867,7 +867,7 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 .push(body["content"].as_str().unwrap_or_default().to_string());
             (201, json!({ "chat": chat(8, "Chat #8", "processing") }))
         }
-        ("POST", "/local_agent/chats/7/messages") if !posted["steer"].is_null() => {
+        ("POST", "/desktop/chats/7/messages") if !posted["steer"].is_null() => {
             if old_api {
                 return (
                     409,
@@ -880,14 +880,14 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
                 202,
                 json!({ "chat": chat(7, "Q3 budget", "processing"), "queued": {
                     "id": 9, "content": posted["content"], "steer": posted["steer"],
-                    "queued_at": "2026-10-17T13:21:20Z", "unqueue_path": "/local_agent/chats/7/queued_messages/9" } }),
+                    "queued_at": "2026-10-17T13:21:20Z", "unqueue_path": "/desktop/chats/7/queued_messages/9" } }),
             )
         }
-        ("DELETE", "/local_agent/chats/7/queued_messages/9") => {
+        ("DELETE", "/desktop/chats/7/queued_messages/9") => {
             st.decisions.push("unqueue 7 9".into());
             (204, Value::Null)
         }
-        ("POST", "/local_agent/chats/7/messages") => {
+        ("POST", "/desktop/chats/7/messages") => {
             let body: Value = serde_json::from_str(body).unwrap_or_default();
             st.asked_with.push(json!([
                 body["model_id"],
@@ -915,7 +915,7 @@ fn oauth(
 ) -> (u16, Value) {
     let mut st = state.lock().unwrap();
     // Pairing registers the key; everything else must be signed by it.
-    let key = if path == "/local_agent/device_authorizations" {
+    let key = if path == "/desktop/device_authorizations" {
         form.get("public_key").cloned().unwrap_or_default()
     } else {
         st.public_key.clone().unwrap_or_default()
@@ -929,10 +929,10 @@ fn oauth(
         return (400, json!({ "error": "use_dpop_nonce" }));
     }
     match (path, form.get("grant_type").map(String::as_str)) {
-        ("/local_agent/device_authorizations", _) => {
+        ("/desktop/device_authorizations", _) => {
             let scopes: Vec<&str> = form["scope"].split(' ').collect();
             assert!(
-                scopes.contains(&"local_agent:serve") || scopes == ["local_agent:chat"],
+                scopes.contains(&"desktop:serve") || scopes == ["desktop:chat"],
                 "{scopes:?}"
             );
             st.pairing_scope = form["scope"].clone();
@@ -949,7 +949,7 @@ fn oauth(
                 }),
             )
         }
-        ("/local_agent/token", Some("urn:ietf:params:oauth:grant-type:device_code")) => {
+        ("/desktop/token", Some("urn:ietf:params:oauth:grant-type:device_code")) => {
             assert_eq!(form["device_code"], "device-code-1");
             st.polls += 1;
             if st.polls == 1 {
@@ -961,14 +961,14 @@ fn oauth(
                     "access_token": ACCESS_TOKEN,
                     "token_type": "DPoP",
                     "expires_in": 600,
-                    "scope": if st.pairing_scope == "local_agent:chat" { "local_agent:chat" } else { "local_agent:serve" },
+                    "scope": if st.pairing_scope == "desktop:chat" { "desktop:chat" } else { "desktop:serve" },
                     "refresh_token": "refresh-1",
                     "device_id": "42",
                     "account": {"id": "123456789", "name": "Demo team", "role": "member"},
                 }),
             )
         }
-        ("/local_agent/token", Some("refresh_token")) => {
+        ("/desktop/token", Some("refresh_token")) => {
             let given = form.get("refresh_token").cloned().unwrap_or_default();
             if st.revoked || !st.refresh_tokens.contains(&given) {
                 return (400, json!({ "error": "invalid_grant" }));
@@ -982,7 +982,7 @@ fn oauth(
                     "access_token": ACCESS_TOKEN,
                     "token_type": "DPoP",
                     "expires_in": 600,
-                    "scope": if st.pairing_scope == "local_agent:chat" { "local_agent:chat" } else { "local_agent:serve" },
+                    "scope": if st.pairing_scope == "desktop:chat" { "desktop:chat" } else { "desktop:serve" },
                     "refresh_token": next,
                 }),
             )
@@ -1403,7 +1403,7 @@ async fn serves_tools_and_enforces_policy_over_the_wire() {
     let log = server.state.lock().unwrap().log.clone();
     assert!(
         log.iter()
-            .filter(|l| l.starts_with("POST /local_agent/token"))
+            .filter(|l| l.starts_with("POST /desktop/token"))
             .count()
             >= 2,
         "{log:?}"
@@ -1726,7 +1726,7 @@ async fn pairs_with_the_device_flow() {
     assert_eq!(paired.url, server.origin);
     assert_eq!(
         server.state.lock().unwrap().pairing_scope,
-        "local_agent:serve local_agent:chat"
+        "desktop:serve desktop:chat"
     );
     assert!(said.iter().any(|l| l.contains("WDJB-MJHT")), "{said:?}");
 
@@ -1772,15 +1772,12 @@ async fn organization_login_keeps_the_primary_folder_pairing_and_refreshes_with_
             credentials.store,
         );
         assert_eq!(tokens.refresh().unwrap(), ACCESS_TOKEN);
-        assert_eq!(tokens.scope().as_deref(), Some("local_agent:chat"));
+        assert_eq!(tokens.scope().as_deref(), Some("desktop:chat"));
         saved
     })
     .await
     .unwrap();
-    assert_eq!(
-        server.state.lock().unwrap().pairing_scope,
-        "local_agent:chat"
-    );
+    assert_eq!(server.state.lock().unwrap().pairing_scope, "desktop:chat");
     assert_eq!(saved.account.id, "123456789");
     assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), before);
     assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), primary);
@@ -2452,7 +2449,7 @@ async fn relays_chats_for_the_terminal() {
             .unwrap()
             .log
             .iter()
-            .filter(|l| l.starts_with("POST /local_agent/token"))
+            .filter(|l| l.starts_with("POST /desktop/token"))
             .count()
     };
     let before = refreshes(&server);
@@ -2522,7 +2519,7 @@ async fn relays_chats_for_the_terminal() {
             },
         )
     });
-    let identifier = r#"{"channel":"LocalAgent::ChatChannel","chat":"7"}"#;
+    let identifier = r#"{"channel":"Desktop::ChatChannel","chat":"7"}"#;
     let subscribe: Value = serde_json::from_str(&next_text(&mut ws).await.unwrap()).unwrap();
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(
@@ -2617,7 +2614,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
     };
     let people_account = "482139075".to_owned();
     for (request, method, path) in [
-        (PeopleRequest::List, "GET", "/local_agent/people"),
+        (PeopleRequest::List, "GET", "/desktop/people"),
         (
             PeopleRequest::Organization {
                 account: people_account.clone(),
@@ -2627,7 +2624,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 },
             },
             "PATCH",
-            "/local_agent/organization",
+            "/desktop/organization",
         ),
         (
             PeopleRequest::Role {
@@ -2636,7 +2633,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 role: "guest".into(),
             },
             "PATCH",
-            "/local_agent/people/2/role",
+            "/desktop/people/2/role",
         ),
         (
             PeopleRequest::Invite {
@@ -2648,7 +2645,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 },
             },
             "POST",
-            "/local_agent/invitations",
+            "/desktop/invitations",
         ),
         (
             PeopleRequest::Withdraw {
@@ -2656,14 +2653,14 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 5,
             },
             "DELETE",
-            "/local_agent/invitations/5",
+            "/desktop/invitations/5",
         ),
         (
             PeopleRequest::ResetJoinLink {
                 account: people_account.clone(),
             },
             "DELETE",
-            "/local_agent/join_code",
+            "/desktop/join_code",
         ),
         (
             PeopleRequest::Remove {
@@ -2671,7 +2668,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 2,
             },
             "DELETE",
-            "/local_agent/people/2",
+            "/desktop/people/2",
         ),
         (
             PeopleRequest::Remove {
@@ -2679,14 +2676,14 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 1,
             },
             "DELETE",
-            "/local_agent/people/1",
+            "/desktop/people/1",
         ),
     ] {
         let c = chats.clone();
         let reply = blocking(move || c.people(request)).await.unwrap();
         assert_eq!(
             matches!(reply, PeopleReply::Left { left: true, .. }),
-            path == "/local_agent/people/1"
+            path == "/desktop/people/1"
         );
         let sent = server
             .state
@@ -2701,10 +2698,10 @@ async fn relays_models_decisions_files_and_chat_actions() {
         if method != "GET" {
             assert_eq!(sent["body"]["account"], people_account);
         }
-        if path == "/local_agent/organization" {
+        if path == "/desktop/organization" {
             assert_eq!(sent["body"]["organization"]["connector_changes"], false);
         }
-        if path == "/local_agent/invitations" {
+        if path == "/desktop/invitations" {
             assert_eq!(sent["body"]["invitation"]["project_ids"], json!([71]));
         }
         if path.ends_with("/role") {
@@ -2734,12 +2731,12 @@ async fn relays_models_decisions_files_and_chat_actions() {
         ..Fields::default()
     };
     for (request, method, path) in [
-        (ScheduleRequest::List, "GET", "/local_agent/schedules"),
-        (ScheduleRequest::New, "GET", "/local_agent/schedules/new"),
+        (ScheduleRequest::List, "GET", "/desktop/schedules"),
+        (ScheduleRequest::New, "GET", "/desktop/schedules/new"),
         (
             ScheduleRequest::Edit { id: 42 },
             "GET",
-            "/local_agent/schedules/42/edit",
+            "/desktop/schedules/42/edit",
         ),
         (
             ScheduleRequest::Create {
@@ -2747,7 +2744,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 fields: fields.clone(),
             },
             "POST",
-            "/local_agent/schedules",
+            "/desktop/schedules",
         ),
         (
             ScheduleRequest::Update {
@@ -2756,7 +2753,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 fields: fields.clone(),
             },
             "PATCH",
-            "/local_agent/schedules/42",
+            "/desktop/schedules/42",
         ),
         (
             ScheduleRequest::Pause {
@@ -2764,7 +2761,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 42,
             },
             "POST",
-            "/local_agent/schedules/42/pause",
+            "/desktop/schedules/42/pause",
         ),
         (
             ScheduleRequest::Resume {
@@ -2772,7 +2769,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 42,
             },
             "DELETE",
-            "/local_agent/schedules/42/pause",
+            "/desktop/schedules/42/pause",
         ),
         (
             ScheduleRequest::Delete {
@@ -2780,7 +2777,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 42,
             },
             "DELETE",
-            "/local_agent/schedules/42",
+            "/desktop/schedules/42",
         ),
         (
             ScheduleRequest::Run {
@@ -2788,7 +2785,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
                 id: 42,
             },
             "POST",
-            "/local_agent/schedules/42/run",
+            "/desktop/schedules/42/run",
         ),
     ] {
         let c = chats.clone();
@@ -2865,7 +2862,7 @@ async fn relays_models_decisions_files_and_chat_actions() {
         .unwrap()
         .workspace_requests
         .iter()
-        .filter(|r| r["path"] == "/local_agent/account_settings")
+        .filter(|r| r["path"] == "/desktop/account_settings")
         .cloned()
         .collect();
     assert_eq!(
@@ -3377,30 +3374,24 @@ async fn relays_native_workspace_controls_with_device_authentication() {
             .map(|r| (r["method"].as_str().unwrap(), r["path"].as_str().unwrap()))
             .collect::<Vec<_>>(),
         vec![
-            ("GET", "/local_agent/new_chat?project_id=42"),
-            ("GET", "/local_agent/instructions?project_id=42"),
-            ("POST", "/local_agent/token_count"),
-            (
-                "GET",
-                "/local_agent/connectors?q=docs+%26+files&category=files"
-            ),
-            ("POST", "/local_agent/connector_handoff"),
-            ("PATCH", "/local_agent/memory_preference"),
-            ("DELETE", "/local_agent/memories/7"),
-            ("DELETE", "/local_agent/services/computer/8"),
-            (
-                "POST",
-                "/local_agent/services/connector/google_workspace/pause"
-            ),
+            ("GET", "/desktop/new_chat?project_id=42"),
+            ("GET", "/desktop/instructions?project_id=42"),
+            ("POST", "/desktop/token_count"),
+            ("GET", "/desktop/connectors?q=docs+%26+files&category=files"),
+            ("POST", "/desktop/connector_handoff"),
+            ("PATCH", "/desktop/memory_preference"),
+            ("DELETE", "/desktop/memories/7"),
+            ("DELETE", "/desktop/services/computer/8"),
+            ("POST", "/desktop/services/connector/google_workspace/pause"),
             (
                 "DELETE",
-                "/local_agent/services/connector/google_workspace/pause"
+                "/desktop/services/connector/google_workspace/pause"
             ),
-            ("PATCH", "/local_agent/instructions/project"),
-            ("PATCH", "/local_agent/instructions/personal"),
-            ("GET", "/local_agent/notification_preferences"),
-            ("PATCH", "/local_agent/notification_preferences"),
-            ("POST", "/local_agent/notification_browser_link"),
+            ("PATCH", "/desktop/instructions/project"),
+            ("PATCH", "/desktop/instructions/personal"),
+            ("GET", "/desktop/notification_preferences"),
+            ("PATCH", "/desktop/notification_preferences"),
+            ("POST", "/desktop/notification_browser_link"),
         ]
     );
     assert_eq!(
@@ -3453,7 +3444,7 @@ async fn keeps_the_chat_list_current_for_the_terminal() {
         .expect("the daemon connects")
         .unwrap();
     let chats = Chats::new(&fx.paths.socket_path());
-    let identifier = r#"{"channel":"LocalAgent::ChatsChannel"}"#;
+    let identifier = r#"{"channel":"Desktop::ChatsChannel"}"#;
 
     type Closer = Arc<Mutex<Option<cww::control::Closer>>>;
     let watch = |chats: &Chats| {
@@ -3618,8 +3609,8 @@ async fn fetches_the_webs_images_for_clients() {
         ("/assets/big.png", "unreachable"),
         ("/assets/page.svg", "unsupported"),
         ("/assets/moved.svg", "unreachable"),
-        ("/local_agent/chats", "invalid"),
-        ("/assets/../local_agent/chats", "invalid"),
+        ("/desktop/chats", "invalid"),
+        ("/assets/../desktop/chats", "invalid"),
     ] {
         let failure = fetch(path).await.unwrap().unwrap_err();
         assert_eq!(failure.code, code, "{path}: {}", failure.message);
@@ -3628,7 +3619,7 @@ async fn fetches_the_webs_images_for_clients() {
     let refused = control_error(
         &fx.paths,
         ControlRequest::Asset {
-            path: "/local_agent/chats".into(),
+            path: "/desktop/chats".into(),
         },
     )
     .await;
@@ -3637,7 +3628,7 @@ async fn fetches_the_webs_images_for_clients() {
         let st = server.state.lock().unwrap();
         assert_eq!(st.assets_with_credentials, 0, "images go without the token");
         assert!(
-            !st.log.iter().any(|l| l.contains("/local_agent/chats")),
+            !st.log.iter().any(|l| l.contains("/desktop/chats")),
             "nothing but images was asked for: {:?}",
             st.log
         );
@@ -4896,7 +4887,7 @@ async fn relays_dictation_and_signed_downloads() {
     let refused = control_error(
         &fx.paths,
         ControlRequest::ChatDownload {
-            path: "/local_agent/chats".into(),
+            path: "/desktop/chats".into(),
         },
     )
     .await;
@@ -5084,10 +5075,7 @@ async fn organization_cli_login_reports_the_chat_grant_without_repairing_folders
         }
         assert_eq!(std::fs::read(fx.paths.config_file()).unwrap(), config);
         assert_eq!(std::fs::read(fx.paths.secrets_file()).unwrap(), secrets);
-        assert_eq!(
-            server.state.lock().unwrap().pairing_scope,
-            "local_agent:chat"
-        );
+        assert_eq!(server.state.lock().unwrap().pairing_scope, "desktop:chat");
         assert_eq!(cww::auth::organizations::list(&fx.paths).unwrap().len(), 1);
     }
     let profile = cww::auth::organizations::list(&fx.paths).unwrap().remove(0);
