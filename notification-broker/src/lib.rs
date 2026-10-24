@@ -195,14 +195,56 @@ impl Backend for Native {
     fn permission(&self, request: bool) -> PermissionQuery {
         let client = self.0.clone();
         Box::pin(async move {
-            if request {
-                client.request_permission().await
-            } else {
-                client.permission().await
+            if !request {
+                return client.permission().await;
             }
+            let permission = client.request_permission().await?;
+            #[cfg(windows)]
+            if permission == Permission::NotDetermined {
+                return turn_on_windows(&client).await;
+            }
+            Ok(permission)
         })
     }
 }
+
+/// Windows asks nobody: a program's notification settings exist once it
+/// has shown a notification, and until then the system reports nothing to
+/// allow, so "Turn on" changed nothing. Turning them on shows one that says
+/// so, and answers what Windows reports once it's up.
+#[cfg(windows)]
+async fn turn_on_windows(client: &Client) -> std::result::Result<Permission, Error> {
+    let (shown, answered) = oneshot::channel();
+    let shown = Mutex::new(Some(shown));
+    let _handle = client.show_with(
+        Notification::new(TURNED_ON_TITLE)
+            .body(TURNED_ON_BODY)
+            .key(TURNED_ON_KEY),
+        move |event| {
+            let outcome = match event {
+                NativeEvent::Shown => Ok(()),
+                NativeEvent::Failed(error) => Err(error),
+                _ => return,
+            };
+            if let Some(shown) = shown.lock().ok().and_then(|mut s| s.take()) {
+                let _ = shown.send(outcome);
+            }
+        },
+    )?;
+    match answered.await {
+        Ok(Ok(())) => client.permission().await,
+        Ok(Err(error)) => Err(error),
+        Err(_) => client.permission().await,
+    }
+}
+
+/// The notification that turns them on where the system has no prompt.
+#[cfg_attr(not(windows), allow(dead_code))]
+const TURNED_ON_TITLE: &str = "Notifications are on";
+#[cfg_attr(not(windows), allow(dead_code))]
+const TURNED_ON_BODY: &str = "Chat with Work tells you here when a chat needs you or has finished.";
+#[cfg_attr(not(windows), allow(dead_code))]
+const TURNED_ON_KEY: &str = "cww-notifications-on";
 
 struct Active<H> {
     handle: H,

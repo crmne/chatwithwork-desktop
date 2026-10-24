@@ -9,6 +9,8 @@ use crate::paths::Paths;
 pub struct AppState {
     /// The welcome page was finished or skipped.
     pub onboarded: bool,
+    /// The first launch asked for notification permission (first_launch.rs).
+    pub notifications_asked: bool,
 }
 
 impl AppState {
@@ -37,7 +39,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         assert!(!AppState::load(&paths).onboarded);
-        AppState { onboarded: true }.save(&paths).unwrap();
+        AppState {
+            onboarded: true,
+            ..Default::default()
+        }
+        .save(&paths)
+        .unwrap();
         assert!(AppState::load(&paths).onboarded);
         // The egui app also kept its title bar and chat choices here.
         std::fs::write(

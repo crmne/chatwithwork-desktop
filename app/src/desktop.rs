@@ -378,6 +378,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                 .spawn_watch(move |status| watcher.status_changed(status));
             let opener = handle.clone();
             std::thread::spawn(move || open(&opener, &first_open));
+            if single {
+                crate::first_launch::ask_once(desktop.paths.clone());
+            }
             #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]
             if let Some(dir) = crate::snapshot::requested() {
                 std::thread::spawn(move || crate::snapshot::run(handle, dir));

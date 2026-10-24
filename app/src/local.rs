@@ -138,7 +138,9 @@ pub fn set_onboarded(
     onboarded: bool,
 ) -> Answer {
     local_page(&webview)?;
-    crate::state::AppState { onboarded }
+    let mut state = crate::state::AppState::load(&desktop.paths);
+    state.onboarded = onboarded;
+    state
         .save(&desktop.paths)
         .map(|()| json!({}))
         .map_err(|e| refusal("failed", format!("Couldn't save: {e}")))

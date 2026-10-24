@@ -1944,7 +1944,11 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
     std::fs::create_dir_all(&paths.daemon.runtime_dir)?;
     if scenario == Scenario::Sample {
         // A paired sample has been through the welcome page.
-        crate::state::AppState { onboarded: true }.save(&paths)?;
+        crate::state::AppState {
+            onboarded: true,
+            notifications_asked: true,
+        }
+        .save(&paths)?;
     }
     // A scan language chosen before, which this computer may not have
     // (`CWW_DEMO_SCAN_LANGUAGE=spa`), for the window's missing-language note.
