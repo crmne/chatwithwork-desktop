@@ -14,6 +14,8 @@ use std::path::PathBuf;
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
+    // Started by the browser as the extension's native messaging host.
+    cww::browsing::host_if_invoked();
     let mut args = std::env::args_os().skip(1);
     let mut log_file: Option<PathBuf> = None;
     while let Some(arg) = args.next() {

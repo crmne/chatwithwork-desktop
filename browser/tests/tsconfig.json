@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "..",
+    "outDir": "../build-tests",
+    "noEmit": false
+  },
+  "include": ["./*.test.ts", "../src/sites.ts", "../src/classify.ts", "../src/snapshot.ts"]
+}

@@ -10,6 +10,7 @@ pub mod account_settings;
 pub mod audit;
 pub mod auth;
 pub mod browser;
+pub mod browsing;
 pub mod chats;
 pub mod commands;
 pub mod config;
