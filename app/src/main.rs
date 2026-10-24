@@ -34,6 +34,7 @@ mod control;
 mod demo;
 mod desktop;
 mod downloads;
+mod first_launch;
 mod linux;
 mod local;
 mod loopback;
