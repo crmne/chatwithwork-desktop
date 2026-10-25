@@ -54,6 +54,24 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             bridge_check(&app);
             continue;
         }
+        // `probe:<file>`: runs a script on the web app's window and prints
+        // the title it leaves, for checks a picture can't make (what each
+        // frame of an animation drew, say).
+        if let Some(file) = page.strip_prefix("probe:") {
+            probe(&app, Path::new(file));
+            continue;
+        }
+        // `shot:<name>`: the web app's window as it is now, after a probe.
+        if let Some(name) = page.strip_prefix("shot:") {
+            if let Some(main) = app.get_webview_window(crate::windows::MAIN) {
+                let path = dir.join(format!("{name}-{theme}.png"));
+                match capture(&main, &path) {
+                    Ok(()) => println!("{}", path.display()),
+                    Err(e) => log::error!("snapshot of {name}: {e}"),
+                }
+            }
+            continue;
+        }
         // `main` is the web app's window on its start page, `main:/path` on
         // one of the server's pages. With `CWW_APP_SNAPSHOT_LOGIN`
         // (`email:password`, a development server's synthetic login), the
@@ -190,6 +208,23 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
         .map_err(|_| "timed out".to_string())?
 }
 
+fn probe(app: &AppHandle, file: &Path) {
+    let (Some(main), Ok(script)) = (
+        app.get_webview_window(crate::windows::MAIN),
+        std::fs::read_to_string(file),
+    ) else {
+        println!("probe: no main window or no script at {}", file.display());
+        return;
+    };
+    let _ = main.eval(&script);
+    let wait = std::env::var("CWW_APP_SNAPSHOT_PROBE_WAIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    std::thread::sleep(Duration::from_secs(wait));
+    println!("probe: {}", main.title().unwrap_or_default());
+}
+
 fn bridge_check(app: &AppHandle) {
     let Some(main) = app.get_webview_window(crate::windows::MAIN) else {
         println!("bridge: no main window");
@@ -238,8 +273,9 @@ fn bridge_check(app: &AppHandle) {
 /// `scanned` presses Scan and waits for the feeder to empty, `blank` opens
 /// the blank pages left out, `crop` opens the first page's crop view,
 /// `cropped` crops the first page, `saved` saves the PDF (`CWW_DEMO_SAVE_TO`),
-/// `menu` opens the finish button's menu, `turned` turns the second, and `send`
-/// sends to the first bot (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
+/// `menu` opens the finish button's menu, `turned` turns the second, `send`
+/// sends to the first bot from the menu, and `attach` hands the scan to a
+/// new chat's composer in the Chat with Work window (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
 /// the PDF).
 fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
     let Ok(()) = crate::windows::show_scan(app) else {
@@ -284,12 +320,16 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
             r#"document.querySelector('[data-key="finish-menu"]')?.click()"#,
             2,
         ),
+        "attach" => (
+            r#"document.querySelector('[data-key="attach"]')?.click()"#,
+            10,
+        ),
         "turned" => (
             r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,
             3,
         ),
         "send" => (
-            r#"(() => { const s = document.querySelector('[data-key="destination"]'); if (s && s.options.length > 1) { s.value = s.options[1].value; s.dispatchEvent(new Event('change')); } setTimeout(() => document.querySelector('[data-key="send"]')?.click(), 300); })()"#,
+            r#"(() => { document.querySelector('[data-key="finish-menu"]')?.click(); setTimeout(() => document.querySelector('[data-key^="menu-bot-"]')?.click(), 300); })()"#,
             15,
         ),
         _ => ("", 0),

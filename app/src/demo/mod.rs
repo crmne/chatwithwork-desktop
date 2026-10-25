@@ -420,7 +420,8 @@ fn sample() -> State {
         "pid": 4242,
         "connection": { "connection": "connected", "since": ago(26 * 3600 - 2) },
         "server": "https://chatwithwork.com",
-        "device_id": "42",
+        // A development server's own device, to see This computer against it.
+        "device_id": std::env::var("CWW_DEMO_DEVICE_ID").unwrap_or_else(|_| "42".into()),
         "paused": false,
         "roots": [
             { "id": "documents", "label": "Documents", "available": true, "index": "ready",

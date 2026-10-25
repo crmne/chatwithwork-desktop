@@ -2,9 +2,10 @@ name: Release
 
 # A v* tag builds every platform, publishes the GitHub release, then hands
 # over to packaging.yml for .deb, .rpm, AUR, Homebrew and WinGet recipes.
-# Each release carries cww and the desktop app (cww-app) with cww inside it:
-# a notarized .dmg and .zip on macOS, zips on Windows, and archives for
-# Linux.
+# Each release carries the desktop app with cww beside it: a notarized .dmg
+# and a .pkg on macOS, an MSI per architecture on Windows, and archives for
+# Linux. PACKAGING.md ("Release assets") lists every file
+# and what uses it; add nothing nobody downloads.
 # Running it by hand builds everything the same way without publishing, to
 # try a change to this workflow before tagging.
 on:
@@ -193,38 +194,14 @@ jobs:
             "target\${{ matrix.target }}\release\cww-app.exe" `
             "target\${{ matrix.target }}\release\cww-scan-helper.exe"
 
-      - name: Package
-        shell: bash
+      # Windows ships only the MSIs (below); nothing read a portable zip.
+      - name: Terminal-only archive
+        if: runner.os == 'Linux'
         run: |
-          name="cww-v${VERSION}-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          cp README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/cww.exe" "target/${{ matrix.target }}/release/cww-agent.exe" "target/${{ matrix.target }}/release/cww-app.exe" "dist/$name/"
-            (cd dist && 7z a "$name.zip" "$name")
-            # The desktop app with the daemon beside it, as the preview
-            # builds had it: the app starts the cww.exe next to it.
-            app="chat-with-work-v${VERSION}-${{ matrix.target }}"
-            release="target/${{ matrix.target }}/release"
-            mkdir -p "dist/$app"
-            # The app is "Chat with Work" where people open it; cww and its
-            # agent keep their names.
-            cp "$release/cww-app.exe" "dist/$app/Chat with Work.exe"
-            cp "$release/cww.exe" "$release/cww-agent.exe" "dist/$app/"
-            # The scanner helper and the TWAIN DSM it loads, with its notices.
-            cp "$release/cww-scan-helper.exe" "$release/TWAINDSM.dll" "dist/$app/"
-            cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt "dist/$app/"
-            cp README.md LICENSE-MIT LICENSE-APACHE "dist/$app/"
-            (cd dist && 7z a "$app.zip" "$app")
-            rm -rf "dist/$app"
-            7z l "dist/$app.zip"
-          else
-            ruby packaging/linux/cli-archive.rb \
-              "target/${{ matrix.target }}/release/cww" \
-              "target/${{ matrix.target }}/release/cww-notify" \
-              "$VERSION" "${{ matrix.target }}" dist
-          fi
-          rm -rf "dist/$name"
+          ruby packaging/linux/cli-archive.rb \
+            "target/${{ matrix.target }}/release/cww" \
+            "target/${{ matrix.target }}/release/cww-notify" \
+            "$VERSION" "${{ matrix.target }}" dist
 
       # WiX 5 is a .NET tool; the runner has the SDK.
       - name: Installer
@@ -263,14 +240,12 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/*.msi
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/*.msi
           if-no-files-found: error
 
@@ -418,11 +393,12 @@ jobs:
           ditto "$RUNNER_TEMP/app/Chat with Work.app" "$RUNNER_TEMP/signed-portable/$name/Chat with Work.app"
           tar -C "$RUNNER_TEMP/signed-portable" -czf "dist/$name.tar.gz" "$name"
 
-      - name: Desktop app disk image and zip
+      # The disk image is the app's only download of its own: the .pkg and
+      # the Homebrew and shell-installer archive carry the same app.
+      - name: Desktop app disk image
         run: |
           app="$RUNNER_TEMP/app/Chat with Work.app"
           dmg="dist/chat-with-work-v${VERSION}-macos-universal.dmg"
-          ditto -c -k --keepParent "$app" "dist/chat-with-work-v${VERSION}-macos-universal.zip"
           staging="$RUNNER_TEMP/dmg"
           mkdir -p "$staging"
           ditto "$app" "$staging/Chat with Work.app"
@@ -454,7 +430,6 @@ jobs:
             dist/*.tar.gz
             dist/*.pkg
             dist/*.dmg
-            dist/*.zip
       - uses: actions/upload-artifact@v7
         with:
           name: macos-universal
@@ -462,7 +437,6 @@ jobs:
             dist/*.tar.gz
             dist/*.pkg
             dist/*.dmg
-            dist/*.zip
           if-no-files-found: error
 
   # The desktop app for Linux, with the static cww from the build job beside

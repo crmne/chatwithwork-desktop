@@ -25,6 +25,7 @@ mod args;
 mod audio;
 mod autostart;
 mod bridge;
+mod computer;
 mod control;
 // The stand-in daemon for `--demo`: it answers the whole control protocol
 // (CONTROL.md), chats included, so more of it serves the settings pages as

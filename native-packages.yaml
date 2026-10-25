@@ -161,12 +161,6 @@ assets:
   WINDOWS_ARM64_MSI:
     file: cww-v@VERSION@-aarch64-pc-windows-msvc.msi
     local: dist/cww-v@VERSION@-aarch64-pc-windows-msvc.msi
-  WINDOWS_X64_ZIP:
-    file: cww-v@VERSION@-x86_64-pc-windows-msvc.zip
-    local: dist/cww-v@VERSION@-x86_64-pc-windows-msvc.zip
-  WINDOWS_ARM64_ZIP:
-    file: cww-v@VERSION@-aarch64-pc-windows-msvc.zip
-    local: dist/cww-v@VERSION@-aarch64-pc-windows-msvc.zip
   SOURCE:
     file: chatwithwork-desktop-@VERSION@.tar.gz
     url: https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v@VERSION@.tar.gz
@@ -184,7 +178,6 @@ templates:
   winget/ChatWithWork.Desktop.yaml: packaging/winget/ChatWithWork.Desktop.yaml.in
   winget/ChatWithWork.Desktop.installer.yaml: packaging/winget/ChatWithWork.Desktop.installer.yaml.in
   winget/ChatWithWork.Desktop.locale.en-US.yaml: packaging/winget/ChatWithWork.Desktop.locale.en-US.yaml.in
-  scoop/cww.json: packaging/scoop/cww.json.in
 repositories:
   homebrew:
     url: https://github.com/crmne/homebrew-tap.git
@@ -230,6 +223,6 @@ repositories:
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push
-# WinGet and Scoop recipes are rendered with the others (recipes/winget,
-# recipes/scoop) and submitted by hand; see PACKAGING.md.
+# WinGet's recipes are rendered with the others (recipes/winget) and
+# submitted by hand with packaging/windows/winget-submit.sh; see PACKAGING.md.
 version_file: Cargo.toml

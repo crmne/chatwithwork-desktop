@@ -17,6 +17,7 @@
     "allow-scan-discard",
     "allow-scan-destinations",
     "allow-scan-send",
+    "allow-scan-attach",
     "allow-scan-open",
     "allow-scan-save",
     "allow-scan-reveal",

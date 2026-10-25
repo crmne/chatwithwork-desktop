@@ -3,7 +3,8 @@ name: Packaging
 # Releases call this after the GitHub release exists: the shared
 # native-packages workflow downloads the complete Linux builds, checks them
 # against checksums.txt, builds .deb and .rpm, attaches them, renders the
-# AUR, Homebrew and WinGet recipes, and publishes the enabled ones.
+# AUR, Homebrew and WinGet recipes, and publishes the enabled ones. The
+# recipes archive it also attaches is removed again (tidy-release).
 #
 # Pushes and pull requests that touch packaging build the same packages
 # from this commit instead, and install them in clean containers.
@@ -111,7 +112,7 @@ jobs:
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             git archive --format=tar.gz --prefix="chatwithwork-desktop-${VERSION}/" \
               -o "dist/chatwithwork-desktop-${VERSION}.tar.gz" HEAD
-            for stand_in in macos-universal.tar.gz x86_64-pc-windows-msvc.msi aarch64-pc-windows-msvc.msi x86_64-pc-windows-msvc.zip aarch64-pc-windows-msvc.zip; do
+            for stand_in in macos-universal.tar.gz x86_64-pc-windows-msvc.msi aarch64-pc-windows-msvc.msi; do
               echo "stand-in for packaging tests" > "dist/cww-v${VERSION}-${stand_in}"
             done
             echo "stand-in for packaging tests" > "dist/chat-with-work-v${VERSION}-macos-universal.dmg"
@@ -145,6 +146,34 @@ jobs:
       source-artifact: ${{ inputs.version == '' && 'packaging-inputs' || '' }}
       publish: ${{ inputs.publish == true && inputs.version != '' }}
     secrets: inherit
+
+  # native-packages attaches the rendered recipes and their checksums
+  # (chatwithwork-desktop-X.Y.Z-packaging.tar.xz, packaging-checksums.txt)
+  # beside the .deb and .rpm files. Nothing downloads them: the AUR and
+  # Homebrew were just published from this run's copy, WinGet's manifests
+  # are rendered by packaging/windows/winget-submit.sh, and GitHub shows
+  # every file's SHA-256. So take them off the release people browse.
+  tidy-release:
+    name: Remove recipe files from the release
+    needs: packaging
+    if: ${{ !cancelled() && needs.packaging.result == 'success' && inputs.publish == true && inputs.version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the recipes archive and its checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="${VERSION#v}"
+          for asset in "chatwithwork-desktop-${version}-packaging.tar.xz" packaging-checksums.txt; do
+            if gh release view "v$version" --repo "$REPOSITORY" --json assets --jq '.assets[].name' | grep -qxF "$asset"; then
+              gh release delete-asset "v$version" "$asset" --repo "$REPOSITORY" --yes
+            fi
+          done
 
   installation:
     name: Install (${{ matrix.os }}, ${{ matrix.image }})

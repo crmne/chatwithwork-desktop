@@ -85,7 +85,6 @@ impl Client {
             .map_err(|e| ControlError::Refused(format!("{e:#}")))
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn status(&self) -> Result<Status> {
         Ok(serde_json::from_value(
             self.request(&ControlRequest::Status)?,
@@ -101,7 +100,6 @@ impl Client {
         self.request(&request).map(drop)
     }
 
-    #[cfg(test)]
     pub fn add_root(&self, path: &Path, label: Option<&str>) -> Result<Value> {
         self.request(&ControlRequest::RootsAdd {
             path: path.to_path_buf(),

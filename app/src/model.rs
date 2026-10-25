@@ -266,8 +266,8 @@ impl TrayView {
         {
             headline = match status.roots.len() {
                 0 => "Online, nothing shared".into(),
-                1 => "Online, sharing 1 folder".into(),
-                n => format!("Online, sharing {n} folders"),
+                1 => "Sharing 1 folder".into(),
+                n => format!("Sharing {n} folders"),
             };
         }
         let detail = status.and_then(|s| {
@@ -435,7 +435,7 @@ mod tests {
             ],
         }));
         let view = TrayView::new(Some(&s));
-        assert_eq!(view.headline, "Online, sharing 2 folders");
+        assert_eq!(view.headline, "Sharing 2 folders");
         assert_eq!(view.detail.as_deref(), Some("Indexing 1 folder…"));
         assert_eq!(view.paused, Some(false));
         assert!(!view.dimmed);

@@ -37,6 +37,11 @@ pub struct Desktop {
     status_known: AtomicBool,
     tray: Mutex<Option<Tray>>,
     quitting: AtomicBool,
+    /// One of the app's questions to the person is showing (computer.rs).
+    pub asking: crate::computer::Asking,
+    /// What the web app's pages last heard of this computer, so an audit
+    /// entry that changes nothing they see sends them nothing.
+    computer_view: Mutex<Option<serde_json::Value>>,
 }
 
 impl Desktop {
@@ -47,6 +52,31 @@ impl Desktop {
     /// The server whose pages the web app's windows show.
     pub fn server(&self) -> Server {
         self.server.lock().expect("server lock").clone()
+    }
+
+    /// The daemon's latest status, `None` while it isn't running.
+    pub fn status(&self) -> Option<Status> {
+        self.status.lock().expect("status lock").clone()
+    }
+
+    /// Tells the web app's pages what changed on this computer, if anything
+    /// they see did.
+    fn tell_pages(&self, app: &AppHandle, status: Option<&Status>) {
+        let view = crate::computer::view(status);
+        {
+            let mut last = self.computer_view.lock().expect("computer view lock");
+            if last.as_ref() == Some(&view) {
+                return;
+            }
+            *last = Some(view.clone());
+        }
+        let script = crate::computer::event(&view);
+        let server = self.server();
+        for (label, window) in app.webview_windows() {
+            if windows::is_remote_label(&label) && window.url().is_ok_and(|url| server.owns(&url)) {
+                let _ = window.eval(&script);
+            }
+        }
     }
 
     /// What the settings pages show of the daemon: its status, and its
@@ -101,6 +131,7 @@ impl Desktop {
             }
         });
         let paired = status.as_ref().and_then(|s| s.server.clone());
+        self.tell_pages(&app, status.as_ref());
         *self.status.lock().expect("status lock") = status;
         self.status_known.store(true, Ordering::SeqCst);
         crate::windows::tell_settings(&app, "status", self.status_json());
@@ -138,7 +169,14 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .windows([MAIN.to_string(), format!("{}*", windows::POPUP_PREFIX)])
             .permission("allow-open-external")
             .permission("allow-open-preferences")
-            .permission("allow-listen"),
+            .permission("allow-listen")
+            .permission("allow-computer")
+            .permission("allow-computer-change")
+            .permission("allow-computer-add-folder")
+            .permission("allow-computer-notifications")
+            .permission("allow-scan")
+            .permission("allow-scan-file")
+            .permission("allow-scan-pending"),
     )
 }
 
@@ -155,7 +193,7 @@ pub fn tray_action(app: &AppHandle, id: &str) {
         Some(Action::Settings) => {
             let app = app.clone();
             std::thread::spawn(move || {
-                let _ = windows::show_settings(&app, None);
+                let _ = windows::show_computer_settings(&app);
             });
         }
         Some(Action::Scan) => {
@@ -262,6 +300,8 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         status_known: AtomicBool::new(false),
         tray: Mutex::new(None),
         quitting: AtomicBool::new(false),
+        asking: Default::default(),
+        computer_view: Mutex::new(None),
     });
 
     let mut builder = tauri::Builder::default();
@@ -313,6 +353,13 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::bridge::open_external,
             crate::bridge::open_preferences,
             crate::bridge::listen,
+            crate::bridge::computer,
+            crate::bridge::computer_change,
+            crate::bridge::computer_add_folder,
+            crate::bridge::computer_notifications,
+            crate::bridge::scan,
+            crate::bridge::scan_file,
+            crate::bridge::scan_pending,
             crate::local::control,
             crate::local::activity,
             crate::local::app_info,
@@ -347,6 +394,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::scan::scan_discard,
             crate::scan::scan_destinations,
             crate::scan::scan_send,
+            crate::scan::scan_attach,
             crate::scan::scan_open,
             crate::scan::scan_save,
             crate::scan::scan_reveal,
