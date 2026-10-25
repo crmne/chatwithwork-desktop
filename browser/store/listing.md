@@ -27,7 +27,7 @@ What goes into each field of the Developer Dashboard for the Chat with Work exte
 > - Read or type into password, card or one-time code fields. They are blurred in its screenshots too.
 > - Run code a website or a server sends it. It does a fixed set of things, the ones above.
 >
-> Stop in the extension's menu, or in Chat with Work Desktop, ends it at once. The extension and Chat with Work Desktop's Local Agent are open source: https://github.com/crmne/chatwithwork-desktop
+> Stop in the extension's menu, or in Chat with Work Desktop, ends it at once. The extension and Chat with Work Desktop are open source: https://github.com/crmne/chatwithwork-desktop
 >
 > Chat with Work Desktop is needed: the extension talks only to it, on your computer, never to a website or to us directly. Install it from https://github.com/crmne/chatwithwork-desktop#install
 
