@@ -1,6 +1,6 @@
 # Chat with Work browser extension
 
-Lets Chat with Work use tabs in its own tab group, "Chat with Work", in your Chromium-family browser (Chrome, Chromium, Edge, Brave), on sites you allow, through Chat with Work Desktop. How it works and what it never does: [docs/browser.md](../docs/browser.md). The wire contract: [PROTOCOL.md 8.16](../PROTOCOL.md) and [CONTROL.md, Browser](../CONTROL.md).
+Lets Chat with Work use tabs in its own tab group, "Chat with Work", in your Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), on sites you allow, through Chat with Work Desktop. How it works and what it never does: [docs/browser.md](../docs/browser.md). The wire contract: [PROTOCOL.md 8.16](../PROTOCOL.md) and [CONTROL.md, Browser](../CONTROL.md).
 
 It's TypeScript compiled by `tsc`, with no runtime dependencies and no bundler.
 

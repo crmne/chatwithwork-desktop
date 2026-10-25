@@ -1,6 +1,6 @@
 # Using the browser
 
-Status: **reading built and tested on Linux with Chromium; changes, the desktop app's settings and the Web Store listing are next.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details will be in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
+Status: **reading built and tested on Linux with Chromium; changes, the desktop app's settings and the Web Store listing are next.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details will be in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
 
 ## Shape
 
@@ -10,7 +10,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
 
 - **Its own tab group.** The extension acts only on tabs in one tab group, "Chat with Work", in the person's real browser. It opens its tabs there, in the background, so the person keeps using their other tabs. A tab the person drags into the group is lent to it; dragged out, it's theirs again. Everything else in the browser is out of reach: the extension never attaches to, reads or lists a tab outside the group.
 - **Native messaging.** The browser starts `cww` as its native messaging host (`com.chatwithwork.desktop`) when the extension connects. That process only relays: it connects to the running daemon over the control socket (`browser_attach`) and passes messages both ways. `cww browser enable` writes the host manifest for every browser it finds (per user: the `NativeMessagingHosts` folders on Linux and macOS, the `HKCU\Software\...\NativeMessagingHosts` keys on Windows), naming only our extension's ID in `allowed_origins`. Flatpak and Snap browsers can't start a host outside their sandbox and aren't supported.
-- **Tools, like the files.** While the person has turned the browser on (on this computer, never from the server), the daemon lists browser tools beside the file tools, with the same annotations, `writeWhen`, approval and audit model:
+- **Tools, like the files.** While the person has turned the browser on (on this computer, never from the server), the daemon lists browser tools beside the file tools, with the same annotations, `writeWhen`, approval and audit model. The reads are built; the tools that change something, from `browser_open` on, come with changes, next:
 
   | Tool | Effect | Does |
   |---|---|---|
@@ -39,7 +39,7 @@ All of it holds on the computer, whatever the server sends. The extension enforc
 - **Outside text.** What a page says is outside text for the taint rule: after a chat reads a page, every change asks again, and browser changes never count as "writes to the computer's own files", since they leave the computer.
 - **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, the change budgets). Downloads a page starts by itself in the group are denied.
 - **Visible.** While the agent acts on a tab, the tab shows a "Chat with Work is using this tab" bar, the group's title says so, and the extension's icon has a badge. Chrome also shows its own "started debugging this browser" bar while the debugger is attached; the extension detaches after a minute without a call, so the bar doesn't stay.
-- **Kill switch.** "Stop" in the extension's menu and "Stop using the browser" in the tray (and `cww browser stop`) detach at once and refuse every browser call (`browser_stopped`) until the person resumes. Pausing the computer stops it too.
+- **Kill switch.** "Stop" in the extension's menu and `cww browser stop` (and, with the desktop app's settings, next, "Stop using the browser" in the tray) detach at once and refuse every browser call (`browser_stopped`) until the person resumes. Pausing the computer stops it too.
 - **Bots.** A bot's chats reach the browser only when the person lends it on the computer (`cww browser lend <bot>`), like a folder, and only the sites allowed there.
 - **Audited** in the local audit log: the tool, tab, site (host only), outcome and duration, never page text.
 
@@ -55,6 +55,6 @@ Tabs in the group can stay in the background while the person works elsewhere. W
 
 ## Why its own extension
 
-Ours, open source (in this repository, MIT or Apache-2.0 like the daemon), published on the Chrome Web Store as "Chat with Work", never relying on a third-party extension. [Playwriter](https://github.com/remorses/playwriter) (MIT; its extension started from Microsoft's Playwright MCP extension, Apache-2.0) was the reference for driving tabs through `chrome.debugger` and keeping them in a group, but its design is the opposite of what we need: it relays the whole DevTools Protocol to a local WebSocket for a Playwright client, so whatever holds the socket can run any script in any connected tab. Ours exposes a dozen fixed operations, runs no code it's sent, and enforces the rules above itself, so the extension was written from scratch.
+Ours, open source (in this repository, MIT or Apache-2.0 like the daemon), to be published on the Chrome Web Store as "Chat with Work", never relying on a third-party extension. [Playwriter](https://github.com/remorses/playwriter) (MIT; its extension started from Microsoft's Playwright MCP extension, Apache-2.0) was the reference for driving tabs through `chrome.debugger` and keeping them in a group, but its design is the opposite of what we need: it relays the whole DevTools Protocol to a local WebSocket for a Playwright client, so whatever holds the socket can run any script in any connected tab. Ours exposes a dozen fixed operations, runs no code it's sent, and enforces the rules above itself, so the extension was written from scratch.
 
 It lives in this repository rather than one of its own because the extension, the native messaging host and the daemon's tools are one protocol that changes in one pull request, the end-to-end tests need the `cww` binary, and the security model is one document. It has its own build (TypeScript, no runtime dependencies) and its own Web Store release tags (`browser-v*`).

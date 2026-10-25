@@ -290,7 +290,7 @@ A Chat with Work bot (an assistant your organization sets up to work by itself, 
 
 ### Your browser
 
-With the Chat with Work browser extension in Chrome, Chromium, Edge or Brave, Chat with Work can also use your own browser, with your sign-ins, on sites you allow: `cww browser enable`, then `cww browser allow github.com`. It works only in its own tab group, "Chat with Work", in the background, so you keep using your other tabs. It reads pages as accessible text (`browser_tabs`, `browser_read`, `browser_screenshot`, `browser_scroll`, `browser_wait`), never types into or reads password and payment fields, and stops at once with Stop in the extension's menu or `cww browser stop`. See [docs/browser.md](docs/browser.md).
+With the Chat with Work browser extension in Chrome, Chromium, Edge, Brave or Vivaldi, Chat with Work can also use your own browser, with your sign-ins, on sites you allow: `cww browser enable`, then `cww browser allow github.com`. It works only in its own tab group, "Chat with Work", in the background, so you keep using your other tabs. It reads pages as accessible text (`browser_tabs`, `browser_read`, `browser_screenshot`, `browser_scroll`, `browser_wait`), never types into or reads password and payment fields, and stops at once with Stop in the extension's menu or `cww browser stop`. See [docs/browser.md](docs/browser.md).
 
 Paths always look like `work-docs:plans/q3.pdf`.
 
