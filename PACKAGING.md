@@ -153,7 +153,7 @@ This is the one in use. The signatures name the publisher **PlentyLabs UG (haftu
 echo plentylabs | gh variable set AZURE_SIGNING_PROFILE -R crmne/chatwithwork-desktop -e windows-signing
 ```
 
-Running `release.yml` by hand never signs: only tag runs enter the environment. After the first signed release, check a downloaded MSI on Windows: `Get-AuthenticodeSignature` reports `Valid` and the PlentyLabs subject.
+Running `release.yml` by hand never signs with Azure, even on a tag: only tag pushes enter the environment. After the first signed release, check a downloaded MSI on Windows: `Get-AuthenticodeSignature` reports `Valid` and the PlentyLabs subject.
 
 #### Option B: a certificate from a CA with cloud signing
 
