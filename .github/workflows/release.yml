@@ -3,8 +3,8 @@ name: Release
 # A v* tag builds every platform, publishes the GitHub release, then hands
 # over to packaging.yml for .deb, .rpm, AUR, Homebrew and WinGet recipes.
 # Each release carries the desktop app with cww beside it: a notarized .dmg
-# and a .pkg on macOS, MSIs and a portable zip per architecture on Windows,
-# and archives for Linux. PACKAGING.md ("Release assets") lists every file
+# and a .pkg on macOS, an MSI per architecture on Windows, and archives for
+# Linux. PACKAGING.md ("Release assets") lists every file
 # and what uses it; add nothing nobody downloads.
 # Running it by hand builds everything the same way without publishing, to
 # try a change to this workflow before tagging.
@@ -194,28 +194,14 @@ jobs:
             "target\${{ matrix.target }}\release\cww-app.exe" `
             "target\${{ matrix.target }}\release\cww-scan-helper.exe"
 
-      - name: Package
-        shell: bash
+      # Windows ships only the MSIs (below); nothing read a portable zip.
+      - name: Terminal-only archive
+        if: runner.os == 'Linux'
         run: |
-          name="cww-v${VERSION}-${{ matrix.target }}"
-          release="target/${{ matrix.target }}/release"
-          mkdir -p "dist/$name"
-          cp README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            # One portable zip: the desktop app with the daemon beside it
-            # (the app starts the cww.exe next to it), the scanner helper
-            # and the TWAIN DSM it loads, with its notices. Scoop installs it.
-            cp "$release/cww.exe" "$release/cww-agent.exe" "$release/cww-app.exe" "dist/$name/"
-            cp "$release/cww-scan-helper.exe" "$release/TWAINDSM.dll" "dist/$name/"
-            cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt "dist/$name/"
-            (cd dist && 7z a "$name.zip" "$name")
-            7z l "dist/$name.zip"
-          else
-            ruby packaging/linux/cli-archive.rb \
-              "$release/cww" "$release/cww-notify" \
-              "$VERSION" "${{ matrix.target }}" dist
-          fi
-          rm -rf "dist/$name"
+          ruby packaging/linux/cli-archive.rb \
+            "target/${{ matrix.target }}/release/cww" \
+            "target/${{ matrix.target }}/release/cww-notify" \
+            "$VERSION" "${{ matrix.target }}" dist
 
       # WiX 5 is a .NET tool; the runner has the SDK.
       - name: Installer
@@ -254,14 +240,12 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/*.msi
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/*.msi
           if-no-files-found: error
 
