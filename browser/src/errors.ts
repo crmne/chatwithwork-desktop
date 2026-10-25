@@ -8,3 +8,12 @@ export class ToolError extends Error {
     super(message);
   }
 }
+
+// The person stopped Chat with Work from using the browser, in the
+// extension or on the computer.
+export function browserStopped(): ToolError {
+  return new ToolError(
+    "browser_stopped",
+    "the person stopped Chat with Work from using the browser; they can resume it on their computer",
+  );
+}

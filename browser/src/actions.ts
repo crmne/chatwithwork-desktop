@@ -2,7 +2,7 @@
 // that the tab is in the Chat with Work group and on a site the person
 // allowed, whatever the daemon decided.
 
-import { callOn, evaluate, send, takeDialog } from "./cdp.js";
+import { callOn, cleanUp, evaluate, send, takeDialog } from "./cdp.js";
 import { isSensitiveField, SENSITIVE_PATTERNS, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { groupTabs, resolveTab } from "./group.js";
@@ -160,8 +160,13 @@ const screenshot: Method = async (params, policy) => {
       scale *= 0.75;
     }
   } finally {
-    for (const backendNodeId of blurred) await callOn(tabId, backendNodeId, BLUR, [false]).catch(() => {});
-    await afterCapture(tabId, SENSITIVE_PATTERNS);
+    // Put the fields back even if Stop was pressed meanwhile.
+    await cleanUp(tabId, async (options) => {
+      for (const backendNodeId of blurred) {
+        await callOn(tabId, backendNodeId, BLUR, [false], [], options).catch(() => {});
+      }
+      await afterCapture(tabId, SENSITIVE_PATTERNS, options);
+    });
   }
   if (data.length > maxBytes) {
     throw new ToolError("too_large", "the screenshot doesn't fit in a tool result");
@@ -263,8 +268,14 @@ const wait: Method = async (params, policy) => {
       `({ ready: document.readyState, found: ${
         text ? `(document.body?.innerText ?? "").toLowerCase().includes(${JSON.stringify(text.toLowerCase())})` : "false"
       } })`,
-    ).catch(() => ({ ready: "loading", found: false }));
-    if (text ? state.found : state.ready === "complete" && Date.now() - started >= 500) {
+    ).catch((error) => {
+      if (error instanceof ToolError && error.code === "browser_stopped") throw error;
+      return { ready: "loading", found: false };
+    });
+    // The page's raw text is only a quick first look: a match counts only
+    // if it's in what browser_read shows, so a wait can't find text in a
+    // password, card or one-time code field.
+    if (text ? state.found && (await readableIncludes(tabId, text)) : state.ready === "complete" && Date.now() - started >= 500) {
       found = true;
       break;
     }
@@ -273,5 +284,14 @@ const wait: Method = async (params, policy) => {
   const now = await still(tabId, policy);
   return withDialog(tabId, { ...about(now), found, waited_ms: Date.now() - started });
 };
+
+// Whether the text browser_read would show for the page includes `text`.
+async function readableIncludes(tabId: number, text: string): Promise<boolean> {
+  const { nodes, sensitive } = await sensitiveFields(tabId).catch((error) => {
+    if (error instanceof ToolError && error.code === "browser_stopped") throw error;
+    return { nodes: [] as AXNode[], sensitive: new Set<number>() };
+  });
+  return snapshotText(nodes, { sensitive }).toLowerCase().includes(text.toLowerCase());
+}
 
 export const methods: Record<string, Method> = { tabs, read, screenshot, scroll, wait };

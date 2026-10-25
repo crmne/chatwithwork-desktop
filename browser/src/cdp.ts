@@ -2,7 +2,7 @@
 // while they're being used: it detaches after a minute without a call, so
 // Chrome's "started debugging this browser" bar doesn't stay.
 
-import { ToolError } from "./errors.js";
+import { browserStopped, ToolError } from "./errors.js";
 
 const IDLE_DETACH_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -13,14 +13,47 @@ interface Session {
   dialog?: string;
 }
 
+// Calls that put back what a tool changed on the page (a screenshot's
+// blur) still run after Stop; nothing else does.
+export interface SendOptions {
+  cleanup?: boolean;
+}
+
 const sessions = new Map<number, Session>();
 const attaching = new Map<number, Promise<void>>();
+
+// Set while the person has stopped Chat with Work from using the browser:
+// nothing attaches or sends, so a call still running (a wait polling, a
+// scroll after a screenshot) can't take the debugger back after Stop.
+let halted = false;
+
+export function isHalted(): boolean {
+  return halted;
+}
+
+// Stop or resume. Halting is set before detaching, so nothing reattaches
+// in between.
+export async function halt(on: boolean): Promise<void> {
+  halted = on;
+  if (on) await detachAll();
+}
+
+// Run `work` with cleanup calls allowed, and, if Stop was pressed
+// meanwhile, detach again once it's done.
+export async function cleanUp(tabId: number, work: (options: SendOptions) => Promise<void>): Promise<void> {
+  try {
+    await work({ cleanup: true });
+  } finally {
+    if (halted) await detach(tabId);
+  }
+}
 
 export function isAttached(tabId: number): boolean {
   return sessions.has(tabId);
 }
 
-async function attach(tabId: number): Promise<void> {
+async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
+  if (halted && !options.cleanup) throw browserStopped();
   if (sessions.has(tabId)) return;
   const pending = attaching.get(tabId);
   if (pending) return pending;
@@ -56,6 +89,11 @@ async function attach(tabId: number): Promise<void> {
   } finally {
     attaching.delete(tabId);
   }
+  // Stopped while attaching: let go at once.
+  if (halted && !options.cleanup) {
+    await detach(tabId);
+    throw browserStopped();
+  }
 }
 
 function touch(tabId: number): void {
@@ -88,8 +126,10 @@ export async function send<T = any>(
   tabId: number,
   method: string,
   params: Record<string, unknown> = {},
+  options: SendOptions = {},
 ): Promise<T> {
-  await attach(tabId);
+  if (halted && !options.cleanup) throw browserStopped();
+  await attach(tabId, options);
   touch(tabId);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -143,23 +183,25 @@ chrome.debugger.onDetach.addListener((source) => {
 
 // The extension's own world in the tab's main frame: it sees the page's
 // DOM, but not the page's scripts, nor they it.
-export async function isolatedContext(tabId: number): Promise<number> {
-  const tree = await send<{ frameTree: { frame: { id: string } } }>(tabId, "Page.getFrameTree");
-  const world = await send<{ executionContextId: number }>(tabId, "Page.createIsolatedWorld", {
-    frameId: tree.frameTree.frame.id,
-    worldName: "Chat with Work",
-    grantUniveralAccess: false,
-  });
+export async function isolatedContext(tabId: number, options: SendOptions = {}): Promise<number> {
+  const tree = await send<{ frameTree: { frame: { id: string } } }>(tabId, "Page.getFrameTree", {}, options);
+  const world = await send<{ executionContextId: number }>(
+    tabId,
+    "Page.createIsolatedWorld",
+    { frameId: tree.frameTree.frame.id, worldName: "Chat with Work", grantUniveralAccess: false },
+    options,
+  );
   return world.executionContextId;
 }
 
 // Run `expression` in the extension's world.
-export async function evaluate<T = unknown>(tabId: number, expression: string): Promise<T> {
-  const contextId = await isolatedContext(tabId);
+export async function evaluate<T = unknown>(tabId: number, expression: string, options: SendOptions = {}): Promise<T> {
+  const contextId = await isolatedContext(tabId, options);
   const result = await send<{ result: { value?: T }; exceptionDetails?: { text?: string } }>(
     tabId,
     "Runtime.evaluate",
     { expression, contextId, returnByValue: true, awaitPromise: true },
+    options,
   );
   if (result.exceptionDetails) {
     throw new ToolError("page_error", `the page refused a check: ${result.exceptionDetails.text ?? "error"}`);
@@ -176,13 +218,16 @@ export async function callOn<T = unknown>(
   fn: string,
   args: unknown[] = [],
   others: number[] = [],
+  options: SendOptions = {},
 ): Promise<T> {
-  const contextId = await isolatedContext(tabId);
+  const contextId = await isolatedContext(tabId, options);
   const resolve = async (id: number) => {
-    const { object } = await send<{ object: { objectId: string } }>(tabId, "DOM.resolveNode", {
-      backendNodeId: id,
-      executionContextId: contextId,
-    }).catch(() => {
+    const { object } = await send<{ object: { objectId: string } }>(
+      tabId,
+      "DOM.resolveNode",
+      { backendNodeId: id, executionContextId: contextId },
+      options,
+    ).catch(() => {
       throw new ToolError("not_found", `e${id} isn't on the page any more; read the page again`);
     });
     return object.objectId;
@@ -199,6 +244,7 @@ export async function callOn<T = unknown>(
       returnByValue: true,
       awaitPromise: true,
     },
+    options,
   );
   if (result.exceptionDetails) {
     throw new ToolError("page_error", `the page refused: ${result.exceptionDetails.text ?? "error"}`);

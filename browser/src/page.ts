@@ -2,7 +2,7 @@
 // (cdp.evaluate). Each is a self-contained function, turned into an
 // expression with its arguments as JSON: they close over nothing.
 
-import { evaluate } from "./cdp.js";
+import { evaluate, isHalted, type SendOptions } from "./cdp.js";
 
 const INDICATOR_ID = "chat-with-work-indicator";
 
@@ -105,9 +105,15 @@ export async function prepareForCapture(tabId: number, patterns: { autocomplete:
   await evaluate(tabId, call(blurSensitive, true, patterns.autocomplete, patterns.words));
 }
 
-export async function afterCapture(tabId: number, patterns: { autocomplete: string; words: string }): Promise<void> {
-  await evaluate(tabId, call(blurSensitive, false, patterns.autocomplete, patterns.words)).catch(() => {});
-  await evaluate(tabId, call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab")).catch(() => {});
+export async function afterCapture(
+  tabId: number,
+  patterns: { autocomplete: string; words: string },
+  options: SendOptions = {},
+): Promise<void> {
+  await evaluate(tabId, call(blurSensitive, false, patterns.autocomplete, patterns.words), options).catch(() => {});
+  // After Stop the tab isn't being used any more, so it doesn't say so.
+  if (isHalted()) return;
+  await evaluate(tabId, call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab"), options).catch(() => {});
 }
 
 export const pageScripts = { call };

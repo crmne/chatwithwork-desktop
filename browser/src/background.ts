@@ -4,8 +4,8 @@
 // an alarm brings it back to reconnect.
 
 import { methods, type Policy } from "./actions.js";
-import { detachAll } from "./cdp.js";
-import { ToolError } from "./errors.js";
+import { halt } from "./cdp.js";
+import { browserStopped, ToolError } from "./errors.js";
 import { groupTabs } from "./group.js";
 
 export const HOST = "com.chatwithwork.desktop";
@@ -31,6 +31,7 @@ let port: chrome.runtime.Port | null = null;
 async function loadStopped(): Promise<void> {
   const stored = await chrome.storage.local.get("stopped");
   state.stopped = stored.stopped === true;
+  await halt(state.stopped || state.policy.stopped);
 }
 
 // The kill switch is read before anything connects or answers, so a worker
@@ -95,7 +96,7 @@ async function onMessage(message: any): Promise<void> {
       sites: Array.isArray(params.sites) ? params.sites.filter((s: unknown) => typeof s === "string") : [],
       stopped: params.stopped === true,
     };
-    if (state.policy.stopped) await detachAll();
+    await halt(state.stopped || state.policy.stopped);
     void refreshBadge();
     return;
   }
@@ -107,7 +108,7 @@ async function onMessage(message: any): Promise<void> {
 async function answer(method: string, params: unknown): Promise<{ result: unknown } | { error: { code: string; message: string } }> {
   await loaded;
   try {
-    if (state.stopped || state.policy.stopped) throw stopped();
+    if (state.stopped || state.policy.stopped) throw browserStopped();
     const run = Object.hasOwn(methods, method) ? methods[method] : undefined;
     if (!run) throw new ToolError("invalid_argument", `unknown method ${method.slice(0, 40)}`);
     if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -118,7 +119,7 @@ async function answer(method: string, params: unknown): Promise<{ result: unknow
     try {
       const result = await run(params as Record<string, unknown>, state.policy);
       // Stop pressed while the call ran: what it found doesn't go out.
-      if (state.stopped || state.policy.stopped) throw stopped();
+      if (state.stopped || state.policy.stopped) throw browserStopped();
       return { result };
     } finally {
       state.busy--;
@@ -130,12 +131,6 @@ async function answer(method: string, params: unknown): Promise<{ result: unknow
   }
 }
 
-function stopped(): ToolError {
-  return new ToolError(
-    "browser_stopped",
-    "the person stopped Chat with Work from using the browser; they can resume it on their computer",
-  );
-}
 
 async function refreshBadge(): Promise<void> {
   const off = state.stopped || state.policy.stopped;
@@ -163,7 +158,7 @@ async function refreshBadge(): Promise<void> {
 async function setStopped(stopped: boolean): Promise<void> {
   state.stopped = stopped;
   await chrome.storage.local.set({ stopped });
-  if (stopped) await detachAll();
+  await halt(state.stopped || state.policy.stopped);
   post({ event: "state", stopped });
   await refreshBadge();
 }

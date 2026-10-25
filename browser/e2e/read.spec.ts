@@ -168,6 +168,33 @@ test("scrolls and waits for text", async () => {
   expect(waited.result.found).toBe(true);
   const missing = await setup.daemon.call("wait", { tab, text: "never there", seconds: 1 });
   expect(missing.result.found).toBe(false);
+  // Text in a field browser_read hides is never found.
+  const hidden = await setup.daemon.call("wait", { tab, text: "737", seconds: 1 });
+  expect(hidden.result.found).toBe(false);
+});
+
+test("the kill switch stops a wait that's running and keeps the debugger off", async () => {
+  const tabs = (await setup.daemon.call("tabs")).result.tabs;
+  const tab = tabs.find((t: { url: string }) => t.url === `${allowed}/`).tab;
+  const waiting = setup.daemon.call("wait", { tab, text: "never there", seconds: 5 });
+  await new Promise((r) => setTimeout(r, 500));
+  setup.daemon.setPolicy({ stopped: true });
+  expect((await waiting).error?.code).toBe("browser_stopped");
+  // Whether the extension still holds the tab's debugger: detaching one it
+  // doesn't hold fails.
+  const attached = await inWorker(
+    setup.context,
+    (id) =>
+      chrome.debugger.detach({ tabId: id as number }).then(
+        () => true,
+        () => false,
+      ),
+    tab,
+  );
+  expect(attached).toBe(false);
+  setup.daemon.setPolicy({ stopped: false });
+  await new Promise((r) => setTimeout(r, 200));
+  expect((await setup.daemon.call("tabs")).error).toBeUndefined();
 });
 
 test("refuses unknown methods and arguments", async () => {
