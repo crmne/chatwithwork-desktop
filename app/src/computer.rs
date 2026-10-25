@@ -171,7 +171,7 @@ impl Change {
             }
             Change::Commands { folder, on } => {
                 let root = find(folder)?;
-                if *on && !commands_supported() {
+                if *on && !root.allows_commands && !commands_supported() {
                     return Err("Commands can't run on Windows yet.".into());
                 }
                 if *on && !root.writable {
