@@ -1,7 +1,9 @@
 //! The menu bar item (macOS), notification-area icon (Windows) or tray item
 //! (Linux, through the AppIndicator library), with the platform's own menu:
-//! the daemon's state as two greyed-out lines, then Open Chat with Work,
-//! Pause Sharing, Scan, Settings and Quit.
+//! the daemon's state as a greyed-out line (and a second one while there is
+//! more to say: indexing, or the last access), then Open Chat with Work,
+//! Scan…, Pause Sharing, Settings and Quit. Settings opens this computer's
+//! part of Chat with Work's own Settings once the computer is paired.
 
 use tauri::AppHandle;
 use tauri::image::Image;
@@ -65,7 +67,10 @@ pub fn action(id: &str) -> Option<Action> {
 
 pub struct Tray {
     icon: TrayIcon,
+    menu: Menu<tauri::Wry>,
     headline: MenuItem<tauri::Wry>,
+    /// In the menu only while there is a detail: Tauri's menus can't hide an
+    /// item, and an empty one is a blank line.
     detail: MenuItem<tauri::Wry>,
     pause: MenuItem<tauri::Wry>,
     view: TrayView,
@@ -125,16 +130,18 @@ impl Tray {
             app,
             &[
                 &headline,
-                &detail,
                 &PredefinedMenuItem::separator(app)?,
                 &open,
-                &pause,
                 &scan,
-                &settings,
+                &pause,
                 &PredefinedMenuItem::separator(app)?,
+                &settings,
                 &quit,
             ],
         )?;
+        if view.detail.is_some() {
+            menu.insert(&detail, 1)?;
+        }
         let icon = TrayIconBuilder::with_id("cww-app")
             .icon(icon(view.dimmed))
             .icon_as_template(cfg!(target_os = "macos"))
@@ -161,6 +168,7 @@ impl Tray {
             .build(app)?;
         Ok(Self {
             icon,
+            menu,
             headline,
             detail,
             pause,
@@ -177,12 +185,21 @@ impl Tray {
         if view.headline != old.headline {
             let _ = self.headline.set_text(&view.headline);
         }
-        // Tauri's menus can't hide an item, so a missing detail is an empty,
-        // greyed-out line.
+        // A missing detail leaves the menu, rather than showing as an
+        // empty line.
         if view.detail != old.detail {
-            let _ = self
-                .detail
-                .set_text(view.detail.clone().unwrap_or_default());
+            if let Some(detail) = &view.detail {
+                let _ = self.detail.set_text(detail);
+            }
+            match (old.detail.is_some(), view.detail.is_some()) {
+                (false, true) => {
+                    let _ = self.menu.insert(&self.detail, 1);
+                }
+                (true, false) => {
+                    let _ = self.menu.remove(&self.detail);
+                }
+                _ => {}
+            }
         }
         if view.paused != old.paused {
             let _ = self.pause.set_text(pause_label(view.paused == Some(true)));
@@ -206,7 +223,7 @@ mod tests {
     fn view(detail: Option<&str>) -> TrayView {
         TrayView {
             health: Health::Online,
-            headline: "Online, sharing 2 folders".into(),
+            headline: "Sharing 2 folders".into(),
             detail: detail.map(Into::into),
             paused: Some(false),
             tooltip: "Chat with Work Desktop: Online".into(),
