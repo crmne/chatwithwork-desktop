@@ -107,12 +107,7 @@ async function onMessage(message: any): Promise<void> {
 async function answer(method: string, params: unknown): Promise<{ result: unknown } | { error: { code: string; message: string } }> {
   await loaded;
   try {
-    if (state.stopped || state.policy.stopped) {
-      throw new ToolError(
-        "browser_stopped",
-        "the person stopped Chat with Work from using the browser; they can resume it on their computer",
-      );
-    }
+    if (state.stopped || state.policy.stopped) throw stopped();
     const run = Object.hasOwn(methods, method) ? methods[method] : undefined;
     if (!run) throw new ToolError("invalid_argument", `unknown method ${method.slice(0, 40)}`);
     if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -121,7 +116,10 @@ async function answer(method: string, params: unknown): Promise<{ result: unknow
     state.busy++;
     void refreshBadge();
     try {
-      return { result: await run(params as Record<string, unknown>, state.policy) };
+      const result = await run(params as Record<string, unknown>, state.policy);
+      // Stop pressed while the call ran: what it found doesn't go out.
+      if (state.stopped || state.policy.stopped) throw stopped();
+      return { result };
     } finally {
       state.busy--;
       setTimeout(() => void refreshBadge(), 1500);
@@ -130,6 +128,13 @@ async function answer(method: string, params: unknown): Promise<{ result: unknow
     if (error instanceof ToolError) return { error: { code: error.code, message: error.message } };
     return { error: { code: "internal", message: String((error as Error)?.message ?? error).slice(0, 300) } };
   }
+}
+
+function stopped(): ToolError {
+  return new ToolError(
+    "browser_stopped",
+    "the person stopped Chat with Work from using the browser; they can resume it on their computer",
+  );
 }
 
 async function refreshBadge(): Promise<void> {

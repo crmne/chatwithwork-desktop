@@ -122,17 +122,31 @@ const screenshot: Method = async (params, policy) => {
     cssVisualViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
   }>(tabId, "Page.getLayoutMetrics");
   const view = metrics.cssVisualViewport;
-  await prepareForCapture(tabId, SENSITIVE_PATTERNS);
-  // Also every field browser_read hides, found the same way, including
-  // those named only by a label and those in shadow roots.
-  // Each by its node, so those in shadow roots, which a document query
-  // doesn't reach, are unblurred after too.
-  const { sensitive } = await sensitiveFields(tabId).catch(() => ({ sensitive: new Set<number>() }));
-  for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR, [true]).catch(() => {});
   let data = "";
   let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / Math.max(1, view.clientWidth));
   let quality = 70;
+  // Each field blurred by its node, so those in shadow roots, which a
+  // document query doesn't reach, are unblurred after too.
+  const blurred: number[] = [];
   try {
+    // Nothing is captured unless every field browser_read hides is blurred:
+    // a field that can't be found or blurred refuses the screenshot.
+    try {
+      await prepareForCapture(tabId, SENSITIVE_PATTERNS);
+      // Also every field browser_read hides, found the same way, including
+      // those named only by a label and those in shadow roots.
+      const { sensitive } = await sensitiveFields(tabId);
+      for (const backendNodeId of sensitive) {
+        await callOn(tabId, backendNodeId, BLUR, [true]);
+        blurred.push(backendNodeId);
+      }
+    } catch (error) {
+      if (error instanceof ToolError) throw error;
+      throw new ToolError(
+        "page_error",
+        "the page changed while hiding its password and payment fields; take the screenshot again",
+      );
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       const shot = await send<{ data: string }>(tabId, "Page.captureScreenshot", {
         format: "jpeg",
@@ -146,7 +160,7 @@ const screenshot: Method = async (params, policy) => {
       scale *= 0.75;
     }
   } finally {
-    for (const backendNodeId of sensitive) await callOn(tabId, backendNodeId, BLUR, [false]).catch(() => {});
+    for (const backendNodeId of blurred) await callOn(tabId, backendNodeId, BLUR, [false]).catch(() => {});
     await afterCapture(tabId, SENSITIVE_PATTERNS);
   }
   if (data.length > maxBytes) {
