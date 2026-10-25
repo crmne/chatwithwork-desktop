@@ -242,11 +242,14 @@ pub async fn scan(
     scans: State<'_, Arc<crate::scan::Scans>>,
 ) -> Result<Value, String> {
     server_page(&desktop, &webview)?;
-    let answer = scans.attach_for(webview.label());
+    let (request, answer) = scans.attach_for(webview.label());
     let opener = app.clone();
+    let waiting = scans.inner().clone();
     std::thread::spawn(move || {
         if let Err(e) = crate::windows::show_scan(&opener) {
             log::warn!("couldn't open the scan window: {e}");
+            waiting.cancel_attach(request);
+            return;
         }
         crate::scan::tell_attaching(&opener, true);
     });

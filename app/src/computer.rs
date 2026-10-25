@@ -193,7 +193,8 @@ impl Change {
                     ControlRequest::RootsCommands {
                         root: root.id.clone(),
                         commands: *on,
-                        network: false,
+                        // Asking again for what's allowed keeps its network as it is.
+                        network: *on && root.allows_commands && root.network,
                     },
                     question,
                 )
@@ -366,6 +367,23 @@ mod tests {
         // Resuming what isn't paused changes nothing, so asks nothing.
         let (_, question) = change(json!({ "action": "resume" })).plan(&status).unwrap();
         assert!(question.is_none());
+    }
+
+    #[test]
+    fn allowing_commands_again_keeps_their_network() {
+        let mut status = status();
+        status.roots[1].network = true;
+        let (request, _) = change(json!({ "action": "commands", "folder": "app", "on": true }))
+            .plan(&status)
+            .unwrap();
+        assert_eq!(
+            request,
+            ControlRequest::RootsCommands {
+                root: "app".into(),
+                commands: true,
+                network: true
+            }
+        );
     }
 
     #[test]

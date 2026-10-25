@@ -1,4 +1,4 @@
-<!-- Copy to vX.Y.Z.md, replace every X.Y.Z, and delete this comment. Match the two previous releases' notes. -->
+<!-- Copy to vX.Y.Z.md, replace every X.Y.Z and vPREVIOUS (the last stable tag), and delete this comment. Match the two previous releases' notes. Upload screenshot.png as a release asset right after publishing, or drop the image line. -->
 One or two plain sentences on what this release changes for people.
 
 ## Download

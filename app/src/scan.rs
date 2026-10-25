@@ -114,13 +114,30 @@ impl Preferences {
 /// A page of the Chat with Work window waiting for a scan for its composer
 /// (bridge.rs's `scan`).
 struct Attaching {
+    /// Which request this is, so a failed one resolves only itself.
+    request: u64,
     /// The window that asked; only it gets the PDF.
     label: String,
     reply: tokio::sync::oneshot::Sender<Option<Value>>,
 }
 
-/// A PDF made for a composer, until its page takes it.
+/// A PDF nobody took in time goes, so a later new chat can't pick it up.
+fn forget_expired(slot: &mut Option<Attached>) {
+    if slot
+        .as_ref()
+        .is_some_and(|attached| attached.made.elapsed() >= ATTACHED_FOR)
+    {
+        *slot = None;
+    }
+}
+
+/// How long a PDF made for a composer waits for its page.
+const ATTACHED_FOR: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A PDF made for a composer, until its page takes it or it's been waiting
+/// longer than `ATTACHED_FOR`.
 struct Attached {
+    made: std::time::Instant,
     id: String,
     label: String,
     /// `{ id, name, pages, size }`, as the page hears of it.
@@ -179,20 +196,35 @@ impl Scans {
 
     /// The window `label` waits for a scan for its composer. A page that
     /// was waiting already gets nothing: the newest asks.
-    pub fn attach_for(&self, label: &str) -> tokio::sync::oneshot::Receiver<Option<Value>> {
+    pub fn attach_for(&self, label: &str) -> (u64, tokio::sync::oneshot::Receiver<Option<Value>>) {
         let (reply, answer) = tokio::sync::oneshot::channel();
+        let request = self.next_id.fetch_add(1, Ordering::SeqCst);
         let previous = self
             .attaching
             .lock()
             .expect("attaching")
             .replace(Attaching {
+                request,
                 label: label.to_string(),
                 reply,
             });
         if let Some(previous) = previous {
             let _ = previous.reply.send(None);
         }
-        answer
+        (request, answer)
+    }
+
+    /// The scan window couldn't open for `request`: its page gets nothing,
+    /// and a newer request stays as it is.
+    pub fn cancel_attach(&self, request: u64) {
+        let mut slot = self.attaching.lock().expect("attaching");
+        if slot
+            .as_ref()
+            .is_some_and(|waiting| waiting.request == request)
+            && let Some(waiting) = slot.take()
+        {
+            let _ = waiting.reply.send(None);
+        }
     }
 
     fn is_attaching(&self) -> bool {
@@ -202,6 +234,7 @@ impl Scans {
     /// The PDF made for the window `label`'s composer, once.
     pub fn take_attached(&self, label: &str, id: &str) -> Option<Vec<u8>> {
         let mut slot = self.attached.lock().expect("attached");
+        forget_expired(&mut slot);
         match slot.as_ref() {
             Some(attached) if attached.label == label && attached.id == id => {
                 slot.take().map(|attached| attached.pdf)
@@ -212,7 +245,8 @@ impl Scans {
 
     /// A scan waiting for the new chat in the window `label`, if one is.
     pub fn pending_for(&self, label: &str) -> Option<Value> {
-        let slot = self.attached.lock().expect("attached");
+        let mut slot = self.attached.lock().expect("attached");
+        forget_expired(&mut slot);
         slot.as_ref()
             .filter(|attached| attached.label == label)
             .map(|attached| attached.answer.clone())
@@ -912,6 +946,7 @@ pub async fn scan_attach(
         .as_ref()
         .map_or(crate::windows::MAIN.to_string(), |w| w.label.clone());
     *scans.attached.lock().expect("attached") = Some(Attached {
+        made: std::time::Instant::now(),
         id,
         label: label.clone(),
         answer: answer.clone(),
@@ -1274,6 +1309,23 @@ mod tests {
         // The third page was turned: 140 x 102 px.
         assert!(text.contains("/MediaBox [0 0 100.8 73.44]"), "{text}");
         assert!(said.lock().unwrap()[0].contains("searchable"));
+    }
+
+    #[test]
+    fn a_failed_scan_request_resolves_only_itself() {
+        let scans = Scans::default();
+        let (first, mut first_answer) = scans.attach_for("main");
+        let (second, mut second_answer) = scans.attach_for("main");
+        // The newer request answered the older one with nothing.
+        assert_eq!(first_answer.try_recv(), Ok(None));
+        scans.cancel_attach(first);
+        assert!(
+            scans.is_attaching(),
+            "a stale cancel leaves the newer request"
+        );
+        scans.cancel_attach(second);
+        assert!(!scans.is_attaching());
+        assert_eq!(second_answer.try_recv(), Ok(None));
     }
 
     #[test]
