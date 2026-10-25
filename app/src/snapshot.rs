@@ -54,6 +54,24 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             bridge_check(&app);
             continue;
         }
+        // `probe:<file>`: runs a script on the web app's window and prints
+        // the title it leaves, for checks a picture can't make (what each
+        // frame of an animation drew, say).
+        if let Some(file) = page.strip_prefix("probe:") {
+            probe(&app, Path::new(file));
+            continue;
+        }
+        // `shot:<name>`: the web app's window as it is now, after a probe.
+        if let Some(name) = page.strip_prefix("shot:") {
+            if let Some(main) = app.get_webview_window(crate::windows::MAIN) {
+                let path = dir.join(format!("{name}-{theme}.png"));
+                match capture(&main, &path) {
+                    Ok(()) => println!("{}", path.display()),
+                    Err(e) => log::error!("snapshot of {name}: {e}"),
+                }
+            }
+            continue;
+        }
         // `main` is the web app's window on its start page, `main:/path` on
         // one of the server's pages. With `CWW_APP_SNAPSHOT_LOGIN`
         // (`email:password`, a development server's synthetic login), the
@@ -188,6 +206,23 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     rx.recv_timeout(Duration::from_secs(20))
         .map_err(|_| "timed out".to_string())?
+}
+
+fn probe(app: &AppHandle, file: &Path) {
+    let (Some(main), Ok(script)) = (
+        app.get_webview_window(crate::windows::MAIN),
+        std::fs::read_to_string(file),
+    ) else {
+        println!("probe: no main window or no script at {}", file.display());
+        return;
+    };
+    let _ = main.eval(&script);
+    let wait = std::env::var("CWW_APP_SNAPSHOT_PROBE_WAIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    std::thread::sleep(Duration::from_secs(wait));
+    println!("probe: {}", main.title().unwrap_or_default());
 }
 
 fn bridge_check(app: &AppHandle) {
