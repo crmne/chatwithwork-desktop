@@ -75,8 +75,8 @@ const state = {
   notice: null,
   destinations: null,
   destinationsError: null,
-  destination: "chat",
-  message: "",
+  // A composer in Chat with Work waits for this scan (its attach menu).
+  attaching: false,
   sending: false,
   progress: null,
   dragging: null,
@@ -94,6 +94,7 @@ async function start() {
   state.ocr = info.ocr;
   state.pages = info.pages;
   state.scanning = info.busy;
+  state.attaching = Boolean(info.attaching);
   if (!state.ocr.available) state.settings.ocr = null;
   render();
   await lookForScanners(info.device);
@@ -193,6 +194,9 @@ window.cwwEvent = (event, payload) => {
     case "progress":
       state.progress = payload.text;
       break;
+    case "attaching":
+      state.attaching = Boolean(payload.attaching);
+      break;
   }
   render();
 };
@@ -245,29 +249,45 @@ function languageBlocks() {
   return true;
 }
 
-async function send() {
+// Hands the PDF to Chat with Work's own composer: the one that asked for
+// it, or a new chat's. The message is written there, with everything the
+// composer offers, and the window closes.
+async function attach() {
   const kept = state.pages.filter((p) => !p.blank);
   if (!kept.length || state.sending || languageBlocks()) return;
-  const destination = state.destination === "chat" ? { kind: "chat" } : { kind: "trigger", id: Number(state.destination) };
-  const target = destinationName();
   state.sending = true;
   state.error = null;
   state.notice = null;
   state.progress = "Preparing…";
   render();
   try {
-    const answer = await call("scan_send", {
-      destination,
-      message: state.destination === "chat" ? state.message : null,
+    await call("scan_attach", {
       language: state.settings.ocr && state.ocr.available ? state.settings.ocr : null,
     });
-    state.message = "";
-    const url = answer.chat?.url;
-    state.notice = {
-      tone: "positive",
-      text: state.destination === "chat" ? "Sent to a new chat." : `Sent to ${target}.`,
-      action: url ? ["Open the chat", () => call("scan_open", { url })] : null,
-    };
+  } catch (error) {
+    state.error = error.message;
+  }
+  state.sending = false;
+  state.progress = null;
+  render();
+}
+
+// Sends the PDF to a bot that takes scans, through the background agent.
+async function sendToBot(destination) {
+  const kept = state.pages.filter((p) => !p.blank);
+  if (!kept.length || state.sending || languageBlocks()) return;
+  state.sending = true;
+  state.error = null;
+  state.notice = null;
+  state.progress = "Preparing…";
+  render();
+  try {
+    await call("scan_send", {
+      destination: { kind: "trigger", id: destination.id },
+      message: null,
+      language: state.settings.ocr && state.ocr.available ? state.settings.ocr : null,
+    });
+    state.notice = { tone: "positive", text: `Sent to ${destination.name}.` };
   } catch (error) {
     state.error = error.message;
   }
@@ -299,12 +319,6 @@ async function save() {
   state.saving = false;
   state.progress = null;
   render();
-}
-
-function destinationName() {
-  if (state.destination === "chat") return "a new chat";
-  const found = (state.destinations || []).find((d) => String(d.id) === state.destination);
-  return found ? found.name : "the bot";
 }
 
 // ---- Drawing ----------------------------------------------------------------
@@ -478,55 +492,68 @@ function sheets(pages, kept) {
 
 // Whether this computer can send to Chat with Work now: paired, and allowed
 // to use its owner's chats (the server answered where scans can go).
-// Until the server answers, Send stays the main action.
+// Until the server answers, the new chat stays the main action.
 const canReachChatWithWork = () => !state.destinationsError;
+
+// What the bar says next to the finish button.
+function hint(signedIn) {
+  if (state.attaching) return "It goes into your message in Chat with Work.";
+  if (signedIn) return "You write your message in Chat with Work, as in any new chat.";
+  return null;
+}
 
 function bar(kept) {
   const busy = state.scanning || state.sending;
   const signedIn = canReachChatWithWork();
-  const destinations = state.destinations || [];
-  const choice = h("select", {
-    class: "select", "aria-label": "Send to", "data-key": "destination", disabled: busy || !kept.length,
-    onchange: (event) => { state.destination = event.target.value; render(); },
-  },
-  h("option", { value: "chat", selected: state.destination === "chat" }, "A new chat"),
-  destinations.length ? h("optgroup", { label: "Bots" },
-    destinations.map((d) => h("option", { value: String(d.id), selected: String(d.id) === state.destination }, d.name))) : null);
-
+  const words = hint(signedIn);
   return h("footer", { class: "scan__bar" },
     h("button", { type: "button", class: "btn", disabled: busy || !state.device || !state.pages.length, "data-key": "rescan",
       onclick: () => scan(false) }, "Rescan"),
     h("span", { class: "spacer" }),
-    state.progress ? h("span", { class: "scan__progress", role: "status" }, state.progress) : null,
-    !state.progress && signedIn && state.destination === "chat" ? h("input", {
-      class: "input", type: "text", placeholder: "Add a message (optional)", value: state.message, "data-key": "message",
-      disabled: busy || !kept.length, maxlength: 2000, oninput: (event) => { state.message = event.target.value; },
-      "aria-label": "Message to send with the scan",
-    }) : null,
-    !state.progress && signedIn ? choice : null,
+    state.progress
+      ? h("span", { class: "scan__progress", role: "status" }, state.progress)
+      : words ? h("span", { class: "scan__hint" }, words) : null,
     finishButton(kept, signedIn, busy));
 }
 
-// One way to finish, two outcomes: Send to Chat with Work, or Save to
-// Computer. The main part is Send while the computer can reach Chat with
-// Work, and Save otherwise, with Send in the menu saying what it needs.
+// One way to finish, and the others in its menu. The main part puts the
+// scan in Chat with Work's composer: the one that asked for it, or a new
+// chat's. The menu sends it to a bot that takes scans, or saves it on this
+// computer. A computer that can't reach Chat with Work saves, and says in
+// the menu what sending needs.
 function finishButton(kept, signedIn, busy) {
   const disabled = busy || !kept.length;
-  const sendLabel = state.sending && !state.saving ? "Sending…" : "Send to Chat with Work";
+  const working = state.sending && !state.saving;
   const saveLabel = state.saving ? "Saving…" : "Save to Computer";
-  const main = signedIn
-    ? h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "send", onclick: send },
-        icon("paper-plane-tilt"), sendLabel)
-    : h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "save", onclick: save },
-        icon("download-simple"), saveLabel);
-  const item = signedIn
-    ? h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-save",
-        onclick: () => { closeMenu(); save(); } }, icon("download-simple"), h("span", {}, "Save to Computer"))
-    : h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-send",
-        onclick: () => { closeMenu(); call("scan_open_account"); } },
-        icon("paper-plane-tilt"),
-        h("span", {}, "Send to Chat with Work",
-          h("small", {}, `${state.destinationsError || "This computer can't reach Chat with Work."} Set it up in Settings.`)));
+  let main;
+  if (state.attaching) {
+    main = h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "attach", onclick: attach },
+      icon("paperclip"), working ? "Attaching…" : "Attach to Message");
+  } else if (signedIn) {
+    main = h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "attach", onclick: attach },
+      icon("chat-circle-text"), working ? "Opening…" : "Continue in a New Chat");
+  } else {
+    main = h("button", { type: "button", class: "btn btn-primary split__main", disabled, "data-key": "save", onclick: save },
+      icon("download-simple"), saveLabel);
+  }
+  const items = [];
+  if (signedIn && !state.attaching) {
+    for (const destination of state.destinations || []) {
+      items.push(h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": `menu-bot-${destination.id}`,
+        onclick: () => { closeMenu(); sendToBot(destination); } },
+        icon("robot"), h("span", {}, `Send to ${destination.name}`, destination.project ? h("small", {}, destination.project) : null)));
+    }
+  }
+  if (signedIn || state.attaching) {
+    items.push(h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-save",
+      onclick: () => { closeMenu(); save(); } }, icon("download-simple"), h("span", {}, "Save to Computer")));
+  } else {
+    items.push(h("button", { type: "button", role: "menuitem", class: "split__item", "data-key": "menu-send",
+      onclick: () => { closeMenu(); call("scan_open_account"); } },
+      icon("paper-plane-tilt"),
+      h("span", {}, "Send to Chat with Work",
+        h("small", {}, `${state.destinationsError || "This computer can't reach Chat with Work."} Set it up in Settings.`))));
+  }
   return h("div", { class: "split", onkeydown: menuKeys },
     main,
     h("button", {
@@ -535,7 +562,7 @@ function finishButton(kept, signedIn, busy) {
       "aria-label": "More ways to finish", title: "More ways to finish",
       onclick: () => (state.menuOpen ? closeMenu() : openMenu()),
     }, icon("caret-down")),
-    state.menuOpen ? h("div", { class: "split__menu", id: "finish-menu", role: "menu", "aria-label": "More ways to finish" }, item) : null);
+    state.menuOpen ? h("div", { class: "split__menu", id: "finish-menu", role: "menu", "aria-label": "More ways to finish" }, items) : null);
 }
 
 function openMenu() {

@@ -7,17 +7,22 @@
 //! docs/desktop-server-contract.md):
 //!
 //! - `openExternal(url)`: a link in the default browser.
-//! - `openPreferences()`: the app's settings window.
+//! - `openPreferences(page)`: the app's settings window, on one of its pages.
 //! - `listen()`: a loopback callback for a sign-in or connection that runs
 //!   in the default browser (loopback.rs).
+//! - `computer`: this computer's shared folders and switches, which a page
+//!   may narrow at once and widen only after the person says yes in the
+//!   app's own dialog (computer.rs).
+//! - `scan()`: the scan window, whose PDF comes back to the page as a file
+//!   for its composer, once the person scans and attaches it (scan.rs).
 //!
 //! Notifications are not part of it: the daemon already shows native ones,
 //! open or closed, and the page tells the server what's on screen.
 
 use std::sync::Arc;
 
-use serde_json::json;
-use tauri::{AppHandle, State, Url, Webview};
+use serde_json::{Value, json};
+use tauri::{AppHandle, Manager, State, Url, Webview};
 
 use crate::desktop::Desktop;
 use crate::server::Server;
@@ -61,15 +66,218 @@ pub fn open_external(
 }
 
 /// Async: a window made from a synchronous command, which runs on the main
-/// thread, can deadlock on Windows.
+/// thread, can deadlock on Windows. `page` is one of the settings window's
+/// own pages; anything else opens it where it was.
 #[tauri::command]
 pub async fn open_preferences(
     app: AppHandle,
     webview: Webview,
     desktop: State<'_, Arc<Desktop>>,
+    page: Option<String>,
 ) -> Result<(), String> {
     server_page(&desktop, &webview)?;
-    crate::windows::show_settings(&app, None).map_err(|e| e.to_string())
+    let page = page.as_deref().and_then(crate::args::page);
+    crate::windows::show_settings(&app, page).map_err(|e| e.to_string())
+}
+
+/// What the page may see of this computer (computer.rs).
+#[tauri::command]
+pub fn computer(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    Ok(crate::computer::view(desktop.status().as_ref()))
+}
+
+/// A change to this computer's sharing that a page asked for: at once when
+/// it narrows, after the person's yes in the app's own dialog when it
+/// widens. Answers what the page may see of the computer afterwards, or
+/// `{ "declined": true }` when the person said no.
+#[tauri::command]
+pub async fn computer_change(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    change: Value,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let change: crate::computer::Change = serde_json::from_value(change)
+        .map_err(|_| "Chat with Work Desktop can't do that.".to_string())?;
+    let desktop = desktop.inner().clone();
+    let label = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = desktop.client.status().map_err(|e| e.to_string())?;
+        let (request, question) = change.plan(&status)?;
+        if let Some(question) = question {
+            let Some(_asking) = desktop.asking.start() else {
+                return Err(
+                    "Answer the question Chat with Work Desktop is asking first.".to_string(),
+                );
+            };
+            if !confirm(&app, &label, &question) {
+                return Ok(json!({ "declined": true }));
+            }
+        }
+        desktop
+            .client
+            .request(&request)
+            .map_err(|e| e.to_string())?;
+        let status = desktop.client.status().ok();
+        Ok(crate::computer::view(status.as_ref()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Shares a folder the person picks in the system's folder picker. The page
+/// can't name one. Answers the folder's label, or `null` if they picked none.
+#[tauri::command]
+pub async fn computer_add_folder(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let desktop = desktop.inner().clone();
+    let parent = app.get_webview_window(webview.label());
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(_asking) = desktop.asking.start() else {
+            return Err("Answer the question Chat with Work Desktop is asking first.".to_string());
+        };
+        let Some(path) = pick_folder(&app, parent.as_ref()) else {
+            return Ok(json!({ "folder": null }));
+        };
+        let answer = desktop
+            .client
+            .add_root(&path, None)
+            .map_err(|e| e.to_string())?;
+        Ok(json!({ "folder": answer["root"]["label"] }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Native notifications on this computer: whether they can show, and with
+/// `ask`, the system's own question to allow them.
+#[tauri::command]
+pub async fn computer_notifications(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    ask: Option<bool>,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let client = desktop.client.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use cww::control::ControlRequest;
+        if ask == Some(true) {
+            client
+                .request(&ControlRequest::NotificationPermission { request: true })
+                .map_err(|e| e.to_string())?;
+        }
+        let answer = client
+            .request(&ControlRequest::NotificationStatus)
+            .map_err(|e| e.to_string())?;
+        // Only what the page shows: never the broker's internals.
+        Ok(json!({
+            "permission": answer["permission"],
+            "connected": answer["connected"],
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Asks the person in a dialog the app draws, over the page's window.
+/// Demo builds can answer it for pictures and checks
+/// (`CWW_DEMO_CONFIRM=yes|no`); real builds always ask.
+fn confirm(app: &AppHandle, label: &str, question: &crate::computer::Question) -> bool {
+    #[cfg(feature = "demo")]
+    if let Ok(answer) = std::env::var("CWW_DEMO_CONFIRM") {
+        return answer == "yes";
+    }
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let mut dialog = app
+        .dialog()
+        .message(&question.message)
+        .title(&question.title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            question.yes.clone(),
+            "Cancel".into(),
+        ));
+    if let Some(window) = app.get_webview_window(label) {
+        dialog = dialog.parent(&window);
+    }
+    dialog.blocking_show()
+}
+
+fn pick_folder(
+    app: &AppHandle,
+    parent: Option<&tauri::WebviewWindow>,
+) -> Option<std::path::PathBuf> {
+    #[cfg(feature = "demo")]
+    if let Some(path) = std::env::var_os("CWW_DEMO_PICK_FOLDER") {
+        return Some(path.into());
+    }
+    use tauri_plugin_dialog::DialogExt;
+    let mut dialog = app.dialog().file().set_title("Share a Folder");
+    if let Some(documents) = crate::paths::documents_dir() {
+        dialog = dialog.set_directory(documents);
+    }
+    if let Some(window) = parent {
+        dialog = dialog.set_parent(window);
+    }
+    dialog
+        .blocking_pick_folder()
+        .and_then(|path| path.into_path().ok())
+}
+
+/// Opens the scan window for the page's composer, and answers once the
+/// person attaches a scan (`{ id, name, pages, size }`, whose bytes
+/// `scan_file` hands over once) or closes the window (`null`). Opening the
+/// window is all a page can do: the person scans and chooses to attach.
+#[tauri::command]
+pub async fn scan(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<crate::scan::Scans>>,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let answer = scans.attach_for(webview.label());
+    let opener = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = crate::windows::show_scan(&opener) {
+            log::warn!("couldn't open the scan window: {e}");
+        }
+        crate::scan::tell_attaching(&opener, true);
+    });
+    Ok(answer.await.ok().flatten().unwrap_or(Value::Null))
+}
+
+/// A scan the person sent to a new chat from the scan window, for the new
+/// chat's composer to take (`{ id, name, pages, size }`, or `null`).
+#[tauri::command]
+pub fn scan_pending(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<crate::scan::Scans>>,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    Ok(scans.pending_for(webview.label()).unwrap_or(Value::Null))
+}
+
+/// The PDF a `scan` answered, once, to the page that asked for it, as bytes.
+#[tauri::command]
+pub fn scan_file(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<crate::scan::Scans>>,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
+    server_page(&desktop, &webview)?;
+    scans
+        .take_attached(webview.label(), &id)
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "That scan is gone. Scan it again.".to_string())
 }
 
 /// Starts a loopback callback and answers its URL. When the browser comes

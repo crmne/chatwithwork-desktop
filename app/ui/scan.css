@@ -1,7 +1,8 @@
 /*
   The scan window: the settings in the sunken side column the settings
   window's nav uses, the pages as a grid of sheets, and a bar at the foot
-  with Rescan, Scan More Pages and Send. Live Wire's tokens and the
+  with Rescan and the button that puts the scan in Chat with Work's
+  composer (or sends it to a bot, or saves it). Live Wire's tokens and the
   settings' components (app.css) throughout; only the scan's own pieces
   are here.
 */
@@ -304,20 +305,14 @@
   flex: 1;
 }
 
-.scan__bar .select {
-  max-inline-size: 12rem;
-}
-
-.scan__bar .input {
-  flex: 1 1 8rem;
-  inline-size: auto;
-  min-inline-size: 7rem;
-  max-inline-size: 18rem;
-}
-
-.scan__progress {
+.scan__progress,
+.scan__hint {
+  min-inline-size: 0;
+  overflow: hidden;
   color: var(--ink-muted);
   font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The crop view */

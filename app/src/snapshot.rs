@@ -238,8 +238,9 @@ fn bridge_check(app: &AppHandle) {
 /// `scanned` presses Scan and waits for the feeder to empty, `blank` opens
 /// the blank pages left out, `crop` opens the first page's crop view,
 /// `cropped` crops the first page, `saved` saves the PDF (`CWW_DEMO_SAVE_TO`),
-/// `menu` opens the finish button's menu, `turned` turns the second, and `send`
-/// sends to the first bot (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
+/// `menu` opens the finish button's menu, `turned` turns the second, `send`
+/// sends to the first bot from the menu, and `attach` hands the scan to a
+/// new chat's composer in the Chat with Work window (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
 /// the PDF).
 fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
     let Ok(()) = crate::windows::show_scan(app) else {
@@ -284,12 +285,16 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
             r#"document.querySelector('[data-key="finish-menu"]')?.click()"#,
             2,
         ),
+        "attach" => (
+            r#"document.querySelector('[data-key="attach"]')?.click()"#,
+            10,
+        ),
         "turned" => (
             r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,
             3,
         ),
         "send" => (
-            r#"(() => { const s = document.querySelector('[data-key="destination"]'); if (s && s.options.length > 1) { s.value = s.options[1].value; s.dispatchEvent(new Event('change')); } setTimeout(() => document.querySelector('[data-key="send"]')?.click(), 300); })()"#,
+            r#"(() => { document.querySelector('[data-key="finish-menu"]')?.click(); setTimeout(() => document.querySelector('[data-key^="menu-bot-"]')?.click(), 300); })()"#,
             15,
         ),
         _ => ("", 0),

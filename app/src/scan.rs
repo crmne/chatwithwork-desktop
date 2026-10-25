@@ -27,7 +27,7 @@ use cww_scan::{Capabilities, ColorMode, Device, End, Request, ScanError, Setting
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, State, Webview};
+use tauri::{AppHandle, Manager, State, Webview};
 
 use crate::desktop::Desktop;
 use crate::windows::{SCAN, is_local_url};
@@ -111,8 +111,27 @@ impl Preferences {
     }
 }
 
+/// A page of the Chat with Work window waiting for a scan for its composer
+/// (bridge.rs's `scan`).
+struct Attaching {
+    /// The window that asked; only it gets the PDF.
+    label: String,
+    reply: tokio::sync::oneshot::Sender<Option<Value>>,
+}
+
+/// A PDF made for a composer, until its page takes it.
+struct Attached {
+    id: String,
+    label: String,
+    /// `{ id, name, pages, size }`, as the page hears of it.
+    answer: Value,
+    pdf: Vec<u8>,
+}
+
 /// What the scan window shares.
 pub struct Scans {
+    attaching: Mutex<Option<Attaching>>,
+    attached: Mutex<Option<Attached>>,
     session: Mutex<Session>,
     helper: Mutex<Option<Helper>>,
     canceller: Mutex<Option<Canceller>>,
@@ -124,6 +143,8 @@ pub struct Scans {
 impl Default for Scans {
     fn default() -> Self {
         Self {
+            attaching: Mutex::default(),
+            attached: Mutex::default(),
             session: Mutex::default(),
             helper: Mutex::default(),
             canceller: Mutex::default(),
@@ -144,12 +165,57 @@ impl Scans {
     /// Deletes the pages and stops the helper: the window closed, or the
     /// app starts (a crash may have left a session behind).
     pub fn close(&self, paths: &crate::paths::Paths) {
+        // A composer still waiting gets nothing: the window closed.
+        if let Some(waiting) = self.attaching.lock().expect("attaching").take() {
+            let _ = waiting.reply.send(None);
+        }
         if let Some(canceller) = self.canceller.lock().expect("canceller").take() {
             canceller.cancel();
         }
         *self.helper.lock().expect("helper") = None;
         *self.session.lock().expect("session") = Session::default();
         let _ = std::fs::remove_dir_all(scans_root(paths));
+    }
+
+    /// The window `label` waits for a scan for its composer. A page that
+    /// was waiting already gets nothing: the newest asks.
+    pub fn attach_for(&self, label: &str) -> tokio::sync::oneshot::Receiver<Option<Value>> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let previous = self
+            .attaching
+            .lock()
+            .expect("attaching")
+            .replace(Attaching {
+                label: label.to_string(),
+                reply,
+            });
+        if let Some(previous) = previous {
+            let _ = previous.reply.send(None);
+        }
+        answer
+    }
+
+    fn is_attaching(&self) -> bool {
+        self.attaching.lock().expect("attaching").is_some()
+    }
+
+    /// The PDF made for the window `label`'s composer, once.
+    pub fn take_attached(&self, label: &str, id: &str) -> Option<Vec<u8>> {
+        let mut slot = self.attached.lock().expect("attached");
+        match slot.as_ref() {
+            Some(attached) if attached.label == label && attached.id == id => {
+                slot.take().map(|attached| attached.pdf)
+            }
+            _ => None,
+        }
+    }
+
+    /// A scan waiting for the new chat in the window `label`, if one is.
+    pub fn pending_for(&self, label: &str) -> Option<Value> {
+        let slot = self.attached.lock().expect("attached");
+        slot.as_ref()
+            .filter(|attached| attached.label == label)
+            .map(|attached| attached.answer.clone())
     }
 
     fn discard_pages(&self) {
@@ -353,6 +419,12 @@ fn tell(app: &AppHandle, payload: Value) {
     crate::windows::tell_window(app, SCAN, "scan", payload);
 }
 
+/// Tells the scan page whether a composer waits for its scan, so it offers
+/// Attach in place of Send.
+pub fn tell_attaching(app: &AppHandle, attaching: bool) {
+    tell(app, json!({ "kind": "attaching", "attaching": attaching }));
+}
+
 /// A language code in words, for saying it's missing.
 fn language_name(code: &str) -> String {
     let name = match code.split('-').next().unwrap_or(code) {
@@ -438,6 +510,7 @@ pub fn scan_info(
         "busy": scans.busy.load(Ordering::SeqCst),
         "server": desktop.server().origin(),
         "max_bytes": MAX_PDF_BYTES,
+        "attaching": scans.is_attaching(),
     }))
 }
 
@@ -776,17 +849,11 @@ pub async fn scan_send(
     let paths = desktop.paths.clone();
     let result = blocking(move || -> Result<Value, Value> {
         let pdf = make_pdf(&app, &scans_, &pages, language.as_deref())?;
-        if pdf.len() > MAX_PDF_BYTES {
-            return Err(refusal(
-                "too_large",
-                format!(
-                    "This scan is {:.1} MB, and Chat with Work takes at most {} MB. Scan in grayscale or black and white, at a lower resolution, or send fewer pages.",
-                    pdf.len() as f64 / 1_048_576.0,
-                    MAX_PDF_BYTES / 1_048_576
-                ),
-            ));
-        }
-        tell(&app, json!({ "kind": "progress", "text": "Sending to Chat with Work…" }));
+        too_large(&pdf)?;
+        tell(
+            &app,
+            json!({ "kind": "progress", "text": "Sending to Chat with Work…" }),
+        );
         use base64::Engine as _;
         let request = ControlRequest::ScanSend {
             destination,
@@ -804,6 +871,88 @@ pub async fn scan_send(
     // The pages stay until Rescan or the window closes, so the same scan can
     // also be saved, or sent somewhere else.
     result?
+}
+
+/// Makes the PDF and hands it to Chat with Work's own composer, then
+/// closes the window: the composer that asked for a scan (its attach menu),
+/// or else a new chat's, in the Chat with Work window. The person writes
+/// their message there, with everything the composer offers, and the file
+/// is uploaded from there like any other.
+#[tauri::command]
+pub async fn scan_attach(
+    webview: Webview,
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<Scans>>,
+    language: Option<String>,
+) -> Answer {
+    scan_page_only(&webview)?;
+    let pages = kept_pages(&scans);
+    if pages.is_empty() {
+        return Err(refusal("invalid", "There are no pages to attach."));
+    }
+    if scans.busy.swap(true, Ordering::SeqCst) {
+        return Err(refusal("busy", "Wait for the scan to finish."));
+    }
+    let count = pages.len();
+    let scans_ = scans.inner().clone();
+    let maker = app.clone();
+    let result = blocking(move || -> Result<Vec<u8>, Value> {
+        let pdf = make_pdf(&maker, &scans_, &pages, language.as_deref())?;
+        too_large(&pdf)?;
+        Ok(pdf)
+    })
+    .await;
+    scans.busy.store(false, Ordering::SeqCst);
+    let pdf = result??;
+    let id = random_id();
+    let answer = json!({ "id": id, "name": filename(count), "pages": count, "size": pdf.len() });
+    let waiting = scans.attaching.lock().expect("attaching").take();
+    let label = waiting
+        .as_ref()
+        .map_or(crate::windows::MAIN.to_string(), |w| w.label.clone());
+    *scans.attached.lock().expect("attached") = Some(Attached {
+        id,
+        label: label.clone(),
+        answer: answer.clone(),
+        pdf,
+    });
+    match waiting {
+        Some(waiting) => {
+            let _ = waiting.reply.send(Some(answer));
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.set_focus();
+            }
+        }
+        // A new chat, whose composer takes the scan as it opens.
+        None => {
+            let opener = app.clone();
+            let start = desktop.server().start_url();
+            std::thread::spawn(move || {
+                let _ = crate::windows::show_main(&opener, Some(start));
+            });
+        }
+    }
+    // Closing the window deletes the pages.
+    if let Some(window) = app.get_webview_window(SCAN) {
+        let _ = window.close();
+    }
+    Ok(json!({}))
+}
+
+/// Chat with Work takes files of at most 25 MB.
+fn too_large(pdf: &[u8]) -> Result<(), Value> {
+    if pdf.len() <= MAX_PDF_BYTES {
+        return Ok(());
+    }
+    Err(refusal(
+        "too_large",
+        format!(
+            "This scan is {:.1} MB, and Chat with Work takes at most {} MB. Scan in grayscale or black and white, at a lower resolution, or send fewer pages.",
+            pdf.len() as f64 / 1_048_576.0,
+            MAX_PDF_BYTES / 1_048_576
+        ),
+    ))
 }
 
 /// The pages to send or save: all but the blank ones left out.

@@ -10,12 +10,48 @@
   if (!internals || typeof internals.invoke !== "function") return;
   const invoke = (command, args) => internals.invoke(command, args || {});
 
+  const change = (action, fields) => invoke("computer_change", { change: { action, ...fields } });
+
+  // This computer: what it shares and allows, decided here. Narrowing
+  // happens at once; widening only after the person's yes in the app's own
+  // dialog, which resolves { declined: true } when they say no.
+  const computer = Object.freeze({
+    status: () => invoke("computer"),
+    pause: () => change("pause"),
+    resume: () => change("resume"),
+    addFolder: () => invoke("computer_add_folder"),
+    removeFolder: (folder) => change("remove", { folder: String(folder) }),
+    renameFolder: (folder, label) => change("rename", { folder: String(folder), label: String(label) }),
+    allowChanges: (folder, on) => change("changes", { folder: String(folder), on: Boolean(on) }),
+    allowCommands: (folder, on) => change("commands", { folder: String(folder), on: Boolean(on) }),
+    allowNetwork: (folder, on) => change("network", { folder: String(folder), on: Boolean(on) }),
+    notifications: () => invoke("computer_notifications", { ask: false }),
+    allowNotifications: () => invoke("computer_notifications", { ask: true }),
+  });
+
+  // A scan for the composer: the scan window opens, and once the person
+  // attaches what they scanned, it comes back as a PDF File (null if they
+  // close the window instead).
+  const fileOf = async (scanned) => {
+    if (!scanned) return null;
+    const bytes = await invoke("scan_file", { id: scanned.id });
+    return new File([bytes], scanned.name, { type: "application/pdf" });
+  };
+  const scan = async () => fileOf(await invoke("scan"));
+
+  // A scan the person sent to a new chat from the scan window: the new
+  // chat's composer takes it as it opens (null when there is none).
+  const pendingScan = async () => fileOf(await invoke("scan_pending"));
+
   const api = Object.freeze({
     version: __VERSION__,
     components: Object.freeze(__COMPONENTS__),
     openExternal: (url) => invoke("open_external", { url: String(url) }),
-    openPreferences: () => invoke("open_preferences"),
+    openPreferences: (page) => invoke("open_preferences", page ? { page: String(page) } : {}),
     listen: () => invoke("listen"),
+    computer,
+    scan,
+    pendingScan,
   });
   Object.defineProperty(window, "ChatWithWorkDesktop", {
     value: api,
@@ -64,12 +100,19 @@
     api.openExternal(url.href);
   });
 
-  // Ctrl+, (Cmd+, on macOS) opens the settings, as in most apps.
+  // Ctrl+, (Cmd+, on macOS) opens the settings, as in most apps: this
+  // computer's part of Chat with Work's Settings where the page names it
+  // (a server that has it), else the app's own settings window.
   window.addEventListener("keydown", (event) => {
     const mac = navigator.platform.startsWith("Mac");
     if (event.key === "," && (mac ? event.metaKey : event.ctrlKey) && !event.altKey && !event.shiftKey) {
       event.preventDefault();
-      api.openPreferences();
+      const path = document.querySelector('meta[name="chatwithwork-desktop-settings"]')?.content;
+      if (path && path.startsWith("/") && !path.startsWith("//")) {
+        window.location.assign(path);
+      } else {
+        api.openPreferences();
+      }
     }
   });
 })();

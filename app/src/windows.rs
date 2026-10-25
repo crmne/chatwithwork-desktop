@@ -274,6 +274,23 @@ pub fn settings_event(event: &str, payload: &serde_json::Value) -> String {
     )
 }
 
+/// This computer's settings in Chat with Work's own Settings, beside
+/// everything else (the server's "This computer" tab).
+pub const COMPUTER_SETTINGS: &str = "/settings?tab=computer";
+
+/// Settings, from the tray: once the computer is paired, Chat with Work's
+/// Settings on This computer, in the Chat with Work window; before that, or
+/// while the background agent isn't running, the app's own settings window,
+/// which pairs it.
+pub fn show_computer_settings(app: &AppHandle) -> tauri::Result<()> {
+    let desktop = app.state::<std::sync::Arc<Desktop>>().inner().clone();
+    let paired = desktop.status().is_some_and(|status| status.is_paired());
+    match desktop.server().page(COMPUTER_SETTINGS) {
+        Some(url) if paired => show_main(app, Some(url)),
+        _ => show_settings(app, None),
+    }
+}
+
 /// Shows the settings window, on `page` or where it was.
 pub fn show_settings(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(SETTINGS) {
