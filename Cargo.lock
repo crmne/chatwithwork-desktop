@@ -1298,7 +1298,7 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
 name = "cww"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "cww-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "cww-notification-broker"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cww",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "cww-scan"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "flate2",
