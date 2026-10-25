@@ -49,7 +49,7 @@ It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, a
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
-Windows builds are not signed yet. If SmartScreen warns, choose **More info**, then **Run anyway**. Portable Windows zips also contain all three executables; extract them to a permanent folder before registering the agent. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
+Windows builds are not signed yet. If SmartScreen warns, choose **More info**, then **Run anyway**. The portable Windows zip, `cww-vX.Y.Z-<arch>-pc-windows-msvc.zip`, holds the app, `cww.exe`, `cww-agent.exe` and the scanner helper; extract it to a permanent folder before registering the agent. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
 
 **Portable Linux desktop app**
 
@@ -68,7 +68,7 @@ Run these commands from a checkout. On Linux the desktop app also needs CMake, c
 
 For a Linux terminal-only build with native notification support, install `notification-broker` instead of `app` in the second command. The notification helper needs Rust 1.98 or newer. On macOS, native notifications require the packaged application bundle, including its identity and signature; loose development binaries are insufficient.
 
-Release archives come with SHA-256 checksums, signed for the desktop app's updater, and GitHub artifact attestations. To check a download:
+Release downloads come with SHA-256 checksums (`checksums.txt`, signed for the desktop app's updater; GitHub also shows each file's SHA-256 on the release), and the archives, MSIs, `.pkg` and `.dmg` with GitHub artifact attestations. [PACKAGING.md](PACKAGING.md#release-assets) lists every file. To check a download:
 
 ```sh
 gh attestation verify cww-app-v0.3.0-x86_64-unknown-linux-gnu.tar.gz --repo crmne/chatwithwork-desktop

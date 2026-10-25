@@ -6,13 +6,32 @@ Every package installs the desktop app, terminal interface and daemon together. 
 
 | Platform | What users install | Built by |
 |---|---|---|
-| macOS | App bundle (`.dmg` / `.zip`), `.pkg` installer, Homebrew cask or formula, or one-line installer. The cask depends on the formula to expose `cww` on PATH without conflicting with existing formula installs. | `release.yml`, job `macos` |
-| Windows | Per-user MSI (WinGet and PowerShell), Scoop, or a portable zip, with `cww.exe`, `cww-app.exe` and `cww-agent.exe`. The app-focused zip names the GUI `Chat with Work.exe`. | `release.yml`, job `build` |
+| macOS | App disk image (`.dmg`), `.pkg` installer, Homebrew cask or formula, or one-line installer. The cask depends on the formula to expose `cww` on PATH without conflicting with existing formula installs. | `release.yml`, job `macos` |
+| Windows | Per-user MSI (WinGet and PowerShell), Scoop, or a portable zip, with `cww.exe`, `cww-app.exe`, `cww-agent.exe` and the scanner helper. | `release.yml`, job `build` |
 | Linux | `.deb`, `.rpm`, all three AUR variants, Homebrew, Nix, the one-line installer, or the complete desktop archive. | `release.yml` (jobs `build` and `linux-app`) and `packaging.yml` |
 
 The Linux archive `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` is the single input for native packages and binary AUR recipes. `packaging/linux/archive.sh` creates it with both executables, the systemd unit, launcher, icon, docs and licenses. `cww` itself remains static (musl); the GUI requires glibc 2.39 or newer, WebKitGTK 4.1 and GTK 3 for its windows (Tauri), the AppIndicator library for its tray item (loaded at run time), D-Bus, and ALSA (`libasound.so.2`) and PipeWire's client library (`libpipewire-0.3.so.0`) for the terminal's dictation helper, which records through PipeWire, then PulseAudio, then ALSA. Linux source builds need those development packages, clang and pkg-config (`libasound2-dev libpipewire-0.3-dev clang libclang-dev pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev libdbus-1-dev` on Debian and Ubuntu, `alsa-lib libpipewire clang pkgconf webkit2gtk-4.1 gtk3 libayatana-appindicator` on Arch); the terminal-only musl binary has no audio or graphics library dependency. Release and packaging-test workflows build the GUI on Ubuntu 24.04: older releases ship a PipeWire too old for the bindings fastframe-audio builds. ELF inspection adds libc and libgcc dependencies; `native-packages.yaml` and the AUR recipes also declare WebKitGTK, GTK and the AppIndicator library loaded at run time. On Windows the window needs the WebView2 runtime, which Windows 11 and current Windows 10 include; the WinGet manifest depends on `Microsoft.EdgeWebView2Runtime` for the rest. Debian 12's glibc 2.36 and Rocky/RHEL 9's 2.34 are too old for this GUI, and Rocky/RHEL 10 ship no WebKitGTK 4.1, so the desktop package installs on neither; the terminal-only archive works there.
 
-Each app download carries `cww` beside the GUI (inside the bundle on macOS), so the app starts the matching daemon. All archives are covered by `checksums.txt` and its signature. The macOS app is signed and stapled before it is copied into the `.pkg` and the formula/shell-installer archive.
+Each app download carries `cww` beside the GUI (inside the bundle on macOS), so the app starts the matching daemon. Every file `release.yml` publishes is covered by `checksums.txt` and its signature; GitHub shows each file's SHA-256 on the release too, the `.deb` and `.rpm` files' included. The macOS app is signed and stapled before it is copied into the `.pkg` and the formula/shell-installer archive.
+
+## Release assets
+
+A release carries only what people download or something reads. Anything else stays in the workflow's artifacts. Before adding a file, name what downloads it here.
+
+| File | For | Read by |
+|---|---|---|
+| `chat-with-work-vX.Y.Z-macos-universal.dmg` | macOS app | People, the Homebrew cask |
+| `cww-vX.Y.Z-macos-universal.pkg` | macOS installer with `cww` on the PATH | People |
+| `cww-vX.Y.Z-<arch>-pc-windows-msvc.msi` | Windows installer, x64 and arm64 | People, WinGet, `cww-installer.ps1`, `test-windows-installer.yml` |
+| `chatwithwork-desktop_X.Y.Z_<arch>.deb`, `chatwithwork-desktop-X.Y.Z-1.<arch>.rpm` | Linux packages, attached by `packaging.yml` | People |
+| `cww-installer.sh`, `cww-installer.ps1` | The one-line installers, at `releases/latest/download/` | People, through the README's commands |
+| `cww-vX.Y.Z-macos-universal.tar.gz` | `cww` and the app, portable | The Homebrew formula, `cww-installer.sh` |
+| `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` | The Linux desktop app and `cww`, portable | The `.deb` and `.rpm` builds, the Homebrew formula on Linux, AUR `-bin`, `cww-installer.sh` |
+| `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` | Terminal-only `cww` and `cww-notify`, for servers and older distributions | People |
+| `cww-vX.Y.Z-<arch>-pc-windows-msvc.zip` | The Windows app, portable | People, the Scoop recipe |
+| `checksums.txt`, `checksums.txt.sig` | SHA-256 of every file above but the Linux packages, signed with `app/assets/update-public-key.hex` | Both installers, native-packages, Scoop's `autoupdate`, and the desktop app's updater once it exists |
+
+native-packages also attaches the rendered recipes (`chatwithwork-desktop-X.Y.Z-packaging.tar.xz`, `packaging-checksums.txt`); `packaging.yml`'s `tidy-release` job removes them, since the AUR and Homebrew are published from the run's own copy and `winget-submit.sh` renders WinGet's manifests itself. The `.zip` of the macOS app and the separate Windows app zips of 0.5.0 and earlier are no longer built: the `.dmg`, `.pkg` and portable zip carry the same app.
 
 ## Files
 
@@ -48,9 +67,9 @@ The background agent's opt-in crash reports (README, "Crash reports") go to the 
 2. Write `packaging/release-notes/vX.Y.Z.md`.
 3. Push `main`, wait for CI, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-`release.yml` checks the tag matches `Cargo.toml` and is on `main`, builds every target and the desktop app, signs what it has credentials for (the app bundle and its disk image are notarized and stapled too), attests the archives (`gh attestation verify <file> --repo crmne/chatwithwork-desktop`), and publishes the release with `checksums.txt` and the installers. Tags with a `-` (`v1.2.0-beta.1`) become draft prereleases and skip the package managers.
+`release.yml` checks the tag matches `Cargo.toml` and is on `main`, builds every target and the desktop app, signs what it has credentials for (the app bundle and its disk image are notarized and stapled too), attests the archives (`gh attestation verify <file> --repo crmne/chatwithwork-desktop`), and publishes the release with `checksums.txt` and the installers (see [Release assets](#release-assets)). Tags with a `-` (`v1.2.0-beta.1`) become draft prereleases and skip the package managers.
 
-For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.10.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. The rendered recipes are attached as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`.
+For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.10.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. It attaches the rendered recipes too, as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`; `tidy-release` takes them off the release again, and they stay in the run's `native-packages` artifact.
 
 ### Trying changes before a tag
 
@@ -145,7 +164,7 @@ Individual developer accounts are free. Microsoft signs Store packages itself, s
 
 | Destination | How it's published | Needs |
 |---|---|---|
-| GitHub release (`.deb`, `.rpm`, recipes) | Automatic | Nothing |
+| GitHub release (`.deb`, `.rpm`) | Automatic | Nothing |
 | Homebrew, `crmne/homebrew-tap` `Formula/cww.rb` and `Casks/chat-with-work.rb` | Automatic when `PUBLISH_HOMEBREW=true` | `HOMEBREW_TAP_SSH_KEY` (a deploy key with write access to the tap only) or `HOMEBREW_TAP_GITHUB_TOKEN` |
 | AUR `chatwithwork-desktop`, `-bin`, `-git` | Automatic when `PUBLISH_AUR=true` | `AUR_SSH_KEY`, `AUR_KNOWN_HOSTS`, and the three AUR packages registered to that key (the publish step clones them, so a new package needs a first push by hand) |
 | WinGet, `ChatWithWork.Desktop` | By hand, below | A fork of `microsoft/winget-pkgs` |
@@ -156,9 +175,9 @@ Individual developer accounts are free. Microsoft signs Store packages itself, s
 
 **The desktop app** is included in every package recipe alongside the terminal agent. Updating the existing package upgrades users to the complete installation; there is no separate Linux GUI package to discover.
 
-**WinGet.** `packaging/windows/winget-submit.sh X.Y.Z` downloads the release's packaging archive, checks that every manifest names `ChatWithWork.Desktop` and the version and that each installer URL matches its hash, and prepares a branch in `crmne/winget-pkgs` with `manifests/c/ChatWithWork/Desktop/X.Y.Z/`. Validate it on Windows (`winget validate --manifest <dir>` and `winget install --manifest <dir>`), then run it again with `--open` to push and open the pull request. The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version, 0.3 installs included.
+**WinGet.** `packaging/windows/winget-submit.sh X.Y.Z` renders the manifests from the tag's `packaging/winget/*.yaml.in` with the MSIs' SHA-256s from the release's `checksums.txt`, checks that every manifest names `ChatWithWork.Desktop` and the version and that each installer URL matches its hash, and prepares a branch in `crmne/winget-pkgs` with `manifests/c/ChatWithWork/Desktop/X.Y.Z/`. Validate it on Windows (`winget validate --manifest <dir>` and `winget install --manifest <dir>`), then run it again with `--open` to push and open the pull request. The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version, 0.3 installs included.
 
-**Scoop.** Put `recipes/scoop/cww.json` in a bucket (for example `crmne/scoop-bucket`, as `bucket/cww.json`). Its `checkver` and `autoupdate` keep it current: `scoop install crmne/cww` once the bucket is added with `scoop bucket add crmne https://github.com/crmne/scoop-bucket`.
+**Scoop.** Put `recipes/scoop/cww.json` from the packaging run's `native-packages` artifact in a bucket (for example `crmne/scoop-bucket`, as `bucket/cww.json`). Its `checkver` and `autoupdate` keep it current: `scoop install crmne/cww` once the bucket is added with `scoop bucket add crmne https://github.com/crmne/scoop-bucket`.
 
 ## Existing releases
 
