@@ -139,25 +139,25 @@ Unsigned Windows binaries that register a logon task are what Microsoft Defender
 - **Reputation for the publisher.** A signature alone doesn't silence SmartScreen: since 2024 no certificate type, EV included, is trusted instantly. Reputation builds as people download and run releases signed by the same publisher identity, so keep signing every release with the same identity and don't rotate it needlessly.
 - The warning only applies to files with the Mark of the Web, meaning downloaded by a browser. `winget install` and the PowerShell one-liner don't trigger it; Defender still scans them.
 
-#### Option A: Azure Artifact Signing (formerly Trusted Signing)
+#### Option A: Azure Artifact Signing (formerly Trusted Signing), set up
 
-About $10 a month, keys in Microsoft's HSMs, and `release.yml` already supports it. Eligibility for Public Trust:
+This is the one in use. The signatures name the publisher **PlentyLabs UG (haftungsbeschränkt) & Co. KG**. PlentyLabs' Basic account, `plentylabs` in West Europe (`https://weu.codesigning.azure.net/`), signs Carmine's other Windows apps too, and is managed in `crmne/terraform` (`azure/signing.tf`, its README's "Code signing"). There is no client secret anywhere:
 
-- Organizations in the EU (and the US, Canada, UK and others) with **at least three years of verifiable tax history**. PlentyLabs qualifies only if it has that history.
-- Individuals only in the US and Canada.
+- A tag's Windows build jobs run in this repository's `windows-signing` environment, which deploys only from `v*` tags. An Entra app registration, `GitHub chatwithwork-desktop Windows signing`, trusts GitHub's OIDC tokens for exactly `repo:crmne/chatwithwork-desktop:environment:windows-signing`, and holds the **Artifact Signing Certificate Profile Signer** role on the account.
+- The jobs sign in with `azure/login` and sign `cww.exe`, `cww-agent.exe`, `cww-app.exe` and `cww-scan-helper.exe` before the MSI is built, then the MSI, with `azure/artifact-signing-action` (SHA-256, Microsoft's RFC 3161 timestamp), and check every signature with `Get-AuthenticodeSignature`.
+- The environment's variables (none secret): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT` and `AZURE_SIGNING_PROFILE`. Signing turns on when `AZURE_SIGNING_PROFILE` is set; without it, releases stay unsigned (or use Option B's certificate).
 
-Steps:
+`AZURE_SIGNING_PROFILE` waits for the certificate profile, which waits for PlentyLabs' Public Trust identity validation (requested 2026-10-25; Microsoft takes 1 to 20 business days, and Carmine completes an ID check with AU10TIX when the request says "Action Required"). Once it completes, `crmne/terraform` creates the profile `plentylabs`, and:
 
-1. In the Azure portal, create an *Artifact Signing account* in West Europe (endpoint `https://weu.codesigning.azure.net/`).
-2. Under *Identity validation*, start a **Public Trust** validation for the organization. Microsoft checks the registration and tax records, and one person completes an ID check with AU10TIX. It usually takes a few days.
-3. Create a *certificate profile* of type **Public Trust** using the validated identity.
-4. Create an app registration (Entra ID) with a client secret, and give it the **Artifact Signing Certificate Profile Signer** role on the account.
-5. Set the secrets: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`.
-6. Run `gh workflow run release.yml` and check the Windows jobs report signed files (`Get-AuthenticodeSignature` on the MSI shows `Valid`).
+```sh
+echo plentylabs | gh variable set AZURE_SIGNING_PROFILE -R crmne/chatwithwork-desktop -e windows-signing
+```
+
+Running `release.yml` by hand never signs: only tag runs enter the environment. After the first signed release, check a downloaded MSI on Windows: `Get-AuthenticodeSignature` reports `Valid` and the PlentyLabs subject.
 
 #### Option B: a certificate from a CA with cloud signing
 
-If the organization doesn't qualify for Option A, buy an **OV** code signing certificate for the organization (or for yourself as an individual) from a CA that offers cloud signing usable in CI, such as SSL.com (eSigner) or Certum (SimplySign). Since June 2023, publicly trusted code signing keys must live in a hardware or cloud HSM, so a new certificate can't be exported as a `.pfx`. The `WINDOWS_CERTIFICATE_PFX` path in `sign.ps1` only works for older exportable certificates. Using a cloud-signing CA needs a small change to `packaging/windows/sign.ps1` to call the CA's signing tool instead. EV costs more and no longer buys instant SmartScreen trust, so OV is enough.
+If Option A's validation fails, buy an **OV** code signing certificate for the organization (or for yourself as an individual) from a CA that offers cloud signing usable in CI, such as SSL.com (eSigner) or Certum (SimplySign). Since June 2023, publicly trusted code signing keys must live in a hardware or cloud HSM, so a new certificate can't be exported as a `.pfx`. The `WINDOWS_CERTIFICATE_PFX` path in `sign.ps1` only works for older exportable certificates. Using a cloud-signing CA needs a small change to `packaging/windows/sign.ps1` to call the CA's signing tool instead. EV costs more and no longer buys instant SmartScreen trust, so OV is enough.
 
 #### Option C: the Microsoft Store
 
