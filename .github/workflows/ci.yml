@@ -1,10 +1,23 @@
 name: CI
 
+# Pull requests run the checks that catch most breakage (lint and tests on
+# the three platforms, the extension, cargo-deny, the Linux Nix package);
+# main, and a run started by hand on any branch, also build the release
+# binaries, the installers and the other Nix packages. Changes to only
+# Markdown or docs/ run nothing.
 on:
   push:
     branches: [main]
+    paths-ignore: [docs/**, "**/*.md"]
   pull_request:
+    paths-ignore: [docs/**, "**/*.md"]
   workflow_dispatch:
+
+# One run per pull request or branch: a new push cancels a pull request's
+# run, and on main a newer commit replaces any run still waiting.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -13,6 +26,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The CLI and daemon, the notification broker, the scanner and the
+  # desktop app, on the three platforms they run on, in one job per platform
+  # so they share a runner and a build cache.
   test:
     strategy:
       fail-fast: false
@@ -20,8 +36,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # A cold mbx cache is slow; a job cut off before the cache saves stays
-    # cold on every later run.
-    timeout-minutes: 60
+    # cold on every later run. An uncached release build with LTO takes more
+    # than 15 minutes on the Windows runners.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -31,7 +48,8 @@ jobs:
       # key carries no job name, so each job sets its own generation.
       - uses: jdx/mr-boxington-action@v1
         with:
-          cache-generation: test-v1
+          cache-generation: test-app-v1
+      - uses: ./.github/actions/speech-build
       - run: cargo fmt --check
       - run: mbx clippy --all-targets --locked -- -D warnings
       - run: cargo fmt -p cww-notification-broker --check
@@ -55,6 +73,98 @@ jobs:
       - run: mbx clippy -p cww-scan --all-targets --locked -- -D warnings
       - run: mbx test -p cww-scan --locked
         timeout-minutes: 5
+      # The bridge script, in a stand-in page (Node comes with the runners).
+      - run: node --test app/tests/bridge.test.mjs
+      - run: cargo fmt -p cww-app --check
+      - run: mbx clippy -p cww-app --all-targets --locked -- -D warnings
+      - run: mbx clippy -p cww-app --features demo --all-targets --locked -- -D warnings
+      - run: mbx test -p cww-app --locked --no-run
+      - run: mbx test -p cww-app --locked
+        timeout-minutes: 5
+
+      # The rest builds what a release ships, on main and runs started by
+      # hand only.
+      - run: mbx build -p cww-app -p cww --release --locked
+        if: github.event_name != 'pull_request'
+
+      - name: Bundle the macOS app
+        if: github.event_name != 'pull_request' && runner.os == 'macOS'
+        run: |
+          packaging/macos/bundle.sh target/release/cww-app target/release/cww \
+            "dist/Chat with Work.app" "$(cargo pkgid -p cww-app | sed 's/.*[#@]//')"
+          ditto -c -k --keepParent "dist/Chat with Work.app" dist/cww-app-macos.zip
+      - name: Build and test the macOS installer
+        if: github.event_name != 'pull_request' && runner.os == 'macOS'
+        run: |
+          version="$(cargo pkgid -p cww-app | sed 's/.*[#@]//')"
+          bash packaging/macos/pkg.sh target/release/cww "$version" dist/cww-test.pkg "dist/Chat with Work.app"
+          bash packaging/macos/test-install.sh dist/cww-test.pkg
+          rm -rf "dist/Chat with Work.app" dist/cww-test.pkg
+
+      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
+      # and load only into a 32-bit process. It goes beside cww-app.exe with
+      # the TWAIN Working Group's TWAINDSM.dll, as the installer has them.
+      # The scan and devices examples try a real scanner without the app.
+      - name: Build the 32-bit scanner helper
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
+          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
+          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/release/
+          ./packaging/windows/twain-dsm.ps1 -Destination target/release
+      - name: Check the Windows binaries need no Visual C++ Redistributable
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe target/release/cww-scan-helper.exe target/release/TWAINDSM.dll
+      - name: Build the Windows installer
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          $version = ((Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$').Matches.Groups[1].Value)
+          ./packaging/windows/build-msi.ps1 -Version $version -Arch x64 -Binary target/release/cww.exe -Output dist/cww-test.msi
+      - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        with:
+          name: cww-windows-installer
+          path: dist/cww-test.msi
+          if-no-files-found: error
+      - name: Test the Windows installer
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi
+          ./packaging/windows/test-standard-user.ps1 -Msi dist/cww-test.msi
+          Remove-Item dist/cww-test.msi, dist/cww-test.wixpdb
+
+      - name: Collect the Linux binary and desktop entry
+        if: github.event_name != 'pull_request' && runner.os == 'Linux'
+        run: |
+          mkdir -p dist/cww-app-linux
+          cp target/release/cww-app packaging/linux/cww-app.desktop dist/cww-app-linux/
+          # Named as the desktop entry's Icon=cww-app asks.
+          cp app/assets/mark.svg dist/cww-app-linux/cww-app.svg
+      - name: Collect the Windows executable
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: bash
+        run: mkdir -p dist && cp target/release/cww-app.exe dist/
+      - name: Collect the scanner helper and its tools
+        if: github.event_name != 'pull_request' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          cp target/release/cww-scan-helper.exe target/release/TWAINDSM.dll dist/
+          cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt dist/
+          mkdir -p dist/scan-tools
+          cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request'
+        with:
+          name: cww-app-${{ runner.os }}
+          path: dist/
+          if-no-files-found: error
 
   # The browser extension: unit tests, then Chromium with the extension and
   # cww as its native messaging host.
@@ -83,113 +193,6 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
 
-  # The desktop app, on the three platforms it runs on.
-  app:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    # An uncached release build with LTO takes more than 15 minutes on the
-    # Windows runners.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: jdx/mr-boxington-action@v1
-        with:
-          cache-generation: app-v1
-      - uses: ./.github/actions/speech-build
-      # The bridge script, in a stand-in page (Node comes with the runners).
-      - run: node --test app/tests/bridge.test.mjs
-      - run: cargo fmt -p cww-app --check
-      - run: mbx clippy -p cww-app --all-targets --locked -- -D warnings
-      - run: mbx clippy -p cww-app --features demo --all-targets --locked -- -D warnings
-      - run: mbx test -p cww-app --locked --no-run
-      - run: mbx test -p cww-app --locked
-        timeout-minutes: 5
-      - run: mbx build -p cww-app -p cww --release --locked
-
-      - name: Bundle the macOS app
-        if: runner.os == 'macOS'
-        run: |
-          packaging/macos/bundle.sh target/release/cww-app target/release/cww \
-            "dist/Chat with Work.app" "$(cargo pkgid -p cww-app | sed 's/.*[#@]//')"
-          ditto -c -k --keepParent "dist/Chat with Work.app" dist/cww-app-macos.zip
-      - name: Build and test the macOS installer
-        if: runner.os == 'macOS'
-        run: |
-          version="$(cargo pkgid -p cww-app | sed 's/.*[#@]//')"
-          bash packaging/macos/pkg.sh target/release/cww "$version" dist/cww-test.pkg "dist/Chat with Work.app"
-          bash packaging/macos/test-install.sh dist/cww-test.pkg
-          rm -rf "dist/Chat with Work.app" dist/cww-test.pkg
-
-      # The scanner's helper is 32-bit on Windows: most TWAIN drivers are,
-      # and load only into a 32-bit process. It goes beside cww-app.exe with
-      # the TWAIN Working Group's TWAINDSM.dll, as the installer has them.
-      # The scan and devices examples try a real scanner without the app.
-      - name: Build the 32-bit scanner helper
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          rustup target add i686-pc-windows-msvc
-          mbx build -p cww-scan --release --locked --target i686-pc-windows-msvc --bin cww-scan-helper --example scan --example devices
-          if ($LASTEXITCODE -ne 0) { throw 'The scanner helper did not build' }
-          Copy-Item target/i686-pc-windows-msvc/release/cww-scan-helper.exe target/release/
-          ./packaging/windows/twain-dsm.ps1 -Destination target/release
-      - name: Check the Windows binaries need no Visual C++ Redistributable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./packaging/windows/check-runtime.ps1 target/release/cww.exe target/release/cww-agent.exe target/release/cww-app.exe target/release/cww-scan-helper.exe target/release/TWAINDSM.dll
-      - name: Build the Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 5.0.2
-          $version = ((Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$').Matches.Groups[1].Value)
-          ./packaging/windows/build-msi.ps1 -Version $version -Arch x64 -Binary target/release/cww.exe -Output dist/cww-test.msi
-      - uses: actions/upload-artifact@v7
-        if: runner.os == 'Windows'
-        with:
-          name: cww-windows-installer
-          path: dist/cww-test.msi
-          if-no-files-found: error
-      - name: Test the Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi
-          ./packaging/windows/test-standard-user.ps1 -Msi dist/cww-test.msi
-          Remove-Item dist/cww-test.msi, dist/cww-test.wixpdb
-
-      - name: Collect the Linux binary and desktop entry
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist/cww-app-linux
-          cp target/release/cww-app packaging/linux/cww-app.desktop dist/cww-app-linux/
-          # Named as the desktop entry's Icon=cww-app asks.
-          cp app/assets/mark.svg dist/cww-app-linux/cww-app.svg
-      - name: Collect the Windows executable
-        if: runner.os == 'Windows'
-        shell: bash
-        run: mkdir -p dist && cp target/release/cww-app.exe dist/
-      - name: Collect the scanner helper and its tools
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cp target/release/cww-scan-helper.exe target/release/TWAINDSM.dll dist/
-          cp packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt dist/
-          mkdir -p dist/scan-tools
-          cp target/i686-pc-windows-msvc/release/examples/scan.exe target/i686-pc-windows-msvc/release/examples/devices.exe dist/scan-tools/
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: cww-app-${{ runner.os }}
-          path: dist/
-          if-no-files-found: error
-
   deny:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -202,15 +205,30 @@ jobs:
           arguments: --workspace --all-features
 
   nix:
+    name: Nix package (x86_64-linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Check flake outputs
+        run: nix flake check --no-build
+      - name: Build package
+        run: nix build .#default -L
+      - run: ./result/bin/cww --version
+      - run: ./result/bin/cww-app --version
+
+  # The other platforms' packages, off pull requests: the macOS runners are
+  # the scarcest.
+  nix-more:
     name: Nix package (${{ matrix.system }})
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            system: x86_64-linux
           - os: ubuntu-24.04-arm
             system: aarch64-linux
           - os: macos-latest
@@ -218,8 +236,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      - name: Check flake outputs
-        run: nix flake check --no-build
       - name: Build package
         run: nix build .#default -L
       - run: ./result/bin/cww --version
