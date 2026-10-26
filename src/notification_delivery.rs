@@ -35,6 +35,8 @@ const CAPACITY: usize = 128;
 const VIEW_TTL: Duration = Duration::from_secs(75);
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const MAX_VIEWS: usize = 32;
+/// How long the server gives an offer before falling back to the browser.
+const OFFER_WINDOW: Duration = Duration::from_secs(15);
 
 /// Returned by `notification_status`. Permission never implies acceptance.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -832,12 +834,15 @@ impl Bridge {
             offer.notification_id.clone(),
             Instant::now() + Duration::from_secs(60),
         );
+        // The server gives an offer 15 seconds. On a clock even a little
+        // behind the server's, that reads as more than 15, and turning such
+        // offers down failed every notification on that computer. Wait at
+        // most 15 seconds instead: the server refuses a late receipt anyway.
         let deadline = OffsetDateTime::parse(&offer.expires_at, &Rfc3339)
             .ok()
             .and_then(|expiry| (expiry - OffsetDateTime::now_utc()).try_into().ok())
-            .filter(|remaining: &Duration| {
-                !remaining.is_zero() && *remaining <= Duration::from_secs(15)
-            });
+            .filter(|remaining: &Duration| !remaining.is_zero())
+            .map(|remaining: Duration| remaining.min(OFFER_WINDOW));
         let id = format!("{}:{}", offer.account, offer.thread);
         if let Some(previous) = self.active.remove(&id) {
             if !previous.shown {
