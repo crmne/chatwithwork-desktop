@@ -56,6 +56,33 @@ jobs:
       - run: mbx test -p cww-scan --locked
         timeout-minutes: 5
 
+  # The browser extension: unit tests, then Chromium with the extension and
+  # cww as its native messaging host.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: browser-v1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npm test
+      - run: mbx build --locked --bin cww
+        working-directory: .
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+
   # The desktop app, on the three platforms it runs on.
   app:
     strategy:

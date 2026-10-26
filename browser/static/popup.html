@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat with Work</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --canvas: light-dark(#ffffff, #0b0b0c);
+    --surface: light-dark(#f6f6f7, #161618);
+    --ink: light-dark(#18181b, #f4f4f5);
+    --ink-muted: light-dark(#52525b, #a1a1aa);
+    --line: light-dark(#e4e4e7, #27272a);
+    --positive: light-dark(#15803d, #4ade80);
+    --attention: light-dark(#b45309, #fbbf24);
+    --negative: light-dark(#b91c1c, #f87171);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 320px; background: var(--canvas); color: var(--ink);
+    font: 14px/1.45 Geist, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  header img { width: 24px; height: 24px; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  section { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .state { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-muted); flex: none; }
+  .state--positive .dot { background: var(--positive); }
+  .state--attention .dot { background: var(--attention); }
+  .state--negative .dot { background: var(--negative); }
+  p { margin: 6px 0 0; color: var(--ink-muted); font-size: 13px; }
+  .label { font: 500 11px/1.4 "Geist Mono", ui-monospace, monospace; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--ink-muted); margin: 0 0 6px; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { font-size: 13px; padding: 2px 0; overflow-wrap: anywhere; }
+  footer { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+  button { font: inherit; font-weight: 500; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  button.negative { color: var(--negative); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <img src="icons/icon-48.png" alt="">
+  <h1>Chat with Work</h1>
+</header>
+<section>
+  <div id="state" class="state"><span class="dot"></span><span id="state-text">Checking…</span></div>
+  <p id="state-detail"></p>
+</section>
+<section>
+  <p class="label">Its tab group</p>
+  <p id="tabs" style="margin:0"></p>
+</section>
+<section>
+  <p class="label">Allowed sites</p>
+  <ul id="sites"></ul>
+  <p>Change them in Chat with Work Desktop's settings, or with <code>cww browser allow</code>.</p>
+</section>
+<footer>
+  <button id="stop" class="negative" hidden>Stop</button>
+  <button id="resume" hidden>Resume</button>
+</footer>
+<script type="module" src="js/popup.js"></script>
+</body>
+</html>
