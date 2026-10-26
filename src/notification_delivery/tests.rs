@@ -803,3 +803,23 @@ async fn slow_event_consumer_reconnects_without_killing_the_delivery_client() {
     shutdown.cancel();
     endpoint.task.await.unwrap();
 }
+
+#[test]
+fn a_clock_behind_the_servers_still_shows_and_waits_at_most_the_window() {
+    let mut fixture = Fixture::new();
+    for (id, ahead) in [(1, 16), (2, 3600)] {
+        // A computer clock behind the server's sees the expiry further off.
+        let mut behind = offer(id, id);
+        behind.expires_at = (OffsetDateTime::now_utc() + time::Duration::seconds(ahead))
+            .format(&Rfc3339)
+            .unwrap();
+        fixture.bridge.show(behind).unwrap();
+        assert!(matches!(
+            fixture.commands.try_recv().unwrap(),
+            Command::Show { .. }
+        ));
+        let pending = &fixture.bridge.active[&format!("482139075:chat-482139075-{id}")];
+        assert!(pending.deadline <= Instant::now() + Duration::from_secs(15));
+    }
+    assert!(fixture.actions().is_empty());
+}
