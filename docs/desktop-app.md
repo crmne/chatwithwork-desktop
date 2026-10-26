@@ -48,8 +48,13 @@ The web app's pages get these commands, and nothing else Tauri offers (no events
 | `scan` | `scan()` | Opens the scan window for the page's composer; resolves a PDF `File` once the person attaches what they scanned, or `null` if they close the window |
 | `scan_pending` | `pendingScan()` | The scan the person sent to a new chat from the scan window, as a `File`, or `null` |
 | `scan_file` | (inside the two above) | The PDF's bytes, once, to the window it was made for |
+| `page_dialog` | (none: Turbo's `data-turbo-confirm`, and `alert()`) | Shows the page's confirmation or alert in the system's message box; resolves whether the person confirmed |
 
 Two checks enforce it. A capability added at start (`desktop.rs`), for the server's origin as a remote URL and the web app's windows only, allows these commands; and each command checks again that its caller is a page of the server in one of those windows (`bridge.rs`). The bridge script (`bridge.js`) defines `window.ChatWithWorkDesktop` only on pages of the server. The user agent's `bridge-components` add `computer` and `scan` for these, so the server shows their controls only to a build that has them.
+
+### Dialogs
+
+The dialog plugin's own script (tauri-plugin-dialog, which the app uses for its questions and pickers) replaces every page's `window.alert()` and `window.confirm()` with calls to its `message` command, which the server's pages may not make, so a `data-turbo-confirm` button did nothing and an alert showed nothing. The bridge script replaces them again, and takes over Turbo's confirmation once Turbo loads (`config.forms.confirm`, or `setConfirmMethod` in Turbo 7): each asks through `page_dialog`, which the app shows in the system's message box over the page's window. It reads the same attributes as the phone apps' `alert` component: `data-bridge-confirm` names the confirm button, `data-bridge-description` adds a line under the message, and a `DELETE` (or `data-bridge-destructive="true"`) shows as a warning with "Delete" unless named. The dialog is titled with the server's host, as a browser's are, so it never reads as one of the app's own questions, and answering it changes nothing on the computer; messages are clipped to 1,000 characters and the button to 32. Only one dialog shows at a time, the app's own questions included: while one is open, another confirmation answers Cancel and another alert is dropped. `window.confirm()` answers a promise of the answer, as the plugin's did, since a native dialog can't answer at once: the web app asks through Turbo's confirmation or awaits it. `window.prompt()` is the web view's own (WKWebView shows none), and the web app doesn't use it.
 
 ### This computer
 

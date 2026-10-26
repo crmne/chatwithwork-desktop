@@ -15,12 +15,16 @@
 //!   app's own dialog (computer.rs).
 //! - `scan()`: the scan window, whose PDF comes back to the page as a file
 //!   for its composer, once the person scans and attaches it (scan.rs).
+//! - Dialogs: Turbo's `data-turbo-confirm`, `confirm()` and `alert()` show
+//!   in the system's message box (`page_dialog`), since the dialog plugin's
+//!   script points the last two at a command these pages may not call.
 //!
 //! Notifications are not part of it: the daemon already shows native ones,
 //! open or closed, and the page tells the server what's on screen.
 
 use std::sync::Arc;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State, Url, Webview};
 
@@ -185,6 +189,129 @@ pub async fn computer_notifications(
     .map_err(|e| e.to_string())?
 }
 
+/// A dialog a page asked for: a confirmation (Turbo's `data-turbo-confirm`)
+/// or an alert. Its words are the page's, so it is titled with the server's
+/// name, as a browser's are, and never reads as one of the app's own
+/// questions; answering it changes nothing on this computer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageDialog {
+    kind: PageDialogKind,
+    message: String,
+    #[serde(default)]
+    detail: Option<String>,
+    #[serde(default)]
+    confirm: Option<String>,
+    #[serde(default)]
+    destructive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PageDialogKind {
+    Confirm,
+    Alert,
+}
+
+/// The longest message a page's dialog shows, and its button's label.
+const DIALOG_TEXT: usize = 1000;
+const DIALOG_LABEL: usize = 32;
+
+impl PageDialog {
+    pub fn parse(value: Value) -> Result<Self, String> {
+        serde_json::from_value(value).map_err(|_| "Chat with Work Desktop can't show that.".into())
+    }
+
+    /// The message, with the detail under it, clipped.
+    fn text(&self) -> String {
+        let text = match self.detail.as_deref().map(str::trim) {
+            Some(detail) if !detail.is_empty() => format!("{}\n\n{detail}", self.message.trim()),
+            _ => self.message.trim().to_string(),
+        };
+        clip(&text, DIALOG_TEXT)
+    }
+
+    /// The button that says yes: the page's label on one line, else "OK".
+    fn yes(&self) -> String {
+        let label: String = self
+            .confirm
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        match clip(label.trim(), DIALOG_LABEL) {
+            label if label.is_empty() => "OK".into(),
+            label => label,
+        }
+    }
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(limit - 1).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Shows a page's dialog over its window, and answers whether the person
+/// confirmed it (an alert answers `true` once dismissed). One question shows
+/// at a time, the app's own included: while another is open, a confirmation
+/// answers no and an alert is dropped.
+#[tauri::command]
+pub async fn page_dialog(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    dialog: Value,
+) -> Result<bool, String> {
+    server_page(&desktop, &webview)?;
+    let dialog = PageDialog::parse(dialog)?;
+    let title = desktop.server().host();
+    let desktop = desktop.inner().clone();
+    let label = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(_asking) = desktop.asking.start() else {
+            return false;
+        };
+        show_page_dialog(&app, &label, &title, &dialog)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn show_page_dialog(app: &AppHandle, label: &str, title: &str, dialog: &PageDialog) -> bool {
+    #[cfg(feature = "demo")]
+    if let Ok(answer) = std::env::var("CWW_DEMO_CONFIRM") {
+        log::info!("page dialog ({:?}) answered {answer}", dialog.kind);
+        return answer == "yes" || dialog.kind == PageDialogKind::Alert;
+    }
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let (kind, buttons) = match dialog.kind {
+        PageDialogKind::Alert => (MessageDialogKind::Info, MessageDialogButtons::Ok),
+        PageDialogKind::Confirm => (
+            if dialog.destructive {
+                MessageDialogKind::Warning
+            } else {
+                MessageDialogKind::Info
+            },
+            MessageDialogButtons::OkCancelCustom(dialog.yes(), "Cancel".into()),
+        ),
+    };
+    let mut message = app
+        .dialog()
+        .message(dialog.text())
+        .title(title)
+        .kind(kind)
+        .buttons(buttons);
+    if let Some(window) = app.get_webview_window(label) {
+        message = message.parent(&window);
+    }
+    message.blocking_show() || dialog.kind == PageDialogKind::Alert
+}
+
 /// Asks the person in a dialog the app draws, over the page's window.
 /// Demo builds can answer it for pictures and checks
 /// (`CWW_DEMO_CONFIRM=yes|no`); real builds always ask.
@@ -327,5 +454,58 @@ mod tests {
     fn callback_details_go_in_as_json_not_script() {
         let event = callback_event(&json!({ "params": { "message": "\");alert(1);//" } }));
         assert!(event.contains(r#"{"params":{"message":"\");alert(1);//"}}"#));
+    }
+
+    #[test]
+    fn a_page_dialog_takes_the_pages_words_and_nothing_else() {
+        let dialog = PageDialog::parse(json!({
+            "kind": "confirm",
+            "message": " Disconnect Google Drive? ",
+            "detail": "Its cached files are deleted.",
+            "confirm": "Disconnect",
+            "destructive": true,
+        }))
+        .unwrap();
+        assert_eq!(dialog.kind, PageDialogKind::Confirm);
+        assert!(dialog.destructive);
+        assert_eq!(
+            dialog.text(),
+            "Disconnect Google Drive?\n\nIts cached files are deleted."
+        );
+        assert_eq!(dialog.yes(), "Disconnect");
+
+        let alert = PageDialog::parse(json!({ "kind": "alert", "message": "Saved." })).unwrap();
+        assert_eq!(alert.kind, PageDialogKind::Alert);
+        assert_eq!(alert.text(), "Saved.");
+        assert_eq!(alert.yes(), "OK");
+        assert!(!alert.destructive);
+
+        for refused in [
+            json!({ "kind": "prompt", "message": "Name?" }),
+            json!({ "kind": "confirm" }),
+            json!({ "kind": "confirm", "message": "Sure?", "title": "Chat with Work Desktop" }),
+            json!("Sure?"),
+        ] {
+            assert!(PageDialog::parse(refused.clone()).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_page_dialog_is_clipped_and_its_button_stays_on_one_line() {
+        let dialog = PageDialog::parse(json!({
+            "kind": "confirm",
+            "message": "x".repeat(5000),
+            "confirm": format!("Yes\n{}", "y".repeat(100)),
+        }))
+        .unwrap();
+        assert_eq!(dialog.text().chars().count(), DIALOG_TEXT);
+        assert!(dialog.text().ends_with('…'));
+        assert!(!dialog.yes().contains('\n'));
+        assert_eq!(dialog.yes().chars().count(), DIALOG_LABEL);
+
+        let blank =
+            PageDialog::parse(json!({ "kind": "confirm", "message": "Sure?", "confirm": " \t " }))
+                .unwrap();
+        assert_eq!(blank.yes(), "OK");
     }
 }

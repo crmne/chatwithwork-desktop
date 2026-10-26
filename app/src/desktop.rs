@@ -176,7 +176,8 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .permission("allow-computer-notifications")
             .permission("allow-scan")
             .permission("allow-scan-file")
-            .permission("allow-scan-pending"),
+            .permission("allow-scan-pending")
+            .permission("allow-page-dialog"),
     )
 }
 
@@ -360,6 +361,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::bridge::scan,
             crate::bridge::scan_file,
             crate::bridge::scan_pending,
+            crate::bridge::page_dialog,
             crate::local::control,
             crate::local::activity,
             crate::local::app_info,
