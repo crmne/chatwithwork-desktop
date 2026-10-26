@@ -17,6 +17,7 @@ const COMMANDS: &[&str] = &[
     "scan",
     "scan_file",
     "scan_pending",
+    "page_dialog",
     // The bundled settings pages (local.rs).
     "control",
     "activity",

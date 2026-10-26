@@ -44,6 +44,16 @@ impl Server {
         self.origin.origin().ascii_serialization()
     }
 
+    /// `host[:port]`: how the server is named where a page speaks for
+    /// itself, as in its dialogs' titles.
+    pub fn host(&self) -> String {
+        let host = self.origin.host_str().unwrap_or_default();
+        match self.origin.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        }
+    }
+
     /// What the window opens on: like the installed web app, `/chats/new`,
     /// which leads into the organization used last.
     pub fn start_url(&self) -> Url {
@@ -98,6 +108,8 @@ mod tests {
         let local = Server::parse("http://127.0.0.1:3210").unwrap();
         assert_eq!(local.origin(), "http://127.0.0.1:3210");
         assert_eq!(local.capability_pattern(), "http://127.0.0.1:3210/*");
+        assert_eq!(local.host(), "127.0.0.1:3210");
+        assert_eq!(server().host(), "work.example");
     }
 
     #[test]

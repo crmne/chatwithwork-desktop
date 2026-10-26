@@ -102,6 +102,8 @@ jobs:
         with:
           cache-generation: app-v1
       - uses: ./.github/actions/speech-build
+      # The bridge script, in a stand-in page (Node comes with the runners).
+      - run: node --test app/tests/bridge.test.mjs
       - run: cargo fmt -p cww-app --check
       - run: mbx clippy -p cww-app --all-targets --locked -- -D warnings
       - run: mbx clippy -p cww-app --features demo --all-targets --locked -- -D warnings

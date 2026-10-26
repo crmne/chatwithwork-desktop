@@ -59,6 +59,57 @@
     configurable: false,
   });
 
+  // Dialogs. The dialog plugin's own script replaces window.alert() and
+  // window.confirm() with calls these pages may not make, so a
+  // data-turbo-confirm button did nothing and an alert showed nothing.
+  // Here Turbo's confirmation, confirm() and alert() ask through the bridge
+  // instead, in the system's message box titled with the server's name. The
+  // labels are the ones the phone apps read: data-bridge-confirm names the
+  // button, data-bridge-description adds detail, and a DELETE (or
+  // data-bridge-destructive="true") is destructive with "Delete" as its
+  // button. confirm() answers a promise, as the plugin's did: a native
+  // dialog can't answer at once. prompt() stays the web view's own.
+  const dialog = (fields) =>
+    invoke("page_dialog", { dialog: fields }).then((answer) => answer === true, () => false);
+
+  const confirmSubmission = (message, form, submitter) => {
+    const attribute = (name) =>
+      submitter?.getAttribute?.(`data-bridge-${name}`) ?? form?.getAttribute?.(`data-bridge-${name}`) ?? null;
+    const method = (form?.querySelector?.("input[name=_method]")?.value || form?.getAttribute?.("method") || "").toLowerCase();
+    const deletes = method === "delete";
+    const destructive = attribute("destructive") ? attribute("destructive") === "true" : deletes;
+    return dialog({
+      kind: "confirm",
+      message: String(message ?? ""),
+      detail: attribute("description"),
+      confirm: attribute("confirm") || (deletes ? "Delete" : "OK"),
+      destructive,
+    });
+  };
+
+  // Turbo loads after this script, so its confirmation is taken over once
+  // it has: Turbo 8's config.forms.confirm, or setConfirmMethod before it.
+  let confirming = false;
+  const useAppDialogs = () => {
+    if (confirming) return;
+    const turbo = window.Turbo;
+    if (turbo?.config?.forms) {
+      turbo.config.forms.confirm = confirmSubmission;
+      confirming = true;
+    } else if (typeof turbo?.setConfirmMethod === "function") {
+      turbo.setConfirmMethod(confirmSubmission);
+      confirming = true;
+    }
+  };
+  document.addEventListener("turbo:load", useAppDialogs);
+  window.addEventListener("DOMContentLoaded", useAppDialogs);
+  window.addEventListener("load", useAppDialogs);
+
+  window.alert = (message) => {
+    dialog({ kind: "alert", message: String(message ?? "") });
+  };
+  window.confirm = (message) => dialog({ kind: "confirm", message: String(message ?? "") });
+
   const leaves = (url) =>
     url.origin !== ORIGIN && /^(https?|mailto):$/.test(url.protocol);
 
