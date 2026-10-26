@@ -199,7 +199,7 @@ impl LocalFiles {
         let known = READ_TOOLS.contains(&name)
             || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
             || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
-            || (is_browser_tool(name) && self.browser().is_some());
+            || self.browser().is_some_and(|browser| browser.offers(name));
         if !known {
             let mut entry = AuditEntry::event("tool");
             entry.tool = Some(
@@ -528,31 +528,51 @@ impl LocalFiles {
         if self.commands().is_some() {
             all.extend(command_tools());
         }
-        if self.browser().is_some() {
-            all.extend(browser_tools());
+        if let Some(browser) = self.browser() {
+            all.extend(browser_tools(browser));
         }
         all
     }
 }
 
-/// The browser tools: reads are read-only and open-world, since the pages
-/// they read are on the web.
-pub fn browser_tools() -> Vec<Tool> {
-    crate::browsing::tools::definitions()
+/// The browser tools offered: all open-world, since they reach the web;
+/// the actions are writes, or destructive unless `writeWhen` says
+/// otherwise.
+pub fn browser_tools(browser: &BrowserTools) -> Vec<Tool> {
+    browser
+        .offered()
         .into_iter()
-        .map(|definition| match definition.kind {
-            Kind::Read => {
-                let mut tool = tool(
+        .map(|definition| {
+            let mut tool = match definition.kind {
+                Kind::Read => tool(
                     definition.name,
                     definition.title,
                     definition.description,
                     definition.input,
-                );
-                if let Some(annotations) = tool.annotations.as_mut() {
-                    annotations.open_world_hint = Some(true);
-                }
-                tool
+                ),
+                Kind::Write => change_tool(
+                    definition.name,
+                    definition.title,
+                    definition.description,
+                    definition.input,
+                    false,
+                    false,
+                    None,
+                ),
+                Kind::Destructive { write_when } => change_tool(
+                    definition.name,
+                    definition.title,
+                    definition.description,
+                    definition.input,
+                    true,
+                    false,
+                    write_when,
+                ),
+            };
+            if let Some(annotations) = tool.annotations.as_mut() {
+                annotations.open_world_hint = Some(true);
             }
+            tool
         })
         .collect()
 }

@@ -3,13 +3,15 @@
 // and keeps the kill switch. An open native port keeps the worker alive;
 // an alarm brings it back to reconnect.
 
-import { methods, type Policy } from "./actions.js";
+import { methods as readMethods, type Policy } from "./actions.js";
+import { changeMethods } from "./changes.js";
 import { halt } from "./cdp.js";
 import { browserStopped, ToolError } from "./errors.js";
 import { groupTabs } from "./group.js";
 
 export const HOST = "com.chatwithwork.desktop";
 const RECONNECT_ALARM = "reconnect";
+const methods = { ...readMethods, ...changeMethods };
 
 type DaemonState = "connected" | "not_running" | "refused" | "unknown";
 
@@ -19,7 +21,7 @@ const state = {
   // The daemon behind it.
   daemon: "unknown" as DaemonState,
   error: "",
-  policy: { sites: [], stopped: false } as Policy,
+  policy: { sites: [], stopped: false, changes: false } as Policy,
   // The person pressed Stop in this extension.
   stopped: false,
   // Calls in progress, for the badge.
@@ -95,6 +97,7 @@ async function onMessage(message: any): Promise<void> {
     state.policy = {
       sites: Array.isArray(params.sites) ? params.sites.filter((s: unknown) => typeof s === "string") : [],
       stopped: params.stopped === true,
+      changes: params.changes === true,
     };
     await halt(state.stopped || state.policy.stopped);
     void refreshBadge();
@@ -181,6 +184,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       stopped: state.stopped,
       stoppedOnComputer: state.policy.stopped,
       sites: state.policy.sites,
+      changes: state.policy.changes,
       tabs: tabs.length,
       version: chrome.runtime.getManifest().version,
     });

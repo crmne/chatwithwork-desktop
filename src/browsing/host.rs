@@ -24,8 +24,9 @@ use crate::paths::Paths;
 
 /// Largest message the browser accepts from a host.
 const TO_BROWSER_MAX: usize = 1024 * 1024;
-/// Largest message we take from the extension (the browser allows 64 MiB).
-const FROM_BROWSER_MAX: usize = 4 * 1024 * 1024;
+/// Largest message we take from the extension (the browser allows 64 MiB):
+/// a downloaded file of up to 10 MB, in base64.
+const FROM_BROWSER_MAX: usize = 16 * 1024 * 1024;
 
 /// The origin when the browser started this process as its native host.
 pub fn invoked_as_host(args: &[std::ffi::OsString]) -> Option<String> {
