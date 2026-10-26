@@ -7,6 +7,7 @@ Nothing here is submitted without Carmine's go-ahead. In order:
 - [ ] The browser work is on `main`: the extension, the native messaging host and the daemon's tools (crmne/chatwithwork-desktop#20 and #21), and the server side (crmne/chatwithwork, `Desktop::Device::BrowserTool`, on main).
 - [ ] A Chat with Work Desktop release that includes them, so reviewers and people can install a `cww` that answers the extension. `cww browser enable` (or Your Browser in the desktop app's settings, crmne/chatwithwork-desktop#23) registers the host.
 - [ ] The privacy policy at https://chatwithwork.com/privacy-policy has its "Your browser" paragraph (on main in crmne/chatwithwork; live once deployed).
+- [ ] The privacy policy also has the extension's Limited Use statement, which the store requires on the policy it links (its Google one covers only Google APIs), next to the Google one in crmne/chatwithwork's `app/views/home/privacy_policy.html.erb`: "The Chat with Work browser extension's use of information it receives from your browser adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements." with a link to https://developer.chrome.com/docs/webstore/program-policies/policies.
 - [x] The extension's private key is in 1Password, and nowhere else: the Document item "Chat with Work browser extension key" in the chatwithwork vault (`op://chatwithwork/Chat with Work browser extension key/key.pem`). The public half is the manifest's `key`, which gives the ID `ehjfihpogoacjodjnanclodinjnnpmcp` that `cww` allows (`src/browsing/bridge.rs`, `EXTENSION_ID`).
 - [ ] A Chrome Web Store developer account for Plenty UG (one-time fee, 2-step verification, the publisher's contact email verified). Group publisher if others should manage it.
 - [ ] A reviewer test account on chatwithwork.com with credits, for the dashboard's private test-instructions field.
@@ -20,7 +21,7 @@ Nothing here is submitted without Carmine's go-ahead. In order:
 
 ## The listing
 
-- [ ] Paste the fields from `listing.md`: summary, description, category, single purpose, each permission's justification, remote code (No), data usage (Website content, Web history), the three certifications, privacy policy URL, homepage and support URLs.
+- [ ] Paste the fields from `listing.md`: summary, description, category, single purpose, each permission's justification, remote code (No), data usage (Website content, Web history, and the categories allowed pages can show, as `listing.md` lists them), the three certifications, privacy policy URL, homepage and support URLs.
 - [ ] Upload `images/` (three 1280×800 screenshots and the 440×280 tile).
 - [ ] Test instructions from `listing.md`, with the test account in the private field.
 - [ ] Visibility: Public. Distribution: all regions.

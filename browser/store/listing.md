@@ -61,14 +61,15 @@ What goes into each field of the Developer Dashboard for the Chat with Work exte
 
 - **Website content**: text, the accessibility tree, and screenshots of pages in its tab group, on allowed sites.
 - **Web history**: the titles and addresses of tabs in its tab group.
+- **Personally identifiable information**, **Health information**, **Financial and payment information** and **Personal communications**: none of these is read on its own, but a page the person allows and asks about (a bank, a clinic, a webmail) can show them, and its text or screenshot then carries them.
 
-Not collected: personally identifiable information beyond what is on those pages, health, financial and payment information (it never reads card fields), authentication information (it never reads password or one-time code fields), personal communications beyond pages the person allowed, location, user activity (it doesn't watch the person's clicks or keystrokes).
+Not collected: authentication information (it never reads password or one-time code fields, and blurs them in screenshots), card numbers (it never reads card fields), location, user activity (it doesn't watch the person's clicks or keystrokes).
 
 What happens to it: the extension sends it only to Chat with Work Desktop on the same computer, which passes it to the person's own Chat with Work (chatwithwork.com, or their organization's self-hosted server) for the chat that asked. It isn't sold, isn't used for anything but the single purpose, and isn't used for credit decisions.
 
 Certify all three: not sold to third parties; not used or transferred for purposes unrelated to the single purpose; not used to determine creditworthiness.
 
-**Privacy policy:** https://chatwithwork.com/privacy-policy (its "Your browser" paragraph covers the extension).
+**Privacy policy:** https://chatwithwork.com/privacy-policy (its "Your browser" paragraph covers the extension, and it must also say that the extension's use of browser data follows the Chrome Web Store User Data Policy: see checklist.md).
 
 ## Test instructions for the reviewer
 
