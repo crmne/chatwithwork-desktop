@@ -22,7 +22,7 @@ import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
-import { hostOfUrl, siteAllowed } from "./sites.js";
+import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
 const TYPE_MAX_CHARS = 10_000;
@@ -397,10 +397,15 @@ const fetchFile: Method = async (params, policy) => {
   } else {
     address = checkUrl(params.url, policy);
   }
-  const name = decodeURIComponent(new URL(address).pathname.split("/").pop() || "download");
+  const name = fileName(new URL(address).pathname);
   if (dryRun(params)) return { dry_run: true, url: address, name };
-  const response = await fetch(address, { credentials: "include", redirect: "follow" }).catch((error) => {
-    throw new ToolError("page_error", `couldn't fetch the file: ${String(error?.message ?? error)}`);
+  // No redirects: following one would send the person's sign-in to an
+  // address nobody checked before it's asked for.
+  const response = await fetch(address, { credentials: "include", redirect: "error" }).catch((error) => {
+    throw new ToolError(
+      "page_error",
+      `couldn't fetch the file (a link that redirects elsewhere isn't followed; pass the address it leads to): ${String(error?.message ?? error)}`,
+    );
   });
   if (!siteAllowed(response.url, policy.sites)) {
     throw new ToolError("site_not_allowed", `the file is on ${hostOfUrl(response.url)}, which isn't allowed`);

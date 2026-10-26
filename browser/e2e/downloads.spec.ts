@@ -66,9 +66,6 @@ test("a download the page starts by itself doesn't happen", async () => {
     expect(clicked.error).toBeUndefined();
     await new Promise((r) => setTimeout(r, 2000));
     expect(readdirSync(downloads)).toEqual([]);
-
-    // The person's own download in the same tab, once the extension has let
-    // go of it, works as usual: here, a plain tab outside the group.
   } finally {
     browser?.kill();
     await daemon.close();

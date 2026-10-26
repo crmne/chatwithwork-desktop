@@ -368,7 +368,7 @@ impl BrowserTools {
             ));
         }
         if name == "browser_download" {
-            return self.download(args, &policy).await;
+            return self.download(args).await;
         }
         if is_change && !dry_run {
             // Actions count against this computer's change budgets.
@@ -432,11 +432,7 @@ impl BrowserTools {
 
     /// Fetch a file in the browser and save it through the writer, with
     /// every rule a new file follows.
-    async fn download(
-        &self,
-        mut args: Value,
-        policy: &super::bridge::Policy,
-    ) -> Result<Answer, ToolError> {
+    async fn download(&self, mut args: Value) -> Result<Answer, ToolError> {
         let path = args
             .as_object_mut()
             .and_then(|object| object.remove("path"))
@@ -457,6 +453,13 @@ impl BrowserTools {
                 .await
                 .map_err(|_| ToolError::internal("the writer crashed on this request"))??;
         let fetched = self.bridge.call("fetch", args).await?;
+        // The person may have stopped the browser, or taken the site off
+        // the list, while the file was fetched: it's saved only under the
+        // rules as they are now.
+        let policy = self.bridge.policy();
+        if policy.stopped {
+            return Err(stopped());
+        }
         let url = fetched
             .get("url")
             .and_then(Value::as_str)

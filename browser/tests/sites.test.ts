@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { siteAllowed } from "../src/sites.js";
+import { fileName, siteAllowed } from "../src/sites.js";
 
 test("a bare host allows it and its subdomains over HTTPS only", () => {
   const sites = ["github.com"];
@@ -34,4 +34,11 @@ test("never other schemes, credentials in URLs, or odd entries", () => {
 test("hosts compare as the browser writes them", () => {
   assert.equal(siteAllowed("https://GitHub.com/", ["GITHUB.COM"]), true);
   assert.equal(siteAllowed("https://xn--mnchen-3ya.de/", ["münchen.de"]), true);
+});
+
+test("a file's name is its path's last segment, decoded where it can be", () => {
+  assert.equal(fileName("/files/Q3%20report.pdf"), "Q3 report.pdf");
+  assert.equal(fileName("/files/100%.csv"), "100%.csv");
+  assert.equal(fileName("/files/"), "download");
+  assert.equal(fileName("/"), "download");
 });

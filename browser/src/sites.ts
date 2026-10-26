@@ -67,3 +67,15 @@ export function hostOfUrl(url: string): string {
     return "";
   }
 }
+
+// The last segment of a path, decoded where its escapes are well formed.
+export function fileName(pathname: string): string {
+  const segment = pathname.split("/").pop() || "";
+  let decoded = segment;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    // A malformed escape: keep the segment as written.
+  }
+  return decoded || "download";
+}
