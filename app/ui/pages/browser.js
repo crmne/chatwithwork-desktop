@@ -182,8 +182,8 @@ export function render(app) {
         }, { kind: "btn-primary" }))) : null,
     browser.enabled ? connection(browser) : null,
     browser.enabled ? setting("Allow actions", browser.changes
-      ? "Chat with Work can also open pages, click, type, choose and save files, each after you approve it. Anything that may send, buy, post or delete shows you a screenshot first."
-      : "Reading only. Turn on to let Chat with Work also open pages, click, type, choose and save files, each after you approve it.",
+      ? "Chat with Work can also open pages, click, type, choose and save files, with your approval in Chat with Work, which you can give for the rest of a chat. Anything that may send, buy, post or delete always asks, with a screenshot."
+      : "Reading only. Turn on to let Chat with Work also open pages, click, type, choose and save files, with your approval in Chat with Work.",
     switchInput(browser.changes || view.allowing, (on) => {
       if (on) {
         view.allowing = true;
@@ -193,7 +193,7 @@ export function render(app) {
       }
     }, { label: "Allow actions in the browser", disabled: busy || view.allowing })) : null,
     view.allowing ? h("div", { class: "confirm" },
-      h("p", {}, "Let Chat with Work act in your browser? It can open pages, click, type, choose and save files into a folder that allows changes, on your allowed sites, with your sign-ins there. Each action asks you in Chat with Work first, with a screenshot for anything that may send, buy, post or delete."),
+      h("p", {}, "Let Chat with Work act in your browser? It can open pages, click, type, choose and save files into a folder that allows changes, on your allowed sites, with your sign-ins there. Each action asks you in Chat with Work first, unless you allow actions for the rest of a chat; anything that may send, buy, post or delete always asks, with a screenshot."),
       h("div", { class: "inline" },
         button("Cancel", () => {
           view.allowing = false;
