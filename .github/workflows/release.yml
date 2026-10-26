@@ -236,7 +236,7 @@ jobs:
 
       - name: Attest release packages
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: |
             dist/*.tar.gz
@@ -424,7 +424,7 @@ jobs:
 
       - name: Attest macOS packages
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: |
             dist/*.tar.gz
@@ -508,7 +508,7 @@ jobs:
 
       - name: Attest the desktop app archive
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: dist/*.tar.gz
       - uses: actions/upload-artifact@v7
