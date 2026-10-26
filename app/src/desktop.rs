@@ -217,6 +217,20 @@ pub fn tray_action(app: &AppHandle, id: &str) {
                 }
             });
         }
+        Some(Action::ToggleBrowser) => {
+            let stopped = desktop
+                .status
+                .lock()
+                .expect("status lock")
+                .as_ref()
+                .is_some_and(|s| s.browser.stopped);
+            let client = desktop.client.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = client.set_browser_stopped(!stopped) {
+                    log::warn!("{e}");
+                }
+            });
+        }
         Some(Action::Quit) => desktop.quit(),
         None => {}
     }
@@ -371,6 +385,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::cancel_pairing,
             crate::local::logout,
             crate::local::start_agent,
+            crate::local::browser_enable,
             crate::local::autostart,
             crate::local::set_autostart,
             crate::local::crash_reports,

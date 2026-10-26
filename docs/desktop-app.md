@@ -9,7 +9,7 @@ Until 0.3.1 the app was native, drawn with egui, with a chat window of its own t
 | | What | Talks to |
 |---|---|---|
 | **Chat with Work window** (`main`, and `page-N` for pages it opens in a new window) | The real web app, loaded from the server | The server, like a browser. The app only through the bridge below |
-| **Settings window** (`settings`) | Pages bundled in the binary (`app/ui`): welcome, shared folders, always private, activity, account (pairing), notifications, general | The daemon, through `local.rs`'s allow-list, and the app's own settings |
+| **Settings window** (`settings`) | Pages bundled in the binary (`app/ui`): welcome, shared folders, always private, your browser, activity, account (pairing), notifications, general | The daemon, through `local.rs`'s allow-list, and the app's own settings |
 | **Scan window** (`scan`) | A bundled page (`app/ui/scan.html`): scan, check the pages, send them ([scanning.md](scanning.md)) | The scanner through a helper process (`--scan-helper`), and the daemon only to send, through `scan.rs`'s own commands |
 | **Tray item** | The daemon's state (and a second line only while there is more to say), Open Chat with Work, Scan…, Pause Sharing, Settings, Quit | The daemon's status, followed by one thread |
 
@@ -62,7 +62,7 @@ Chat with Work's Settings has a This computer page, and the new chat page's pane
 
 - **Narrowing happens at once**: pausing, stopping sharing a folder, turning changes, commands or their network off. A compromised server could make the computer share less, never more.
 - **Widening waits for the person**: resuming, allowing changes, commands, or the network for commands each ask in a dialog the app draws over the window (tauri-plugin-dialog, the system's own message box), which no page can see or answer, naming the folder as the daemon has it, never as the page said. A folder is added only through the system's folder picker, where the person picks it; the page can't name one. One question shows at a time.
-- **Pages never see** where a folder is on this computer (`local_path`), the activity log, the deny list, the config file or the proxy, or which bots a folder is lent to (only how many). Those, lending folders to bots, start at login, crash reports and dictation stay in the settings window, which This computer links to.
+- **Pages never see** where a folder is on this computer (`local_path`), the activity log, the deny list, the config file or the proxy, or which bots a folder is lent to (only how many). Those, lending folders to bots, the browser (docs/browser.md), start at login, crash reports and dictation stay in the settings window, which This computer links to.
 - **The state follows**: each time what a page sees changes, the app dispatches `chatwithwork-desktop:computer` with it on the server's pages in its windows.
 
 `status()` answers `{ running, paired, server, device_id, paused, connection, health: { label, tone }, folders: [{ id, label, available, index, indexed_files, changes, commands, network, bots }], commands }` (`commands`: whether this platform runs commands). The server matches `device_id` with its own row for the computer.

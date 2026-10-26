@@ -26,6 +26,21 @@ pub struct Status {
     pub activity: u64,
     pub config_file: Option<PathBuf>,
     pub audit_file: Option<PathBuf>,
+    /// The browser settings, and the browser attached (docs/browser.md).
+    pub browser: BrowserStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BrowserStatus {
+    pub enabled: bool,
+    pub stopped: bool,
+    pub changes: bool,
+    pub sites: Vec<String>,
+    pub bots: Vec<serde_json::Value>,
+    pub connected: bool,
+    /// The attached browser: `browser`, `version`, `stopped`.
+    pub extension: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -255,6 +270,9 @@ pub struct TrayView {
     pub tooltip: String,
     /// Draw the icon faded: nothing is being served.
     pub dimmed: bool,
+    /// `Some(true)` offers Resume Using the Browser, `Some(false)` Stop
+    /// Using the Browser, `None` neither: the browser is off.
+    pub browser_stopped: Option<bool>,
 }
 
 impl TrayView {
@@ -294,6 +312,9 @@ impl TrayView {
             detail,
             paused,
             dimmed: !health.is_serving(),
+            browser_stopped: status
+                .filter(|s| s.browser.enabled)
+                .map(|s| s.browser.stopped),
         }
     }
 }
