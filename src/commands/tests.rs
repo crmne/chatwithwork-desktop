@@ -675,6 +675,8 @@ mod on_windows {
                     "[Console]::Out.WriteLine(\"home=$PSHOME\"); \
                      foreach ($p in $env:PSModulePath.Split(';')) { \
                      [Console]::Out.WriteLine(\"modules=$p \" + [IO.Directory]::Exists($p)) }; \
+                     try { Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop } \
+                     catch { [Console]::Out.WriteLine('import ' + $_.Exception.ToString()) }; \
                      (Get-Command Write-Output).Source; (Get-Command Get-ChildItem).Source",
                 ),
             )
@@ -786,26 +788,29 @@ mod on_windows {
             .runs
             .start(
                 &fx.config,
+                // The marker is put together so an error quoting the line
+                // doesn't print it.
                 &request(
                     "[Diagnostics.Process]::Start('cmd.exe', '/d /c for /l %i in (0,0,1) do @rem') \
-                     | Out-Null; Write-Output started; Start-Sleep -Seconds 60",
+                     | Out-Null; 'start' + 'ed'; Start-Sleep -Seconds 60",
                 ),
             )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             let piece = fx.runs.output(&status.id, 0, 4000).unwrap();
-            if piece.text.contains("started") {
+            if piece.text.lines().any(|l| l.trim_end() == "started") {
                 break;
             }
             assert!(!piece.done, "it ended first: {}", piece.text);
             assert!(Instant::now() < deadline, "it never started");
             std::thread::sleep(Duration::from_millis(50));
         }
+        let asked = Instant::now();
         fx.runs.stop(&status.id).unwrap();
         let done = wait(&fx.runs, &status.id);
-        assert_eq!(done.status.state, "stopped");
-        assert!(done.status.duration_ms < 20_000);
+        assert_eq!(done.status.state, "stopped", "{done:?}");
+        assert!(asked.elapsed() < Duration::from_secs(10), "{done:?}");
 
         fx.config.limits.command_timeout_seconds = 3;
         let status = fx
