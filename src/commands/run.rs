@@ -302,6 +302,30 @@ mod tests {
     }
 
     #[test]
+    fn only_a_failed_run_names_the_limits_windows_refuses_past() {
+        use mxc_sdk::mxc_common::models::ResourceLimit;
+        assert_eq!(
+            limit_that_ended(Some(ResourceLimit::CpuTime), -1),
+            Some("cpu_time")
+        );
+        assert_eq!(
+            limit_that_ended(Some(ResourceLimit::CpuTime), 0),
+            Some("cpu_time")
+        );
+        assert_eq!(
+            limit_that_ended(Some(ResourceLimit::Memory), 1),
+            Some("memory")
+        );
+        assert_eq!(limit_that_ended(Some(ResourceLimit::Memory), 0), None);
+        assert_eq!(
+            limit_that_ended(Some(ResourceLimit::MaxProcesses), 1),
+            Some("processes")
+        );
+        assert_eq!(limit_that_ended(Some(ResourceLimit::MaxProcesses), 0), None);
+        assert_eq!(limit_that_ended(None, 1), None);
+    }
+
+    #[test]
     fn descendants_count_the_whole_tree_and_nothing_else() {
         let tree = [(2, 1), (3, 2), (4, 2), (5, 4), (6, 1), (7, 99)];
         assert_eq!(descendants(2, &tree), 3);
