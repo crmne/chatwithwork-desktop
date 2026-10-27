@@ -68,7 +68,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 
 # Crypto: Ed25519 device key, SHA-256 and randomness come from ring (already used by rustls).
 ring = "0.17"
-base64 = "0.22"
+base64 = "0.23"
 
 # Secrets: OS keychain (macOS Keychain, Secret Service), with a 0600 file fallback.
 keyring = "4.2"
