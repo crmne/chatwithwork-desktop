@@ -65,7 +65,7 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 
 - **A command can change or delete anything in its folder**, and nothing in the trash brings that back: approve each one knowing that. Version control is the undo.
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
-- **Toolchain settings are readable**: mise's config can hold environment variables.
+- **Toolchain settings are readable**: mise's config can hold environment variables, and on Windows so can npm's global settings (`%APPDATA%\npm\etc\npmrc`), which npm keeps beside its global programs.
 - **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet, and no memory limit either: CPU time is limited per process, and the wall clock ends the rest. On Windows the container holds it.
 - **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) there's no network at all. On Windows it's the internet and the local network, but never this computer's own servers.
 - **On Windows, a command can show windows of its own** on your desktop, though it can't read or drive other programs' windows, the clipboard or your input. And the daemon that starts it isn't sandboxed there yet: the command is, and the daemon checks the folder and the working folder itself, as everywhere.
