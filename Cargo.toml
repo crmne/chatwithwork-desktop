@@ -107,7 +107,7 @@ mimalloc = { version = "0.1", default-features = false }
 libmimalloc-sys = { version = "0.1", default-features = false, features = ["extended"] }
 
 # The user's Documents folder (XDG user dirs, known folders on Windows).
-dirs = "6"
+dirs = "7"
 
 # Terminal UI (`cww tui`). crossterm works the same on Linux, macOS and Windows.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }

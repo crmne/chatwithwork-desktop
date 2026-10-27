@@ -72,7 +72,7 @@ notify = "8.2"
 ring = "0.17"
 base64 = "0.23"
 # The Downloads folder for files the page downloads, and their names.
-dirs = "6"
+dirs = "7"
 percent-encoding = "2.3"
 # Shared async control and demo support.
 tokio = { version = "1.53", features = ["sync", "macros"] }
