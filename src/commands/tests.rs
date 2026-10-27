@@ -58,7 +58,9 @@ fn fixture(commands: bool) -> Fixture {
         commands,
         network: false,
     });
-    config.limits.command_timeout_seconds = 20;
+    // Windows PowerShell can take long to start on a machine that hasn't
+    // compiled .NET's assemblies ahead of time yet (a fresh CI runner).
+    config.limits.command_timeout_seconds = if cfg!(windows) { 120 } else { 20 };
     Fixture {
         _dir: dir,
         folder,
@@ -93,7 +95,7 @@ fn shell(command: &str) -> Request {
 }
 
 fn wait(runs: &Runs, id: &str) -> Finished {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 150 } else { 30 });
     loop {
         if !runs.status(id).unwrap().running() {
             return runs.finished(id).unwrap();
@@ -744,7 +746,7 @@ mod on_windows {
                 ),
             )
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !fx
             .runs
             .output(&status.id, 0, 100)
