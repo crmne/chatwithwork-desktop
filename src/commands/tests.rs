@@ -179,7 +179,11 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
             .ends_with("data/runs/0123456789ab")
     );
     assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
-    assert_eq!(json["resources"]["memoryMb"], 4096);
+    if cfg!(target_os = "macos") {
+        assert!(json["resources"].get("memoryMb").is_none(), "{json}");
+    } else {
+        assert_eq!(json["resources"]["memoryMb"], 4096);
+    }
     let env: Vec<&str> = json["process"]["env"]
         .as_array()
         .unwrap()
@@ -253,6 +257,19 @@ fn seatbelt_is_named() {
         serde_json::from_str(&plan.request_json(None, Sandbox::Seatbelt)).unwrap();
     assert_eq!(json["containment"], "seatbelt");
     assert_eq!(json["seatbelt"]["guiAccess"], false);
+    // MXC refuses a memory limit on Seatbelt, and with it every run.
+    assert!(json["resources"].get("memoryMb").is_none(), "{json}");
+    assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
+}
+
+#[test]
+fn macos_promises_no_memory_or_process_limit() {
+    let limits = Limits::from_config(&crate::config::Limits::default());
+    if cfg!(target_os = "macos") {
+        assert_eq!((limits.memory_mb, limits.processes), (0, 0));
+    } else {
+        assert_eq!((limits.memory_mb, limits.processes), (4096, 256));
+    }
 }
 
 #[test]

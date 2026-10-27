@@ -417,10 +417,14 @@ impl Plan {
             "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
             "resources": {
                 "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
-                "memoryMb": self.limits.memory_mb,
                 "priority": "low",
             },
         });
+        // MXC refuses a run whose memory limit its backend can't hold, as
+        // Seatbelt can't; 0 means none.
+        if self.limits.memory_mb > 0 && sandbox != Sandbox::Seatbelt {
+            document["resources"]["memoryMb"] = self.limits.memory_mb.into();
+        }
         if sandbox == Sandbox::Seatbelt {
             document["containment"] = "seatbelt".into();
             document["seatbelt"] = json!({
