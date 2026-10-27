@@ -395,7 +395,7 @@ fn display(path: &Path) -> String {
 /// says only 0 or 1).
 const PROLOGUE: &str = "$ErrorActionPreference = 'Continue'\r\n\
 $ProgressPreference = 'SilentlyContinue'\r\n\
-$__cwwUtf8 = New-Object System.Text.UTF8Encoding $false\r\n\
+$__cwwUtf8 = [System.Text.UTF8Encoding]::new($false)\r\n\
 [Console]::OutputEncoding = $__cwwUtf8\r\n\
 $OutputEncoding = $__cwwUtf8\r\n\
 $global:LASTEXITCODE = 0\r\n";
@@ -410,6 +410,27 @@ exit 1\r\n";
 /// (a trailing backtick) before the epilogue starts.
 pub fn script(command: &str) -> String {
     format!("{PROLOGUE}{command}\r\n\r\n{EPILOGUE}")
+}
+
+/// Where a run's Windows PowerShell looks for modules: those installed for
+/// everyone, and its own.
+fn module_path(host: &Host) -> String {
+    let program_files = host
+        .system_env
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("ProgramFiles"))
+        .map_or_else(
+            || PathBuf::from(r"C:\Program Files"),
+            |(_, value)| PathBuf::from(value),
+        );
+    [
+        within(&program_files, r"WindowsPowerShell\Modules"),
+        within(&host.system32(), r"WindowsPowerShell\v1.0\Modules"),
+    ]
+    .iter()
+    .map(|p| display(p))
+    .collect::<Vec<_>>()
+    .join(";")
 }
 
 /// The command line that runs `script` in Windows PowerShell 5.1.
@@ -485,6 +506,10 @@ impl Plan {
             ("LOCALAPPDATA".to_string(), format!("{own}\\AppData\\Local")),
             ("TEMP".to_string(), format!("{own}\\tmp")),
             ("TMP".to_string(), format!("{own}\\tmp")),
+            // Where Windows PowerShell finds most of its commands, which
+            // live in modules (Write-Output is in one). Left to itself, a run
+            // on Windows on Arm found none of them.
+            ("PSModulePath".to_string(), module_path(host)),
             ("LANG".to_string(), "C.UTF-8".to_string()),
             ("TERM".to_string(), "dumb".to_string()),
             // Python writes UTF-8 to a pipe, not the system's code page.
@@ -1048,6 +1073,12 @@ mod tests {
         assert_eq!(var("ProgramFiles").as_deref(), Some(r"C:\Program Files"));
         assert_eq!(var("PATHEXT").as_deref(), Some(".COM;.EXE;.BAT;.CMD"));
         assert_eq!(var("npm_config_update_notifier").as_deref(), Some("false"));
+        assert_eq!(
+            var("PSModulePath").as_deref(),
+            Some(
+                r"C:\Program Files\WindowsPowerShell\Modules;C:\Windows\System32\WindowsPowerShell\v1.0\Modules"
+            )
+        );
         let path = var("PATH").unwrap();
         let path: Vec<&str> = path.split(';').collect();
         let at = |dir: &str| path.iter().position(|p| *p == dir);
