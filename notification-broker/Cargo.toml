@@ -16,7 +16,7 @@ path = "src/main.rs"
 cww = { path = ".." }
 anyhow = "1"
 serde_json = "1"
-pollster = "0.4"
+pollster = "1.0"
 tokio = { version = "1.53", features = ["sync", "macros"] }
 # Same owner-approved revision as every Fastframe dependency in app/.
 fastframe-notifications = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.1" }
