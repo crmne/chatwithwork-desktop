@@ -611,7 +611,13 @@ mod on_windows {
     use super::*;
 
     fn works() -> bool {
-        crate::commands::windows::sandbox().is_ok()
+        match crate::commands::windows::sandbox() {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("not running commands here: {}", e.message);
+                false
+            }
+        }
     }
 
     fn lines(text: &str) -> Vec<&str> {

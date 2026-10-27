@@ -113,6 +113,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is lent to (see `roots_bot`), empty when none.
+- `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
 
 ### `pause` and `resume`
 
@@ -228,7 +229,7 @@ Answers with the updated `root` and writes a `root_changes_allowed` or `root_cha
 {"cmd": "roots_commands", "root": "app", "commands": true, "network": false}
 ```
 
-Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on Windows. While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
+Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on a Windows without the process containers commands run in (Windows 11 24H2 with the August 2026 update and later; `status` says, in `commands`). While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
 
@@ -291,7 +292,7 @@ The daemon answers `{"ok": true}` when the origin is the published extension's (
 ]}
 ```
 
-The commands Chat with Work ran on this computer with `run` (PROTOCOL.md section 8.15): those running first, then the latest to end (the last 32 are kept until the daemon restarts). Each has its status as `run_status` gives it (`state` `running`, `exited`, `timed_out`, `stopped` or `failed`; `limit`, `cpu_time` or `processes`, when a limit ended it), the folder by ID and label, the folder inside it it started in, its command line, whether it had the network, and when it started (Unix seconds). An empty list where commands can't run (Windows, an organization's own daemon). For this computer's windows only: the server never gets this list.
+The commands Chat with Work ran on this computer with `run` (PROTOCOL.md section 8.15): those running first, then the latest to end (the last 32 are kept until the daemon restarts). Each has its status as `run_status` gives it (`state` `running`, `exited`, `timed_out`, `stopped` or `failed`; `limit`, `cpu_time` or `processes`, when a limit ended it), the folder by ID and label, the folder inside it it started in, its command line, whether it had the network, and when it started (Unix seconds). An empty list where commands can't run (an organization's own daemon, or a Windows that can't sandbox them). For this computer's windows only: the server never gets this list.
 
 ```json
 {"cmd": "command_output", "run": "3f9a0c1d2e4b", "offset": 0}
