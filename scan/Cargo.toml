@@ -27,7 +27,7 @@ flate2 = "1"
 # libsane is loaded at run time, from the distribution's package, never
 # shipped: its backends are GPL with an exception for frontends that load
 # them, and a computer without SANE still runs the app.
-libloading = "0.8"
+libloading = "0.9"
 
 [dev-dependencies]
 tempfile = "3.27"
@@ -42,7 +42,7 @@ objc2-vision = "0.3"
 [target.'cfg(windows)'.dependencies]
 # TWAIN: the data source manager is loaded at run time, the hidden window
 # and message loop a TWAIN source needs come from Win32.
-libloading = "0.8"
+libloading = "0.9"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
