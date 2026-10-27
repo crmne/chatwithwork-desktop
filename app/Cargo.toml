@@ -90,7 +90,7 @@ whisper-rs = { version = "0.16.0", default-features = false }
 # windows in --demo builds (snapshot.rs). Already in the tree through Tauri.
 webkit2gtk = "2.0"
 # Saves those pictures as PNG.
-cairo-rs = { version = "0.18", features = ["png"], optional = true }
+cairo-rs = { version = "0.22", features = ["png"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Pictures of the windows in --demo builds (snapshot.rs): WKWebView draws its
