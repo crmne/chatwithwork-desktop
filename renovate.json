@@ -2,5 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "cairo-rs must match the cairo-rs webkit2gtk 2.0 builds on (gtk-rs 0.18, Tauri's GTK3 stack): snapshot.rs turns webkit2gtk's surface into an ImageSurface, which only works across the same version.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["cairo-rs"],
+      "allowedVersions": "<0.19"
+    }
   ]
 }
