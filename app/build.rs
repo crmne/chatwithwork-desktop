@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "cancel_pairing",
     "logout",
     "start_agent",
+    "prepare_command_drives",
     "browser_enable",
     "autostart",
     "set_autostart",

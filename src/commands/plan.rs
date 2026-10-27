@@ -32,6 +32,9 @@ pub enum Sandbox {
     Landlock,
     /// macOS.
     Seatbelt,
+    /// Windows: a process container on the BaseContainer of Windows 11
+    /// 24H2 and later (see `windows.rs`).
+    ProcessContainer,
 }
 
 impl Sandbox {
@@ -60,12 +63,26 @@ impl Sandbox {
         {
             Ok(Self::Seatbelt)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            super::windows::sandbox()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             Err(RunError::new(
                 "unavailable",
                 "commands can't run on this system yet",
             ))
+        }
+    }
+
+    /// Its name in `status` and the dry run.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+            Self::Landlock => "landlock",
+            Self::Seatbelt => "seatbelt",
+            Self::ProcessContainer => "process_container",
         }
     }
 
@@ -94,7 +111,7 @@ impl Sandbox {
     pub fn own_processes(self) -> usize {
         match self {
             Self::Bubblewrap => 3,
-            Self::Landlock | Self::Seatbelt => 0,
+            Self::Landlock | Self::Seatbelt | Self::ProcessContainer => 0,
         }
     }
 }
@@ -143,9 +160,9 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
             format!("a command is at most {MAX_COMMAND_CHARS} characters, without NUL"),
         ));
     }
-    let folder = root
-        .path
-        .canonicalize()
+    // Canonical, and on Windows without the `\\?\` prefix, which the
+    // sandbox's own paths don't carry.
+    let folder = crate::roots::canonical(&root.path)
         .map_err(|_| RunError::new("not_found", format!("{} isn't there", root.label)))?;
     let relative = Path::new(&request.dir);
     let plain = relative
@@ -157,9 +174,7 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
             "the working folder must be a relative path inside the shared folder",
         ));
     }
-    let cwd = folder
-        .join(relative)
-        .canonicalize()
+    let cwd = crate::roots::canonical(&folder.join(relative))
         .map_err(|_| RunError::new("not_found", format!("no folder {}", request.dir)))?;
     if !cwd.starts_with(&folder) || !cwd.is_dir() {
         return Err(RunError::new(
@@ -373,6 +388,11 @@ impl Plan {
     /// computer gets, for what the two hold differently. A run with the
     /// network never gets here on Landlock ([`Sandbox::refuses`]).
     pub fn request_json(&self, home: Option<&Path>, sandbox: Sandbox) -> String {
+        if sandbox == Sandbox::ProcessContainer {
+            return self
+                .windows_request(&super::windows::Host::current())
+                .to_string();
+        }
         let mut found = toolchains(home);
         if sandbox == Sandbox::Landlock {
             // Landlock can't take write access back below a folder it

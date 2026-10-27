@@ -109,6 +109,13 @@ libmimalloc-sys = { version = "0.1", default-features = false, features = ["exte
 # The user's Documents folder (XDG user dirs, known folders on Windows).
 dirs = "7"
 
+# Commands run in a folder (`run`) go in a sandbox of their own, one per
+# run: Bubblewrap on Linux, or Landlock where Bubblewrap can't create its
+# namespaces, Seatbelt on macOS, and a process container (BaseContainer) on
+# Windows. Carmine's fork adds CPU time and memory limits and the Landlock
+# backend.
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "d57b0d1aa3a2d552001fa54ef4ac4baaa733c26d" }
+
 # Terminal UI (`cww tui`). crossterm works the same on Linux, macOS and Windows.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 crossterm = "0.29"
@@ -116,11 +123,6 @@ crossterm = "0.29"
 # Safe resolution (openat2, O_NOFOLLOW, F_GETPATH), peer credentials, umask.
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process", "system", "alloc"] }
-# Commands run in a folder (`run`) go in a sandbox of their own, one per
-# run: Bubblewrap on Linux, or Landlock where Bubblewrap can't create its
-# namespaces, and Seatbelt on macOS. Carmine's fork adds CPU time and memory
-# limits and the Landlock backend.
-mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "d57b0d1aa3a2d552001fa54ef4ac4baaa733c26d" }
 
 # The kernel sandbox for the daemon on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -136,7 +138,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
 ] }
 
 [dev-dependencies]

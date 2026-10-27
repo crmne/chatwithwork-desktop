@@ -28,7 +28,7 @@ pub(super) fn spawn(
             move || {
                 let state = run(&plan, &cell);
                 lock(&cell).finish(state);
-                let _ = std::fs::remove_dir_all(&plan.home);
+                remove_home(&plan.home);
                 retire(&plan.id);
             }
         });
@@ -132,17 +132,35 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     for reader in readers {
         let _ = reader.join();
     }
-    if ended.is_some() {
+    if let Some(code) = ended {
         let _ = process.wait();
-        let cpu = process
+        let exceeded = process
             .output_metadata()
             .and_then(|m| m.resource_usage)
             .and_then(|u| u.limit_exceeded);
-        if cpu == Some(mxc_sdk::mxc_common::models::ResourceLimit::CpuTime) {
-            lock(cell).limit = Some("cpu_time");
+        if let Some(limit) = limit_that_ended(exceeded, code) {
+            lock(cell).limit = Some(limit);
         }
     }
     state
+}
+
+/// The limit to name for a run that exited with `code`, from what MXC says
+/// it ran into. Running out of CPU time ends a process wherever it's
+/// enforced. Windows also refuses a process past the process limit, and
+/// memory past the memory limit, without ending the run: those are named
+/// only when the run failed.
+fn limit_that_ended(
+    exceeded: Option<mxc_sdk::mxc_common::models::ResourceLimit>,
+    code: i32,
+) -> Option<&'static str> {
+    use mxc_sdk::mxc_common::models::ResourceLimit;
+    match exceeded? {
+        ResourceLimit::CpuTime => Some("cpu_time"),
+        ResourceLimit::MaxProcesses if code != 0 => Some("processes"),
+        ResourceLimit::Memory if code != 0 => Some("memory"),
+        _ => None,
+    }
 }
 
 /// Why MXC didn't start a run, for the person who asked for it.
@@ -217,15 +235,43 @@ fn descendants(root: u32, parents: &[(u32, u32)]) -> usize {
     count
 }
 
-/// The run's own home and temporary folder, private to this user.
+/// Remove a run's home once it has ended. On Windows the files of the
+/// processes it left (ended when its container closed) are let go of a
+/// moment later, so it tries again for a few seconds.
+fn remove_home(home: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 5 } else { 0 });
+    loop {
+        match std::fs::remove_dir_all(home) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                tracing::warn!(error = %e.kind(), "a command's home wasn't removed");
+                return;
+            }
+        }
+    }
+}
+
+/// The run's own home and temporary folder, private to this user (on
+/// Windows by where they are, under `%LOCALAPPDATA%`), and there the script
+/// a Windows run's PowerShell reads.
 fn make_home(plan: &Plan) -> std::io::Result<()> {
-    for dir in [plan.home.clone(), plan.home.join("tmp")] {
+    let mut dirs = vec![plan.home.clone(), plan.home.join("tmp")];
+    if cfg!(windows) {
+        dirs.push(plan.home.join("AppData").join("Local"));
+        dirs.push(plan.home.join("AppData").join("Roaming"));
+    }
+    for dir in dirs {
         std::fs::create_dir_all(&dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
+    }
+    if cfg!(windows) {
+        std::fs::write(plan.script_path(), super::windows::script(&plan.command))?;
     }
     Ok(())
 }

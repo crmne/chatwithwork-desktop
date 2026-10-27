@@ -36,7 +36,7 @@ pub fn view(status: Option<&Status>) -> Value {
             "running": false,
             "health": { "label": health.label(), "tone": health.tone() },
             "folders": [],
-            "commands": commands_supported(),
+            "commands": commands_supported(None),
         });
     };
     json!({
@@ -48,7 +48,7 @@ pub fn view(status: Option<&Status>) -> Value {
         "connection": status.connection.connection,
         "health": { "label": health.label(), "tone": health.tone() },
         "folders": status.roots.iter().map(folder).collect::<Vec<_>>(),
-        "commands": commands_supported(),
+        "commands": commands_supported(Some(status)),
     })
 }
 
@@ -66,9 +66,25 @@ fn folder(root: &RootStatus) -> Value {
     })
 }
 
-/// Commands run in folders on macOS and Linux only.
-fn commands_supported() -> bool {
+/// Whether commands can run in folders here: on Windows only where the
+/// daemon says so (Windows 11 24H2 and later, docs/commands.md).
+fn commands_supported(status: Option<&Status>) -> bool {
     Platform::current() != Platform::Windows
+        || status
+            .and_then(|s| s.commands.as_ref())
+            .is_some_and(|c| c.available)
+}
+
+/// Why commands can't run here, in the daemon's words if it said.
+fn commands_unsupported(status: &Status) -> String {
+    let Some(detail) = status.commands.as_ref().and_then(|c| c.detail.as_deref()) else {
+        return "Commands can't run on this computer.".into();
+    };
+    let mut chars = detail.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => "Commands can't run on this computer.".into(),
+    }
 }
 
 /// What a page may ask. Anything else is refused before it reaches the
@@ -171,8 +187,8 @@ impl Change {
             }
             Change::Commands { folder, on } => {
                 let root = find(folder)?;
-                if *on && !root.allows_commands && !commands_supported() {
-                    return Err("Commands can't run on Windows yet.".into());
+                if *on && !root.allows_commands && !commands_supported(Some(status)) {
+                    return Err(commands_unsupported(status));
                 }
                 if *on && !root.writable {
                     return Err("Allow changes in this folder first.".into());
@@ -384,6 +400,34 @@ mod tests {
                 network: true
             }
         );
+    }
+
+    #[test]
+    fn commands_run_only_where_the_daemon_says_this_windows_can() {
+        let mut status = status();
+        status.roots[1].allows_commands = false;
+        let allow = || change(json!({ "action": "commands", "folder": "app", "on": true }));
+        status.commands = Some(crate::model::CommandsHost {
+            available: false,
+            detail: Some("commands need Windows 11 24H2 or later".into()),
+            drives: Vec::new(),
+        });
+        let planned = allow().plan(&status);
+        if cfg!(windows) {
+            assert_eq!(
+                planned.unwrap_err(),
+                "Commands need Windows 11 24H2 or later."
+            );
+            assert_eq!(view(Some(&status))["commands"], json!(false));
+        } else {
+            assert!(planned.is_ok(), "only Windows depends on the daemon's word");
+        }
+        status.commands = Some(crate::model::CommandsHost {
+            available: true,
+            ..Default::default()
+        });
+        assert!(allow().plan(&status).is_ok());
+        assert_eq!(view(Some(&status))["commands"], json!(true));
     }
 
     #[test]

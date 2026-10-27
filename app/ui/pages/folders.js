@@ -108,7 +108,7 @@ function folderRow(app, root) {
   const allowing = view.allowing === root.id;
   const commanding = view.commanding === root.id;
   const [indexLabel, tone] = indexState(root);
-  const unix = app.info.platform !== "windows";
+  const runsCommands = commandsHere(app);
 
   const setting = (titleText, text, control) =>
     h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
@@ -191,8 +191,10 @@ function folderRow(app, root) {
             change(app, root.id, { cmd: "roots_writable", root: root.id, writable: true });
           }, { kind: "btn-primary" }))) : null,
 
-      // Run commands: only where changes are allowed, and not on Windows.
-      root.writable && unix ? setting("Run commands", root.allows_commands
+      // Run commands: only where changes are allowed, and on Windows only
+      // where the daemon says this Windows can.
+      root.writable && !runsCommands ? setting("Run commands", commandsUnavailable(app), null) : null,
+      root.writable && runsCommands ? setting("Run commands", root.allows_commands
         ? "Chat with Work can run commands here, like tests or a build, each after you approve it, in a sandbox that can change only this folder."
         : "Turn on to let Chat with Work run commands here, like tests or a build, each after you approve it.",
       switchInput(root.allows_commands || commanding, (on) => {
@@ -215,12 +217,57 @@ function folderRow(app, root) {
             view.commanding = null;
             change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: false });
           }, { kind: "btn-primary" }))) : null,
-      root.writable && unix && root.allows_commands ? setting("Commands use the network", root.network
+      root.writable && runsCommands && root.allows_commands ? setting("Commands use the network", root.network
         ? "Commands here can reach the internet, to install packages or fetch dependencies."
         : "Commands here run without a network.",
       switchInput(root.network, (on) => change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: on }),
         { label: `Commands in ${root.label} use the network`, disabled: busy })) : null,
       bots(app, root, busy)));
+}
+
+// Whether commands can run here: everywhere but Windows, and there where
+// the daemon says so (Windows 11 24H2 and later, docs/commands.md).
+function commandsHere(app) {
+  return app.info.platform !== "windows" || !!app.status?.commands?.available;
+}
+
+function commandsUnavailable(app) {
+  const detail = app.status?.commands?.detail;
+  return detail ? `${detail[0].toUpperCase()}${detail.slice(1)}.` : "Commands can't run on this computer.";
+}
+
+// "drive C:", "drives C: and D:".
+function driveNames(drives) {
+  const names = drives.map((drive) => String(drive.root).replace(/\\$/, ""));
+  if (names.length === 1) return `drive ${names[0]}`;
+  return `drives ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// Windows keeps the top of a drive from sandboxes, and Node.js, npm and
+// cmd's dir look at it first: an administrator can let them see it
+// (local.rs, prepare_command_drives).
+function drivesRow(app, drives) {
+  const view = app.view("folders");
+  const names = driveNames(drives);
+  return h("div", { class: "row" },
+    h("div", { class: "row__body" },
+      h("h3", {}, "Node.js and cmd in commands"),
+      h("p", {}, `Node.js, npm and cmd's dir look at the top of ${names} first, which Windows keeps from sandboxes, so they fail in commands here. Let sandboxed programs read the details of ${names}, never what's in it? Windows asks for an administrator.`)),
+    h("div", { class: "row__actions" },
+      button(view.preparing ? "Allowing…" : "Allow…", async () => {
+        view.preparing = true;
+        view.error = null;
+        view.note = null;
+        app.render();
+        try {
+          await call("prepare_command_drives");
+          view.note = `Commands can now see the top of ${names}: Node.js, npm and cmd's dir work there.`;
+        } catch (error) {
+          view.error = error.message;
+        }
+        view.preparing = false;
+        app.render();
+      }, { disabled: !!view.preparing })));
 }
 
 // What lending a folder lets a bot do, in the words CONTROL.md asks for.
@@ -327,12 +374,16 @@ export function render(app) {
     return page;
   }
   const busy = view.adding || view.picking;
-  append(page, 
+  const unprepared = commandsHere(app) && status.roots.some((root) => root.allows_commands)
+    ? (status.commands?.drives || []).filter((drive) => !drive.prepared)
+    : [];
+  append(page,
     status.roots.length === 0
       ? group(h("div", { class: "empty" },
         h("strong", {}, "Nothing is shared yet"),
         h("p", {}, "Add a folder to let Chat with Work search it. Share narrow folders: anything inside can be read, except the private files listed under Always Private.")))
       : group(...status.roots.map((root) => folderRow(app, root))),
+    unprepared.length ? group(drivesRow(app, unprepared)) : null,
     h("div", { class: "section" },
       h("div", { class: "inline" },
         button(view.adding ? "Adding…" : "Add Folder…", () => pickFolder(app), { kind: "btn-primary", disabled: busy }),

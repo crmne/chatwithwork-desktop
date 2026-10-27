@@ -143,6 +143,7 @@ impl CommandTools {
                         "folder": root.label,
                         "dir": path.rel.as_string(),
                         "command": command,
+                        "shell": shell(),
                         "network": root.network,
                         "background": args.background,
                         "limits": self.limits,
@@ -262,6 +263,7 @@ fn ended(status: &Status, command: &str) -> String {
     ) {
         (Some("cpu_time"), ..) => "CPU limit".to_string(),
         (Some("processes"), ..) => "process limit".to_string(),
+        (Some("memory"), ..) => "memory limit".to_string(),
         (_, "exited", Some(code)) => format!("exit {code}"),
         (_, state, _) => state.replace('_', " "),
     };
@@ -315,6 +317,34 @@ fn tool_error(err: RunError) -> ToolError {
     ToolError::new(code, err.message)
 }
 
+/// The shell a command line runs in here: `sh -c`, or Windows PowerShell
+/// 5.1, which every Windows has (`windows.rs`).
+pub fn shell() -> &'static str {
+    if cfg!(windows) { "powershell" } else { "sh" }
+}
+
+const RUN_SH: &str = "Run one line of shell (`sh -c`) in a shared folder that allows commands \
+     (`allows_commands: true` in `roots`), such as `bin/rails test` or `npm run build`. \
+     It runs in a sandbox of its own: it can change only that folder, reads the system \
+     and the installed language toolchains, has no network unless the folder allows it \
+     (`network` in `roots`), and has CPU, memory and time limits. `path` is the folder \
+     to start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns \
+     the exit code and the end of its output; a longer command keeps running, and the \
+     result says how to follow it. `background: true` returns at once. The person \
+     approves every command.";
+
+const RUN_POWERSHELL: &str = "Run one line of Windows PowerShell 5.1 in a shared folder that \
+     allows commands (`allows_commands: true` in `roots`), such as `npm test` or \
+     `dotnet build`. Separate commands with `;`: this PowerShell has no `&&` or `||`. \
+     `cmd /c` runs cmd syntax. It runs in a sandbox of its own: it can change only that \
+     folder, reads the system, the folders on the system's PATH and the installed \
+     language toolchains, has no network unless the folder allows it (`network` in \
+     `roots`), and has CPU, memory, process and time limits. `path` is the folder to \
+     start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns the \
+     exit code (the last command's) and the end of its output; a longer command keeps \
+     running, and the result says how to follow it. `background: true` returns at once. \
+     The person approves every command.";
+
 /// The tools' definitions: `(name, title, description, schema, kind)`,
 /// where kind is `run`, `read` or `stop`.
 pub fn definitions() -> Vec<(
@@ -328,19 +358,15 @@ pub fn definitions() -> Vec<(
         (
             "run",
             "Run a command on the computer",
-            "Run one line of shell (`sh -c`) in a shared folder that allows commands \
-             (`allows_commands: true` in `roots`), such as `bin/rails test` or `npm run build`. \
-             It runs in a sandbox of its own: it can change only that folder, reads the system \
-             and the installed language toolchains, has no network unless the folder allows it \
-             (`network` in `roots`), and has CPU, memory and time limits. `path` is the folder \
-             to start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns \
-             the exit code and the end of its output; a longer command keeps running, and the \
-             result says how to follow it. `background: true` returns at once. The person \
-             approves every command.",
+            if cfg!(windows) {
+                RUN_POWERSHELL
+            } else {
+                RUN_SH
+            },
             json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "maxLength": MAX_COMMAND_CHARS, "description": "One line of shell." },
+                    "command": { "type": "string", "maxLength": MAX_COMMAND_CHARS, "description": if cfg!(windows) { "One line of Windows PowerShell." } else { "One line of shell." } },
                     "path": { "type": "string", "description": "`<root_id>:` or `<root_id>:dir`, the folder it starts in." },
                     "background": { "type": "boolean", "description": "Return at once and leave it running (a server, a watcher, a long build)." },
                     "dry_run": { "type": "boolean", "description": "Check the command and say where and how it would run, without running it." }

@@ -243,6 +243,49 @@ pub async fn browser_enable(webview: Webview, enabled: bool) -> Answer {
         .map_err(|e| refusal("failed", format!("{e:#}")))
 }
 
+/// Windows: let commands see the top of the drives they run on, which
+/// Node.js, npm and cmd's `dir` look at and Windows keeps from sandboxes
+/// (`cww::commands::windows::DRIVE_ROOT_MASK`). The drives are the ones the
+/// daemon names in its status; Windows asks an administrator, over the
+/// settings window.
+#[tauri::command]
+pub async fn prepare_command_drives(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    local_page(&webview)?;
+    #[cfg(windows)]
+    {
+        let Some(status) = desktop.status() else {
+            return Err(refusal(
+                "not_running",
+                "The background agent isn't running.",
+            ));
+        };
+        let roots: Vec<std::path::PathBuf> = status
+            .commands
+            .map(|c| c.drives)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|drive| !drive.prepared)
+            .map(|drive| drive.root)
+            .collect();
+        let owner = webview.window().hwnd().ok().map(|hwnd| hwnd.0 as isize);
+        let prepared = blocking(move || cww::commands::windows::prepare_drives(&roots, owner))
+            .await?
+            .map_err(|e| refusal("failed", e))?;
+        // The daemon reads the drives again for its next status.
+        let client = desktop.client.clone();
+        let _ = blocking(move || client.request(&ControlRequest::Reload)).await;
+        Ok(json!({ "prepared": prepared }))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = desktop;
+        Err(refusal(
+            "unsupported",
+            "Only Windows keeps the top of a drive from the commands' sandbox.",
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn start_agent(webview: Webview) -> Answer {
     local_page(&webview)?;

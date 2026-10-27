@@ -14,6 +14,7 @@
     "allow-cancel-pairing",
     "allow-logout",
     "allow-start-agent",
+    "allow-prepare-command-drives",
     "allow-browser-enable",
     "allow-autostart",
     "allow-set-autostart",

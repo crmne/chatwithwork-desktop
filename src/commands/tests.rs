@@ -159,6 +159,8 @@ fn the_working_folder_stays_inside_the_shared_folder() {
     }
 }
 
+/// The Linux and macOS requests.
+#[cfg(unix)]
 #[test]
 fn the_request_holds_the_run_to_its_folder_without_network() {
     let fx = fixture(true);
@@ -204,6 +206,8 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
     assert!(json["network"].get("ingress").is_none());
 }
 
+/// The Linux and macOS requests.
+#[cfg(unix)]
 #[test]
 fn landlock_refuses_commands_the_network() {
     let mut fx = fixture(true);
@@ -227,6 +231,8 @@ fn landlock_refuses_commands_the_network() {
     assert_eq!(Sandbox::Seatbelt.refuses(&online), None);
 }
 
+/// The Linux and macOS requests.
+#[cfg(unix)]
 #[test]
 fn on_landlock_toolchains_inside_the_folder_are_left_to_it() {
     let fx = fixture(true);
@@ -248,6 +254,8 @@ fn on_landlock_toolchains_inside_the_folder_are_left_to_it() {
     assert!(!readonly(Sandbox::Landlock).contains(&cargo));
 }
 
+/// The Linux and macOS requests.
+#[cfg(unix)]
 #[test]
 fn seatbelt_is_named() {
     let fx = fixture(true);
@@ -593,4 +601,242 @@ fn toolchains() {
         .unwrap();
     let done = wait(&fx.runs, &status.id);
     println!("{}\n{}", done.stdout, done.stderr);
+}
+
+/// Commands on Windows, in a process container, where this Windows has one
+/// and the tests run in a desktop session (`windows::sandbox`): elsewhere
+/// they check nothing.
+#[cfg(windows)]
+mod on_windows {
+    use super::*;
+
+    fn works() -> bool {
+        crate::commands::windows::sandbox().is_ok()
+    }
+
+    fn lines(text: &str) -> Vec<&str> {
+        text.lines().map(str::trim_end).collect()
+    }
+
+    #[test]
+    fn a_command_runs_in_powershell_in_its_folder_and_reports_how_it_ended() {
+        if !works() {
+            return;
+        }
+        let fx = fixture(true);
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(
+                    "Get-Content README.md; [Console]::Error.WriteLine('oops'); \
+                     'made' | Set-Content out.txt; 'é ü 中文'; cmd /c exit 3",
+                ),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.state, "exited", "{done:?}");
+        assert_eq!(
+            done.status.exit_code,
+            Some(3),
+            "the last command's: {done:?}"
+        );
+        assert_eq!(lines(&done.stdout), ["hello", "é ü 中文"], "{done:?}");
+        assert_eq!(lines(&done.stderr), ["oops"], "{done:?}");
+        assert_eq!(
+            std::fs::read_to_string(fx.folder.join("out.txt"))
+                .unwrap()
+                .trim(),
+            "made"
+        );
+    }
+
+    #[test]
+    fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
+        if !works() {
+            return;
+        }
+        let fx = fixture(true);
+        let outside = fx.folder.parent().unwrap().join("outside.txt");
+        std::fs::write(&outside, "keep\n").unwrap();
+        // SAFETY: tests set this before any run reads the environment.
+        unsafe { std::env::set_var("CWW_SECRET_FOR_TEST", "leak") };
+        let command = format!(
+            "try {{ Get-Content -LiteralPath '{0}' -ErrorAction Stop; 'read' }} \
+             catch {{ 'no-read' }}; \
+             try {{ Set-Content -LiteralPath '{0}' changed -ErrorAction Stop; 'wrote' }} \
+             catch {{ 'no-write' }}; \
+             try {{ Get-ChildItem -LiteralPath '{1}' -ErrorAction Stop | Out-Null; 'listed' }} \
+             catch {{ 'no-list' }}; \
+             \"secret=$env:CWW_SECRET_FOR_TEST\"; \"home=$env:USERPROFILE\"; \
+             New-Item -ItemType File \"$env:USERPROFILE\\ok\" | Out-Null; 'home-writable'",
+            outside.display(),
+            fx.folder.parent().unwrap().display(),
+        );
+        let status = fx.runs.start(&fx.config, &request(&command)).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
+        let out = lines(&done.stdout);
+        for line in ["no-read", "no-write", "no-list", "secret=", "home-writable"] {
+            assert!(out.contains(&line), "{line}: {done:?}");
+        }
+        let home = out
+            .iter()
+            .find_map(|l| l.strip_prefix("home="))
+            .unwrap()
+            .to_string();
+        assert!(home.ends_with(&status.id), "its own home: {home}");
+        // Removed once the run's processes let go of it, a moment after.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Path::new(&home).exists() {
+            assert!(Instant::now() < deadline, "its home goes when it ends");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn a_command_never_reaches_this_computer_and_the_network_only_where_allowed() {
+        if !works() {
+            return;
+        }
+        let mut fx = fixture(true);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dial = format!(
+            "$c = New-Object Net.Sockets.TcpClient; \
+             try {{ $c.Connect('127.0.0.1', {port}); 'connected' }} catch {{ 'refused' }}; \
+             try {{ [Net.Dns]::GetHostAddresses('example.com') | Out-Null; 'resolved' }} \
+             catch {{ 'no-dns' }}"
+        );
+        let status = fx.runs.start(&fx.config, &request(&dial)).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(lines(&done.stdout), ["refused", "no-dns"], "{done:?}");
+        assert!(listener.accept().is_err(), "nothing reached this computer");
+
+        // With the network, still not this computer's own servers.
+        fx.config.roots[0].network = true;
+        let status = fx.runs.start(&fx.config, &request(&dial)).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(lines(&done.stdout)[0], "refused", "{done:?}");
+        assert!(listener.accept().is_err());
+    }
+
+    #[test]
+    fn a_command_is_stopped_on_request_with_everything_it_started() {
+        if !works() {
+            return;
+        }
+        let mut fx = fixture(true);
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(
+                    "[Diagnostics.Process]::Start('cmd.exe', '/d /c for /l %i in (0,0,1) do @rem') \
+                     | Out-Null; Write-Output started; Start-Sleep -Seconds 60",
+                ),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !fx
+            .runs
+            .output(&status.id, 0, 100)
+            .unwrap()
+            .text
+            .contains("started")
+        {
+            assert!(Instant::now() < deadline, "it never started");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        fx.runs.stop(&status.id).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.state, "stopped");
+        assert!(done.status.duration_ms < 20_000);
+
+        fx.config.limits.command_timeout_seconds = 3;
+        let status = fx
+            .runs
+            .start(&fx.config, &request("Start-Sleep -Seconds 60"))
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.state, "timed_out");
+    }
+
+    #[test]
+    fn output_is_kept_in_pieces_and_the_result_keeps_the_end() {
+        if !works() {
+            return;
+        }
+        let mut fx = fixture(true);
+        fx.config.limits.command_output_chars = 100;
+        let status = fx
+            .runs
+            .start(&fx.config, &request("1..2000 | ForEach-Object { $_ }"))
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.stdout.chars().count(), 100);
+        assert!(
+            done.stdout.ends_with("1999\r\n2000\r\n"),
+            "{:?}",
+            done.stdout
+        );
+        let mut offset = 0;
+        let mut text = String::new();
+        loop {
+            let piece = fx.runs.output(&status.id, offset, 1000).unwrap();
+            text.push_str(&piece.text);
+            offset = piece.next_offset;
+            if piece.done {
+                break;
+            }
+        }
+        assert_eq!(text.lines().count(), 2000);
+    }
+
+    #[test]
+    fn a_command_runs_into_its_cpu_memory_and_process_limits() {
+        if !works() {
+            return;
+        }
+        let mut fx = fixture(true);
+        fx.config.limits.command_cpu_seconds = 2;
+        let status = fx
+            .runs
+            .start(&fx.config, &request("while ($true) {}"))
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.limit.as_deref(), Some("cpu_time"), "{done:?}");
+
+        fx.config.limits.command_cpu_seconds = 60;
+        fx.config.limits.command_memory_mb = 300;
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(
+                    "$ErrorActionPreference = 'Stop'; $b = New-Object byte[] (900MB); 'allocated'",
+                ),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert!(!done.stdout.contains("allocated"), "{done:?}");
+        assert_eq!(done.status.limit.as_deref(), Some("memory"), "{done:?}");
+
+        fx.config.limits.command_memory_mb = 4096;
+        fx.config.limits.command_processes = 4;
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(
+                    "$ErrorActionPreference = 'Stop'; 1..6 | ForEach-Object { \
+                     [Diagnostics.Process]::Start('cmd.exe', '/d /c for /l %i in (1,1,400000) do @rem') \
+                     } | Out-Null",
+                ),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.limit.as_deref(), Some("processes"), "{done:?}");
+    }
 }

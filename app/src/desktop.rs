@@ -385,6 +385,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::cancel_pairing,
             crate::local::logout,
             crate::local::start_agent,
+            crate::local::prepare_command_drives,
             crate::local::browser_enable,
             crate::local::autostart,
             crate::local::set_autostart,
