@@ -659,6 +659,34 @@ mod on_windows {
         );
     }
 
+    /// PowerShell finds its own commands, which live in modules, and says
+    /// where it looked when it doesn't.
+    #[test]
+    fn powershell_finds_its_modules() {
+        if !works() {
+            return;
+        }
+        let fx = fixture(true);
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(
+                    "[Console]::Out.WriteLine(\"home=$PSHOME\"); \
+                     foreach ($p in $env:PSModulePath.Split(';')) { \
+                     [Console]::Out.WriteLine(\"modules=$p \" + [IO.Directory]::Exists($p)) }; \
+                     (Get-Command Write-Output).Source; (Get-Command Get-ChildItem).Source",
+                ),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        let out = lines(&done.stdout);
+        assert!(out.contains(&"Microsoft.PowerShell.Utility"), "{done:?}");
+        assert!(out.contains(&"Microsoft.PowerShell.Management"), "{done:?}");
+        assert!(done.stderr.is_empty(), "{done:?}");
+        assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    }
+
     #[test]
     fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
         if !works() {
@@ -669,23 +697,34 @@ mod on_windows {
         std::fs::write(&outside, "keep\n").unwrap();
         // SAFETY: tests set this before any run reads the environment.
         unsafe { std::env::set_var("CWW_SECRET_FOR_TEST", "leak") };
+        // Each refusal says why, so a command PowerShell couldn't find
+        // doesn't pass for one.
         let command = format!(
             "try {{ Get-Content -LiteralPath '{0}' -ErrorAction Stop; 'read' }} \
-             catch {{ 'no-read' }}; \
+             catch {{ 'no-read ' + $_.FullyQualifiedErrorId }}; \
              try {{ Set-Content -LiteralPath '{0}' changed -ErrorAction Stop; 'wrote' }} \
-             catch {{ 'no-write' }}; \
+             catch {{ 'no-write ' + $_.FullyQualifiedErrorId }}; \
              try {{ Get-ChildItem -LiteralPath '{1}' -ErrorAction Stop | Out-Null; 'listed' }} \
-             catch {{ 'no-list' }}; \
+             catch {{ 'no-list ' + $_.FullyQualifiedErrorId }}; \
              \"secret=$env:CWW_SECRET_FOR_TEST\"; \"home=$env:USERPROFILE\"; \
-             New-Item -ItemType File \"$env:USERPROFILE\\ok\" | Out-Null; 'home-writable'",
+             New-Item -ItemType File \"$env:USERPROFILE\\ok\" -ErrorAction Stop | Out-Null; \
+             'home-writable'",
             outside.display(),
             fx.folder.parent().unwrap().display(),
         );
         let status = fx.runs.start(&fx.config, &request(&command)).unwrap();
         let done = wait(&fx.runs, &status.id);
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep\n");
+        assert!(done.stderr.is_empty(), "{done:?}");
         let out = lines(&done.stdout);
-        for line in ["no-read", "no-write", "no-list", "secret=", "home-writable"] {
+        for refusal in ["no-read ", "no-write ", "no-list "] {
+            let line = out.iter().find(|l| l.starts_with(refusal));
+            assert!(
+                line.is_some_and(|l| !l.contains("CommandNotFound")),
+                "{refusal}: {done:?}"
+            );
+        }
+        for line in ["secret=", "home-writable"] {
             assert!(out.contains(&line), "{line}: {done:?}");
         }
         let home = out
@@ -711,22 +750,29 @@ mod on_windows {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
+        // Each failure says whether the socket refused, so a script that
+        // broke earlier doesn't pass for a refusal.
         let dial = format!(
-            "$c = New-Object Net.Sockets.TcpClient; \
-             try {{ $c.Connect('127.0.0.1', {port}); 'connected' }} catch {{ 'refused' }}; \
+            "$c = [Net.Sockets.TcpClient]::new(); \
+             try {{ $c.Connect('127.0.0.1', {port}); 'connected' }} \
+             catch {{ 'refused ' + ($_.Exception.InnerException -is [Net.Sockets.SocketException]) }}; \
              try {{ [Net.Dns]::GetHostAddresses('example.com') | Out-Null; 'resolved' }} \
-             catch {{ 'no-dns' }}"
+             catch {{ 'no-dns ' + ($_.Exception.InnerException -is [Net.Sockets.SocketException]) }}"
         );
         let status = fx.runs.start(&fx.config, &request(&dial)).unwrap();
         let done = wait(&fx.runs, &status.id);
-        assert_eq!(lines(&done.stdout), ["refused", "no-dns"], "{done:?}");
+        assert_eq!(
+            lines(&done.stdout),
+            ["refused True", "no-dns True"],
+            "{done:?}"
+        );
         assert!(listener.accept().is_err(), "nothing reached this computer");
 
         // With the network, still not this computer's own servers.
         fx.config.roots[0].network = true;
         let status = fx.runs.start(&fx.config, &request(&dial)).unwrap();
         let done = wait(&fx.runs, &status.id);
-        assert_eq!(lines(&done.stdout)[0], "refused", "{done:?}");
+        assert_eq!(lines(&done.stdout)[0], "refused True", "{done:?}");
         assert!(listener.accept().is_err());
     }
 
@@ -747,13 +793,12 @@ mod on_windows {
             )
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(120);
-        while !fx
-            .runs
-            .output(&status.id, 0, 100)
-            .unwrap()
-            .text
-            .contains("started")
-        {
+        loop {
+            let piece = fx.runs.output(&status.id, 0, 4000).unwrap();
+            if piece.text.contains("started") {
+                break;
+            }
+            assert!(!piece.done, "it ended first: {}", piece.text);
             assert!(Instant::now() < deadline, "it never started");
             std::thread::sleep(Duration::from_millis(50));
         }
