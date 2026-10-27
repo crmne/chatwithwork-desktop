@@ -59,7 +59,7 @@ jiff = "0.2"
 # Start at login in the tray: the XDG autostart entry on Linux, a login
 # item with the bundle's launch agent on macOS, the Run key on Windows. Same
 # release as fastframe-audio.
-fastframe-autostart = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.14.1" }
+fastframe-autostart = { version = "0.14.0", git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
 # Native delivery for the supervisor's pipe-only notification broker.
 cww-notification-broker = { path = "../notification-broker" }
 # Scanning: scanners through the system (in a helper process), blank
