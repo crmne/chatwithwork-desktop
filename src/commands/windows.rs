@@ -412,8 +412,8 @@ pub fn script(command: &str) -> String {
     format!("{PROLOGUE}{command}\r\n\r\n{EPILOGUE}")
 }
 
-/// Where a run's Windows PowerShell looks for modules: those installed for
-/// everyone, and its own.
+/// Where a run's Windows PowerShell looks for modules: its own first, which
+/// hold its everyday commands, then those installed for everyone.
 fn module_path(host: &Host) -> String {
     let program_files = host
         .system_env
@@ -424,8 +424,8 @@ fn module_path(host: &Host) -> String {
             |(_, value)| PathBuf::from(value),
         );
     [
-        within(&program_files, r"WindowsPowerShell\Modules"),
         within(&host.system32(), r"WindowsPowerShell\v1.0\Modules"),
+        within(&program_files, r"WindowsPowerShell\Modules"),
     ]
     .iter()
     .map(|p| display(p))
@@ -507,9 +507,15 @@ impl Plan {
             ("TEMP".to_string(), format!("{own}\\tmp")),
             ("TMP".to_string(), format!("{own}\\tmp")),
             // Where Windows PowerShell finds most of its commands, which
-            // live in modules (Write-Output is in one). Left to itself, a run
-            // on Windows on Arm found none of them.
+            // live in modules (Write-Output is in one), and where it keeps
+            // what it learned of them: in the run's home, like everything
+            // else a run writes. Left to itself, a run on Windows on Arm
+            // found none of them.
             ("PSModulePath".to_string(), module_path(host)),
+            (
+                "PSModuleAnalysisCachePath".to_string(),
+                format!("{own}\\AppData\\Local\\ModuleAnalysisCache"),
+            ),
             ("LANG".to_string(), "C.UTF-8".to_string()),
             ("TERM".to_string(), "dumb".to_string()),
             // Python writes UTF-8 to a pipe, not the system's code page.
@@ -1073,10 +1079,15 @@ mod tests {
         assert_eq!(var("ProgramFiles").as_deref(), Some(r"C:\Program Files"));
         assert_eq!(var("PATHEXT").as_deref(), Some(".COM;.EXE;.BAT;.CMD"));
         assert_eq!(var("npm_config_update_notifier").as_deref(), Some("false"));
+        assert!(
+            var("PSModuleAnalysisCachePath")
+                .unwrap()
+                .starts_with(&var("LOCALAPPDATA").unwrap())
+        );
         assert_eq!(
             var("PSModulePath").as_deref(),
             Some(
-                r"C:\Program Files\WindowsPowerShell\Modules;C:\Windows\System32\WindowsPowerShell\v1.0\Modules"
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\Modules;C:\Program Files\WindowsPowerShell\Modules"
             )
         );
         let path = var("PATH").unwrap();

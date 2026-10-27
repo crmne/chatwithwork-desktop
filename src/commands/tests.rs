@@ -675,9 +675,11 @@ mod on_windows {
                     "[Console]::Out.WriteLine(\"home=$PSHOME\"); \
                      foreach ($p in $env:PSModulePath.Split(';')) { \
                      [Console]::Out.WriteLine(\"modules=$p \" + [IO.Directory]::Exists($p)) }; \
-                     try { Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop } \
-                     catch { [Console]::Out.WriteLine('import ' + $_.Exception.ToString()) }; \
-                     (Get-Command Write-Output).Source; (Get-Command Get-ChildItem).Source",
+                     (Get-Command Write-Output).Source; (Get-Command Get-ChildItem).Source; \
+                     if (-not (Get-Command Get-ChildItem -ErrorAction SilentlyContinue)) { \
+                     $listed = @(Get-Module -ListAvailable -ErrorAction SilentlyContinue -ErrorVariable failed); \
+                     [Console]::Out.WriteLine(\"listed=$($listed.Count)\"); \
+                     foreach ($f in $failed) { [Console]::Out.WriteLine('list ' + $f.ToString()) } }",
                 ),
             )
             .unwrap();
