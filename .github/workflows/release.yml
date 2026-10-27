@@ -72,6 +72,11 @@ jobs:
       id-token: write
       attestations: write
     runs-on: ${{ matrix.os }}
+    # A tag's Windows jobs sign in to Azure Artifact Signing as the app
+    # registration that trusts only this environment, which deploys only
+    # from v* tags (PACKAGING.md, "Windows"), on tag pushes only: a run by hand,
+    # even of a tag, and Linux rows get none of its variables.
+    environment: ${{ startsWith(matrix.os, 'windows') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'windows-signing' || '' }}
     # An uncached release build with LTO of cww and the desktop app takes
     # more than 30 minutes on the Windows runners.
     timeout-minutes: 90
@@ -94,12 +99,16 @@ jobs:
             msi-arch: arm64
     env:
       VERSION: ${{ needs.release-source.outputs.version }}
-      # Azure Artifact Signing (formerly Trusted Signing). A complete set
-      # signs the Windows binaries and installer; none leaves them unsigned.
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      # A code signing certificate as an alternative to Azure.
+      # A code signing certificate as an alternative to Azure Artifact
+      # Signing, used only while the windows-signing environment names no
+      # certificate profile.
       WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      # The Artifact Signing account native-packages signs with; empty
+      # outside the windows-signing environment, which leaves builds unsigned.
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -139,8 +148,7 @@ jobs:
       - name: Build the CLI notification helper
         if: runner.os == 'Linux'
         run: mbx build --locked --release --target ${{ matrix.target }} -p cww-notification-broker --bin cww-notify
-      - uses: ruby/setup-ruby@v1
-        if: runner.os == 'Linux'
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: '4.0'
 
@@ -165,27 +173,28 @@ jobs:
           $release = "target\${{ matrix.target }}\release"
           ./packaging/windows/check-runtime.ps1 "$release\cww.exe" "$release\cww-agent.exe" "$release\cww-app.exe" "$release\cww-scan-helper.exe" "$release\TWAINDSM.dll"
 
-      - name: Sign binaries (Azure Artifact Signing)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
-        uses: azure/artifact-signing-action@v2
+      # native-packages signs with Azure Artifact Signing
+      # (native-packages.yaml, windows.signing) through this sign-in, once
+      # the windows-signing environment names a certificate profile.
+      - name: Install native-packages
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE != ''
+        run: gem install native-packages --version 0.11.0 --no-document
+      - name: Sign in to Azure for code signing
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE != ''
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
-          files: |
-            ${{ github.workspace }}\target\${{ matrix.target }}\release\cww.exe
-            ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-agent.exe
-            ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-app.exe
-            ${{ github.workspace }}\target\${{ matrix.target }}\release\cww-scan-helper.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: Chat with Work Desktop
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign binaries (Azure Artifact Signing)
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE != ''
+        shell: pwsh
+        run: |
+          $release = "target\${{ matrix.target }}\release"
+          native-packages sign-windows "$release\cww.exe" "$release\cww-agent.exe" "$release\cww-app.exe" "$release\cww-scan-helper.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Sign binaries (certificate)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == '' && env.WINDOWS_CERTIFICATE_PFX != ''
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE == '' && env.WINDOWS_CERTIFICATE_PFX != ''
         shell: pwsh
         run: |
           ./packaging/windows/sign.ps1 `
@@ -214,29 +223,32 @@ jobs:
             -Output "dist\cww-v$($env:VERSION)-${{ matrix.target }}.msi"
           Remove-Item dist\*.wixpdb
       - name: Sign installer (Azure Artifact Signing)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
-        uses: azure/artifact-signing-action@v2
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist
-          files-folder-filter: msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: Chat with Work Desktop
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE != ''
+        shell: pwsh
+        run: native-packages sign-windows (Get-ChildItem dist\*.msi).FullName
       - name: Sign installer (certificate)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == '' && env.WINDOWS_CERTIFICATE_PFX != ''
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE == '' && env.WINDOWS_CERTIFICATE_PFX != ''
         shell: pwsh
         run: ./packaging/windows/sign.ps1 (Get-ChildItem dist\*.msi).FullName
+      # native-packages checks its own signatures; this checks the certificate's.
+      - name: Check the signatures
+        if: runner.os == 'Windows' && vars.AZURE_SIGNING_PROFILE == '' && env.WINDOWS_CERTIFICATE_PFX != ''
+        shell: pwsh
+        run: |
+          $release = "target\${{ matrix.target }}\release"
+          $files = "$release\cww.exe", "$release\cww-agent.exe", "$release\cww-app.exe", "$release\cww-scan-helper.exe"
+          $files += (Get-ChildItem dist\*.msi).FullName
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
+              throw "$file is not validly signed and timestamped: $($signature.Status) $($signature.StatusMessage)"
+            }
+            "$file signed by $($signature.SignerCertificate.Subject)"
+          }
 
       - name: Attest release packages
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: |
             dist/*.tar.gz
@@ -310,7 +322,7 @@ jobs:
         with:
           ruby-version: '4.0'
       - name: Install native packaging
-        run: gem install native-packages --version 0.10.0 --no-document
+        run: gem install native-packages --version 0.11.0 --no-document
 
       - name: Sign and notarize the universal binary
         run: |
@@ -424,7 +436,7 @@ jobs:
 
       - name: Attest macOS packages
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: |
             dist/*.tar.gz
@@ -508,7 +520,7 @@ jobs:
 
       - name: Attest the desktop app archive
         if: startsWith(github.ref, 'refs/tags/')
-        uses: crmne/native-packages/.github/actions/attest@226fb48cb375c7cb309a3e642c7228a6e00e9ebf # v0.10.0
+        uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
         with:
           subject-path: dist/*.tar.gz
       - uses: actions/upload-artifact@v7
@@ -556,7 +568,7 @@ jobs:
         env:
           CWW_UPDATE_SIGNING_KEY: ${{ secrets.CWW_UPDATE_SIGNING_KEY }}
         run: |
-          gem install native-packages --version 0.10.0 --no-document
+          gem install native-packages --version 0.11.0 --no-document
           native-packages sign-checksums dist/checksums.txt \
             --public-key app/assets/update-public-key.hex \
             --key-env CWW_UPDATE_SIGNING_KEY

@@ -72,13 +72,13 @@ The background agent's opt-in crash reports (README, "Crash reports") go to the 
 
 `release.yml` checks the tag matches `Cargo.toml` and is on `main`, builds every target and the desktop app, signs what it has credentials for (the app bundle and its disk image are notarized and stapled too), attests the archives (`gh attestation verify <file> --repo crmne/chatwithwork-desktop`), and publishes the release with `checksums.txt` and the installers (see [Release assets](#release-assets)). Tags with a `-` (`v1.2.0-beta.1`) become draft prereleases and skip the package managers.
 
-For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.10.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. It attaches the rendered recipes too, as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`; `tidy-release` takes them off the release again, and they stay in the run's `native-packages` artifact.
+For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.11.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. It attaches the rendered recipes too, as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`; `tidy-release` takes them off the release again, and they stay in the run's `native-packages` artifact.
 
 ### Trying changes before a tag
 
 - `gh workflow run release.yml` builds and signs everything, uploading the files as workflow artifacts without publishing.
 - Any push or PR that touches packaging runs `packaging.yml` against the commit: static daemon and glibc GUI builds, `.deb`/`.rpm`, all recipes (with stand-ins for the macOS and Windows assets), and install tests on Ubuntu 24.04, Debian 13, and Fedora 41 and latest, on amd64 and arm64.
-- Locally, with `gem install native-packages --version 0.10.0`, nFPM 2.47.0 and `bsdtar`:
+- Locally, with `gem install native-packages --version 0.11.0`, nFPM 2.47.0 and `bsdtar`:
 
   ```sh
   python3 packaging/test-packaging.py
@@ -139,25 +139,21 @@ Unsigned Windows binaries that register a logon task are what Microsoft Defender
 - **Reputation for the publisher.** A signature alone doesn't silence SmartScreen: since 2024 no certificate type, EV included, is trusted instantly. Reputation builds as people download and run releases signed by the same publisher identity, so keep signing every release with the same identity and don't rotate it needlessly.
 - The warning only applies to files with the Mark of the Web, meaning downloaded by a browser. `winget install` and the PowerShell one-liner don't trigger it; Defender still scans them.
 
-#### Option A: Azure Artifact Signing (formerly Trusted Signing)
+#### Option A: Azure Artifact Signing (formerly Trusted Signing), set up
 
-About $10 a month, keys in Microsoft's HSMs, and `release.yml` already supports it. Eligibility for Public Trust:
+This is the one in use. The signatures name the publisher **PlentyLabs UG (haftungsbeschränkt) & Co. KG**. PlentyLabs' Basic account, `plentylabs` in West Europe (`https://weu.codesigning.azure.net/`), signs Carmine's other Windows apps too, and is managed in `crmne/terraform` (`azure/signing.tf`, its README's "Code signing"). There is no client secret anywhere:
 
-- Organizations in the EU (and the US, Canada, UK and others) with **at least three years of verifiable tax history**. PlentyLabs qualifies only if it has that history.
-- Individuals only in the US and Canada.
+- A tag's Windows build jobs run in this repository's `windows-signing` environment, which deploys only from `v*` tags. An Entra app registration, `GitHub chatwithwork-desktop Windows signing`, trusts GitHub's OIDC tokens for exactly `repo:crmne@106617/chatwithwork-desktop@1386440334:environment:windows-signing` (GitHub's immutable subject, with the owner's and repository's ids; the plain `repo:crmne/chatwithwork-desktop:...` form fails with `AADSTS700213`), and holds the **Artifact Signing Certificate Profile Signer** role on the account.
+- The jobs sign in with `azure/login`, then native-packages signs (`windows.signing` in `native-packages.yaml`): `native-packages sign-windows` signs `cww.exe`, `cww-agent.exe`, `cww-app.exe` and `cww-scan-helper.exe` before the MSI is built, then the MSI, with SHA-256 and Microsoft's RFC 3161 timestamp, and checks that every signature is `Valid`, timestamped and PlentyLabs'. See native-packages' [Windows code signing](https://github.com/crmne/native-packages/blob/v0.11.0/docs/_guides/windows-signing.md).
+- The environment's variables (none secret): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT` and `AZURE_SIGNING_PROFILE`. Signing turns on when `AZURE_SIGNING_PROFILE` is set; without it, releases stay unsigned (or use Option B's certificate).
 
-Steps:
+`AZURE_SIGNING_PROFILE` names the Public Trust certificate profile `plentylabs`, created once PlentyLabs' identity validation completed (2026-10-26), so every tag release signs.
 
-1. In the Azure portal, create an *Artifact Signing account* in West Europe (endpoint `https://weu.codesigning.azure.net/`).
-2. Under *Identity validation*, start a **Public Trust** validation for the organization. Microsoft checks the registration and tax records, and one person completes an ID check with AU10TIX. It usually takes a few days.
-3. Create a *certificate profile* of type **Public Trust** using the validated identity.
-4. Create an app registration (Entra ID) with a client secret, and give it the **Artifact Signing Certificate Profile Signer** role on the account.
-5. Set the secrets: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`.
-6. Run `gh workflow run release.yml` and check the Windows jobs report signed files (`Get-AuthenticodeSignature` on the MSI shows `Valid`).
+Running `release.yml` by hand never signs with Azure, even on a tag: only tag pushes enter the environment. After the first signed release, check a downloaded MSI on Windows: `Get-AuthenticodeSignature` reports `Valid` and the PlentyLabs subject.
 
 #### Option B: a certificate from a CA with cloud signing
 
-If the organization doesn't qualify for Option A, buy an **OV** code signing certificate for the organization (or for yourself as an individual) from a CA that offers cloud signing usable in CI, such as SSL.com (eSigner) or Certum (SimplySign). Since June 2023, publicly trusted code signing keys must live in a hardware or cloud HSM, so a new certificate can't be exported as a `.pfx`. The `WINDOWS_CERTIFICATE_PFX` path in `sign.ps1` only works for older exportable certificates. Using a cloud-signing CA needs a small change to `packaging/windows/sign.ps1` to call the CA's signing tool instead. EV costs more and no longer buys instant SmartScreen trust, so OV is enough.
+If Option A's validation fails, buy an **OV** code signing certificate for the organization (or for yourself as an individual) from a CA that offers cloud signing usable in CI, such as SSL.com (eSigner) or Certum (SimplySign). Since June 2023, publicly trusted code signing keys must live in a hardware or cloud HSM, so a new certificate can't be exported as a `.pfx`. The `WINDOWS_CERTIFICATE_PFX` path in `sign.ps1` only works for older exportable certificates. Using a cloud-signing CA needs a small change to `packaging/windows/sign.ps1` to call the CA's signing tool instead. EV costs more and no longer buys instant SmartScreen trust, so OV is enough.
 
 #### Option C: the Microsoft Store
 
