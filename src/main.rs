@@ -671,7 +671,7 @@ fn prepare_commands(config: &Config) -> Result<()> {
     );
     let prepared = windows::prepare_drives(&missing, None).map_err(anyhow::Error::msg)?;
     println!(
-        "Commands can now see the top of {}: Node.js, npm and cmd's dir work there.",
+        "Commands can now see the top of {}, so Node.js, npm and cmd's dir work there.",
         names(&prepared)
     );
     Ok(())

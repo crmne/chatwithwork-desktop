@@ -262,7 +262,7 @@ function drivesRow(app, drives) {
         app.render();
         try {
           await call("prepare_command_drives");
-          view.note = `Commands can now see the top of ${names}: Node.js, npm and cmd's dir work there.`;
+          view.note = `Commands can now see the top of ${names}, so Node.js, npm and cmd's dir work there.`;
         } catch (error) {
           view.error = error.message;
         }
