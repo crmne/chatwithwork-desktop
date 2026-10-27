@@ -939,7 +939,14 @@ mod tests {
             folder: folder.to_path_buf(),
             cwd: folder.join("src"),
             network,
-            limits: super::super::Limits::from_config(&crate::config::Limits::default()),
+            // As Windows gets them; a Mac's leave out memory and processes.
+            limits: super::super::Limits {
+                cpu_seconds: 600,
+                memory_mb: 4096,
+                timeout_seconds: 1800,
+                processes: 256,
+                output_chars: 20_000,
+            },
             home: home.to_path_buf(),
         }
     }
