@@ -657,6 +657,18 @@ mod on_windows {
                 .trim(),
             "made"
         );
+        assert_eq!(entries(&fx.folder), ["README.md", "out.txt", "src"]);
+    }
+
+    /// What's in a folder, by name: a run leaves nothing there but what its
+    /// command wrote.
+    fn entries(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     /// PowerShell finds its own commands, which live in modules, and says
@@ -689,6 +701,30 @@ mod on_windows {
         assert!(out.contains(&"Microsoft.PowerShell.Management"), "{done:?}");
         assert!(done.stderr.is_empty(), "{done:?}");
         assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+        // PowerShell keeps what it learned of its modules in the run's home,
+        // not in the folder it runs in.
+        assert_eq!(entries(&fx.folder), ["README.md", "src"]);
+    }
+
+    /// PowerShell saves what it learned of its modules a while after it
+    /// loads one, from a run still going by then: into the run's home, never
+    /// into the folder the run works in.
+    #[test]
+    fn powershell_keeps_its_module_cache_out_of_the_folder() {
+        if !works() {
+            return;
+        }
+        let fx = fixture(true);
+        let status = fx
+            .runs
+            .start(
+                &fx.config,
+                &request("Get-ChildItem | Out-Null; Start-Sleep -Seconds 50"),
+            )
+            .unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+        assert_eq!(entries(&fx.folder), ["README.md", "src"]);
     }
 
     #[test]

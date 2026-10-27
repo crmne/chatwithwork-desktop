@@ -510,7 +510,9 @@ impl Plan {
             // live in modules (Write-Output is in one), and where it keeps
             // what it learned of them: in the run's home, like everything
             // else a run writes. Left to itself, a run on Windows on Arm
-            // found none of them.
+            // found none of them, and PowerShell, which can't find the
+            // person's AppData from the sandbox, saved its module cache in
+            // the folder the run works in, as a `Microsoft` folder.
             ("PSModulePath".to_string(), module_path(host)),
             (
                 "PSModuleAnalysisCachePath".to_string(),
