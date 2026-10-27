@@ -70,7 +70,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 notify = "8.2"
 # Random nonces for the loopback callback.
 ring = "0.17"
-base64 = "0.22"
+base64 = "0.23"
 # The Downloads folder for files the page downloads, and their names.
 dirs = "6"
 percent-encoding = "2.3"
