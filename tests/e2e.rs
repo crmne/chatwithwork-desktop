@@ -4289,6 +4289,39 @@ async fn allowing_changes_is_a_local_switch() {
         .unwrap();
 }
 
+/// A folder that allows commands says so to the server and in the status,
+/// on every platform: the model runs commands only where `roots` says it may.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_folder_that_allows_commands_says_so_everywhere() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.roots[0].network = true;
+    config.save(&fx.paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let tools = s.request("tools/list", json!({})).await;
+    assert!(tool_names(&tools).contains(&"run".to_string()), "{tools}");
+    let roots = s.call("roots", json!({})).await;
+    let roots = &roots["structuredContent"]["roots"];
+    assert_eq!(roots[0]["allows_commands"], true, "{roots}");
+    assert_eq!(roots[0]["network"], true, "{roots}");
+    assert!(roots[1].get("allows_commands").is_none(), "{roots}");
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    assert_eq!(status["roots"][0]["allows_commands"], true, "{status}");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
 /// A bot's chat reaches only the folders this computer lends it, and only
 /// this computer lends them, over the control channel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
