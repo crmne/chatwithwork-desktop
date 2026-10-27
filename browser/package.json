@@ -13,7 +13,7 @@
     "package": "node scripts/build.mjs --store"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@types/chrome": "0.3.6",
     "@types/node": "25.9.9",
     "typescript": "7.0.2"
