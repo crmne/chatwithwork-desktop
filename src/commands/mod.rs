@@ -79,12 +79,18 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// The limits this computer's sandbox holds. Seatbelt can't hold a
+    /// memory limit (macOS doesn't enforce `RLIMIT_AS`, so MXC refuses
+    /// `memoryMb` there) and nothing counts a run's processes on macOS yet,
+    /// so both are 0 there, none, and the approval card leaves them out
+    /// rather than promise them.
     pub fn from_config(limits: &crate::config::Limits) -> Self {
+        let held = !cfg!(target_os = "macos");
         Self {
             cpu_seconds: limits.command_cpu_seconds,
-            memory_mb: limits.command_memory_mb,
+            memory_mb: if held { limits.command_memory_mb } else { 0 },
             timeout_seconds: limits.command_timeout_seconds,
-            processes: limits.command_processes,
+            processes: if held { limits.command_processes } else { 0 },
             output_chars: limits.command_output_chars,
         }
     }

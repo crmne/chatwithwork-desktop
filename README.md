@@ -279,7 +279,7 @@ In folders where you also allow commands (`cww roots allow-commands <root>`, or 
 
 | Tool | What it does |
 |---|---|
-| `run` | Runs one line of shell in the folder, like `bin/rails test`, in a sandbox of its own that can change only that folder, without the network unless you allow it, with CPU, memory and time limits. Its output comes as it's printed; a long command keeps running. |
+| `run` | Runs one line of shell in the folder, like `bin/rails test`, in a sandbox of its own that can change only that folder, without the network unless you allow it, with CPU and time limits (and memory on Linux). Its output comes as it's printed; a long command keeps running. |
 | `run_status`, `run_output`, `run_stop` | Follow a command left running, read what it printed, or stop it. |
 
 Chat with Work asks before every command. See [docs/commands.md](docs/commands.md).

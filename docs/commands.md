@@ -1,6 +1,6 @@
 # Running commands
 
-Status: **built on Linux, untested on macOS, off on Windows.** In a shared folder that allows changes, you can also allow commands. Chat with Work can then run one line of shell there, like `bin/rails test` or `npm run build`, each after you approve it. The wire details are in [PROTOCOL.md, section 8.15](../PROTOCOL.md#815-commands), and the switch in [CONTROL.md, `roots_commands`](../CONTROL.md#roots_commands).
+Status: **built on Linux, tested on macOS, off on Windows.** On macOS, commands were tried for real on 2026-10-27 on a Mac mini (Apple silicon, macOS 27) paired with staging: approved runs, a failing one, the network off and on, the CPU limit, a background run with its output followed in `cww tui` and stopped from there and from a chat, and the sandbox refusing to read or write outside its folder. Up to 0.6.2 every command on a Mac failed to start ("resources.memoryMb is not supported by the 'seatbelt' backend"); the tests ran with the fix that followed. In a shared folder that allows changes, you can also allow commands. Chat with Work can then run one line of shell there, like `bin/rails test` or `npm run build`, each after you approve it. The wire details are in [PROTOCOL.md, section 8.15](../PROTOCOL.md#815-commands), and the switch in [CONTROL.md, `roots_commands`](../CONTROL.md#roots_commands).
 
 ## Where a command runs
 
@@ -10,7 +10,7 @@ The daemon itself can't run anything in a shared folder: its sandbox never gives
 - It **writes** only its folder, and a home and temporary folder of its own (`<data>/runs/<id>`, removed when it ends).
 - It has **no network**, unless the folder allows it ("Commands use the network"). Without it, the system resolver's socket is hidden too. On Landlock it can't open a network socket at all.
 - It gets a **clean environment**: `PATH` from the toolchains above and the system, `HOME` and `TMPDIR` in its own folder, `LANG=C.UTF-8`, `TERM=dumb`, and what the toolchains need to find themselves (`MISE_DATA_DIR`, `RUSTUP_HOME`, ...). Never the daemon's variables or tokens. mise trusts the folder's own `mise.toml`.
-- It has **limits**: CPU time and memory for each process it starts (600 CPU seconds and 4 GB by default), at most 256 processes at once, a wall clock (30 minutes), low priority, and at most 4 commands at once. They're `command_cpu_seconds`, `command_memory_mb`, `command_processes`, `command_timeout_seconds` and `commands_running` under `[limits]` in `config.toml`. MXC enforces CPU time and memory (rlimits) and the clock; it limits processes only on Windows, so on Linux whoever runs the command counts the sandbox's processes in `/proc` four times a second and stops it past the limit. A run ended by a limit says which (`limit`: `cpu_time` or `processes`).
+- It has **limits**: CPU time and memory for each process it starts (600 CPU seconds and 4 GB by default), at most 256 processes at once, a wall clock (30 minutes), low priority, and at most 4 commands at once. They're `command_cpu_seconds`, `command_memory_mb`, `command_processes`, `command_timeout_seconds` and `commands_running` under `[limits]` in `config.toml`. MXC enforces CPU time and memory (rlimits) and the clock; it limits processes only on Windows, so on Linux whoever runs the command counts the sandbox's processes in `/proc` four times a second and stops it past the limit. On macOS only CPU time, the clock, priority and the number of commands hold: Seatbelt can't hold a memory limit (macOS doesn't enforce `RLIMIT_AS`, and MXC refuses one there), and nothing counts a run's processes yet, so a Mac sends `memory_mb` and `processes` as 0 and the approval card leaves them out. A run ended by a limit says which (`limit`: `cpu_time` or `processes`).
 
 Commands stop when the computer is paused (and none start until it's resumed), and when Chat with Work revokes it.
 
@@ -48,12 +48,11 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 - **A command can change or delete anything in its folder**, and nothing in the trash brings that back: approve each one knowing that. Version control is the undo.
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
 - **Toolchain settings are readable**: mise's config can hold environment variables.
-- **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet: CPU time is limited per process, and the wall clock ends the rest.
+- **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet, and no memory limit either: CPU time is limited per process, and the wall clock ends the rest.
 - **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) there's no network at all.
 - **The systemd unit's own limits apply to commands.** The supervisor runs under `cww daemon install`'s unit, whose `MemoryDenyWriteExecute`, system call filter and `ProtectSystem=strict` carry over to everything it starts: JIT runtimes (Node, the JVM) may fail there until the unit is relaxed for them.
 
 ## Not built yet
 
-- macOS: Seatbelt runs come from MXC, but haven't been tried on a Mac here.
 - Windows: off, until it has a sandbox for the daemon.
 - Live output inside the chat's step: the step shows the result when the call answers, and the server would have to pass progress through the chat API for more. Until then this computer's windows show it themselves (below).
