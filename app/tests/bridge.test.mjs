@@ -33,7 +33,7 @@ function page({ origin = ORIGIN, answer = () => true } = {}) {
   window.alert = () => assert.fail("the plugin's alert ran");
   window.confirm = () => assert.fail("the plugin's confirm ran");
   const document = { addEventListener: on("document") };
-  vm.runInNewContext(template, { window, document, URL, URLSearchParams, Element: class {}, HTMLFormElement: class {} });
+  vm.runInNewContext(template, { window, document, URL, URLSearchParams, File, Element: class {}, HTMLFormElement: class {} });
   const fire = (key) => (listeners[key] || []).forEach((listener) => listener({}));
   return { window, calls, fire };
 }
@@ -128,4 +128,29 @@ test("pages of other sites get nothing", () => {
   assert.equal(window.ChatWithWorkDesktop, undefined);
   assert.throws(() => window.alert("hi"), /the plugin's alert ran/);
   assert.equal(calls.length, 0);
+});
+
+// A scan's PDF: the app hands its bytes over as an ArrayBuffer through Tauri's
+// IPC protocol, or as a plain array of numbers once a page's Content Security
+// Policy made Tauri fall back to postMessage, as Chat with Work's pages do.
+test("a scan reaches the composer as its PDF, however the app hands the bytes over", async () => {
+  const pdf = Buffer.from("%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n", "latin1");
+  const arrayBuffer = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength);
+  for (const bytes of [[...pdf], arrayBuffer]) {
+    const scanned = { id: "a1b2c3d4", name: "Scan 2026-10-27.pdf", pages: 1, size: pdf.length };
+    const { window, calls } = page({ answer: (command) => (command === "scan" ? scanned : bytes) });
+
+    const file = await window.ChatWithWorkDesktop.scan();
+
+    assert.equal(file.name, "Scan 2026-10-27.pdf");
+    assert.equal(file.type, "application/pdf");
+    assert.deepEqual(Buffer.from(await file.arrayBuffer()), pdf);
+    assert.deepEqual(calls, [{ command: "scan", args: {} }, { command: "scan_file", args: { id: "a1b2c3d4" } }]);
+  }
+});
+
+test("no pending scan, no file", async () => {
+  const { window, calls } = page({ answer: () => null });
+  assert.equal(await window.ChatWithWorkDesktop.pendingScan(), null);
+  assert.deepEqual(calls.map(({ command }) => command), ["scan_pending"]);
 });

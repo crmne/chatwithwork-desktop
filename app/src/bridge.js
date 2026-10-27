@@ -32,9 +32,16 @@
   // A scan for the composer: the scan window opens, and once the person
   // attaches what they scanned, it comes back as a PDF File (null if they
   // close the window instead).
+  //
+  // `scan_file` answers raw bytes: an ArrayBuffer through Tauri's IPC
+  // protocol, but a plain array of numbers once the page's Content Security
+  // Policy made Tauri fall back to postMessage, as Chat with Work's pages
+  // do. A File made from that array holds its numbers as text ("37,80,68,"),
+  // which no PDF reader opens, so the bytes become bytes again first.
   const fileOf = async (scanned) => {
     if (!scanned) return null;
-    const bytes = await invoke("scan_file", { id: scanned.id });
+    const answer = await invoke("scan_file", { id: scanned.id });
+    const bytes = Array.isArray(answer) ? Uint8Array.from(answer) : answer;
     return new File([bytes], scanned.name, { type: "application/pdf" });
   };
   const scan = async () => fileOf(await invoke("scan"));

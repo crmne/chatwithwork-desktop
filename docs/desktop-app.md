@@ -47,7 +47,7 @@ The web app's pages get these commands, and nothing else Tauri offers (no events
 | `computer_notifications` | `computer.notifications()`, `.allowNotifications()` | Whether native notifications can show here (`permission`, `connected`), and the system's own question to allow them |
 | `scan` | `scan()` | Opens the scan window for the page's composer; resolves a PDF `File` once the person attaches what they scanned, or `null` if they close the window |
 | `scan_pending` | `pendingScan()` | The scan the person sent to a new chat from the scan window, as a `File`, or `null` |
-| `scan_file` | (inside the two above) | The PDF's bytes, once, to the window it was made for |
+| `scan_file` | (inside the two above) | The PDF's bytes, once, to the window it was made for: an `ArrayBuffer` through Tauri's IPC protocol, or a plain array of numbers where the page's Content Security Policy makes Tauri fall back to `postMessage` (Chat with Work's pages do), which the bridge turns back into bytes before making the `File` |
 | `page_dialog` | (none: Turbo's `data-turbo-confirm`, and `alert()`) | Shows the page's confirmation or alert in the system's message box; resolves whether the person confirmed |
 
 Two checks enforce it. A capability added at start (`desktop.rs`), for the server's origin as a remote URL and the web app's windows only, allows these commands; and each command checks again that its caller is a page of the server in one of those windows (`bridge.rs`). The bridge script (`bridge.js`) defines `window.ChatWithWorkDesktop` only on pages of the server. The user agent's `bridge-components` add `computer` and `scan` for these, so the server shows their controls only to a build that has them.
