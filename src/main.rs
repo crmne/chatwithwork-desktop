@@ -654,13 +654,7 @@ fn prepare_commands(config: &Config) -> Result<()> {
         .map(|r| r.path.clone())
         .collect();
     let roots = windows::drive_roots(&windows::system_root(), &folders);
-    let names = |roots: &[PathBuf]| {
-        roots
-            .iter()
-            .map(|r| r.display().to_string())
-            .collect::<Vec<_>>()
-            .join(" and ")
-    };
+    let names = windows::drive_names;
     let missing: Vec<PathBuf> = roots
         .iter()
         .filter(|root| !windows::drive_prepared(root))
@@ -671,7 +665,7 @@ fn prepare_commands(config: &Config) -> Result<()> {
         return Ok(());
     }
     println!(
-        "Windows asks for an administrator to let sandboxed programs read the details of {} \
+        "Windows asks for an administrator to let sandboxed programs read the top of {} \
          (never what's in it)...",
         names(&missing)
     );

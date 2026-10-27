@@ -660,6 +660,19 @@ pub fn drive_prepared(root: &Path) -> bool {
     })
 }
 
+/// How people read `roots`: "drive C:", "drives C: and D:".
+pub fn drive_names(roots: &[PathBuf]) -> String {
+    let names: Vec<String> = roots
+        .iter()
+        .map(|root| display(root).trim_end_matches('\\').to_string())
+        .collect();
+    match names.as_slice() {
+        [one] => format!("drive {one}"),
+        [rest @ .., last] => format!("drives {} and {last}", rest.join(", ")),
+        [] => String::new(),
+    }
+}
+
 /// The `icacls` arguments that prepare `root`.
 pub fn prepare_arguments(root: &Path) -> String {
     let grants: Vec<String> = SANDBOXED_APPS
@@ -1061,6 +1074,15 @@ mod tests {
                 ]
             ),
             [PathBuf::from(r"C:\"), PathBuf::from(r"D:\")]
+        );
+        assert_eq!(drive_names(&[PathBuf::from(r"C:\")]), "drive C:");
+        assert_eq!(
+            drive_names(&[
+                PathBuf::from(r"C:\"),
+                PathBuf::from(r"D:\"),
+                PathBuf::from(r"E:\")
+            ]),
+            "drives C:, D: and E:"
         );
         assert_eq!(
             prepare_arguments(Path::new(r"C:\")),
