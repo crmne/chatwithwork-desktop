@@ -192,9 +192,10 @@ function folderRow(app, root) {
           }, { kind: "btn-primary" }))) : null,
 
       // Run commands: only where changes are allowed, and on Windows only
-      // where the daemon says this Windows can.
-      root.writable && !runsCommands ? setting("Run commands", commandsUnavailable(app), null) : null,
-      root.writable && runsCommands ? setting("Run commands", root.allows_commands
+      // where the daemon says this Windows can. A folder that allows them
+      // keeps its switch even then, so they can be turned off.
+      root.writable && !runsCommands && !root.allows_commands ? setting("Run commands", commandsUnavailable(app), null) : null,
+      root.writable && (runsCommands || root.allows_commands) ? setting("Run commands", root.allows_commands
         ? "Chat with Work can run commands here, like tests or a build, each after you approve it, in a sandbox that can change only this folder."
         : "Turn on to let Chat with Work run commands here, like tests or a build, each after you approve it.",
       switchInput(root.allows_commands || commanding, (on) => {
@@ -217,7 +218,7 @@ function folderRow(app, root) {
             view.commanding = null;
             change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: false });
           }, { kind: "btn-primary" }))) : null,
-      root.writable && runsCommands && root.allows_commands ? setting("Commands use the network", root.network
+      root.writable && root.allows_commands ? setting("Commands use the network", root.network
         ? "Commands here can reach the internet, to install packages or fetch dependencies."
         : "Commands here run without a network.",
       switchInput(root.network, (on) => change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: on }),

@@ -292,7 +292,7 @@ The daemon answers `{"ok": true}` when the origin is the published extension's (
 ]}
 ```
 
-The commands Chat with Work ran on this computer with `run` (PROTOCOL.md section 8.15): those running first, then the latest to end (the last 32 are kept until the daemon restarts). Each has its status as `run_status` gives it (`state` `running`, `exited`, `timed_out`, `stopped` or `failed`; `limit`, `cpu_time` or `processes`, when a limit ended it), the folder by ID and label, the folder inside it it started in, its command line, whether it had the network, and when it started (Unix seconds). An empty list where commands can't run (an organization's own daemon, or a Windows that can't sandbox them). For this computer's windows only: the server never gets this list.
+The commands Chat with Work ran on this computer with `run` (PROTOCOL.md section 8.15): those running first, then the latest to end (the last 32 are kept until the daemon restarts). Each has its status as `run_status` gives it (`state` `running`, `exited`, `timed_out`, `stopped` or `failed`; `limit`, `cpu_time`, `processes` or, on Windows, `memory`, when a limit ended it), the folder by ID and label, the folder inside it it started in, its command line, whether it had the network, and when it started (Unix seconds). An empty list where commands can't run (an organization's own daemon, or a Windows that can't sandbox them). For this computer's windows only: the server never gets this list.
 
 ```json
 {"cmd": "command_output", "run": "3f9a0c1d2e4b", "offset": 0}
