@@ -147,7 +147,7 @@ impl Sane {
         // SAFETY: libsane runs no code on load that needs anything from us.
         let library = LIBRARIES
             .iter()
-            .find_map(|name| unsafe { Library::new(name) }.ok())
+            .find_map(|name| unsafe { Library::new(*name) }.ok())
             .ok_or_else(missing)?;
         // SAFETY: every symbol has the SANE 1.0 signature it is declared
         // with here, and `library` outlives `api` inside `Sane`.
