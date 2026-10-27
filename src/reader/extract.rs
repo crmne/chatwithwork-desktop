@@ -262,9 +262,9 @@ fn office_xml(bytes: &[u8], kind: OfficeKind, max_chars: usize) -> Result<String
 fn xml_text(xml: &[u8], kind: OfficeKind, out: &mut String, max_chars: usize) {
     use quick_xml::events::Event;
 
-    let (text_tag, para_tag): (&[u8], &[u8]) = match kind {
-        OfficeKind::Docx => (b"w:t", b"w:p"),
-        OfficeKind::Pptx => (b"a:t", b"a:p"),
+    let (text_tag, para_tag) = match kind {
+        OfficeKind::Docx => ("w:t", "w:p"),
+        OfficeKind::Pptx => ("a:t", "a:p"),
     };
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut in_text = false;
@@ -275,25 +275,21 @@ fn xml_text(xml: &[u8], kind: OfficeKind, out: &mut String, max_chars: usize) {
             Ok(Event::End(e)) if e.name().as_ref() == text_tag => in_text = false,
             Ok(Event::End(e)) if e.name().as_ref() == para_tag => out.push('\n'),
             Ok(Event::Empty(e)) => match e.name().as_ref() {
-                b"w:tab" => out.push('\t'),
-                b"w:br" | b"w:cr" | b"a:br" => out.push('\n'),
+                "w:tab" => out.push('\t'),
+                "w:br" | "w:cr" | "a:br" => out.push('\n'),
                 _ => {}
             },
-            Ok(Event::Text(t)) if in_text => {
-                if let Ok(s) = t.decode() {
-                    out.push_str(&s);
-                }
-            }
+            Ok(Event::Text(t)) if in_text => out.push_str(&t.xml10_content()),
             Ok(Event::GeneralRef(r)) if in_text => {
                 if let Ok(Some(c)) = r.resolve_char_ref() {
                     out.push(c);
                 } else {
                     match &*r {
-                        b"amp" => out.push('&'),
-                        b"lt" => out.push('<'),
-                        b"gt" => out.push('>'),
-                        b"quot" => out.push('"'),
-                        b"apos" => out.push('\''),
+                        "amp" => out.push('&'),
+                        "lt" => out.push('<'),
+                        "gt" => out.push('>'),
+                        "quot" => out.push('"'),
+                        "apos" => out.push('\''),
                         _ => {}
                     }
                 }
@@ -479,9 +475,14 @@ mod tests {
 
     #[test]
     fn docx_and_pptx() {
-        let docx = fixtures::docx(&["Quarterly plan", "Budget &amp; hiring"]);
+        let docx = fixtures::docx(&[
+            "Quarterly plan",
+            "Budget &amp; hiring",
+            "Caf&#233; &#x2014; lunch",
+        ]);
         let text = extract("plan.docx", &docx, 1000).unwrap();
         assert!(text.contains("Quarterly plan\nBudget & hiring"), "{text:?}");
+        assert!(text.contains("Caf\u{e9} \u{2014} lunch"), "{text:?}");
 
         let pptx = fixtures::pptx(&["Intro", "Roadmap"]);
         let text = extract("deck.pptx", &pptx, 1000).unwrap();
