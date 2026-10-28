@@ -92,7 +92,7 @@ webkit2gtk = "2.0"
 # Opens the display before Tauri does (linux.rs), so a session without one
 # exits with a sentence instead of tao's panic. The version WebKitGTK and
 # tao already use.
-gtk = "0.18"
+gtk = "0.19"
 # Saves those pictures as PNG. Stays on the cairo-rs webkit2gtk uses (gtk-rs
 # 0.18), or its surfaces are another crate's type (renovate.json holds it).
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
