@@ -823,3 +823,24 @@ fn a_clock_behind_the_servers_still_shows_and_waits_at_most_the_window() {
     }
     assert!(fixture.actions().is_empty());
 }
+
+#[test]
+fn a_service_started_before_the_desktop_borrows_its_display() {
+    let environment = "HOME=/home/a\nWAYLAND_DISPLAY=wayland-1\nDISPLAY=:0\n\
+        XDG_CURRENT_DESKTOP=Hyprland\nXAUTHORITY=$'/run/user/1000/my auth\\x41\\101'\n\
+        XDG_SESSION_TYPE=$'bad\\q'\nPATH=/usr/bin\n";
+    assert_eq!(
+        display_variables(environment),
+        [
+            ("WAYLAND_DISPLAY".to_owned(), "wayland-1".to_owned()),
+            ("DISPLAY".to_owned(), ":0".to_owned()),
+            ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
+            (
+                "XAUTHORITY".to_owned(),
+                "/run/user/1000/my authAA".to_owned()
+            ),
+        ]
+    );
+    assert!(display_variables("PATH=/usr/bin\n").is_empty());
+    assert_eq!(unquote(r"it\'s\ttab\\").as_deref(), Some("it's\ttab\\"));
+}

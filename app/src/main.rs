@@ -102,6 +102,11 @@ fn main() {
         Ok(args::Parsed::Run(options)) => {
             // Before GTK or any other thread starts.
             linux::prepare_web_view();
+            // Tauri panics when GTK finds no display; say why instead.
+            if let Err(message) = linux::open_display() {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
             if let Err(e) = desktop::run(options) {
                 log::error!("{e:#}");
                 eprintln!("error: {e:#}");

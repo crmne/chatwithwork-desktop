@@ -190,6 +190,7 @@ fn open_activation_with_window(
         && let Ok(mut child) = std::process::Command::new(app)
             .arg("--open-chat")
             .arg(target.encode())
+            .envs(session_display())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -200,6 +201,102 @@ fn open_activation_with_window(
         return;
     }
     browser(&activation.browser_url());
+}
+
+/// The desktop's display, for an app the daemon starts. A systemd user
+/// service that starts with the user's manager, before the desktop session
+/// exports its display (uwsm, GNOME and KDE all import it later), has no
+/// `WAYLAND_DISPLAY` or `DISPLAY` of its own, and the manager doesn't pass
+/// what it learns later to services already running. The app could then
+/// open no window. When this process has neither, take them from the
+/// manager's current environment; otherwise keep what it has.
+fn session_display() -> Vec<(String, String)> {
+    #[cfg(target_os = "linux")]
+    {
+        let has = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+        if !has("WAYLAND_DISPLAY")
+            && !has("DISPLAY")
+            && let Ok(output) = std::process::Command::new("systemctl")
+                .args(["--user", "show-environment"])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+            && output.status.success()
+        {
+            return display_variables(&String::from_utf8_lossy(&output.stdout));
+        }
+    }
+    Vec::new()
+}
+
+/// The display's variables in `systemctl --user show-environment`'s output,
+/// with values systemd quoted (`$'...'`, for spaces or shell characters)
+/// decoded.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn display_variables(environment: &str) -> Vec<(String, String)> {
+    const DISPLAY: [&str; 5] = [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XAUTHORITY",
+        "XDG_SESSION_TYPE",
+        "XDG_CURRENT_DESKTOP",
+    ];
+    environment
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(name, _)| DISPLAY.contains(name))
+        .filter_map(|(name, value)| {
+            let value = match value.strip_prefix("$'") {
+                Some(quoted) => unquote(quoted.strip_suffix('\'')?)?,
+                None => value.to_owned(),
+            };
+            (!value.is_empty()).then(|| (name.to_owned(), value))
+        })
+        .collect()
+}
+
+/// The inside of a `$'...'` value, as bash reads it. None for anything it
+/// can't decode, which is then left out.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unquote(quoted: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut chars = quoted.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buffer = [0; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+        let escaped = chars.next()?;
+        let byte = match escaped {
+            'n' => b'\n',
+            't' => b'\t',
+            'r' => b'\r',
+            'a' => 0x07,
+            'b' => 0x08,
+            'e' | 'E' => 0x1b,
+            'f' => 0x0c,
+            'v' => 0x0b,
+            '\\' | '\'' | '"' | '?' => escaped as u8,
+            'x' => {
+                let mut digits = String::new();
+                while digits.len() < 2 && chars.peek().is_some_and(char::is_ascii_hexdigit) {
+                    digits.push(chars.next()?);
+                }
+                u8::from_str_radix(&digits, 16).ok()?
+            }
+            '0'..='7' => {
+                let mut digits = escaped.to_string();
+                while digits.len() < 3 && chars.peek().is_some_and(|c| ('0'..='7').contains(c)) {
+                    digits.push(chars.next()?);
+                }
+                u8::try_from(u32::from_str_radix(&digits, 8).ok()?).ok()?
+            }
+            _ => return None,
+        };
+        bytes.push(byte);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn desktop_started(child: &mut std::process::Child, window: Duration, poll: Duration) -> bool {
