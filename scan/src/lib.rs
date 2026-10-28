@@ -21,6 +21,7 @@
 pub mod blank;
 pub mod edit;
 pub mod helper;
+pub mod languages;
 pub mod ocr;
 pub mod pdf;
 pub mod sample;

@@ -273,7 +273,9 @@ fn bridge_check(app: &AppHandle) {
 /// `scanned` presses Scan and waits for the feeder to empty, `blank` opens
 /// the blank pages left out, `crop` opens the first page's crop view,
 /// `cropped` crops the first page, `saved` saves the PDF (`CWW_DEMO_SAVE_TO`),
-/// `menu` opens the finish button's menu, `turned` turns the second, `send`
+/// `menu` opens the finish button's menu, `turned` turns the second,
+/// `add-language` opens Add a Language, `language-added` downloads Italian
+/// through it (Linux, from the network), `send`
 /// sends to the first bot from the menu, and `attach` hands the scan to a
 /// new chat's composer in the Chat with Work window (with `CWW_DEMO_SCAN_OUT`, the demo daemon keeps
 /// the PDF).
@@ -327,6 +329,15 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
         "turned" => (
             r#"document.querySelectorAll('[data-key^="turn-"]')[1]?.click()"#,
             3,
+        ),
+        "add-language" => (
+            r#"(() => { const s = document.getElementById('language'); s.value = '__add__'; s.dispatchEvent(new Event('change')); })()"#,
+            3,
+        ),
+        // Downloads Italian from tessdata_fast (2.7 MB) and picks it.
+        "language-added" => (
+            r#"(() => { const s = document.getElementById('language'); s.value = '__add__'; s.dispatchEvent(new Event('change')); setTimeout(() => { const p = document.getElementById('add-language'); p.value = 'ita'; p.dispatchEvent(new Event('change')); document.querySelector('[data-key="download-language"]')?.click(); }, 1500); })()"#,
+            20,
         ),
         "send" => (
             r#"(() => { document.querySelector('[data-key="finish-menu"]')?.click(); setTimeout(() => document.querySelector('[data-key^="menu-bot-"]')?.click(), 300); })()"#,

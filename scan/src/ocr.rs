@@ -50,9 +50,19 @@ pub trait Engine: Send + Sync {
 
 /// This system's engine, or why there is none (with what to install).
 pub fn system_engine() -> Result<Box<dyn Engine>, String> {
+    system_engine_with(None)
+}
+
+/// This system's engine, reading the languages added in `added` too
+/// (Tesseract's, on Linux: [`crate::languages`]).
+pub fn system_engine_with(
+    #[cfg_attr(any(target_os = "macos", windows), allow(unused_variables))] added: Option<
+        std::path::PathBuf,
+    >,
+) -> Result<Box<dyn Engine>, String> {
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        Tesseract::find().map(|t| Box::new(t) as Box<dyn Engine>)
+        Tesseract::find().map(|t| Box::new(t.with_added(added)) as Box<dyn Engine>)
     }
     #[cfg(target_os = "macos")]
     {
@@ -64,9 +74,11 @@ pub fn system_engine() -> Result<Box<dyn Engine>, String> {
     }
 }
 
-/// Tesseract, through the `tesseract` command the distribution installs.
+/// Tesseract, through the `tesseract` command the distribution installs,
+/// with its languages and those the app added in a folder of its own.
 pub struct Tesseract {
     program: std::path::PathBuf,
+    added: Option<std::path::PathBuf>,
 }
 
 /// The Linux families we package for, each naming Tesseract's packages its
@@ -171,7 +183,40 @@ impl Tesseract {
             .map(std::path::PathBuf::from)
             .or_else(|| find_on_path("tesseract"))
             .ok_or_else(|| Distro::here().tesseract_missing())?;
-        Ok(Self { program })
+        Ok(Self {
+            program,
+            added: None,
+        })
+    }
+
+    /// Reads the languages in `added` (`<code>.traineddata` files) too.
+    pub fn with_added(mut self, added: Option<std::path::PathBuf>) -> Self {
+        self.added = added;
+        self
+    }
+
+    /// The folder holding `code` when the app added it.
+    fn added_folder(&self, code: &str) -> Option<&std::path::Path> {
+        let added = self.added.as_deref()?;
+        added
+            .join(format!("{code}.traineddata"))
+            .is_file()
+            .then_some(added)
+    }
+
+    /// The languages added in the app's folder.
+    fn added_codes(&self) -> Vec<String> {
+        let Some(Ok(entries)) = self.added.as_deref().map(std::fs::read_dir) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let code = name.strip_suffix(".traineddata")?;
+                (plain_code(code) && entry.path().is_file()).then(|| code.to_string())
+            })
+            .collect()
     }
 
     fn command(&self) -> Command {
@@ -211,15 +256,22 @@ impl Engine for Tesseract {
             .stdin(Stdio::null())
             .output()
             .map_err(|e| format!("Couldn't run Tesseract: {e}"))?;
-        let mut languages: Vec<Language> = String::from_utf8_lossy(&output.stdout)
+        let system = String::from_utf8_lossy(&output.stdout);
+        let mut codes: Vec<String> = system
             .lines()
             .skip_while(|line| !line.starts_with("List of available languages"))
             .skip(1)
-            .map(str::trim)
-            .filter(|code| plain_code(code) && !matches!(*code, "osd" | "equ" | "snum"))
+            .map(|code| code.trim().to_string())
+            .chain(self.added_codes())
+            .filter(|code| plain_code(code) && !matches!(code.as_str(), "osd" | "equ" | "snum"))
+            .collect();
+        codes.sort();
+        codes.dedup();
+        let mut languages: Vec<Language> = codes
+            .into_iter()
             .map(|code| Language {
-                code: code.to_string(),
-                name: tesseract_name(code),
+                name: tesseract_name(&code),
+                code,
             })
             .collect();
         languages.sort_by(|a, b| a.name.cmp(&b.name));
@@ -239,13 +291,17 @@ impl Engine for Tesseract {
         despeckle(&page.to_luma8())
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .map_err(|e| e.to_string())?;
-        let mut child = self
-            .command()
+        let mut command = self.command();
+        command.args(["stdin", "stdout"]);
+        // A language the app added is read from its folder; the system's
+        // from the system's.
+        if let Some(folder) = self.added_folder(language) {
+            command.arg("--tessdata-dir").arg(folder);
+        }
+        let mut child = command
             // TSV through its parameter rather than the `tsv` config file, which
             // only some tessdata folders carry.
             .args([
-                "stdin",
-                "stdout",
                 "-l",
                 language,
                 "--dpi",
@@ -352,6 +408,9 @@ pub fn parse_tsv(tsv: &str) -> Vec<Word> {
 
 /// Tesseract's language codes in English. Codes not listed show as they are.
 pub fn tesseract_name(code: &str) -> String {
+    if let Some(pack) = crate::languages::pack(code) {
+        return pack.name.to_string();
+    }
     let name = match code {
         "afr" => "Afrikaans",
         "ara" => "Arabic",
@@ -404,6 +463,55 @@ pub fn tesseract_name(code: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn added_languages_are_listed_and_read_from_their_folder() {
+        use super::{Engine, Tesseract};
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let added = temp.path().join("tessdata");
+        std::fs::create_dir(&added).unwrap();
+        std::fs::write(added.join("ita.traineddata"), b"model").unwrap();
+        std::fs::write(added.join("eng.traineddata"), b"model").unwrap();
+        std::fs::write(added.join("../x.traineddata"), b"elsewhere").unwrap();
+        std::fs::write(added.join("notes.txt"), b"").unwrap();
+        let args = temp.path().join("args");
+        let program = temp.path().join("tesseract");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'List of available languages in \"/usr/share/tessdata/\" (2):\\neng\\nosd\\n'; exit 0; fi\necho \"$@\" >> {}\ncat >/dev/null\nprintf 'level\\tpage_num\\n'\n",
+                args.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tesseract = Tesseract {
+            program,
+            added: Some(added.clone()),
+        };
+        let codes: Vec<String> = tesseract
+            .languages()
+            .unwrap()
+            .into_iter()
+            .map(|l| l.code)
+            .collect();
+        assert_eq!(codes, ["eng", "ita"]);
+        let page = image::DynamicImage::new_luma8(8, 8);
+        tesseract.recognize(&page, 300, "ita").unwrap();
+        tesseract.recognize(&page, 300, "deu").unwrap();
+        let calls = std::fs::read_to_string(&args).unwrap();
+        let calls: Vec<&str> = calls.lines().collect();
+        assert!(
+            calls[0].contains(&format!("--tessdata-dir {} -l ita", added.display())),
+            "{}",
+            calls[0]
+        );
+        assert!(!calls[1].contains("--tessdata-dir"), "{}", calls[1]);
+        assert_eq!(super::tesseract_name("ita"), "Italian");
+        assert_eq!(super::tesseract_name("kmr"), "Kurdish (Kurmanji)");
+    }
+
     #[test]
     fn distro_comes_from_os_release() {
         let arch = "NAME=\"Arch Linux\"\nID=arch\n";

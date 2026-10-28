@@ -527,3 +527,20 @@
   margin-block-end: 0.5rem;
   font-size: 0.8125rem;
 }
+
+/* Adding an OCR language: its picker, then the download's progress */
+.scan__adding {
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background-color: var(--canvas-sunken);
+}
+
+.scan__adding .field__row {
+  justify-content: space-between;
+}
+
+.scan__adding-note {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}

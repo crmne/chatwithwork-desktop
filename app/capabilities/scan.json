@@ -22,6 +22,9 @@
     "allow-scan-save",
     "allow-scan-reveal",
     "allow-scan-open-account",
-    "allow-scan-add-language"
+    "allow-scan-add-language",
+    "allow-scan-language-packs",
+    "allow-scan-download-language",
+    "allow-scan-cancel-language"
   ]
 }

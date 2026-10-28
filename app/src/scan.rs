@@ -155,6 +155,16 @@ pub struct Scans {
     busy: AtomicBool,
     next_id: AtomicU64,
     engine: Result<Arc<dyn Engine>, String>,
+    /// Where languages the person adds are kept (Linux's Tesseract only).
+    added_languages: Option<PathBuf>,
+    language_download: LanguageDownload,
+}
+
+/// The language pack downloading, one at a time.
+#[derive(Default)]
+struct LanguageDownload {
+    running: AtomicBool,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Default for Scans {
@@ -168,9 +178,22 @@ impl Default for Scans {
             busy: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             engine: cww_scan::ocr::system_engine().map(Arc::from),
+            added_languages: None,
+            language_download: LanguageDownload::default(),
         }
     }
 }
+
+/// Where the languages the person adds are kept: beside the daemon's other
+/// downloads (the Whisper models), never in the system's tessdata.
+pub fn added_languages(paths: &crate::paths::Paths) -> PathBuf {
+    paths.daemon.data_dir.join("ocr-languages")
+}
+
+/// Whether this computer can add languages by itself: Tesseract reads from
+/// a folder of the app's; Vision's languages are the Mac's, and Windows adds
+/// its own in Settings.
+const DOWNLOADS_LANGUAGES: bool = cfg!(not(any(target_os = "macos", windows)));
 
 /// Where sessions keep their pages: under the app's state directory, never
 /// a shared temporary folder.
@@ -179,6 +202,16 @@ pub fn scans_root(paths: &crate::paths::Paths) -> PathBuf {
 }
 
 impl Scans {
+    /// The scanner's state, reading the languages added in `paths` too.
+    pub fn new(paths: &crate::paths::Paths) -> Self {
+        let added = DOWNLOADS_LANGUAGES.then(|| added_languages(paths));
+        Self {
+            engine: cww_scan::ocr::system_engine_with(added.clone()).map(Arc::from),
+            added_languages: added,
+            ..Self::default()
+        }
+    }
+
     /// Deletes the pages and stops the helper: the window closed, or the
     /// app starts (a crash may have left a session behind).
     pub fn close(&self, paths: &crate::paths::Paths) {
@@ -501,6 +534,135 @@ pub fn scan_add_language(webview: Webview) -> Answer {
     Ok(json!({}))
 }
 
+/// The languages this computer can add by itself and doesn't read yet,
+/// by name: `[{ code, name, bytes }]`.
+#[tauri::command]
+pub fn scan_language_packs(webview: Webview, scans: State<'_, Arc<Scans>>) -> Answer {
+    scan_page_only(&webview)?;
+    if scans.added_languages.is_none() {
+        return Ok(json!({ "packs": [] }));
+    }
+    let have: Vec<String> = match &scans.engine {
+        Ok(engine) => engine
+            .languages()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| l.code)
+            .collect(),
+        Err(_) => return Ok(json!({ "packs": [] })),
+    };
+    Ok(json!({ "packs": packs_to_add(&have) }))
+}
+
+fn packs_to_add(have: &[String]) -> Vec<Value> {
+    let mut packs: Vec<&cww_scan::languages::Pack> = cww_scan::languages::PACKS
+        .iter()
+        .filter(|p| !have.iter().any(|code| code == p.code))
+        .collect();
+    packs.sort_by_key(|p| p.name);
+    packs
+        .into_iter()
+        .map(|p| json!({ "code": p.code, "name": p.name, "bytes": p.bytes }))
+        .collect()
+}
+
+/// Downloads a language pack into the app's folder, checked against its
+/// pinned SHA-256. Progress arrives as `scan` events of kind `language`
+/// (`code`, `bytes`, `total`, then `done` with an `error` if it failed).
+#[tauri::command]
+pub fn scan_download_language(
+    webview: Webview,
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    scans: State<'_, Arc<Scans>>,
+    code: String,
+) -> Answer {
+    scan_page_only(&webview)?;
+    let folder = scans.added_languages.clone().ok_or_else(|| {
+        refusal(
+            "unsupported",
+            "This computer adds languages in its own settings.",
+        )
+    })?;
+    let pack = cww_scan::languages::pack(&code)
+        .ok_or_else(|| refusal("invalid", "That isn't a language Chat with Work can add."))?;
+    let download = &scans.language_download;
+    if download.running.swap(true, Ordering::SeqCst) {
+        return Err(refusal("busy", "A language is already downloading."));
+    }
+    download.cancelled.store(false, Ordering::SeqCst);
+    let scans = scans.inner().clone();
+    let paths = desktop.paths.daemon.clone();
+    let spawned = std::thread::Builder::new()
+        .name("cww-language-download".into())
+        .spawn({
+            let scans = scans.clone();
+            move || {
+                // Clears `running` however this ends, a panic included.
+                struct Running(Arc<Scans>);
+                impl Drop for Running {
+                    fn drop(&mut self) {
+                        self.0.language_download.running.store(false, Ordering::SeqCst);
+                    }
+                }
+                let _running = Running(scans.clone());
+                let progress = |bytes| {
+                    tell(
+                        &app,
+                        json!({ "kind": "language", "code": pack.code, "bytes": bytes, "total": pack.bytes }),
+                    )
+                };
+                progress(0);
+                let last = AtomicU64::new(0);
+                let url = pack.url();
+                let result = cww::fetch::verified(
+                    &paths,
+                    &cww::fetch::Pinned {
+                        url: &url,
+                        bytes: pack.bytes,
+                        sha256: pack.sha256,
+                        what: "language",
+                    },
+                    &folder.join(format!("{}.traineddata", pack.code)),
+                    &scans.language_download.cancelled,
+                    |bytes| {
+                        // At most every quarter megabyte, so the page isn't flooded.
+                        if bytes.saturating_sub(last.load(Ordering::Relaxed)) >= 250_000
+                            || bytes == pack.bytes
+                        {
+                            last.store(bytes, Ordering::Relaxed);
+                            progress(bytes);
+                        }
+                    },
+                );
+                scans.language_download.running.store(false, Ordering::SeqCst);
+                let error = result.err().map(|e| format!("{e:#}"));
+                tell(
+                    &app,
+                    json!({ "kind": "language", "code": pack.code, "done": true, "error": error }),
+                );
+            }
+        });
+    if let Err(e) = spawned {
+        scans
+            .language_download
+            .running
+            .store(false, Ordering::SeqCst);
+        return Err(refusal("failed", e.to_string()));
+    }
+    Ok(json!({}))
+}
+
+#[tauri::command]
+pub fn scan_cancel_language(webview: Webview, scans: State<'_, Arc<Scans>>) -> Answer {
+    scan_page_only(&webview)?;
+    scans
+        .language_download
+        .cancelled
+        .store(true, Ordering::SeqCst);
+    Ok(json!({}))
+}
+
 #[tauri::command]
 pub fn scan_info(
     webview: Webview,
@@ -528,7 +690,13 @@ pub fn scan_info(
         .as_ref()
         .filter(|code| !languages.is_empty() && !languages.iter().any(|l| &l.code == *code))
         .map(|code| {
-            json!({ "code": code, "name": language_name(code), "how": add_language_hint(code) })
+            json!({
+                "code": code,
+                "name": language_name(code),
+                "how": add_language_hint(code),
+                // Whether the window can download it itself.
+                "pack": scans.added_languages.is_some() && cww_scan::languages::pack(code).is_some(),
+            })
         });
     let session = scans.session.lock().expect("session");
     Ok(json!({
@@ -537,7 +705,13 @@ pub fn scan_info(
         "languages": languages,
         "ocr": match &scans.engine {
             Ok(_) if languages.is_empty() => json!({ "available": false, "reason": no_languages(&languages_error) }),
-            Ok(_) => json!({ "available": true, "missing": missing, "can_add": cfg!(windows) }),
+            Ok(_) => json!({
+                "available": true,
+                "missing": missing,
+                "can_add": cfg!(windows),
+                "can_download": scans.added_languages.is_some(),
+                "downloading": scans.language_download.running.load(Ordering::SeqCst),
+            }),
             Err(reason) => json!({ "available": false, "reason": reason }),
         },
         "pages": session.pages.iter().map(Page::json).collect::<Vec<_>>(),
@@ -1214,6 +1388,17 @@ pub fn scan_open(webview: Webview, desktop: State<'_, Arc<Desktop>>, url: String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn languages_to_add_leave_out_the_ones_here_and_go_by_name() {
+        let packs = super::packs_to_add(&["eng".into(), "deu".into()]);
+        let codes: Vec<&str> = packs.iter().map(|p| p["code"].as_str().unwrap()).collect();
+        assert!(!codes.contains(&"eng") && !codes.contains(&"deu"));
+        assert!(codes.contains(&"ita"));
+        let names: Vec<&str> = packs.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!(names[0], "Afrikaans");
+    }
+
     use super::*;
     use cww_scan::ocr::Word;
 
