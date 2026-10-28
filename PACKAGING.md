@@ -32,7 +32,7 @@ A release carries only what people download or something reads; anything else st
 | `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` | The portable Linux app and `cww`. The input for the `.deb` and `.rpm` builds; the Homebrew formula on Linux, AUR `-bin` and `cww-installer.sh` download it. |
 | `cww-vX.Y.Z-macos-universal.tar.gz` | The app and a signed `cww`, for the Homebrew formula and `cww-installer.sh`. |
 | `checksums.txt` | SHA-256 of every file above but the `.deb` and `.rpm` files (GitHub shows theirs on the release). Both installers and native-packages check downloads against it. |
-| `checksums.txt.sig` | Ed25519 signature of `checksums.txt` with the key in `app/assets/update-public-key.hex`, kept for the desktop app's updater, which isn't built yet. |
+| `checksums.txt.sig` | Ed25519 signature of `checksums.txt` with the key in `app/assets/update-public-key.hex`. The desktop app's updater (`app/src/update.rs`, fastframe-update) refuses a release without a valid one, then checks its download against `checksums.txt`: the `.dmg` on macOS, the `.msi` on Windows. |
 
 native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-packaging.tar.xz`, `packaging-checksums.txt`); `packaging.yml`'s `tidy-release` job removes them, since the AUR and Homebrew are published from the run's own copy and `winget-submit.sh` renders WinGet's manifests itself. Releases up to 0.5.0 also carried a `.zip` of the macOS app and portable Windows zips; nothing read them, so they're no longer built. Scoop's recipe went with the zips: no bucket was ever published.
 
@@ -59,6 +59,12 @@ native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-
 | `packaging/test-install.sh` | Installs, runs and removes Debian, RPM and Arch packages in clean containers. |
 | `packaging/release-notes/vX.Y.Z.md` | Required for a stable tag. Start from `TEMPLATE.md`, whose Download section names the one file to pick per platform. |
 | `flake.nix` | The Nix package (Linux and macOS) and a dev shell. |
+
+## Updates
+
+The app updates itself through [fastframe-update](https://github.com/crmne/fastframe/tree/v0.15.2/crates/fastframe-update) (`app/src/update.rs`): the Mac app from the `.dmg` (bundle `com.chatwithwork.desktop`, assets `chat-with-work-vX.Y.Z-macos-universal.dmg`) and the Windows installer's app (`cww-vX.Y.Z-<target>.msi`, found by the `cww-installer.txt` marker the MSI installs beside `cww-app.exe`, installed per user into the folder the app runs from with `msiexec /i ... INSTALLFOLDER=...`). Keep those names, the bundle identifier, the marker and `INSTALLFOLDER`: installed versions look for them. Homebrew, the AUR, `.deb`, `.rpm`, Nix and the Mac `.pkg` (by its receipt, `com.chatwithwork.cww`) update through their own tools; the Linux archive has no marker, since the updater replaces one program and the archive carries `cww` beside the app.
+
+To try the updater without publishing a release, build two versions with a throwaway key (`CWW_UPDATE_PUBLIC_KEY=<64 hex digits>` at build time; release builds never set it), put the newer one's asset, `checksums.txt` and its signature (`openssl pkeyutl -sign -rawin`) with a `latest.json` shaped like GitHub's release on a loopback HTTP server, and start the older one with `CWW_UPDATE_FEED=http://127.0.0.1:<port>`. A Linux build updates itself in that test when `cww-app-portable.txt` (`cww-app-portable-v1`) sits beside it.
 
 ## Crash reports
 

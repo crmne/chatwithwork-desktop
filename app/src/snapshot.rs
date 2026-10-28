@@ -35,7 +35,13 @@ pub fn run(app: AppHandle, dir: PathBuf) {
                 .split_once(':')
                 .map(|(e, p)| (e.to_string(), p.to_string()))
         });
-    std::thread::sleep(Duration::from_secs(3));
+    // Longer with `CWW_APP_SNAPSHOT_DELAY` (seconds), for what comes later:
+    // an update's check and download start 20 seconds after launch.
+    let delay = std::env::var("CWW_APP_SNAPSHOT_DELAY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    std::thread::sleep(Duration::from_secs(delay));
     let Some(window) = app.get_webview_window(SETTINGS) else {
         log::error!("snapshot: no settings window");
         app.exit(1);
@@ -127,8 +133,20 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             scan_step(&app, step.trim_start_matches(':'), &dir, &theme);
             continue;
         }
-        crate::windows::tell_settings(&app, "navigate", &page);
+        // `<page>:end`: the page scrolled to its end.
+        let (name, end) = match page.strip_suffix(":end") {
+            Some(name) => (name.to_string(), true),
+            None => (page.clone(), false),
+        };
+        crate::windows::tell_settings(&app, "navigate", &name);
         std::thread::sleep(Duration::from_millis(1500));
+        if end {
+            let _ = window.eval(
+                "document.querySelectorAll('*').forEach((e) => { if (e.scrollHeight > e.clientHeight) e.scrollTop = e.scrollHeight; }); window.scrollTo(0, document.body.scrollHeight);",
+            );
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        let page = if end { format!("{name}-end") } else { name };
         let path = dir.join(format!("{page}-{theme}.png"));
         match capture(&window, &path) {
             Ok(()) => println!("{}", path.display()),

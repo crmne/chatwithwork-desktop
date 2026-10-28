@@ -22,6 +22,12 @@ mod ids {
     pub const SETTINGS: &str = "settings";
     pub const SCAN: &str = "scan";
     pub const QUIT: &str = "quit";
+    pub const UPDATE: &str = "update";
+}
+
+/// The entry while an update waits for a restart.
+pub fn update_label(version: &str) -> String {
+    format!("Restart to Update to {version}")
 }
 
 pub const SCAN_LABEL: &str = "Scan…";
@@ -63,6 +69,7 @@ pub enum Action {
     ToggleBrowser,
     Settings,
     Scan,
+    RestartToUpdate,
     Quit,
 }
 
@@ -73,6 +80,7 @@ pub fn action(id: &str) -> Option<Action> {
         ids::BROWSER => Action::ToggleBrowser,
         ids::SETTINGS => Action::Settings,
         ids::SCAN => Action::Scan,
+        ids::UPDATE => Action::RestartToUpdate,
         ids::QUIT => Action::Quit,
         _ => return None,
     })
@@ -88,6 +96,8 @@ pub struct Tray {
     pause: MenuItem<tauri::Wry>,
     /// In the menu only while the browser is on, after Pause Sharing.
     browser: MenuItem<tauri::Wry>,
+    /// Restart to Update, just above Quit while an update is ready.
+    update: Option<(String, MenuItem<tauri::Wry>)>,
     view: TrayView,
 }
 
@@ -204,8 +214,35 @@ impl Tray {
             detail,
             pause,
             browser,
+            update: None,
             view: view.clone(),
         })
+    }
+
+    /// Offers Restart to Update for `version`, or takes the entry away.
+    pub fn set_update(&mut self, app: &AppHandle, version: Option<&str>) {
+        if self.update.as_ref().map(|(v, _)| v.as_str()) == version {
+            return;
+        }
+        if let Some((_, item)) = self.update.take() {
+            let _ = self.menu.remove(&item);
+        }
+        let Some(version) = version else {
+            return;
+        };
+        let Ok(item) =
+            MenuItem::with_id(app, ids::UPDATE, update_label(version), true, None::<&str>)
+        else {
+            return;
+        };
+        // Just above Quit, the last entry.
+        let position = self
+            .menu
+            .items()
+            .map_or(0, |items| items.len().saturating_sub(1));
+        if self.menu.insert(&item, position).is_ok() {
+            self.update = Some((version.to_owned(), item));
+        }
     }
 
     pub fn update(&mut self, view: &TrayView) {
@@ -290,6 +327,8 @@ mod tests {
         assert_eq!(action("settings"), Some(Action::Settings));
         assert_eq!(action("scan"), Some(Action::Scan));
         assert_eq!(action("quit"), Some(Action::Quit));
+        assert_eq!(action("update"), Some(Action::RestartToUpdate));
+        assert_eq!(update_label("0.7.0"), "Restart to Update to 0.7.0");
         assert_eq!(action("headline"), None);
         assert_eq!(action("detail"), None);
         assert_eq!(pause_label(true), "Resume Sharing");

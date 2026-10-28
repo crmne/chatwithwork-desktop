@@ -595,3 +595,44 @@ mod tests {
         assert_eq!(model_by_id("../../x"), None);
     }
 }
+
+// Updating the app by itself (update.rs).
+
+#[tauri::command]
+pub fn update_status(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    local_page(&webview)?;
+    let view = desktop.updates.view();
+    // A rolled-back update's message is shown once.
+    desktop.updates.dismiss_problem();
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn update_check(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    local_page(&webview)?;
+    desktop.updates.check_now();
+    Ok(desktop.updates.view())
+}
+
+/// Hands the downloaded update to its helper and quits.
+#[tauri::command]
+pub fn update_restart(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    local_page(&webview)?;
+    desktop
+        .restart_to_update()
+        .map(|()| json!({}))
+        .map_err(|e| refusal("failed", e))
+}
+
+/// Turns the daily check on or off; the setting is the app's own.
+#[tauri::command]
+pub fn set_update_checks(webview: Webview, desktop: State<'_, Arc<Desktop>>, on: bool) -> Answer {
+    local_page(&webview)?;
+    let mut state = crate::state::AppState::load(&desktop.paths);
+    state.update_checks_off = !on;
+    state
+        .save(&desktop.paths)
+        .map_err(|e| refusal("failed", e.to_string()))?;
+    desktop.updates.set_automatic(on);
+    Ok(desktop.updates.view())
+}

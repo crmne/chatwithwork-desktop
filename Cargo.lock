@@ -1369,6 +1369,7 @@ dependencies = [
  "env_logger",
  "fastframe-audio",
  "fastframe-autostart",
+ "fastframe-update",
  "gtk",
  "image",
  "jiff",
@@ -1390,6 +1391,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "ureq",
  "url",
  "webkit2gtk",
  "whisper-rs",
@@ -1932,8 +1934,8 @@ checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
 
 [[package]]
 name = "fastframe-audio"
-version = "0.14.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.1#2b04c0eed57e450461a5bef61fdebc93ed7d7226"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
 dependencies = [
  "cpal",
  "libc",
@@ -1944,8 +1946,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-autostart"
-version = "0.14.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.1#2b04c0eed57e450461a5bef61fdebc93ed7d7226"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
 dependencies = [
  "fastframe-file",
  "log",
@@ -1958,8 +1960,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-desktop"
-version = "0.14.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.1#2b04c0eed57e450461a5bef61fdebc93ed7d7226"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
 dependencies = [
  "log",
  "mac-usernotifications",
@@ -1967,9 +1969,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastframe-dirs"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
+dependencies = [
+ "directories",
+]
+
+[[package]]
 name = "fastframe-file"
-version = "0.14.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.1#2b04c0eed57e450461a5bef61fdebc93ed7d7226"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
 dependencies = [
  "log",
  "windows-sys 0.60.2",
@@ -1977,8 +1987,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-notifications"
-version = "0.14.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.1#2b04c0eed57e450461a5bef61fdebc93ed7d7226"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
 dependencies = [
  "block2",
  "directories",
@@ -1996,6 +2006,21 @@ dependencies = [
  "windows",
  "windows-sys 0.60.2",
  "zbus",
+]
+
+[[package]]
+name = "fastframe-update"
+version = "0.15.2"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
+dependencies = [
+ "anyhow",
+ "fastframe-dirs",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "url",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

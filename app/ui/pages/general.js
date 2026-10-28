@@ -11,9 +11,10 @@ const REPOSITORY = "https://github.com/crmne/chatwithwork-desktop";
 
 export async function load(app) {
   const view = app.view("general");
-  const [autostart, crash, dictation] = await Promise.allSettled([
-    call("autostart"), call("crash_reports"), call("dictation"),
+  const [autostart, crash, dictation, update] = await Promise.allSettled([
+    call("autostart"), call("crash_reports"), call("dictation"), call("update_status"),
   ]);
+  if (update.status === "fulfilled") view.update = update.value;
   if (autostart.status === "fulfilled") view.autostart = autostart.value.enabled;
   if (crash.status === "fulfilled") view.crash = crash.value;
   if (dictation.status === "fulfilled") view.dictation = dictation.value;
@@ -23,6 +24,10 @@ export async function load(app) {
 export const enter = load;
 
 export async function listen(app, on) {
+  await on("update", (event) => {
+    app.view("general").update = event;
+    if (app.page === "general") app.render();
+  });
   await on("dictation-download", (event) => {
     const view = app.view("general");
     if (event.done) {
@@ -154,6 +159,71 @@ function dictationSection(app) {
     view.dictationError ? notice(view.dictationError) : null);
 }
 
+// What updating says, and the button it offers.
+function updateText(u) {
+  const release = u.release?.version;
+  switch (u.phase) {
+    case "checking": return "Checking for updates…";
+    case "current": return `Chat with Work Desktop ${u.version} is the latest version.`;
+    case "downloading": {
+      const percent = u.total ? Math.round((100 * u.received) / u.total) : 0;
+      return `Downloading version ${release}: ${percent}%`;
+    }
+    case "ready": return `Version ${release} is downloaded and checked. Restart to use it; your windows come back.`;
+    case "installing": return `Installing version ${release}…`;
+    case "unsupported": return `Version ${release} is out. ${u.advice}`;
+    case "failed": return u.error;
+    default: return u.automatic ? "Checked once a day. Updates download in the background, signed and verified, and install when you restart." : "Automatic checks are off.";
+  }
+}
+
+function updatesSection(app) {
+  const view = app.view("general");
+  const u = view.update;
+  if (!u) return null;
+  const busy = ["checking", "downloading", "installing"].includes(u.phase);
+  const action = u.phase === "ready"
+    ? button("Restart to Update", async () => {
+      try {
+        await call("update_restart");
+      } catch (error) {
+        view.updateError = error.message;
+        app.render();
+      }
+    }, { kind: "btn-primary", key: "update-restart" })
+    : u.phase === "unsupported"
+      ? button("Release Notes", () => call("open_url", { url: u.release?.url || u.releases }))
+      : button(u.phase === "checking" ? "Checking…" : "Check Now", async () => {
+        view.updateError = null;
+        try {
+          view.update = await call("update_check");
+        } catch (error) {
+          view.updateError = error.message;
+        }
+        app.render();
+      }, { disabled: busy });
+  return section("Updates", null,
+    group(
+      row({ title: "Version", text: updateText(u), actions: action }),
+      u.phase === "downloading" && u.total ? h("div", { class: "row row--stack" },
+        h("div", { class: "meter", role: "progressbar", "aria-label": "Update download", "aria-valuemin": "0", "aria-valuemax": String(u.total), "aria-valuenow": String(u.received) },
+          h("span", { style: `inline-size: ${Math.min(100, (100 * u.received) / u.total).toFixed(1)}%` }))) : null,
+      row({
+        title: "Check for updates",
+        text: "Once a day, from Chat with Work Desktop's releases on GitHub. A copy a package manager installed updates through it instead.",
+        actions: switchInput(u.automatic, async (on) => {
+          try {
+            view.update = await call("set_update_checks", { on });
+          } catch (error) {
+            view.updateError = error.message;
+          }
+          app.render();
+        }, { label: "Check for updates" }),
+      })),
+    u.problem ? notice(u.problem) : null,
+    view.updateError ? notice(view.updateError) : null);
+}
+
 export function render(app) {
   const view = app.view("general");
   const status = app.status;
@@ -188,6 +258,7 @@ export function render(app) {
           status.audit_file ? row({ title: "Activity log", micro: displayPath(status.audit_file, app.info.home),
             actions: button("Open", () => call("open_file", { which: "audit" })) }) : null)
         : agentMissing(app)),
+    updatesSection(app),
     section("About", null,
       group(
         row({

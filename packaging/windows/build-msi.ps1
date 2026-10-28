@@ -29,7 +29,7 @@ try {
   foreach ($name in "cww-app.exe", "cww-scan-helper.exe", "TWAINDSM.dll") {
     Copy-Item (Join-Path (Split-Path -Parent $Binary) $name) (Join-Path $source $name)
   }
-  foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt") {
+  foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt", "cww-installer.txt") {
     Copy-Item (Join-Path $PSScriptRoot $notice) $source
   }
   foreach ($doc in "README.md", "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE") {
