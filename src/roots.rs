@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{BotLoan, Config, Root};
+use crate::config::{BotLoan, Config, MAX_READ_BUDGET, Root};
 use crate::paths::{Paths, home_dir};
 use crate::policy::DenyList;
 use crate::reader::safe_fs::is_valid_root_id;
@@ -121,6 +121,7 @@ pub fn add_root(config: &mut Config, paths: &Paths, new: NewRoot<'_>) -> Result<
         writable: new.writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     config.roots.push(root.clone());
     Ok(root)
@@ -239,6 +240,26 @@ pub fn set_bot(
             unattended,
         });
     }
+    Ok(root.clone())
+}
+
+/// Give a shared folder a read budget of its own (`Some`: characters a
+/// chat may read from it per rolling hour, all chats together twice that),
+/// or put it back on the budget every folder shares (`None`). Only the
+/// user does this, here or through the control channel; the server can't.
+pub fn set_read_budget(config: &mut Config, which: &str, budget: Option<usize>) -> Result<Root> {
+    let least = config.limits.read_chars_per_chat_hour.min(MAX_READ_BUDGET);
+    if let Some(budget) = budget
+        && !(least..=MAX_READ_BUDGET).contains(&budget)
+    {
+        bail!(
+            "a folder's read budget is from {least} characters an hour (what every folder \
+             has) to {MAX_READ_BUDGET}"
+        );
+    }
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    root.read_budget = budget;
     Ok(root.clone())
 }
 
@@ -440,10 +461,46 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         });
         assert_eq!(new_id(&config, "Work docs"), "work-docs-2");
         assert_eq!(new_id(&config, "文档"), "root");
         assert_eq!(new_id(&config, "A"), "root");
+    }
+
+    #[test]
+    fn sets_a_folders_read_budget_within_its_bounds() {
+        let mut config = Config::default();
+        config.roots.push(Root {
+            bots: Vec::new(),
+            id: "app".into(),
+            label: "App".into(),
+            path: "/x".into(),
+            follow_symlinks: false,
+            writable: false,
+            commands: false,
+            network: false,
+            read_budget: None,
+        });
+        let root = set_read_budget(&mut config, "app", Some(5_000_000)).unwrap();
+        assert_eq!(root.read_budget, Some(5_000_000));
+        assert_eq!(config.roots[0].read_budget(&config.limits), Some(5_000_000));
+        for wrong in [999_999, 20_000_001] {
+            let err = set_read_budget(&mut config, "app", Some(wrong)).unwrap_err();
+            assert!(err.to_string().contains("1000000"), "{err}");
+        }
+        assert_eq!(config.roots[0].read_budget, Some(5_000_000));
+        let root = set_read_budget(&mut config, "App", None).unwrap();
+        assert_eq!(root.read_budget, None);
+        assert!(set_read_budget(&mut config, "nope", None).is_err());
+        // A budget written by hand out of bounds counts within them.
+        config.roots[0].read_budget = Some(10);
+        assert_eq!(config.roots[0].read_budget(&config.limits), Some(1_000_000));
+        config.roots[0].read_budget = Some(usize::MAX);
+        assert_eq!(
+            config.roots[0].read_budget(&config.limits),
+            Some(20_000_000)
+        );
     }
 
     #[test]
@@ -458,6 +515,7 @@ mod tests {
             writable: true,
             commands: false,
             network: false,
+            read_budget: None,
         });
 
         let root = set_bot(&mut config, "app", "42", Some("Issue fixer"), true, false).unwrap();
@@ -620,6 +678,7 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         });
         let err = set_writable(&mut config, "home", true, false).unwrap_err();
         assert!(err.to_string().contains("--i-know"), "{err}");

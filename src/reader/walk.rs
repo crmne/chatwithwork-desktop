@@ -219,6 +219,7 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         })
         .unwrap();
         let deny = Arc::new(DenyList::new(Vec::<String>::new()).unwrap());

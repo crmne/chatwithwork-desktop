@@ -2,7 +2,7 @@
 
 Chat with Work Desktop is the open-source desktop app for [Chat with Work](https://chatwithwork.com): Chat with Work in a window of its own, and a background agent (`cww` on the command line) that lets Chat with Work read, and with your approval change files and run commands, in folders you share on your Mac, Windows PC or Linux machine, and nothing else.
 
-- **Reads, and changes only with your approval:** a shared folder gets four read tools, `roots`, `search`, `list` and `read`. Turn on "Allow changes" for it, on your computer, and the assistant can also create, edit, move and delete files there, each change approved by you in Chat with Work. You can also allow commands in such a folder (on Windows, from Windows 11 24H2), each run approved by you too ([What the assistant can do](#what-the-assistant-can-do)). Old versions and deleted files go to your system trash; nothing is deleted for good, and no programs, launchers or macro documents are ever written.
+- **Reads, and changes only with your approval:** a shared folder gets the read tools: `roots`, `search`, `list`, `read`, `grep` and `glob` for code, and `read_bytes` for copying a file into a chat. Turn on "Allow changes" for it, on your computer, and the assistant can also create, edit, move and delete files there, each change approved by you in Chat with Work. You can also allow commands in such a folder (on Windows, from Windows 11 24H2), each approved by you in Chat with Work too, or run without asking in a chat where you chose "Allow everything" ([What the assistant can do](#what-the-assistant-can-do)). Old versions and deleted files go to your system trash; nothing is deleted for good, and no programs, launchers or macro documents are ever written.
 - **Only the folders you share,** and never the secrets inside them. SSH keys, `.env` files, keychains and browser profiles stay private even inside a shared folder.
 - **Outbound only.** The daemon opens one WebSocket to Chat with Work. No port is opened on your machine, and no third-party relay sees your data.
 - **Local index.** Full-text search (BM25) runs on your machine. Only the results of a specific tool call leave it: a few snippets, a directory listing, or a chunk of one file.
@@ -105,6 +105,7 @@ cww roots add ~/Documents/Work --label "Work docs"
 cww roots list
 cww roots allow-changes work-docs   # let Chat with Work change files there too
 cww roots deny-changes work-docs    # read-only again
+cww roots read-budget app 5000000   # let a chat read more of a folder in an hour, such as code
 cww roots remove work-docs
 ```
 
@@ -113,6 +114,8 @@ Share narrow folders: anything inside a shared folder can be read by the assista
 A shared folder is read-only until you allow changes in it (and a folder you share read-only stays read-only even inside one that allows changes), with `cww roots allow-changes` (or `--allow-changes` on `add`), the `w` key on the terminal UI's Shared folders page, or the "Allow changes" switch in the desktop app. Then the assistant can create, edit, move and delete files there. Chat with Work asks you before each change, the previous version of anything replaced and everything deleted goes to the system trash (the Trash on macOS, the Recycle Bin on Windows, your desktop's trash on Linux), and the activity log records every change. Nothing on the server can turn changes on. See [docs/file-changes.md](docs/file-changes.md).
 
 Symlinks are not followed. `--follow-symlinks` allows links that stay inside the folder; links that point outside are refused either way.
+
+A chat may read 1,000,000 characters an hour from your shared folders, and all chats together 2,000,000. A folder you work in a lot, such as code, can have a budget of its own: `cww roots read-budget <root> <characters>`, from 1,000,000 to 20,000,000 characters a chat an hour (all chats together twice it), counted for that folder alone; `default` puts it back on the shared budget. Only you can set it, here or over the control API (`roots_read_budget`); the server can't.
 
 ## Run the daemon
 
@@ -260,6 +263,9 @@ Through version 0.3.1, the desktop app was a native egui app with its own chat w
 | `search` | Full-text search, 20 hits at most, with a snippet of up to 300 characters each. A live grep covers files that aren't indexed yet. |
 | `list` | Lists one folder, 200 entries per page. |
 | `read` | Returns the text of one file, 32 000 characters at a time. PDF, Word, PowerPoint and Excel files are converted to text. |
+| `grep` | Searches code like ripgrep: lines matching a regular expression, with context lines, or the files that match, or how many lines in each. It skips what Git ignores, hidden files and binary files. |
+| `glob` | Finds files by name (`**/*.rb`), with their size and modification time. |
+| `read_bytes` | Copies one file, of any kind, up to 25 MiB, a chunk at a time, for Chat with Work to attach to a chat. Chat with Work uses it itself, never the model, with its own budget of 100 MiB an hour. |
 
 In folders where you allow changes, and only while at least one folder does:
 
@@ -272,6 +278,7 @@ In folders where you allow changes, and only while at least one folder does:
 | `move` | Moves or renames a file or folder, within or between folders that allow changes. A file it replaces goes to the trash. |
 | `delete` | Moves a file or folder to the system trash. |
 | `create_document` | Creates a Word document from Markdown, or an Excel workbook from rows of values (never formulas). Replacing one puts the old file in the trash; existing documents are never edited in place. |
+| `patch` | Edits several text files and creates new ones in one change, approved on one card: all of it or none. The previous versions go to the trash. |
 
 Chat with Work asks before each change; "Allow for the rest of this chat" can cover writes, never a replace, a move over a file, or a delete. Programs, scripts that run when opened, shortcuts and Office files with macros are never made, no file gets an execute bit, and version control internals, shell startup files, autostart folders and editor task settings are never changed.
 
@@ -282,7 +289,7 @@ In folders where you also allow commands (`cww roots allow-commands <root>`, or 
 | `run` | Runs one line of shell in the folder (Windows PowerShell on Windows), like `bin/rails test`, in a sandbox of its own that can change only that folder, without the network unless you allow it, with CPU and time limits (and memory on Linux and Windows). Its output comes as it's printed; a long command keeps running. |
 | `run_status`, `run_output`, `run_stop` | Follow a command left running, read what it printed, or stop it. |
 
-Chat with Work asks before every command. See [docs/commands.md](docs/commands.md).
+Each command is approved in Chat with Work (on the web or in its apps, never on this computer), or runs without asking in a chat where you chose "Allow everything" as the permission mode, as file changes do there; guests, scheduled and event runs, and bots' and agents' chats always ask. This computer decides where commands may run at all: only in folders where you allow them, with the network only where you allow that too. See [docs/commands.md](docs/commands.md).
 
 ### Lending folders to bots
 
@@ -327,6 +334,7 @@ label = "Work docs"
 path = "/Users/carmine/Documents/Work"
 follow_symlinks = false
 writable = false      # true lets Chat with Work change files here (cww roots allow-changes)
+# read_budget = 5000000  # characters a chat may read from this folder an hour (cww roots read-budget)
 
 [deny]
 extra = ["*.secret", "Clients/Confidential"]  # more patterns to block
@@ -339,6 +347,7 @@ calls_per_minute = 120
 read_chars_per_call = 32000
 read_chars_per_chat_hour = 1000000
 read_chars_per_hour = 2000000
+copy_bytes_per_hour = 104857600  # 100 MiB of files read_bytes copies into chats
 changes_per_minute = 30          # changes: create, write, edit, mkdir, move, delete
 changes_per_day = 500
 change_bytes_per_hour = 52428800 # 50 MiB written by changes
@@ -432,7 +441,7 @@ The rule behind the design: **every control that must hold against a compromised
 | Threat | How cww handles it |
 |---|---|
 | A bug in cww, or a malicious document that exploits a parser | The daemon runs in a kernel sandbox: Landlock on Linux, Seatbelt on macOS. It can read the shared folders, its own directories and system libraries, and write only its own directories plus, when you allow changes, exactly those folders and the trash their files go to (create, write, rename and remove, never execute), so the rest of your home folder (`~/.ssh`, other projects, the keychain files) is out of reach even for code the daemon didn't mean to run. `cww status --json` shows the sandbox's state. |
-| A compromised server, admin or database sends arbitrary tool calls | Unless you allow changes in a folder, only the four read tools exist, and commands only where you also allow them. Reads are confined to your shared folders and the deny list. Rate and volume limits, the audit log, and `cww pause` all run locally. For folders where you allow changes, see below. |
+| A compromised server, admin or database sends arbitrary tool calls | Unless you allow changes in a folder, only the read tools exist, and commands only where you also allow them. Reads are confined to your shared folders and the deny list. Rate and volume limits, the audit log, and `cww pause` all run locally. For folders where you allow changes, see below. |
 | A change escaping its folder, or hitting what it shouldn't | Changes open their folder one folder at a time, never through a symlink or junction, and check every folder opened by its real path (as the kernel reports it, so case variants and 8.3 short names can't dodge the lists) and its identity (so a folder shared read-only stays read-only whatever name reaches it), then create, rename and remove relative to that open folder (`O_CREAT \| O_EXCL \| O_NOFOLLOW`, `renameat2(RENAME_NOREPLACE)`, `renamex_np(RENAME_EXCL)`, handle renames without `ReplaceIfExists` on Windows). Links, hard links, FIFOs, sockets, devices, executables, read-only files and other users' files are never changed. The deny list covers every source and destination, and everything inside a folder that is moved or deleted, where it is and where it would land; so does a second built-in list, which keeps the home folder's dot files, Git internals, shell startup files, autostart and launch agents, and editor, interpreter and hook settings that run code unchanged. No programs, launchers, shortcuts, macro documents or documents that make Office run or fetch things (`.rtf`, `.mht`, `.slk`, `.iqy`, Office XML) are written, and never an execute bit; every file cww makes carries the Mark-of-the-Web on Windows and the quarantine mark on macOS, as a download would. |
 | Losing files to a change | Nothing is deleted for good: every replaced version and every deleted file goes to the system trash, and a change the trash can't take is refused. Writes go to a temporary file that is flushed, then swapped with the old version in one step where the filesystem allows (keeping its group, extended attributes and ACLs) or renamed into place, so a crash never leaves half a file. |
 | Prompt injection ("read ~/.ssh/id_ed25519") | Paths outside shared folders don't resolve at all. The deny list applies inside shared folders, and it can only be changed in the local config file. |
@@ -454,7 +463,8 @@ The rule behind the design: **every control that must hold against a compromised
 
 - **Anything inside a shared folder that isn't on the deny list can be read.** Share narrow folders. A secret stored in `notes.txt` is readable.
 - **In a folder that allows changes, a compromised server can change files without your approval** (see above): recoverable from the trash, within the budgets, and logged, but changed.
-- **In a folder that allows commands, an approved command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)). Where Bubblewrap can't run, commands run on Landlock instead, without the network and without `chmod` by name. On Windows they run in a process container, which only Windows 11 24H2 and later have; there Node.js and cmd's `dir` need an administrator to run `cww roots prepare-commands` once.
+- **In a folder that allows commands, a compromised server could run commands without your approval**, as it could make changes: commands are approved in Chat with Work, or run without asking in a chat set to Allow everything, and the daemon can't tell either from a forged approval. Only you turn commands on, per folder, on this computer.
+- **In a folder that allows commands, a command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)). Where Bubblewrap can't run, commands run on Landlock instead, without the network and without `chmod` by name. On Windows they run in a process container, which only Windows 11 24H2 and later have; there Node.js and cmd's `dir` need an administrator to run `cww roots prepare-commands` once.
 - **Text that runs later can be written.** cww writes no programs and sets no execute bit, and the never-changed list keeps out the files that run on their own (startup files, autostart, editor and hook settings). But build files and scripts are ordinary text people ask to have edited, and stay changeable: a changed `Makefile`, `package.json` script, `build.rs`, test, or shell script runs when you build, test or run the project yourself, and changed source code runs when you run the program. Settings of programs that live outside the home folder's dot files (`~/Library/Application Support` on macOS, `AppData` on Windows) are only out of reach because those folders are too broad to share without `--i-know`. Read the diff before you build or run something a change touched.
 - **Results do reach Chat with Work and the model provider.** "Private" means your files and the index stay on your computer, and only the snippets and chunks needed for an answer leave it. Once they leave, the server's retention and sharing rules apply.
 - **A malicious file could exploit a parser** (PDF, Office). Extraction runs with size caps and panic isolation, inside the kernel sandbox, which keeps it to the shared folders. The sandboxed daemon can still use the network, so an exploit could send what it can read to someone else; a separate reader process without network access is planned, and the `reader` module is structured for that split.

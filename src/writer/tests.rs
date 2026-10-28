@@ -50,6 +50,7 @@ fn fixture_with(limits: Limits) -> Fixture {
         writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     let mut config = Config {
         roots: vec![
@@ -692,6 +693,7 @@ fn refuses_folders_that_hold_a_shared_folder() {
         writable: true,
         commands: false,
         network: false,
+        read_budget: None,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs), root("inner", &inner)],
@@ -728,6 +730,7 @@ fn folders_shared_read_only_stay_read_only_inside_writable_ones() {
         writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs, true), root("private", &inner, false)],
@@ -830,6 +833,7 @@ fn moves_across_filesystems_by_copying() {
         writable: true,
         commands: false,
         network: false,
+        read_budget: None,
     };
     fs::write(f.docs.join("sub/a.md"), "a").unwrap();
     let mut config = Config {
@@ -977,6 +981,7 @@ fn folders_shared_read_only_stay_read_only_whatever_name_reaches_them() {
         writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     let mut config = Config {
         roots: vec![root("docs", &f.docs, true), root("private", &inner, false)],
@@ -1285,4 +1290,389 @@ fn saves_downloaded_files_as_new_files_only() {
         code(f.writer.save_file("docs:../x.pdf", bytes, false)),
         ErrorCode::InvalidPath
     );
+}
+
+fn patch_req(changes: serde_json::Value) -> patch::PatchRequest {
+    serde_json::from_value(serde_json::json!({ "changes": changes })).unwrap()
+}
+
+fn patch(f: &Fixture, changes: serde_json::Value) -> Result<patch::PatchResult, ToolError> {
+    f.writer.patch(&patch_req(changes))
+}
+
+/// Hidden files a change left behind in `dir`.
+fn leftovers(dir: &Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".cww-"))
+        .collect()
+}
+
+const NOTES: &str = "# Notes\nOne\nTwo\n";
+
+fn three_changes() -> serde_json::Value {
+    serde_json::json!([
+        { "path": "docs:notes.md", "old_text": "One", "new_text": "Uno" },
+        { "path": "docs:notes.md", "old_text": "Uno\nTwo", "new_text": "Uno\nDos" },
+        { "path": "other:plan.md", "content": "# Plan\n" },
+        { "path": "docs:sub/new.md", "content": "new\n" }
+    ])
+}
+
+#[test]
+fn patches_several_files_at_once() {
+    let f = fixture();
+    let made = patch(&f, three_changes()).unwrap();
+    assert!(!made.dry_run);
+    assert_eq!(made.effect, "patched");
+    let paths: Vec<_> = made.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["docs:notes.md", "other:plan.md", "docs:sub/new.md"]);
+    assert_eq!(
+        fs::read_to_string(f.docs.join("notes.md")).unwrap(),
+        "# Notes\nUno\nDos\n"
+    );
+    assert_eq!(
+        fs::read_to_string(f.base.join("other/plan.md")).unwrap(),
+        "# Plan\n"
+    );
+    assert_eq!(
+        fs::read_to_string(f.docs.join("sub/new.md")).unwrap(),
+        "new\n"
+    );
+    let edited = &made.files[0];
+    assert_eq!(edited.effect, Effect::Edited);
+    assert_eq!(edited.size, Some(16));
+    assert_eq!(
+        edited.sha256.as_deref(),
+        Some(sha256(b"# Notes\nUno\nDos\n").as_str())
+    );
+    let previous = edited.previous.as_ref().unwrap();
+    assert_eq!(previous.sha256, sha256(NOTES.as_bytes()));
+    assert_eq!(previous.in_trash, Some(true));
+    assert!(edited.trashed_to.is_some());
+    assert_eq!(made.files[1].effect, Effect::Created);
+    assert!(made.files[1].previous.is_none());
+    // The previous version is in the trash, under its own name.
+    assert_eq!(trashed(&f), ["notes.md"]);
+    assert_eq!(
+        fs::read_to_string(trash_files(&f.trash).join("notes.md")).unwrap(),
+        NOTES
+    );
+    for dir in [&f.docs, &f.docs.join("sub"), &f.base.join("other")] {
+        assert!(leftovers(dir).is_empty(), "{dir:?}");
+    }
+    let json = serde_json::to_value(&made).unwrap();
+    assert!(json["files"][0].get("diff").is_none());
+    assert!(json["files"][0].get("edits").is_none());
+}
+
+#[test]
+fn a_dry_run_shows_each_diff_and_changes_nothing() {
+    let f = fixture();
+    let mut req = patch_req(three_changes());
+    req.dry_run = true;
+    let checked = f.writer.patch(&req).unwrap();
+    assert!(checked.dry_run);
+    assert_eq!(fs::read_to_string(f.docs.join("notes.md")).unwrap(), NOTES);
+    assert!(!f.base.join("other/plan.md").exists());
+    let json = serde_json::to_value(&checked).unwrap();
+    let notes = &json["files"][0];
+    assert_eq!(notes["effect"], "edited");
+    assert_eq!(notes["edits"], 2);
+    assert_eq!(notes["previous"]["sha256"], sha256(NOTES.as_bytes()));
+    assert!(notes["previous"].get("in_trash").is_none());
+    let diff = notes["diff"].as_str().unwrap();
+    assert!(diff.contains("-One\n-Two\n+Uno\n+Dos\n"), "{diff}");
+    let plan = &json["files"][1];
+    assert_eq!(plan["effect"], "created");
+    assert_eq!(plan["size"], 7);
+    assert!(plan["diff"].as_str().unwrap().contains("+# Plan\n"));
+    assert!(trashed(&f).is_empty());
+}
+
+#[test]
+fn a_dry_run_cuts_the_diffs_together() {
+    let f = fixture();
+    let big = "line of text\n".repeat(30_000 / 13);
+    let changes: Vec<_> = (0..4)
+        .map(|i| serde_json::json!({ "path": format!("docs:big{i}.md"), "content": big }))
+        .collect();
+    let mut req = patch_req(serde_json::Value::Array(changes));
+    req.dry_run = true;
+    let checked = f.writer.patch(&req).unwrap();
+    let json = serde_json::to_value(&checked).unwrap();
+    let diff = |i: usize| json["files"][i]["diff"].as_str().map(str::len);
+    assert!(diff(0).unwrap() > 29_000 && diff(1).unwrap() > 29_000);
+    let third = json["files"][2]["diff"].as_str().unwrap();
+    assert!(
+        third.ends_with("(the diffs go on)\n"),
+        "{}",
+        &third[third.len() - 60..]
+    );
+    assert!(json["files"][2].get("diff_cut").is_none());
+    let total: usize = (0..3).map(|i| diff(i).unwrap()).sum();
+    assert!(total <= patch::MAX_PATCH_DIFF_BYTES + 64, "{total}");
+    assert_eq!(json["files"][3]["diff"], serde_json::Value::Null);
+    assert_eq!(json["files"][3]["diff_cut"], true);
+}
+
+#[test]
+fn checks_every_change_before_making_any() {
+    let f = fixture();
+    let err = patch(
+        &f,
+        serde_json::json!([
+            { "path": "docs:notes.md", "old_text": "One", "new_text": "Uno" },
+            { "path": "other:plan.md", "content": "# Plan\n" },
+            { "path": "docs:sub/missing.md", "old_text": "a", "new_text": "b" }
+        ]),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    assert!(
+        err.message.starts_with("Change 2 (docs:sub/missing.md): "),
+        "{}",
+        err.message
+    );
+    assert!(
+        err.message.ends_with("No file was changed."),
+        "{}",
+        err.message
+    );
+    assert_eq!(fs::read_to_string(f.docs.join("notes.md")).unwrap(), NOTES);
+    assert!(!f.base.join("other/plan.md").exists());
+
+    let refused = |changes: serde_json::Value| patch(&f, changes).unwrap_err();
+    let cases = [
+        (
+            serde_json::json!([
+                { "path": "docs:a.md", "content": "x" },
+                { "path": "docs:notes.md", "old_text": "Three", "new_text": "3" }
+            ]),
+            ErrorCode::InvalidArgument,
+            "Change 1 (docs:notes.md): old_text was not found",
+        ),
+        (
+            serde_json::json!([{ "path": "ro:keep.md", "old_text": "keep", "new_text": "k" }]),
+            ErrorCode::NotWritable,
+            "Change 0 (ro:keep.md)",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:.env", "old_text": "1", "new_text": "2" }]),
+            ErrorCode::Denied,
+            "Change 0 (docs:.env)",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:escape.txt", "old_text": "o", "new_text": "0" }]),
+            ErrorCode::Denied,
+            "Change 0",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:notes.md", "content": "x" }]),
+            ErrorCode::Exists,
+            "Change 0 (docs:notes.md)",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:run.sh.exe", "content": "x" }]),
+            ErrorCode::NotChangeable,
+            "Change 0",
+        ),
+        (
+            serde_json::json!([
+                { "path": "docs:x.md", "content": "x" },
+                { "path": "docs:x.md", "old_text": "x", "new_text": "y" }
+            ]),
+            ErrorCode::InvalidArgument,
+            "Change 1 (docs:x.md)",
+        ),
+        (
+            serde_json::json!([
+                { "path": "docs:notes.md", "old_text": "One", "new_text": "1" },
+                { "path": "docs:./notes.md", "content": "x" }
+            ]),
+            ErrorCode::InvalidArgument,
+            "Change 1 (docs:notes.md)",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:notes.md", "old_text": "One", "new_text": "1", "content": "x" }]),
+            ErrorCode::InvalidArgument,
+            "Change 0: ",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:notes.md", "old_text": "One" }]),
+            ErrorCode::InvalidArgument,
+            "Change 0: ",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:notes.md", "old": "One", "new_text": "1" }]),
+            ErrorCode::InvalidArgument,
+            "Change 0: unknown field",
+        ),
+        (
+            serde_json::json!([{ "path": "docs:../x.md", "content": "x" }]),
+            ErrorCode::InvalidPath,
+            "Change 0: ",
+        ),
+        (
+            serde_json::json!([]),
+            ErrorCode::InvalidArgument,
+            "from 1 to 50",
+        ),
+    ];
+    for (changes, code, start) in cases {
+        let err = refused(changes.clone());
+        assert_eq!(err.code, code, "{changes}: {}", err.message);
+        assert!(err.message.contains(start), "{changes}: {}", err.message);
+    }
+    let many: Vec<_> = (0..51)
+        .map(|i| serde_json::json!({ "path": format!("docs:f{i}.md"), "content": "x" }))
+        .collect();
+    assert_eq!(
+        refused(serde_json::Value::Array(many)).code,
+        ErrorCode::InvalidArgument
+    );
+    let files: Vec<_> = (0..21)
+        .map(|i| serde_json::json!({ "path": format!("docs:f{i}.md"), "content": "x" }))
+        .collect();
+    let err = refused(serde_json::Value::Array(files));
+    assert!(
+        err.message.contains("Change 20 (docs:f20.md)"),
+        "{}",
+        err.message
+    );
+    assert!(trashed(&f).is_empty());
+    assert!(leftovers(&f.docs).is_empty());
+}
+
+#[test]
+fn expected_hashes_guard_each_file() {
+    let f = fixture();
+    let with = |expected: serde_json::Value| {
+        let mut req = patch_req(serde_json::json!([
+            { "path": "docs:notes.md", "old_text": "One", "new_text": "Uno" },
+            { "path": "other:plan.md", "content": "# Plan\n" }
+        ]));
+        req.expected_sha256 = serde_json::from_value(expected).unwrap();
+        f.writer.patch(&req)
+    };
+    let err = with(serde_json::json!({ "docs:notes.md": "0".repeat(64) })).unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    assert!(
+        err.message.starts_with("Change 0 (docs:notes.md)"),
+        "{}",
+        err.message
+    );
+    assert!(!f.base.join("other/plan.md").exists());
+    for bad in [
+        serde_json::json!({ "other:plan.md": "0" }),
+        serde_json::json!({ "docs:sub/other.md": "0" }),
+    ] {
+        assert_eq!(with(bad).unwrap_err().code, ErrorCode::InvalidArgument);
+    }
+    with(serde_json::json!({ "docs:./notes.md": sha256(NOTES.as_bytes()).to_uppercase() }))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(f.docs.join("notes.md")).unwrap(),
+        "# Notes\nUno\nTwo\n"
+    );
+}
+
+#[test]
+fn counts_one_change_per_file() {
+    let f = fixture_with(Limits {
+        changes_per_minute: 2,
+        ..Limits::default()
+    });
+    let err = patch(&f, three_changes()).unwrap_err();
+    assert_eq!(err.code, ErrorCode::RateLimited);
+    assert_eq!(fs::read_to_string(f.docs.join("notes.md")).unwrap(), NOTES);
+    assert!(leftovers(&f.docs).is_empty());
+    // Two files fit.
+    patch(
+        &f,
+        serde_json::json!([
+            { "path": "docs:notes.md", "old_text": "One", "new_text": "Uno" },
+            { "path": "docs:b.md", "content": "b" }
+        ]),
+    )
+    .unwrap();
+    assert_eq!(code(create(&f, "docs:c.md", "c")), ErrorCode::RateLimited);
+}
+
+/// Make a patch fail at `step` of file `index`, and check every file is
+/// as it was: with files swapped in one step, and moved aside first as on
+/// Windows.
+fn fails_and_puts_back(step: &'static str, index: usize) {
+    fails_and_puts_back_with(step, index, false);
+    fails_and_puts_back_with(step, index, true);
+}
+
+fn fails_and_puts_back_with(step: &'static str, index: usize, no_exchange: bool) {
+    let f = fixture();
+    f.writer
+        .no_exchange
+        .store(no_exchange, std::sync::atomic::Ordering::SeqCst);
+    fs::write(f.base.join("other/keep.md"), "keep\n").unwrap();
+    let changes = serde_json::json!([
+        { "path": "docs:notes.md", "old_text": "One", "new_text": "Uno" },
+        { "path": "docs:sub/new.md", "content": "new\n" },
+        { "path": "other:keep.md", "old_text": "keep", "new_text": "kept" },
+        { "path": "other:plan.md", "content": "# Plan\n" }
+    ]);
+    *f.writer.fail_patch_at.lock().unwrap() = Some((step, index));
+    let err = patch(&f, changes.clone()).unwrap_err();
+    assert!(err.message.contains("injected failure"), "{}", err.message);
+    assert!(
+        err.message
+            .contains("put back as it was, so nothing was changed"),
+        "{}",
+        err.message
+    );
+    assert_eq!(fs::read_to_string(f.docs.join("notes.md")).unwrap(), NOTES);
+    assert_eq!(
+        fs::read_to_string(f.base.join("other/keep.md")).unwrap(),
+        "keep\n"
+    );
+    assert!(!f.docs.join("sub/new.md").exists());
+    assert!(!f.base.join("other/plan.md").exists());
+    for dir in [&f.docs, &f.docs.join("sub"), &f.base.join("other")] {
+        assert!(
+            leftovers(dir).is_empty(),
+            "{step} {index} {no_exchange}: {dir:?}"
+        );
+    }
+    // The same patch goes through once nothing fails.
+    *f.writer.fail_patch_at.lock().unwrap() = None;
+    let made = patch(&f, changes).unwrap();
+    assert_eq!(
+        fs::read_to_string(f.base.join("other/keep.md")).unwrap(),
+        "kept\n"
+    );
+    // (After a failed trash, the first try's previous version stays in the
+    // trash too.)
+    let trash = trashed(&f);
+    assert!(trash.contains(&"keep.md".into()) && trash.contains(&"notes.md".into()));
+    assert!(made.files[0].previous.as_ref().unwrap().in_trash == Some(true));
+    assert!(leftovers(&f.docs).is_empty());
+}
+
+#[test]
+fn a_patch_that_fails_while_staging_changes_nothing() {
+    fails_and_puts_back("stage", 2);
+}
+
+#[test]
+fn a_patch_that_fails_mid_way_puts_every_file_back() {
+    fails_and_puts_back("swap", 3);
+    fails_and_puts_back("swap", 2);
+    fails_and_puts_back("swap", 0);
+}
+
+#[test]
+fn a_patch_the_trash_refuses_puts_every_file_back() {
+    // The first edited file's previous version is already in the trash
+    // when the second's fails: it comes back from what was read.
+    fails_and_puts_back("trash", 2);
+    fails_and_puts_back("trash", 0);
 }

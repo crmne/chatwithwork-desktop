@@ -428,6 +428,16 @@ pub struct Staged {
     path: PathBuf,
 }
 
+impl Staged {
+    /// Its hidden name in its folder.
+    pub fn name(&self) -> OsString {
+        self.path
+            .file_name()
+            .map(OsStr::to_os_string)
+            .unwrap_or_default()
+    }
+}
+
 /// Open without following a final reparse point, with `access`.
 fn open_with(path: &Path, access: u32) -> io::Result<File> {
     OpenOptions::new()
@@ -690,6 +700,23 @@ impl ChangeDir {
         _stat: &EntryStat,
     ) -> Result<PathBuf, ToolError> {
         Err(ToolError::internal("Windows can't swap files"))
+    }
+
+    /// Move the entry `name` (a version set aside under a hidden name) to
+    /// the Recycle Bin as the file `shown`, so Restore puts it back there.
+    pub fn trash_as(
+        &self,
+        name: &OsStr,
+        shown: &OsStr,
+        trash: &Trash,
+        stat: &EntryStat,
+    ) -> Result<PathBuf, ToolError> {
+        let (file, _) = self.open_child(
+            name,
+            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        )?;
+        let real = final_path(&file).map_err(|e| io_error(&e, "checking the path"))?;
+        trash.put(&file, &self.path.join(shown), &real, false, stat.size)
     }
 
     pub fn discard(&self, staged: Staged) {
@@ -1026,6 +1053,7 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         })
         .unwrap();
         Fixture {

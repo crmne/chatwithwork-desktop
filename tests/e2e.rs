@@ -1175,6 +1175,7 @@ fn pair(fixture: &Fixture, server: &FakeServer) {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         }],
         ..Config::default()
     };
@@ -1421,7 +1422,18 @@ async fn serves_tools_and_enforces_policy_over_the_wire() {
     let tools = s.request("tools/list", json!({})).await;
     let tools = tools["result"]["tools"].as_array().unwrap().clone();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["roots", "search", "list", "read"]);
+    assert_eq!(
+        names,
+        [
+            "roots",
+            "search",
+            "list",
+            "read",
+            "grep",
+            "glob",
+            "read_bytes"
+        ]
+    );
     for tool in &tools {
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
         assert_eq!(tool["annotations"]["openWorldHint"], false);
@@ -2114,6 +2126,47 @@ async fn the_settings_app_manages_folders_over_the_control_channel() {
     )
     .await;
     assert!(empty.contains("can't be empty"), "{empty}");
+
+    // A read budget of its own, shown in the status, and back to the
+    // shared one.
+    let budget = control(
+        &fx.paths,
+        ControlRequest::RootsReadBudget {
+            root: "docs".into(),
+            read_budget: Some(5_000_000),
+        },
+    )
+    .await;
+    assert_eq!(budget["root"]["read_budget"], 5_000_000, "{budget}");
+    watch
+        .until("the read budget", |s| {
+            s["roots"][0]["read_budget"] == 5_000_000
+        })
+        .await;
+    let too_much = control_error(
+        &fx.paths,
+        ControlRequest::RootsReadBudget {
+            root: "docs".into(),
+            read_budget: Some(50_000_000),
+        },
+    )
+    .await;
+    assert!(too_much.contains("20000000"), "{too_much}");
+    control(
+        &fx.paths,
+        ControlRequest::RootsReadBudget {
+            root: "docs".into(),
+            read_budget: None,
+        },
+    )
+    .await;
+    watch
+        .until("the shared read budget", |s| {
+            s["roots"][0].get("read_budget").is_none()
+        })
+        .await;
+    assert_eq!(Config::load(&fx.paths).unwrap().roots[0].read_budget, None);
+
     let ssh = fx.base.join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
     let denied = control_error(
@@ -3660,6 +3713,7 @@ fn pair_for_changes(fx: &Fixture, server: &FakeServer, writable: bool, limits: O
         writable: false,
         commands: false,
         network: false,
+        read_budget: None,
     });
     if let Some(limits) = limits {
         config.limits = limits;
@@ -3715,20 +3769,33 @@ async fn changes_files_over_the_wire() {
             "search",
             "list",
             "read",
+            "grep",
+            "glob",
+            "read_bytes",
             "create",
             "write",
             "edit",
             "mkdir",
             "move",
             "delete",
-            "create_document"
+            "create_document",
+            "patch"
         ]
     );
     for tool in tools["result"]["tools"].as_array().unwrap() {
         let name = tool["name"].as_str().unwrap();
         let a = &tool["annotations"];
         assert_eq!(a["openWorldHint"], false, "{name}");
-        let read_only = ["roots", "search", "list", "read"].contains(&name);
+        let read_only = [
+            "roots",
+            "search",
+            "list",
+            "read",
+            "grep",
+            "glob",
+            "read_bytes",
+        ]
+        .contains(&name);
         assert_eq!(a["readOnlyHint"], read_only, "{name}");
         let destructive = ["write", "move", "delete", "create_document"].contains(&name);
         assert_eq!(a["destructiveHint"], destructive, "{name}");
@@ -4220,7 +4287,18 @@ async fn allowing_changes_is_a_local_switch() {
     let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
     let mut s = connect(&mut server).await;
     let tools = s.request("tools/list", json!({})).await;
-    assert_eq!(tool_names(&tools), ["roots", "search", "list", "read"]);
+    assert_eq!(
+        tool_names(&tools),
+        [
+            "roots",
+            "search",
+            "list",
+            "read",
+            "grep",
+            "glob",
+            "read_bytes"
+        ]
+    );
     let refused = s
         .request(
             "tools/call",
@@ -4269,7 +4347,18 @@ async fn allowing_changes_is_a_local_switch() {
     .await;
     let mut s = connect(&mut server).await;
     let tools = s.request("tools/list", json!({})).await;
-    assert_eq!(tool_names(&tools), ["roots", "search", "list", "read"]);
+    assert_eq!(
+        tool_names(&tools),
+        [
+            "roots",
+            "search",
+            "list",
+            "read",
+            "grep",
+            "glob",
+            "read_bytes"
+        ]
+    );
     let log = control(&fx.paths, ControlRequest::AuditTail { lines: Some(200) }).await;
     let events: Vec<&str> = log["entries"]
         .as_array()
@@ -4602,6 +4691,7 @@ async fn changes_files_on_windows() {
         writable: false,
         commands: false,
         network: false,
+        read_budget: None,
     });
     config.save(&fx.paths).unwrap();
     let bin = recycle_bin_of(&fx.base);

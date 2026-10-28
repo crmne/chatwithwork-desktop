@@ -57,6 +57,7 @@ fn fixture(commands: bool) -> Fixture {
         writable: true,
         commands,
         network: false,
+        read_budget: None,
     });
     // Windows PowerShell can take long to start on a machine that hasn't
     // compiled .NET's assemblies ahead of time yet (a fresh CI runner).
