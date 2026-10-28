@@ -84,9 +84,10 @@ impl Limiter {
         let mut w = self.windows.lock().expect("windows");
         prune(&mut w.calls, now, MINUTE, |t| *t);
         if w.calls.len() >= max {
+            // The call whose expiry brings the count under `max` again.
             let frees_in = w
                 .calls
-                .front()
+                .get(w.calls.len() - max)
                 .map_or(MINUTE, |t| MINUTE.saturating_sub(now.duration_since(*t)));
             return Err(ToolError::new(
                 ErrorCode::RateLimited,
@@ -474,6 +475,24 @@ mod tests {
             calls_per_minute: 1,
             ..limits()
         });
+        // With the limit lowered under calls already made, it frees up only
+        // once enough of them have left the minute.
+        let lowered = Limiter::new(limits());
+        for s in [0, 10, 20] {
+            lowered.check_call_at(t0 + Duration::from_secs(s)).unwrap();
+        }
+        lowered.set_limits(Limits {
+            calls_per_minute: 1,
+            ..limits()
+        });
+        let err = lowered
+            .check_call_at(t0 + Duration::from_secs(30))
+            .unwrap_err();
+        assert!(
+            err.message.contains("in about 50 seconds"),
+            "{}",
+            err.message
+        );
         calls.check_call_at(t0).unwrap();
         let err = calls
             .check_call_at(t0 + Duration::from_secs(15))

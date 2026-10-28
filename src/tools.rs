@@ -106,6 +106,11 @@ pub const CHANGE_TOOLS: [&str; 8] = [
 const BUDGET_NOTE: &str = "The hourly read budget ended here. The next page is at next_offset, \
                            once the budget allows more.";
 
+/// How to narrow a search whose first result doesn't fit what's left of
+/// the read budget, in each tool's own arguments.
+const GREP_NARROWING: &str = "a path, a glob, or output \"files\" or \"count\"";
+const GLOB_NARROWING: &str = "a path, or a more specific pattern";
+
 /// Headroom kept below the message cap for the JSON-RPC envelope.
 const ENVELOPE_HEADROOM: usize = 2048;
 
@@ -545,7 +550,7 @@ impl LocalFiles {
                 while resp.len() > 1 && result_size(&resp) > self.budget() {
                     resp.keep(resp.len() / 2, None);
                 }
-                let kept = self.charge(chat, &resp.costs())?;
+                let kept = self.charge(chat, &resp.costs(), GREP_NARROWING)?;
                 resp.keep(kept, Some(BUDGET_NOTE));
                 Ok(Output::Grep(resp))
             }
@@ -559,7 +564,7 @@ impl LocalFiles {
                 while resp.paths.len() > 1 && result_size(&resp) > self.budget() {
                     resp.keep(resp.paths.len() / 2, None);
                 }
-                let kept = self.charge(chat, &resp.costs())?;
+                let kept = self.charge(chat, &resp.costs(), GLOB_NARROWING)?;
                 resp.keep(kept, Some(BUDGET_NOTE));
                 Ok(Output::Glob(resp))
             }
@@ -668,7 +673,12 @@ impl LocalFiles {
     /// returns, in order) against their folders' read budgets for `chat`.
     /// Returns how many fit before one doesn't; refused when not even the
     /// first does.
-    fn charge(&self, chat: &str, costs: &[(String, usize)]) -> Result<usize, ToolError> {
+    fn charge(
+        &self,
+        chat: &str,
+        costs: &[(String, usize)],
+        narrowing: &str,
+    ) -> Result<usize, ToolError> {
         let limiter = &self.inner.limiter;
         let mut left: Vec<(ReadScope, usize, usize)> = Vec::new();
         let mut kept = 0;
@@ -692,8 +702,8 @@ impl LocalFiles {
                             ErrorCode::RateLimited,
                             format!(
                                 "The first result is {chars} characters, more than the {remaining} left of \
-                                 the hourly reading allowance for this folder. Narrow the search: a path or \
-                                 glob, or output \"files\" or \"count\"."
+                                 the hourly reading allowance for this folder. Narrow the search: \
+                                 {narrowing}."
                             ),
                         )
                     });
