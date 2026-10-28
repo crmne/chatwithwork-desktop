@@ -782,7 +782,7 @@ It counts as one change per file against the changes-per-minute and per-day budg
 | `not_a_file` / `not_a_directory` | Wrong kind of entry for `read` / `list`, or for a change. |
 | `too_large` | The file is over the size limit, or a folder holds more than a change may move. |
 | `unsupported` | The file can't be turned into text (binary, encrypted or damaged). |
-| `rate_limited` | A daemon-side rate or volume limit was hit, for reads or for changes. Try again later. |
+| `rate_limited` | A daemon-side rate or volume limit was hit, for reads or for changes. The refusals of the tool calls per minute and of the hourly read budgets say when they free up ("It frees up in about 12 minutes: stop calling this computer's tools until then, and tell the person."), so the caller stops calling instead of spending its turns on refusals; the change budgets and the copy budget say only to try again later. A `grep` or `glob` whose first result is larger than what's left of the read budget says so, and to narrow the search, instead. |
 | `paused` | The user ran `cww pause`. |
 | `not_writable` | A change in a shared folder that doesn't allow changes. The message names the folder's label and says the person can allow changes on their computer. |
 | `exists` | Something is already at the path (or at `to`), and the call doesn't replace it. |
@@ -804,11 +804,11 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 
 | Limit | Default |
 |---|---|
-| Tool calls per rolling minute (all chats) | 120 |
+| Tool calls per rolling minute (all chats) | 240 |
 | Characters per `read` call | 32 000 |
-| Characters read per chat per rolling hour, from folders without a budget of their own | 1 000 000 |
-| Characters read per rolling hour, all chats, from those folders | 2 000 000 |
-| A folder's own read budget (`read_budget`), per chat per rolling hour | 1 000 000 (the shared per-chat budget) to 20 000 000; all chats together twice it |
+| Characters read per chat per rolling hour, from folders without a budget of their own | 5 000 000 |
+| Characters read per rolling hour, all chats, from those folders | 10 000 000 |
+| A folder's own read budget (`read_budget`), per chat per rolling hour | 5 000 000 (the shared per-chat budget) to 20 000 000; all chats together twice it |
 | Bytes `read_bytes` returns per rolling hour, all chats | 100 MiB |
 | Search hits per call / snippet length | 20 / 300 characters |
 | `list` entries per page | 200 |

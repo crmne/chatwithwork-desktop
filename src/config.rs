@@ -299,13 +299,31 @@ pub struct Limits {
     pub copy_bytes_per_hour: u64,
 }
 
+impl Limits {
+    /// A file saved before the defaults were sized for code keeps their old
+    /// values, written out whole by `Config::save`: those exact values move
+    /// up to the new defaults, and anything set by hand stays as it is.
+    pub fn raise_old_defaults(&mut self) {
+        let new = Self::default();
+        if self.calls_per_minute == 120 {
+            self.calls_per_minute = new.calls_per_minute;
+        }
+        if self.read_chars_per_chat_hour == 1_000_000 {
+            self.read_chars_per_chat_hour = new.read_chars_per_chat_hour;
+        }
+        if self.read_chars_per_hour == 2_000_000 {
+            self.read_chars_per_hour = new.read_chars_per_hour;
+        }
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            calls_per_minute: 120,
+            calls_per_minute: 240,
             read_chars_per_call: 32_000,
-            read_chars_per_chat_hour: 1_000_000,
-            read_chars_per_hour: 2_000_000,
+            read_chars_per_chat_hour: 5_000_000,
+            read_chars_per_hour: 10_000_000,
             search_hits: 20,
             snippet_chars: 300,
             list_page: 200,
@@ -355,9 +373,12 @@ impl Config {
     pub fn load(paths: &Paths) -> Result<Self> {
         let file = paths.config_file();
         match std::fs::read_to_string(&file) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", file.display()))
-            }
+            Ok(text) => toml::from_str::<Self>(&text)
+                .map(|mut config| {
+                    config.limits.raise_old_defaults();
+                    config
+                })
+                .with_context(|| format!("parsing {}", file.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", file.display())),
         }
@@ -414,5 +435,19 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         assert!(toml::from_str::<Config>("allow_everything = true").is_err());
+    }
+
+    #[test]
+    fn old_default_limits_move_up_and_custom_ones_stay() {
+        let mut limits = Limits {
+            calls_per_minute: 120,
+            read_chars_per_chat_hour: 1_000_000,
+            read_chars_per_hour: 3_000_000,
+            ..Limits::default()
+        };
+        limits.raise_old_defaults();
+        assert_eq!(limits.calls_per_minute, 240);
+        assert_eq!(limits.read_chars_per_chat_hour, 5_000_000);
+        assert_eq!(limits.read_chars_per_hour, 3_000_000);
     }
 }

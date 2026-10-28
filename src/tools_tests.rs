@@ -255,6 +255,13 @@ async fn a_folder_with_its_own_budget_reads_on_it() {
             .unwrap()
             .contains("this folder")
     );
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("a more specific pattern"),
+        "{answer}"
+    );
     // A search of every folder still gets what is outside it.
     let answer = call(&f, "glob", json!({ "pattern": "*.md" })).await;
     assert_eq!(answer["paths"][0]["path"], "docs:notes.md");

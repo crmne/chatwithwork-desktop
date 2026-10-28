@@ -38,7 +38,7 @@ use crate::audit::{AuditEntry, AuditLog, Decision};
 use crate::browsing::tools::{Answer, BrowserTools, Kind, is_browser_tool};
 use crate::commands::tools::{COMMAND_TOOLS, CommandTools, Progress};
 use crate::error::{ErrorCode, ToolError};
-use crate::limits::{Limiter, ReadScope, read_budget_used_up};
+use crate::limits::{Limiter, ReadScope};
 use crate::reader::code::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::reader::{
     ListRequest, ListResponse, ReadBytesRequest, ReadBytesResponse, ReadRequest, ReadResponse,
@@ -105,6 +105,11 @@ pub const CHANGE_TOOLS: [&str; 8] = [
 /// What a `grep` or `glob` answer says when the read budget cut it.
 const BUDGET_NOTE: &str = "The hourly read budget ended here. The next page is at next_offset, \
                            once the budget allows more.";
+
+/// How to narrow a search whose first result doesn't fit what's left of
+/// the read budget, in each tool's own arguments.
+const GREP_NARROWING: &str = "a path, a glob, or output \"files\" or \"count\"";
+const GLOB_NARROWING: &str = "a path, or a more specific pattern";
 
 /// Headroom kept below the message cap for the JSON-RPC envelope.
 const ENVELOPE_HEADROOM: usize = 2048;
@@ -545,7 +550,7 @@ impl LocalFiles {
                 while resp.len() > 1 && result_size(&resp) > self.budget() {
                     resp.keep(resp.len() / 2, None);
                 }
-                let kept = self.charge(chat, &resp.costs())?;
+                let kept = self.charge(chat, &resp.costs(), GREP_NARROWING)?;
                 resp.keep(kept, Some(BUDGET_NOTE));
                 Ok(Output::Grep(resp))
             }
@@ -559,7 +564,7 @@ impl LocalFiles {
                 while resp.paths.len() > 1 && result_size(&resp) > self.budget() {
                     resp.keep(resp.paths.len() / 2, None);
                 }
-                let kept = self.charge(chat, &resp.costs())?;
+                let kept = self.charge(chat, &resp.costs(), GLOB_NARROWING)?;
                 resp.keep(kept, Some(BUDGET_NOTE));
                 Ok(Output::Glob(resp))
             }
@@ -659,7 +664,7 @@ impl LocalFiles {
     fn check_budget_left(&self, chat: &str, path: &str) -> Result<(), ToolError> {
         let scope = self.scope_of(path);
         if self.inner.limiter.read_remaining(chat, &scope) == 0 {
-            return Err(read_budget_used_up(&scope));
+            return Err(self.inner.limiter.read_budget_used_up(chat, &scope));
         }
         Ok(())
     }
@@ -668,7 +673,12 @@ impl LocalFiles {
     /// returns, in order) against their folders' read budgets for `chat`.
     /// Returns how many fit before one doesn't; refused when not even the
     /// first does.
-    fn charge(&self, chat: &str, costs: &[(String, usize)]) -> Result<usize, ToolError> {
+    fn charge(
+        &self,
+        chat: &str,
+        costs: &[(String, usize)],
+        narrowing: &str,
+    ) -> Result<usize, ToolError> {
         let limiter = &self.inner.limiter;
         let mut left: Vec<(ReadScope, usize, usize)> = Vec::new();
         let mut kept = 0;
@@ -685,7 +695,18 @@ impl LocalFiles {
             let (scope, remaining, spent) = &mut left[at];
             if *chars > *remaining {
                 if kept == 0 {
-                    return Err(read_budget_used_up(scope));
+                    return Err(if *remaining == 0 {
+                        limiter.read_budget_used_up(chat, scope)
+                    } else {
+                        ToolError::new(
+                            ErrorCode::RateLimited,
+                            format!(
+                                "The first result is {chars} characters, more than the {remaining} left of \
+                                 the hourly reading allowance for this folder. Narrow the search: \
+                                 {narrowing}."
+                            ),
+                        )
+                    });
                 }
                 break;
             }
