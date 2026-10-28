@@ -823,3 +823,18 @@ fn a_clock_behind_the_servers_still_shows_and_waits_at_most_the_window() {
     }
     assert!(fixture.actions().is_empty());
 }
+
+#[test]
+fn a_service_started_before_the_desktop_borrows_its_display() {
+    let environment = "HOME=/home/a\nWAYLAND_DISPLAY=wayland-1\nDISPLAY=:0\n\
+        XDG_CURRENT_DESKTOP=Hyprland\nXAUTHORITY=$'/tmp/odd\\npath'\nPATH=/usr/bin\n";
+    assert_eq!(
+        display_variables(environment),
+        [
+            ("WAYLAND_DISPLAY".to_owned(), "wayland-1".to_owned()),
+            ("DISPLAY".to_owned(), ":0".to_owned()),
+            ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
+        ]
+    );
+    assert!(display_variables("PATH=/usr/bin\n").is_empty());
+}

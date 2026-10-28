@@ -1,5 +1,5 @@
 //! WebKitGTK workarounds, applied by the app itself only where they're
-//! needed.
+//! needed, and the check that a display is there before Tauri needs one.
 //!
 //! On NVIDIA's proprietary driver under Wayland, WebKitGTK's GPU process
 //! dies at start with a Wayland protocol error (71) when the driver uses
@@ -25,6 +25,43 @@ pub fn prepare_web_view() {
     }
 }
 
+/// Opens GTK's display before Tauri does. Tauri's event loop (tao) panics
+/// when GTK can't start, which happens whenever the app is started outside
+/// a graphical session: from SSH, a service started before the desktop
+/// exported its display, or a session whose compositor has gone. That
+/// panic is a crash report with nothing to fix in it; this says why in a
+/// sentence and exits instead, and the daemon opens a notification's chat
+/// in the browser when the app exits with an error. On macOS and Windows
+/// there is always a display, so this is Linux only.
+pub fn open_display() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        // GTK remembers it's initialized: tao's own gtk::init() then
+        // returns at once on this same (main) thread.
+        if gtk::init().is_err() {
+            return Err(no_display(
+                std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
+                std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty()),
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Why no window could open, from what the environment names.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn no_display(wayland: bool, x11: bool) -> &'static str {
+    if wayland || x11 {
+        "Chat with Work couldn't open a window: the display this session names \
+         isn't answering. Start Chat with Work from your desktop."
+    } else {
+        "Chat with Work needs a desktop to open its windows, and this session \
+         has none (neither WAYLAND_DISPLAY nor DISPLAY is set). Start Chat with \
+         Work from your desktop, or use `cww` in a terminal."
+    }
+}
+
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const EXPLICIT_SYNC: &str = "__NV_DISABLE_EXPLICIT_SYNC";
 
@@ -45,5 +82,12 @@ mod tests {
         assert!(!needs_explicit_sync_workaround(true, true, true));
         assert!(!needs_explicit_sync_workaround(false, false, true));
         assert!(!needs_explicit_sync_workaround(false, true, false));
+    }
+
+    #[test]
+    fn no_display_says_whether_one_was_named() {
+        assert!(no_display(false, false).contains("WAYLAND_DISPLAY"));
+        assert!(no_display(true, false).contains("isn't answering"));
+        assert!(no_display(false, true).contains("isn't answering"));
     }
 }

@@ -1369,6 +1369,7 @@ dependencies = [
  "env_logger",
  "fastframe-audio",
  "fastframe-autostart",
+ "gtk",
  "image",
  "jiff",
  "log",

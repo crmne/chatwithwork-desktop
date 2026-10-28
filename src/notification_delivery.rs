@@ -190,6 +190,7 @@ fn open_activation_with_window(
         && let Ok(mut child) = std::process::Command::new(app)
             .arg("--open-chat")
             .arg(target.encode())
+            .envs(session_display())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -200,6 +201,54 @@ fn open_activation_with_window(
         return;
     }
     browser(&activation.browser_url());
+}
+
+/// The desktop's display, for an app the daemon starts. A systemd user
+/// service that starts with the user's manager, before the desktop session
+/// exports its display (uwsm, GNOME and KDE all import it later), has no
+/// `WAYLAND_DISPLAY` or `DISPLAY` of its own, and the manager doesn't pass
+/// what it learns later to services already running. The app could then
+/// open no window. When this process has neither, take them from the
+/// manager's current environment; otherwise keep what it has.
+fn session_display() -> Vec<(String, String)> {
+    #[cfg(target_os = "linux")]
+    {
+        let has = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+        if !has("WAYLAND_DISPLAY")
+            && !has("DISPLAY")
+            && let Ok(output) = std::process::Command::new("systemctl")
+                .args(["--user", "show-environment"])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+            && output.status.success()
+        {
+            return display_variables(&String::from_utf8_lossy(&output.stdout));
+        }
+    }
+    Vec::new()
+}
+
+/// The display's variables in `systemctl --user show-environment`'s output.
+/// Values systemd had to quote (`$'...'`) are left out: a display's never
+/// need it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn display_variables(environment: &str) -> Vec<(String, String)> {
+    const DISPLAY: [&str; 5] = [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XAUTHORITY",
+        "XDG_SESSION_TYPE",
+        "XDG_CURRENT_DESKTOP",
+    ];
+    environment
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(name, value)| {
+            DISPLAY.contains(name) && !value.is_empty() && !value.starts_with("$'")
+        })
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
 }
 
 fn desktop_started(child: &mut std::process::Child, window: Duration, poll: Duration) -> bool {

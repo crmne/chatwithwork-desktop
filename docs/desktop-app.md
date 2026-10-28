@@ -31,6 +31,7 @@ The same binary is also pipe-only helpers, started before any window or tray exi
 - **Notifications.** The daemon already shows native notifications, with the window open or closed, with generic text, and the web page tells the server which chat is on screen, so the window adds none of its own. Web Push in the web view isn't used.
 - **Shortcuts.** Ctrl+, (Cmd+, on macOS) opens this computer's settings: Chat with Work's Settings, This computer, where the page names it (`<meta name="chatwithwork-desktop-settings">`), else the settings window; Ctrl and plus or minus zoom.
 - **Linux on NVIDIA.** Under Wayland with NVIDIA's driver, WebKitGTK can't draw with explicit sync (the window stays empty or the GPU process dies with protocol error 71), so the app sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, only when the driver is loaded and the session is Wayland, and never over a value already set (`linux.rs`).
+- **Without a desktop.** Started where there's no display (over SSH, or with a stale or missing `WAYLAND_DISPLAY` and `DISPLAY`), the app says so in a sentence and exits with an error, instead of panicking in Tauri's event loop (`linux::open_display`). A daemon started as a systemd user service before the desktop session exported its display has none of its own, so when it opens a notification's chat in the app it takes the display from the user manager's current environment (`notification_delivery.rs`); if the app still can't start, the chat opens in the browser.
 
 ## The bridge
 
