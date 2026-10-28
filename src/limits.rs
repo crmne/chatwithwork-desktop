@@ -163,10 +163,19 @@ impl Limiter {
         let w = self.windows.lock().expect("windows");
         // How long until the oldest read in `q` leaves the hour, when `q`
         // has used up `budget`.
+        // How long until enough reads in `q` leave the hour for it to fall
+        // below `budget` again, when it has used it up.
         let frees = |q: Option<&Window>, budget: usize| {
-            q.filter(|q| q.iter().map(|(_, n)| n).sum::<usize>() >= budget)
-                .and_then(|q| q.front())
-                .map(|(t, _)| HOUR.saturating_sub(now.duration_since(*t)))
+            let q = q?;
+            let mut used: usize = q.iter().map(|(_, n)| n).sum();
+            let mut reads = q.iter();
+            let mut frees_at = None;
+            while used >= budget {
+                let (t, n) = reads.next()?;
+                used -= n;
+                frees_at = Some(HOUR.saturating_sub(now.duration_since(*t)));
+            }
+            frees_at
         };
         let frees_in = frees(w.chat_reads.get(&(key.clone(), chat.to_string())), per_chat)
             .into_iter()
@@ -471,6 +480,17 @@ mod tests {
             .unwrap_err();
         assert!(
             err.message.contains("in about 45 seconds"),
+            "{}",
+            err.message
+        );
+        // A read that leaves the hour without bringing it under the budget
+        // doesn't free it: the one that does, later, is when.
+        let l = Limiter::new(limits());
+        l.record_read_at("b", &G, 50, t0);
+        l.record_read_at("b", &G, 250, t0 + 30 * MINUTE);
+        let err = l.read_allowance_at("b", &G, t0 + 40 * MINUTE).unwrap_err();
+        assert!(
+            err.message.contains("in about 50 minutes"),
             "{}",
             err.message
         );

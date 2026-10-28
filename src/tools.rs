@@ -685,7 +685,18 @@ impl LocalFiles {
             let (scope, remaining, spent) = &mut left[at];
             if *chars > *remaining {
                 if kept == 0 {
-                    return Err(limiter.read_budget_used_up(chat, scope));
+                    return Err(if *remaining == 0 {
+                        limiter.read_budget_used_up(chat, scope)
+                    } else {
+                        ToolError::new(
+                            ErrorCode::RateLimited,
+                            format!(
+                                "The first result is {chars} characters, more than the {remaining} left of \
+                                 the hourly reading allowance for this folder. Narrow the search: a path or \
+                                 glob, or output \"files\" or \"count\"."
+                            ),
+                        )
+                    });
                 }
                 break;
             }
