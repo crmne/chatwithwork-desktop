@@ -196,8 +196,8 @@ function folderRow(app, root) {
       // keeps its switch even then, so they can be turned off.
       root.writable && !runsCommands && !root.allows_commands ? setting("Run commands", commandsUnavailable(app), null) : null,
       root.writable && (runsCommands || root.allows_commands) ? setting("Run commands", root.allows_commands
-        ? "Chat with Work can run commands here, like tests or a build, each after you approve it, in a sandbox that can change only this folder."
-        : "Turn on to let Chat with Work run commands here, like tests or a build, each after you approve it.",
+        ? "Chat with Work can run commands here, like tests or a build, in a sandbox that can change only this folder. Each is approved in Chat with Work, unless a chat allows everything."
+        : "Turn on to let Chat with Work run commands here, like tests or a build, each approved in Chat with Work.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
           view.commanding = root.id;
@@ -208,7 +208,7 @@ function folderRow(app, root) {
         }
       }, { label: `Run commands in ${root.label}`, disabled: busy || commanding })) : null,
       commanding ? h("div", { class: "confirm" },
-        h("p", {}, `Let Chat with Work run commands in “${root.label}”? It asks you in Chat with Work before each one. A command can change or delete anything in this folder, and nothing outside it.`),
+        h("p", {}, `Let Chat with Work run commands in “${root.label}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it.`),
         h("div", { class: "inline" },
           button("Cancel", () => {
             view.commanding = null;

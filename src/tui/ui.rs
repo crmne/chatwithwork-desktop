@@ -2648,8 +2648,9 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
             lines.push(Line::raw(""));
             lines.extend(
                 wrap(
-                    "Chat with Work could then run commands here, like tests or a build. It \
-                     asks you before each one. A command runs in a sandbox that can change or \
+                    "Chat with Work could then run commands here, like tests or a build. Each \
+                     one is approved in Chat with Work, or runs without asking in a chat where \
+                     you chose Allow everything. A command runs in a sandbox that can change or \
                      delete anything in this folder and nothing outside it, without the network \
                      unless you allow it (i).",
                     text_width,

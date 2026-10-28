@@ -197,7 +197,7 @@ impl Change {
                     ask(
                         "Allow Commands",
                         format!(
-                            "Let Chat with Work run commands in “{}”? It asks you in Chat with Work before each one. A command can change or delete anything in this folder, and nothing outside it.",
+                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it.",
                             root.label
                         ),
                         "Allow Commands",
