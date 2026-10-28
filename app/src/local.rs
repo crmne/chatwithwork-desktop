@@ -47,7 +47,7 @@ pub const ALLOWED: [&str; 23] = [
     "browser_bot",
 ];
 
-type Answer = Result<Value, Value>;
+type Answer<T = Value> = Result<T, Value>;
 
 fn refusal(code: &str, message: impl Into<String>) -> Value {
     json!({ "code": code, "message": message.into() })
@@ -412,7 +412,8 @@ pub fn quit(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
 }
 
 // Dictation for `cww tui`: cloud or on this computer, with Whisper models
-// downloaded on request. The preference lives in the daemon's config folder.
+// downloaded as soon as local dictation is chosen (and by `cww tui` itself
+// on first use). The preference lives in the daemon's config folder.
 
 #[derive(Default)]
 pub struct Download {
@@ -435,48 +436,63 @@ pub fn dictation(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
         Ok(p) => (p, None),
         Err(e) => (Default::default(), Some(format!("{e:#}"))),
     };
+    let recommended = cww::dictation::Model::for_this_computer();
     let models: Vec<Value> = cww::dictation::Model::ALL
         .into_iter()
         .map(|m| {
-            json!({ "id": m.id(), "label": m.label(), "bytes": m.bytes(), "downloaded": m.downloaded(paths) })
+            json!({ "id": m.id(), "name": m.name(), "label": m.label(), "bytes": m.bytes(), "downloaded": m.downloaded(paths) })
         })
         .collect();
     Ok(json!({
         "mode": preferences.mode,
-        "model": preferences.model,
+        // What local dictation uses, and whether someone picked it.
+        "model": preferences.model(),
+        "chosen": preferences.model,
+        "recommended": recommended,
         "models": models,
         "error": error,
         "downloading": desktop.download.running.load(Ordering::SeqCst),
     }))
 }
 
+/// Saves the choice. Choosing to dictate on this computer starts getting
+/// its model at once, so it's there by the first dictation.
 #[tauri::command]
 pub fn set_dictation(
     webview: Webview,
     desktop: State<'_, Arc<Desktop>>,
     mode: cww::dictation::Mode,
-    model: cww::dictation::Model,
+    model: Option<cww::dictation::Model>,
 ) -> Answer {
     local_page(&webview)?;
-    cww::dictation::Preferences { mode, model }
+    let preferences = cww::dictation::Preferences { mode, model };
+    preferences
         .save(&desktop.paths.daemon)
-        .map(|()| json!({}))
-        .map_err(|e| refusal("failed", format!("{e:#}")))
+        .map_err(|e| refusal("failed", format!("{e:#}")))?;
+    let downloading = mode == cww::dictation::Mode::Local
+        && !preferences.model().downloaded(&desktop.paths.daemon)
+        && start_download(&desktop, preferences.model()).is_ok();
+    Ok(json!({ "downloading": downloading }))
 }
 
-/// Downloads a model; progress arrives as `dictation-download` events
-/// (`bytes`, `total`, then `done` with an `error` if it failed).
+/// Downloads a model again after a download failed or was cancelled.
 #[tauri::command]
 pub fn download_model(webview: Webview, desktop: State<'_, Arc<Desktop>>, model: String) -> Answer {
     local_page(&webview)?;
     let model = model_by_id(&model).ok_or_else(|| refusal("invalid", "No such model."))?;
+    start_download(&desktop, model).map(|()| json!({}))
+}
+
+/// Progress arrives as `dictation-download` events (`model`, `bytes`,
+/// `total`, then `done` with an `error` if it failed).
+fn start_download(desktop: &Arc<Desktop>, model: cww::dictation::Model) -> Answer<()> {
     let download = &desktop.download;
     if download.running.swap(true, Ordering::SeqCst) {
         return Err(refusal("busy", "A model is already downloading."));
     }
     download.cancelled.store(false, Ordering::SeqCst);
     download.bytes.store(0, Ordering::SeqCst);
-    let desktop = desktop.inner().clone();
+    let desktop = desktop.clone();
     let spawning = desktop.clone();
     std::thread::Builder::new()
         .name("cww-model-download".into())
@@ -492,8 +508,13 @@ pub fn download_model(webview: Webview, desktop: State<'_, Arc<Desktop>>, model:
             let _running = Running(desktop.clone());
             let app = desktop.app();
             let total = model.bytes();
+            crate::windows::tell_settings(
+                &app,
+                "dictation-download",
+                json!({ "model": model.id(), "bytes": 0, "total": total }),
+            );
             let last = AtomicU64::new(0);
-            let result = model.download(
+            let result = model.ensure(
                 &desktop.paths.daemon,
                 &desktop.download.cancelled,
                 |bytes| {
@@ -523,7 +544,7 @@ pub fn download_model(webview: Webview, desktop: State<'_, Arc<Desktop>>, model:
             spawning.download.running.store(false, Ordering::SeqCst);
             refusal("failed", e.to_string())
         })?;
-    Ok(json!({}))
+    Ok(())
 }
 
 #[tauri::command]

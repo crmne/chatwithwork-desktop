@@ -87,12 +87,30 @@ async function setPaused(app, paused) {
 async function saveDictation(app, mode, model) {
   const view = app.view("general");
   try {
-    await call("set_dictation", { mode, model });
+    const answer = await call("set_dictation", { mode, model });
     view.dictationError = null;
+    // Choosing this computer starts getting its model; the progress
+    // events follow.
+    if (answer.downloading) view.cancelling = false;
   } catch (error) {
     view.dictationError = error.message;
   }
   await load(app);
+}
+
+async function downloadAgain(app, model) {
+  const view = app.view("general");
+  view.cancelling = false;
+  view.dictationError = null;
+  view.download = { model: model.id, bytes: 0, total: model.bytes };
+  app.render();
+  try {
+    await call("download_model", { model: model.id });
+  } catch (error) {
+    view.download = null;
+    view.dictationError = error.message;
+    app.render();
+  }
 }
 
 function dictationSection(app) {
@@ -100,10 +118,13 @@ function dictationSection(app) {
   const d = view.dictation;
   if (!d) return null;
   const model = d.models.find((m) => m.id === d.model) || d.models[0];
+  const recommended = d.models.find((m) => m.id === d.recommended) || model;
   const choice = (value, label) =>
     h("label", {}, h("input", { type: "radio", name: "dictation-mode", value, checked: d.mode === value,
-      onchange: () => saveDictation(app, value, d.model) }), label);
-  const megabytes = (bytes) => (bytes / 1e6).toFixed(1);
+      onchange: () => saveDictation(app, value, d.chosen) }), label);
+  const megabytes = (bytes) => Math.round(bytes / 1e6);
+  const download = view.download || (d.downloading ? { model: model.id, bytes: 0, total: model.bytes } : null);
+  const named = (id) => (d.models.find((m) => m.id === id) || model).name;
   return section("Dictation", "How the terminal app, cww tui, turns your voice into text. The Chat with Work window dictates through your server.",
     group(
       row({
@@ -117,23 +138,24 @@ function dictationSection(app) {
       d.mode === "local" ? h("div", { class: "row row--stack" },
         h("div", { class: "inline" },
           h("label", { class: "check", for: "speech-model" }, "Whisper model"),
-          h("select", { class: "select", id: "speech-model", disabled: !!view.download,
-            onchange: (event) => saveDictation(app, d.mode, event.target.value) },
-          d.models.map((m) => h("option", { value: m.id, selected: m.id === d.model }, m.label)))),
-        view.download
+          h("select", { class: "select", id: "speech-model", disabled: !!download,
+            onchange: (event) => saveDictation(app, d.mode, event.target.value || null) },
+          h("option", { value: "", selected: !d.chosen }, `Best for this computer (${recommended.name})`),
+          d.models.map((m) => h("option", { value: m.id, selected: m.id === d.chosen }, m.label)))),
+        download
           ? h("div", { class: "section" },
-            h("div", { class: "meter", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(view.download.total), "aria-valuenow": String(view.download.bytes) },
-              h("span", { style: `inline-size: ${Math.min(100, (100 * view.download.bytes) / view.download.total).toFixed(1)}%` })),
+            h("div", { class: "meter", role: "progressbar", "aria-label": "Whisper download", "aria-valuemin": "0", "aria-valuemax": String(download.total), "aria-valuenow": String(download.bytes) },
+              h("span", { style: `inline-size: ${Math.min(100, (100 * download.bytes) / download.total).toFixed(1)}%` })),
             h("div", { class: "inline" },
-              h("span", { class: "note" }, `Downloading ${view.download.model}: ${megabytes(view.download.bytes)} / ${megabytes(view.download.total)} MB`),
-              button(view.cancelling ? "Cancelling…" : "Cancel download", () => {
+              h("span", { class: "note" }, `Getting Whisper ${named(download.model)}: ${megabytes(download.bytes)} of ${megabytes(download.total)} MB`),
+              button(view.cancelling ? "Cancelling…" : "Cancel", () => {
                 view.cancelling = true;
                 call("cancel_download");
                 app.render();
               }, { disabled: view.cancelling })))
           : model.downloaded
-            ? h("div", { class: "inline" }, h("span", { class: "note" }, "Downloaded. Ready for local dictation."),
-              button("Remove model", async () => {
+            ? h("div", { class: "inline" }, h("span", { class: "note" }, `${model.name} is ready. Dictation works offline.`),
+              button("Remove", async () => {
                 try {
                   await call("remove_model", { model: model.id });
                 } catch (error) {
@@ -142,19 +164,8 @@ function dictationSection(app) {
                 load(app);
               }))
             : h("div", { class: "section" },
-              h("p", { class: "note" }, "Download from Hugging Face once, then use it offline. Model files are verified before use and are not included in the app."),
-              h("div", { class: "inline" }, button("Download model", async () => {
-                view.cancelling = false;
-                view.download = { model: model.id, bytes: 0, total: model.bytes };
-                app.render();
-                try {
-                  await call("download_model", { model: model.id });
-                } catch (error) {
-                  view.download = null;
-                  view.dictationError = error.message;
-                  app.render();
-                }
-              })))) : null),
+              h("p", { class: "note" }, `${model.name} (${megabytes(model.bytes)} MB) downloads from Hugging Face the first time you dictate, or now. It's checked before use and kept with the agent's data on this computer.`),
+              h("div", { class: "inline" }, button("Download Now", () => downloadAgain(app, model))))) : null),
     d.error ? notice(d.error) : null,
     view.dictationError ? notice(view.dictationError) : null);
 }

@@ -206,6 +206,45 @@ fn dictation_puts_words_at_the_cursor_and_never_sends_them() {
 }
 
 #[test]
+fn the_first_local_dictation_shows_its_model_downloading() {
+    use super::dictation::{Phase, Update};
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let Effect::Chat(ChatCommand::Dictate(generation)) = app.run_command(Cmd::Dictate, "")[0]
+    else {
+        panic!("dictate")
+    };
+    app.update(Msg::Chat(ChatMsg::Dictation(generation, Update::Recording)));
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Downloading {
+            bytes: 74_000_000,
+            total: 147_951_465,
+        },
+    )));
+    let screen = render_to_string(&app, 160, 30);
+    assert!(screen.contains("Listening"), "{screen}");
+    assert!(
+        screen.contains("Getting Whisper for its first use (148 MB): 50%"),
+        "{screen}"
+    );
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Transcribing,
+    )));
+    assert_eq!(app.chat.dictation.phase, Phase::Transcribing);
+    assert!(render_to_string(&app, 160, 30).contains("50%. Escape to discard."));
+    app.update(Msg::Chat(ChatMsg::Dictation(
+        generation,
+        Update::Downloading {
+            bytes: 147_951_465,
+            total: 147_951_465,
+        },
+    )));
+    assert!(render_to_string(&app, 160, 30).contains("Transcribing"));
+}
+
+#[test]
 fn dictation_is_cancelled_by_navigation_and_ignores_old_words() {
     use super::dictation::Update;
     let mut app = app();

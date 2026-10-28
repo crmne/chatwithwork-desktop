@@ -1952,6 +1952,22 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
         }
         .save(&paths)?;
     }
+    // Dictation on this computer (`CWW_DEMO_DICTATION=local`), its model
+    // not downloaded yet, or ready (`local-ready`: a stand-in file of the
+    // model's size, which is all the page checks).
+    if let Some(dictation) = std::env::var_os("CWW_DEMO_DICTATION") {
+        cww::dictation::Preferences {
+            mode: cww::dictation::Mode::Local,
+            model: None,
+        }
+        .save(&paths.daemon)?;
+        if dictation == "local-ready" {
+            let model = cww::dictation::Model::for_this_computer();
+            let file = model.path(&paths.daemon);
+            std::fs::create_dir_all(file.parent().expect("models folder"))?;
+            std::fs::File::create(file)?.set_len(model.bytes())?;
+        }
+    }
     // A scan language chosen before, which this computer may not have
     // (`CWW_DEMO_SCAN_LANGUAGE=spa`), for the window's missing-language note.
     if let Some(language) = std::env::var_os("CWW_DEMO_SCAN_LANGUAGE") {
