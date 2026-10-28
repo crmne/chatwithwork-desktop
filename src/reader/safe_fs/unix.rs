@@ -323,6 +323,14 @@ pub struct Staged {
     name: OsString,
 }
 
+impl Staged {
+    /// Its hidden name in its folder: after [`ChangeDir::exchange`], where
+    /// the old version is.
+    pub fn name(&self) -> OsString {
+        self.name.clone()
+    }
+}
+
 impl ChangeDir {
     /// The entry `name`, without following it if it's a link. `None` if
     /// nothing has that name.
@@ -500,6 +508,30 @@ impl ChangeDir {
     ) -> Result<PathBuf, ToolError> {
         let name = staged
             .name
+            .to_str()
+            .ok_or_else(|| ToolError::internal("a temporary name that isn't UTF-8"))?;
+        let went = trash.put(
+            self.fd.as_fd(),
+            name,
+            &self.path.join(shown),
+            stat.identity.0,
+            false,
+        )?;
+        let _ = rustix::fs::fsync(&self.fd);
+        Ok(went)
+    }
+
+    /// Move the entry `name` (a version set aside under a hidden name) to
+    /// the trash as the file `shown`, so the trash shows where it came
+    /// from. Returns where it went.
+    pub fn trash_as(
+        &self,
+        name: &OsStr,
+        shown: &OsStr,
+        trash: &Trash,
+        stat: &EntryStat,
+    ) -> Result<PathBuf, ToolError> {
+        let name = name
             .to_str()
             .ok_or_else(|| ToolError::internal("a temporary name that isn't UTF-8"))?;
         let went = trash.put(
@@ -951,6 +983,7 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         })
         .unwrap();
         Fixture {

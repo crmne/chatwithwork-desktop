@@ -416,8 +416,8 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
             let done = |label: &str| match (*commands, *network) {
                 (true, true) => format!("Commands in {label} can use the network now."),
                 (true, false) => format!(
-                    "Chat with Work can run commands in {label} now, each after you approve it \
-                     there, without the network."
+                    "Chat with Work can run commands in {label} now, without the network, each \
+                     approved in Chat with Work unless a chat allows everything."
                 ),
                 (false, _) => format!("{label} runs no commands now."),
             };

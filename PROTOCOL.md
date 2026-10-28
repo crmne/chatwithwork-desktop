@@ -22,7 +22,7 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
 ## 1. Roles and overview
 
-- The **daemon** runs on the user's computer. It is an MCP *server* that lets Chat with Work read, and with the user's approval change files and run commands, in folders the user shares: four read-only tools, seven change tools while at least one shared folder allows changes (section 8.7), and the command tools while one also allows commands, on Linux and macOS (section 8.15).
+- The **daemon** runs on the user's computer. It is an MCP *server* that lets Chat with Work read, and with the user's approval change files and run commands, in folders the user shares: seven read-only tools, eight change tools while at least one shared folder allows changes (section 8.7), and the command tools while one also allows commands (section 8.15).
 - The **server** is Chat with Work. It is the MCP *client*: the model loop runs there and calls the tools.
 - The daemon opens the only connection, outbound, to `wss://<server>/desktop`. The server never connects to the daemon.
 - Over that socket the server sends JSON-RPC requests and the daemon answers them. The daemon never sends requests: no sampling, no elicitation, no roots.
@@ -307,7 +307,7 @@ A Chat with Work bot (an assistant an organization sets up to work by itself) re
 For such a call the daemon:
 
 - answers `roots` with only the folders lent to that bot, each with `"unattended": true` or `false` (whether its commands may start without a person approving each one there);
-- refuses, with `not_lent`, any call whose `path`, `from`, `to` or `root` names a folder not lent to it, and a `search` without a `root` (or with `"root": null`) when nothing is lent to it; such a `search` looks only in the lent folders;
+- refuses, with `not_lent`, any call whose `path`, `from`, `to` or `root` names a folder not lent to it (for `patch`, the `path` of any change and any key of `expected_sha256`), and a `search` without a `root` (or with `"root": null`), or a `grep` or `glob` without a `path`, when nothing is lent to it; such a call looks only in the lent folders;
 - refuses, with `not_lent`, `run_status`, `run_output` and `run_stop` for a command that isn't running in a folder lent to it;
 - refuses, with `needs_approval`, a `run` (not a dry run) that also carries `"com.chatwithwork/unattended": true` in a folder whose loan doesn't allow unattended commands. The server sends that flag when it runs the bot's command without asking anyone, which it does only where `roots` said `"unattended": true`.
 
@@ -319,7 +319,7 @@ Each folder still allows only what it allows anyone: changes where changes are a
 |---|---|
 | `server/discover` | `supportedVersions`, `capabilities: {"tools":{}}`, and `_meta["io.modelcontextprotocol/serverInfo"] = {"name":"cww","version":…}`. |
 | `initialize` | Legacy handshake (7.1). `serverInfo.name` is `cww`, and the result carries instructions. |
-| `tools/list` | The four read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
+| `tools/list` | The seven read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
 | `tools/call` | See section 8. |
 | `notifications/initialized`, `notifications/cancelled` | Accepted. Cancelling abandons a call in progress. |
 | `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, anything else | `-32601` method not found. |
@@ -328,11 +328,13 @@ The daemon ignores JSON-RPC responses from the server, since it never sends requ
 
 ### 7.4 Tool naming on the server
 
-The daemon's tool names are `roots`, `search`, `list` and `read`, and the change tools `create`, `write`, `edit`, `mkdir`, `move`, `delete` and `create_document`, with no prefix. The server namespaces them per device, for example `local_<device_id>_read`, following its existing `mcp_<id>_` convention.
+The daemon's tool names are `roots`, `search`, `list`, `read`, `grep`, `glob` and `read_bytes`, and the change tools `create`, `write`, `edit`, `mkdir`, `move`, `delete`, `create_document` and `patch`, with no prefix. The server namespaces them per device, for example `local_<device_id>_read`, following its existing `mcp_<id>_` convention.
 
 ## 8. Tools
 
-The read-only tools (8.3 to 8.6) are annotated `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`. The change tools carry their own annotations (8.7). Unknown argument keys are rejected with `invalid_argument`.
+The read-only tools (8.3 to 8.6, and `grep`, `glob` and `read_bytes` in 8.17 to 8.19) are annotated `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`. The change tools carry their own annotations (8.7; `patch` is in 8.20). Unknown argument keys are rejected with `invalid_argument`.
+
+The sections keep their numbers from earlier versions: the tools added for working in code come after the browser's, in 8.17 to 8.20.
 
 ### 8.1 Paths
 
@@ -375,12 +377,13 @@ Arguments: none (`{}`).
 ```json
 {
   "roots": [
-    { "id": "work-docs", "label": "Work docs", "available": true, "writable": false, "index": "ready", "indexed_files": 1532 }
+    { "id": "work-docs", "label": "Work docs", "available": true, "writable": false, "index": "ready", "indexed_files": 1532 },
+    { "id": "app", "label": "App", "available": true, "writable": true, "index": "ready", "indexed_files": 412, "read_budget": 5000000 }
   ]
 }
 ```
 
-`writable` is true when the user allowed changes in the folder; the change tools only work there. `allows_commands` is there, true, when it also allows commands (section 8.15), and `network` when they may use the network. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
+`writable` is true when the user allowed changes in the folder; the change tools only work there. `read_budget` is there when the person gave the folder a read budget of its own on the computer: the characters a chat may read from it per rolling hour (section 10). `allows_commands` is there, true, when it also allows commands (section 8.15), and `network` when they may use the network. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
 
 ### 8.4 `search`
 
@@ -449,11 +452,11 @@ Arguments: none (`{}`).
 }
 ```
 
-`next_offset` is `null` at the end of the file. PDF, DOCX, PPTX (slides marked `--- Slide N ---`), and XLSX/XLS/ODS (one `## Sheet` section per sheet, tab-separated rows) are converted to text. Other files are read as UTF-8 (invalid bytes are replaced) unless they look binary, which gives `unsupported`. Files over 64 MiB give `too_large`.
+`next_offset` is `null` at the end of the file. `max_chars` is lowered by what is left of the read budget of the file's folder (section 10). PDF, DOCX, PPTX (slides marked `--- Slide N ---`), and XLSX/XLS/ODS (one `## Sheet` section per sheet, tab-separated rows) are converted to text. Other files are read as UTF-8 (invalid bytes are replaced) unless they look binary, which gives `unsupported`. Files over 64 MiB give `too_large`.
 
 ### 8.7 Changes
 
-The user allows changes per shared folder, on their computer (`writable = true` in `config.toml`, `cww roots allow-changes`, or a switch in the terminal UI and the desktop app). Nothing the server sends can turn it on. While no folder allows changes, `tools/list` has only the four read-only tools and a call to a change tool is an unknown tool (`-32602`). While one does, these seven are listed after them:
+The user allows changes per shared folder, on their computer (`writable = true` in `config.toml`, `cww roots allow-changes`, or a switch in the terminal UI and the desktop app). Nothing the server sends can turn it on. While no folder allows changes, `tools/list` has only the seven read-only tools and a call to a change tool is an unknown tool (`-32602`). While one does, these eight are listed after them:
 
 | Tool | Does | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `_meta["com.chatwithwork/writeWhen"]` |
 |---|---|---|---|---|---|
@@ -464,6 +467,7 @@ The user allows changes per shared folder, on their computer (`writable = true` 
 | `move` | Move or rename a file or folder; `replace` optional | false | **true** | false | `{"replace": false}` |
 | `delete` | Move a file or folder to the system trash | false | **true** | false | |
 | `create_document` | New Word (`.docx`) or Excel (`.xlsx`) file; `replace` optional | false | **true** | false | `{"replace": false}` |
+| `patch` | Edits to several text files and new text files, approved as one change set and made all or nothing (8.20) | false | false | false | |
 
 All of them are `openWorldHint: false`.
 
@@ -478,10 +482,10 @@ All of them are `openWorldHint: false`.
 - **Text tools write text.** `create`, `write` and `edit` take UTF-8 without NUL characters, refuse names of documents and media that text would corrupt (`.pdf`, `.docx`, `.xlsx`, `.zip`, images, ...; `not_changeable`, pointing `.docx` and `.xlsx` to `create_document`), and only change existing files that are UTF-8 text (`not_changeable`). `edit` and `append` keep the file's line endings and byte order mark.
 - **Nothing is deleted for good.** A replaced, appended or edited file's previous version, a deleted file or folder, and a file a `move` or `create_document` replaces all go to the **system trash** on the user's computer: the freedesktop.org trash on Linux (`$XDG_DATA_HOME/Trash`, or `$topdir/.Trash/$uid` or `$topdir/.Trash-$uid` for other filesystems, with a `.trashinfo` record so file managers can restore it), the Trash on macOS (`~/.Trash`, or `.Trashes/$uid` on other volumes), and the Recycle Bin on Windows (with the `$I` record Restore uses). When the trash can't take an item (a network drive, a removable drive on Windows, a mount inside the folder), the change is refused with `trash_unavailable` and nothing changes.
 - **Atomic.** New content is written to a hidden file beside the target and flushed to disk. A new file is renamed into place without replacing anything (`renameat2(RENAME_NOREPLACE)`, `renamex_np(RENAME_EXCL)`, or a handle rename without `ReplaceIfExists`). A replaced file is swapped with its new version in one step where the filesystem can (Linux, macOS), keeping its group, extended attributes and ACLs, and the old version then goes to the trash; elsewhere (Windows, which keeps the access list) the old version goes to the trash first. A crash leaves the old file, the new file, or the old one in the trash or beside the file under a hidden name; never half a file. A move to another filesystem copies, then moves the original to the trash.
-- **Budgets** (section 10): changes per minute and per day and bytes written per hour, separate from the read budgets, and a size cap per file. Dry runs and refused calls don't count against them.
+- **Budgets** (section 10): changes per minute and per day and bytes written per hour, separate from the read budgets, and a size cap per file. A `patch` counts as one change per file it changes. Dry runs and refused calls don't count against them.
 - Changes run one at a time, and every one is in the local audit log with its effect, the paths before and after, the bytes written, and where the old version went in the trash.
 
-**Dry runs.** Every change tool takes `dry_run: true`: the daemon runs every check above against the files as they are now and answers what the call would do (`"dry_run": true`), without changing anything or counting against the change budgets. For `write` and `edit` the answer includes a unified diff (`diff`, at most 32 KiB) and the file's current SHA-256 (`previous.sha256`). The diff shows the file as it is, so it counts against the read budgets (section 10) like a `read` of as many characters: it is cut to what the budget allows (ending with a line that says so), and once the budget is used up, a dry run of `write` or `edit` is refused with `rate_limited`, as a read would be. A server that gets `rate_limited` for its own preview can show the card without the diff (with `old_text` and `new_text` for `edit`). A server can make a dry run itself, with the model's arguments plus `dry_run: true`, to fill the approval card, and then pass the SHA-256 back as `expected_sha256` when the user approves, so `write` and `edit` fail with `conflict` if the file changed in between. Dry runs are logged locally like other calls.
+**Dry runs.** Every change tool takes `dry_run: true`: the daemon runs every check above against the files as they are now and answers what the call would do (`"dry_run": true`), without changing anything or counting against the change budgets. For `write` and `edit` the answer includes a unified diff (`diff`, at most 32 KiB) and the file's current SHA-256 (`previous.sha256`); for `patch`, one per file (8.20). The diff shows the file as it is, so it counts against the read budgets of the file's folder (section 10) like a `read` of as many characters: it is cut to what the budget allows (ending with a line that says so), and once the budget is used up, a dry run of `write` or `edit` is refused with `rate_limited`, as a read would be. A server that gets `rate_limited` for its own preview can show the card without the diff (with `old_text` and `new_text` for `edit`). A server can make a dry run itself, with the model's arguments plus `dry_run: true`, to fill the approval card, and then pass the SHA-256 back as `expected_sha256` when the user approves, so `write` and `edit` fail with `conflict` if the file changed in between. Dry runs are logged locally like other calls.
 
 **Results.** A change answers:
 
@@ -591,6 +595,8 @@ Effect `created`, or `replaced`. `exists` without `replace`.
 
 Offered only while a shared folder allows commands (`allows_commands` in `roots`, only where `writable` too), which the user turns on on this computer, never the server. See [docs/commands.md](docs/commands.md) for the sandbox each command runs in.
 
+Every command has an approval decided in Chat with Work (the web or any of its apps, never on the computer), or runs without a card in a chat where the person chose "Allow everything" as their permission mode, as file changes do; the server still records it. Guests, scheduled and event runs, and bots' and agents' chats always ask (a bot's unattended loan aside, 7.2.1). The daemon can't tell either from a forged approval: what it decides is where commands may run at all, per folder, and whether they may use the network, which only the person on the computer turns on. There is no allowlist of command lines.
+
 `run` (`destructiveHint: true`, `openWorldHint: true`):
 
 | Argument | Type | Notes |
@@ -645,6 +651,102 @@ An action that leaves the tab on a site that isn't allowed answers `{"tab", "all
 `tab` is a tab's id from `browser_tabs`; without it, the group's tab used last. `browser_read`'s text is the page's accessibility tree, one line per item (`- heading "Inbox" [level=1]`, `- link "Compose" [ref=e41]`, `- textbox "Search" [ref=e110]: budget`, `- paragraph: text`), indented by nesting; things that can be clicked or typed in carry `[ref=e<n>]`. Password, card and one-time code fields show `[sensitive]: (hidden)`, and are blurred in screenshots. `max_chars` is lowered by the read budget (section 10), and the characters returned count against it like a `read`. An answer whose `url` isn't on an allowed site is dropped by the daemon (`site_not_allowed`). When the page opened a JavaScript dialog, the extension dismissed it and the answer's `dialog` says what it was.
 
 Errors (section 9) the browser adds: `browser_unavailable` (no browser with the extension is connected), `browser_stopped` (the person stopped it, in the extension or on the computer, or paused the computer), `site_not_allowed`, `not_in_group` (the tab isn't in the group), `no_tab` (the group is empty), `sensitive_field`, `would_submit`, and `page_error` (the page or the browser failed). A bot's call to a browser not lent to it is `not_lent`.
+
+### 8.17 `grep`
+
+Searches the text of files for lines matching a regular expression, as ripgrep does. Offered always, with the read tools.
+
+| Argument | Type | Notes |
+|---|---|---|
+| `pattern` | string, required | 1 to 1000 characters, a regular expression in ripgrep's syntax (Rust's `regex`). A match never spans lines. |
+| `path` | string | A shared folder (`<root_id>:`), a folder in one, or a file. Without it, every shared folder the caller reaches (for a bot, only the folders lent to it), in the order of their IDs. |
+| `glob` | string | Only files matching it, with `search`'s `path_glob` rules: without `/` the file name, with `/` the path relative to `path` (or to the shared folder). Case-insensitive. |
+| `ignore_case` | boolean | Default false. |
+| `output` | `"content"` (default), `"files"`, or `"count"` | |
+| `context` | integer | 0 to 10 lines before and after each match, default 0. Only with `content`. |
+| `limit` | integer | 1 to 500, default 100: matching lines for `content`, files for `files` and `count`. |
+| `offset` | integer | Results to skip, for the next page, default 0. |
+
+```json
+{ "output": "content", "matches": [ { "path": "app:src/lib.rs", "line": 12, "text": "fn main() {",
+    "before": [ { "line": 11, "text": "" } ], "after": [ { "line": 13, "text": "    run();" } ] } ],
+  "files_searched": 412, "truncated": false, "timed_out": false, "next_offset": null }
+{ "output": "files", "files": [ "app:src/lib.rs", "app:src/main.rs" ], "files_searched": 412, "truncated": false, "timed_out": false, "next_offset": null }
+{ "output": "count", "counts": [ { "path": "app:src/lib.rs", "count": 3 } ], "files_searched": 412, "truncated": false, "timed_out": false, "next_offset": null }
+```
+
+The walk is ripgrep's: it respects `.gitignore`, `.ignore` and Git's `info/exclude` (from the shared folder down, also when `path` is a folder inside it), skips hidden files and folders, and never follows a symlink. A folder named as `path` is searched even when hidden or ignored, and a file named as `path` is searched as it is. The deny list applies exactly as for `read` and the index, and files are opened with `read`'s refusals (no links, no special files, no files with more than one hard link unless the config allows them). Binary files (any NUL byte), documents (PDF, Office) and files over the index's size cap (32 MiB) are skipped. `files_searched` counts the files whose text was searched. Lines are cut at 500 characters; `before` and `after` appear only with `context` above 0, and a match's context may repeat lines another match shows. Results are in path order (by shared folder, then one folder level at a time, names in byte order), then line order. `truncated` is true, and `next_offset` the `offset` of the next page, when there were more results than `limit`. After 10 seconds the search stops and answers what it found, with `timed_out: true` and a `note`.
+
+The characters returned (paths and line texts) count against the read budgets of their folders (section 10). When a budget runs out mid-answer, the answer stops before the first result that doesn't fit, with `truncated: true`, `next_offset`, and a `note`; when not even the first fits, the call is `rate_limited`. An answer too large for one message is cut the same way. The audit log records it as `search` is: the pattern (its first 256 characters), the path, and how many results it returned.
+
+### 8.18 `glob`
+
+Finds files by name. Offered always, with the read tools.
+
+| Argument | Type | Notes |
+|---|---|---|
+| `pattern` | string, required | 1 to 500 characters: `**/*.rb`, `src/**/test_*.py`, `*.md`. Without `/` it matches the file name at any depth; with `/`, the path relative to `path`. Case-sensitive. |
+| `path` | string | A folder (or `<root_id>:`). Without it, every shared folder the caller reaches. A file is `not_a_directory`. |
+| `hidden` | boolean | Default false: hidden files and folders are skipped unless this is true. |
+| `limit` | integer | 1 to 1000, default 200. |
+| `offset` | integer | Default 0. |
+
+```json
+{ "paths": [ { "path": "app:src/lib.rs", "size": 2048, "modified": "2026-10-20T08:00:00Z" } ],
+  "truncated": false, "next_offset": null }
+```
+
+Files only, walked as `grep` walks (ignore files respected, the deny list, no symlinks followed), sorted by path. The paths returned count against the read budgets as `grep`'s do, and the answer is cut the same way. After 10 seconds the walk stops and the answer adds `"timed_out": true` and a `note`; the field is there only then.
+
+### 8.19 `read_bytes`
+
+Copies one file's bytes, whatever it holds, a chunk at a time. Offered always, with the read tools (read annotations). The server never gives it to a model: it uses it for its own tool that copies one file the model names into the chat's files.
+
+| Argument | Type | Notes |
+|---|---|---|
+| `path` | string, required | A file, of any type (binary included). |
+| `offset` | integer | Byte offset, default 0. Past the end is `invalid_argument`. |
+| `max_bytes` | integer | 1 to 65536, default 65536. |
+
+```json
+{ "path": "app:assets/logo.png", "offset": 0, "next_offset": 65536, "size": 204800, "modified": "2026-10-20T08:00:00Z", "data": "iVBORw0KGgo…" }
+```
+
+`data` is the bytes in standard base64; `next_offset` is `null` at the end. A full chunk of 64 KiB, which travels twice in base64 (8.2), stays within one message. A chunk is shorter than `max_bytes` without being the last only when the copy budget has less left. The path is resolved, and refused, exactly as for `read` (the deny list, links, special files, hard links); files over 25 MiB are `too_large`. It counts against its own budget, not the read characters: `[limits] copy_bytes_per_hour`, 100 MiB for all chats per rolling hour, counted per chunk returned; past it, `rate_limited`. The audit log records the path and the size of the answer, never the contents.
+
+### 8.20 `patch`
+
+A change tool (8.7), listed with the others while a folder allows changes: edits to several text files and new text files, approved on one card and made all or nothing. `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`, without `writeWhen`: like `edit`, a write.
+
+| Argument | Type | Notes |
+|---|---|---|
+| `changes` | array, required | 1 to 50 changes, touching at most 20 distinct files. Each is either an edit `{ "path", "old_text", "new_text" }`, with exactly `edit`'s rules (8.10), or a new file `{ "path", "content" }`, with `create`'s rules (8.8: `exists` if anything is there, and its folder must exist). Several edits to one file apply in order, each to the text the one before left. A path can't be both created and edited, nor created twice. |
+| `expected_sha256` | object | A path (any spelling of `<root>:rel` that normalizes to a file the patch edits) to the hex SHA-256 its current content must have; `conflict` otherwise. A key naming a file the patch creates, or doesn't touch, is `invalid_argument`. |
+| `dry_run` | boolean | |
+
+Every rule of 8.7 applies to every file (the folder allows changes, the deny lists, the never-changed list, no programs, text only, the trash, the budgets, the size cap). **All or nothing:** every change is checked against the files as they are before anything is written; if one fails, nothing changes, and the error names the change by its index in `changes` (from 0) and its path, in the usual error sentence: `invalid_argument: Change 2 (app:src/lib.rs): old_text was not found in the file. Read the file again and quote the text exactly, whitespace included. No file was changed.` Then the files are changed: each new version is written to a hidden file beside its file and flushed; then, one file at a time, it takes the file's name, an edited file's previous version staying beside it under a hidden name (swapped in one step on Linux and macOS, moved aside first on Windows); only once every file is in place do the previous versions go to the system trash. If any step fails, the files already changed get their previous versions back (from beside them, or, once a previous version is in the trash, from the content read before), new files are removed, and the error says the folder is as it was. Should putting one back fail too, the error names it and says its previous version is beside it under a hidden name or in the trash. See [docs/file-changes.md](docs/file-changes.md).
+
+Dry run:
+
+```json
+{ "dry_run": true, "effect": "patched", "files": [
+    { "path": "app:src/lib.rs", "effect": "edited", "edits": 2, "diff": "--- app:src/lib.rs\n+++ app:src/lib.rs\n@@ ...",
+      "previous": { "size": 2048, "modified": "2026-10-20T08:00:00Z", "sha256": "4b1a..." } },
+    { "path": "app:src/new.rs", "effect": "created", "diff": "...", "size": 120 } ] }
+```
+
+Files are in the order they first appear in `changes`. Each diff is a unified diff like `edit`'s dry run (a new file's adds every line). The diffs together are cut at 64 KiB: the file whose diff was cut ends with a line saying so, and later files get `"diff": null` with `"diff_cut": true`. The diffs read the files as they are, so each counts against the read budgets of its file's folder like `edit`'s dry run: cut where a budget ends (ending with a line that says so, later files `null` and `diff_cut`), and a dry run that touches a folder whose budget is spent is `rate_limited`. A diff that would make the answer too large for one message is dropped the same way, from the last file.
+
+Applied:
+
+```json
+{ "dry_run": false, "effect": "patched", "files": [
+    { "path": "app:src/lib.rs", "effect": "edited", "size": 2100, "sha256": "9f2c...",
+      "previous": { "size": 2048, "modified": "...", "sha256": "4b1a...", "in_trash": true } },
+    { "path": "app:src/new.rs", "effect": "created", "size": 120, "sha256": "..." } ] }
+```
+
+It counts as one change per file against the changes-per-minute and per-day budgets, plus the bytes written, all or none. Each file gets its own entry in the local audit log, as a change of its own would (tool `patch`, the path, its effect, the bytes written, where its previous version went in the trash; never contents); a refused patch is one entry naming its first file.
 
 ## 9. Errors
 
@@ -704,25 +806,35 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 |---|---|
 | Tool calls per rolling minute (all chats) | 120 |
 | Characters per `read` call | 32 000 |
-| `read` characters per chat per rolling hour | 1 000 000 |
-| `read` characters per rolling hour, all chats | 2 000 000 |
+| Characters read per chat per rolling hour, from folders without a budget of their own | 1 000 000 |
+| Characters read per rolling hour, all chats, from those folders | 2 000 000 |
+| A folder's own read budget (`read_budget`), per chat per rolling hour | 1 000 000 (the shared per-chat budget) to 20 000 000; all chats together twice it |
+| Bytes `read_bytes` returns per rolling hour, all chats | 100 MiB |
 | Search hits per call / snippet length | 20 / 300 characters |
 | `list` entries per page | 200 |
 | Largest file `read` opens | 64 MiB |
 | Largest file indexed | 32 MiB |
 | JSON-RPC message size | 256 KiB |
-| Live grep time budget | 5 seconds |
+| Live grep time budget (`search`) | 5 seconds |
+| `grep` and `glob` time budget | 10 seconds |
+| `grep` line length | 500 characters |
+| Largest file `grep` searches | 32 MiB (as indexed) |
+| Largest file `read_bytes` copies | 25 MiB |
 | Changes per rolling minute / day (all chats) | 30 / 500 |
 | Bytes changes may write per rolling hour | 50 MiB |
 | Largest file a change creates, edits or copies | 10 MiB |
 | Files and folders one move or delete of a folder may carry | 1000 |
+| Changes in one `patch` / files they touch | 50 / 20 |
+| A `patch` dry run's diffs, together | 64 KiB |
+
+**Read budgets.** "Characters read" are what `read`, `grep` and `glob` return (paths and line texts), what `browser_read` returns, and the diffs of dry runs of `write`, `edit` and `patch`. They count against the budgets of the folder they come from: the shared ones (`read_chars_per_chat_hour`, `read_chars_per_hour`), or, for a folder the person gave a budget of its own on the computer (`read_budget` on the root in `config.toml`, `cww roots read-budget`, or the control API's `roots_read_budget`, CONTROL.md), a per-chat budget of that size and an all-chats budget of twice it for that folder alone, instead of the shared ones. The server can't set or raise either. `read` stops at the budget left; `grep` and `glob` stop their answer at the first result that doesn't fit (with `truncated`, `next_offset` and a `note`), and answer `rate_limited` when not even the first does; a dry run's diff is cut where the budget ends, and a dry run touching a folder whose budget is spent is `rate_limited`. `read_bytes` has its own budget, in bytes, for all chats (`copy_bytes_per_hour`), and doesn't count against the read budgets.
 
 ## 11. Decisions this spec makes
 
 `docs/desktop.md` left these points open or ambiguous. This is what the daemon does:
 
 1. **Framing.** The design says both "JSON-RPC frames on a WebSocket" and "terminated by an Action Cable channel". The daemon speaks Action Cable (`actioncable-v1-json`, channel `Desktop::Channel`) by default, with bare JSON-RPC (`mcp`) as a negotiated alternative for relays and other servers.
-2. **Tool names** are `roots`, `search`, `list` and `read`, without the `local_` prefix the design's table shows. The server adds `local_<device_id>_`, which would otherwise produce `local_7_local_read`.
+2. **Tool names** are `roots`, `search`, `list`, `read` and the others in section 8, without the `local_` prefix the design's table shows. The server adds `local_<device_id>_`, which would otherwise produce `local_7_local_read`.
 3. **DPoP.** Standard RFC 9449 proofs with `alg: EdDSA` on every token call and on the upgrade, with `ath` on the upgrade. "Signs a server nonce" is implemented as the RFC 9449 `DPoP-Nonce` mechanism, not as a custom challenge frame.
 4. **`htu` for the upgrade** is the `https://` form of the socket URL, which is what Rails sees as `request.url`.
 5. **Form-encoded OAuth requests** (as in RFC 6749 and 8628) with JSON responses. The device metadata travels as extra form fields.
@@ -732,7 +844,7 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 9. **Results** carry both `structuredContent` and the same JSON as a text block. Tool-level problems are `isError` results with a stable `code`, and JSON-RPC errors are kept for routing failures.
 10. **Root labels and IDs are visible to the server.** Open question 7 in the design is answered in favor of labels. Absolute paths are never visible.
 11. **Hard links** are refused by default: a file with a link count above 1 is `denied`. A hard link inside a root can point at data from outside it, and after the fact it can't be told apart from a legitimate one.
-12. **Hidden files** (dot-files) and git-ignored files are not indexed or grepped, but can still be listed and read if they aren't on the deny list.
+12. **Hidden files** (dot-files) and git-ignored files are not indexed or searched (`search`, `grep`, `glob`), unless a call names them as its `path` or `glob` asks for `hidden` ones, but can still be listed and read if they aren't on the deny list.
 13. **Offsets** count Unicode scalar values.
 14. **Revocation handling.** `invalid_grant`, `unauthorized_client` and `access_denied` on refresh stop the daemon's reconnect loop until `cww login`. Everything else is retried.
 15. **One server per daemon.** Open question 1 in the design is answered as one pairing at a time. `cww login` again replaces it.

@@ -128,6 +128,13 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unattended: bool,
     },
+    /// Give a shared folder a read budget of its own: characters a chat
+    /// may read from it per rolling hour (all chats together twice that),
+    /// or `null` for the budget every folder shares.
+    RootsReadBudget {
+        root: String,
+        read_budget: Option<usize>,
+    },
     /// The commands this computer ran for Chat with Work (`run`): those
     /// running and the latest to end, with each one's command line, folder
     /// and state. Only for this computer's own windows.
@@ -1206,6 +1213,20 @@ mod tests {
                     label: "Work".into(),
                 },
                 r#"{"cmd":"roots_label","root":"docs","label":"Work"}"#,
+            ),
+            (
+                ControlRequest::RootsReadBudget {
+                    root: "app".into(),
+                    read_budget: Some(5_000_000),
+                },
+                r#"{"cmd":"roots_read_budget","root":"app","read_budget":5000000}"#,
+            ),
+            (
+                ControlRequest::RootsReadBudget {
+                    root: "app".into(),
+                    read_budget: None,
+                },
+                r#"{"cmd":"roots_read_budget","root":"app","read_budget":null}"#,
             ),
             (ControlRequest::Deny, r#"{"cmd":"deny"}"#),
             (

@@ -1,6 +1,6 @@
 # Running commands
 
-Status: **built on Linux, tested on macOS and Windows.** On macOS, commands were tried for real on 2026-10-27 on a Mac mini (Apple silicon, macOS 27) paired with staging: approved runs, a failing one, the network off and on, the CPU limit, a background run with its output followed in `cww tui` and stopped from there and from a chat, and the sandbox refusing to read or write outside its folder. Up to 0.6.2 every command on a Mac failed to start ("resources.memoryMb is not supported by the 'seatbelt' backend"); the tests ran with the fix that followed. On Windows, commands run from Windows 11 24H2 with the August 2026 update ([Windows](#windows)); the tests that run them for real passed on 2026-10-27 on a Windows 11 26H2 virtual machine, in a standard user's desktop session, and on Windows 11 on Arm (25H2) in CI. The same day, on that virtual machine, the installer CI built, paired with staging as a standard user, ran `dir`, `git status` and `npm test`, a failing build, a background run followed in `cww tui` and stopped from a chat, a command approved in `cww tui`, and a read outside its folder that the sandbox refused. In a shared folder that allows changes, you can also allow commands. Chat with Work can then run one line of shell there (Windows PowerShell on Windows), like `bin/rails test` or `npm run build`, each after you approve it. The wire details are in [PROTOCOL.md, section 8.15](../PROTOCOL.md#815-commands), and the switch in [CONTROL.md, `roots_commands`](../CONTROL.md#roots_commands).
+Status: **built on Linux, tested on macOS and Windows.** On macOS, commands were tried for real on 2026-10-27 on a Mac mini (Apple silicon, macOS 27) paired with staging: approved runs, a failing one, the network off and on, the CPU limit, a background run with its output followed in `cww tui` and stopped from there and from a chat, and the sandbox refusing to read or write outside its folder. Up to 0.6.2 every command on a Mac failed to start ("resources.memoryMb is not supported by the 'seatbelt' backend"); the tests ran with the fix that followed. On Windows, commands run from Windows 11 24H2 with the August 2026 update ([Windows](#windows)); the tests that run them for real passed on 2026-10-27 on a Windows 11 26H2 virtual machine, in a standard user's desktop session, and on Windows 11 on Arm (25H2) in CI. The same day, on that virtual machine, the installer CI built, paired with staging as a standard user, ran `dir`, `git status` and `npm test`, a failing build, a background run followed in `cww tui` and stopped from a chat, a command approved in `cww tui`, and a read outside its folder that the sandbox refused. In a shared folder that allows changes, you can also allow commands. Chat with Work can then run one line of shell there (Windows PowerShell on Windows), like `bin/rails test` or `npm run build`: each approved in Chat with Work, or run without asking in a chat where you chose "Allow everything" as the permission mode ([Who approves](#who-approves)). The wire details are in [PROTOCOL.md, section 8.15](../PROTOCOL.md#815-commands), and the switch in [CONTROL.md, `roots_commands`](../CONTROL.md#roots_commands).
 
 ## Where a command runs
 
@@ -55,7 +55,13 @@ They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_
 - `run_status` and `run_output` follow a command left running: how it stands, and what it printed from an offset (the latest megabyte is kept).
 - `run_stop` stops one, and everything it started.
 
-`run` is annotated destructive and open-world, so Chat with Work asks every time; `run_stop` is a plain write; the other two only read. Each call is in the activity log with how it ended and the command line ("exit 0 · bin/rails test"). That log stays on this computer.
+`run` is annotated destructive and open-world, so Chat with Work asks for each one, unless the chat runs under "Allow everything" ([Who approves](#who-approves)); `run_stop` is a plain write; the other two only read. Each call is in the activity log with how it ended and the command line ("exit 0 · bin/rails test"). That log stays on this computer.
+
+## Who approves
+
+Every command has an approval, decided in Chat with Work: on the web or in any of its apps, never on this computer. When the person chose "Allow everything" as their permission mode in a chat, Chat with Work runs that chat's commands without a card, as it already does for file changes there, and still records each one. Guests, scheduled and event runs, and bots' and agents' chats always ask (a bot's unattended loan, which only the person here turns on, aside: [PROTOCOL.md 7.2.1](../PROTOCOL.md#721-bots)).
+
+What this computer decides is where commands may run at all: per folder, commands allowed or not, and with the network or without, which only the person on the computer turns on. There is no allowlist of command lines. The daemon can't tell an approval from a forged one, or from a chat that allows everything, so in a folder that allows commands, a compromised server could run commands without anyone approving them; the sandbox, the limits and the audit log hold either way.
 
 ## On this computer
 
@@ -63,7 +69,8 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 
 ## What it doesn't protect against
 
-- **A command can change or delete anything in its folder**, and nothing in the trash brings that back: approve each one knowing that. Version control is the undo.
+- **A command can change or delete anything in its folder**, and nothing in the trash brings that back: allow commands, and approve each one or allow everything in a chat, knowing that. Version control is the undo.
+- **A compromised server could run commands** in folders that allow them, without anyone approving them ([Who approves](#who-approves)).
 - **A command reads everything in its folder**, the deny list included (`.env`, keys): the deny list keeps files from Chat with Work's tools, not from programs run in the folder.
 - **A command's output can say where its folder is on this computer.** Chat with Work's tools name folders by their labels, but programs print paths: `pwd`, error messages and stack traces everywhere, and on Windows PowerShell's `dir` shows `Directory: C:\Users\you\project` above its listing. The output reaches Chat with Work as the command printed it.
 - **Toolchain settings are readable**: mise's config can hold environment variables, and on Windows so can npm's global settings (`%APPDATA%\npm\etc\npmrc`), which npm keeps beside its global programs.

@@ -113,6 +113,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is lent to (see `roots_bot`), empty when none.
+- `read_budget` is there when the folder has a read budget of its own (see `roots_read_budget`): the characters a chat may read from it per rolling hour.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
 
 ### `pause` and `resume`
@@ -229,9 +230,19 @@ Answers with the updated `root` and writes a `root_changes_allowed` or `root_cha
 {"cmd": "roots_commands", "root": "app", "commands": true, "network": false}
 ```
 
-Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on a Windows without the process containers commands run in (Windows 11 24H2 with the August 2026 update and later; `status` says, in `commands`). While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), each approved by the person, in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)). Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
+Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on a Windows without the process containers commands run in (Windows 11 24H2 with the August 2026 update and later; `status` says, in `commands`). While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)): each command approved by the person in Chat with Work (the web or its apps, never on this computer), or run without asking in a chat where they chose "Allow everything" as the permission mode. A compromised server could run commands in folders that allow them. Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
+
+### `roots_read_budget`
+
+```json
+{"cmd": "roots_read_budget", "root": "app", "read_budget": 5000000}
+```
+
+Gives a shared folder a read budget of its own (`read_budget`: the characters a chat may read from it per rolling hour), or puts it back on the budget every folder shares (`null`). `root` is an ID, a path, or a label that matches exactly one root. The budget is from the shared per-chat budget (`[limits] read_chars_per_chat_hour`, 1,000,000 by default) to 20,000,000; anything else is refused. Reads from the folder (`read`, `grep`, `glob`, the diffs of dry runs of `write`, `edit` and `patch`) then count against a per-chat budget of that size and an all-chats budget of twice it, for that folder alone, instead of the shared ones (PROTOCOL.md section 10); `read_bytes` keeps its own byte budget. It suits a folder worked in a lot, such as code. Clients can offer it as a choice (the shared budget, 5 million or 20 million characters an hour) without asking first: it only lets more of a folder already shared be read in an hour. Only this channel and `config.toml` (`read_budget` on the root) can change it, never the server.
+
+Answers with the updated `root` and writes a `root_read_budget_set` audit entry; `roots` and `status` report the budget on the folder. `cww roots read-budget <root> <characters|default>` does the same from the command line.
 
 ### `roots_bot`
 
@@ -625,12 +636,12 @@ The daemon never polls to produce events, and a client that waits on a subscript
 | Field | Present | Meaning |
 |---|---|---|
 | `ts` | always | RFC 3339, UTC. |
-| `event` | always | `tool` for a tool call. Daemon events: `started`, `stopped`, `connected`, `disconnected`, `revoked`, `paused`, `resumed`, `reloaded`, `root_added`, `root_removed`, `root_labeled`, `root_changes_allowed`, `root_changes_stopped`, `root_commands_allowed`, `root_commands_stopped`, `command_stopped` (from `command_stop`), `shutdown_requested`, `restarting` (to fit the sandbox to a new set of folders). |
-| `tool` | tool calls | `roots`, `search`, `list`, `read`, a change tool (`create`, `write`, `edit`, `mkdir`, `move`, `delete`, `create_document`), a command tool (`run`, `run_status`, `run_output`, `run_stop`), or an unknown name the server tried. |
+| `event` | always | `tool` for a tool call. Daemon events: `started`, `stopped`, `connected`, `disconnected`, `revoked`, `paused`, `resumed`, `reloaded`, `root_added`, `root_removed`, `root_labeled`, `root_changes_allowed`, `root_changes_stopped`, `root_commands_allowed`, `root_commands_stopped`, `root_read_budget_set`, `command_stopped` (from `command_stop`), `shutdown_requested`, `restarting` (to fit the sandbox to a new set of folders). |
+| `tool` | tool calls | `roots`, `search`, `list`, `read`, `grep`, `glob`, `read_bytes`, a change tool (`create`, `write`, `edit`, `mkdir`, `move`, `delete`, `create_document`, `patch`; a patch has one entry per file it changed), a command tool (`run`, `run_status`, `run_output`, `run_stop`), or an unknown name the server tried. |
 | `decision` | tool calls | `allowed`, `denied` or `error`. |
-| `path`, `query` | when given | The tool path (`root:relative`; the source, for `move`) or search query, truncated. |
+| `path`, `query` | when given | The tool path (`root:relative`; the source, for `move`) or search query (the pattern, for `grep` and `glob`), truncated. |
 | `to` | moves | Where a `move` went. |
-| `effect` | changes | What a change did: `created`, `replaced`, `appended`, `edited`, `created_folder`, `moved`, `trashed`, or `unchanged` (the folder was there). |
+| `effect` | changes | What a change did: `created`, `replaced`, `appended`, `edited`, `created_folder`, `moved`, `trashed`, or `unchanged` (the folder was there); for each file of a `patch`, `edited` or `created`. |
 | `dry_run` | dry runs | `true` when the call only checked a change and changed nothing. |
 | `written` | changes | Bytes written to disk. |
 | `trash` | changes | Where the old version, the deleted item, or the file a move replaced went in the system trash, as an absolute path on this computer. Never sent to the server. |

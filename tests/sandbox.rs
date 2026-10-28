@@ -33,6 +33,7 @@ fn only_shared_folders_are_readable() {
             writable: false,
             commands: false,
             network: false,
+            read_budget: None,
         }],
         secret_store: Some("file".into()),
         ..Config::default()
@@ -105,6 +106,7 @@ fn only_folders_that_allow_changes_are_writable() {
         writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     Config {
         roots: vec![root("docs", &docs, true), root("ro", &ro, false)],
@@ -246,6 +248,7 @@ fn only_folders_that_allow_changes_are_writable_on_macos() {
         writable,
         commands: false,
         network: false,
+        read_budget: None,
     };
     Config {
         roots: vec![root("docs", &docs, true), root("ro", &ro, false)],

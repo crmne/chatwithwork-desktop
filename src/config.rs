@@ -178,9 +178,32 @@ pub struct Root {
     /// never by the server.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bots: Vec<BotLoan>,
+    /// Characters a chat may read from this folder per rolling hour, in
+    /// place of `[limits] read_chars_per_chat_hour`; all chats together may
+    /// read twice it. For folders worked in a lot, such as code. Between
+    /// that limit and [`MAX_READ_BUDGET`]; only ever changed here or from
+    /// this computer's apps, never by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_budget: Option<usize>,
 }
 
+/// The largest read budget a folder may have: characters per chat per
+/// rolling hour.
+pub const MAX_READ_BUDGET: usize = 20_000_000;
+
 impl Root {
+    /// This folder's own read budget, if it has one, within its bounds:
+    /// at least the per-chat budget every folder has (`limits`), at most
+    /// [`MAX_READ_BUDGET`].
+    pub fn read_budget(&self, limits: &Limits) -> Option<usize> {
+        self.read_budget.map(|budget| {
+            budget.clamp(
+                limits.read_chars_per_chat_hour.min(MAX_READ_BUDGET),
+                MAX_READ_BUDGET,
+            )
+        })
+    }
+
     /// Commands may run here: changes and commands are both allowed.
     pub fn runs_commands(&self) -> bool {
         self.writable && self.commands
@@ -226,9 +249,11 @@ pub struct Limits {
     pub calls_per_minute: u32,
     /// Maximum characters one `read` call returns.
     pub read_chars_per_call: usize,
-    /// Characters `read` may return per chat in a rolling hour.
+    /// Characters reads (`read`, `grep`, `glob`, the diffs of dry runs) may
+    /// return per chat in a rolling hour, from folders without a
+    /// `read_budget` of their own.
     pub read_chars_per_chat_hour: usize,
-    /// Characters `read` may return across all chats in a rolling hour.
+    /// Characters those reads may return across all chats in a rolling hour.
     pub read_chars_per_hour: usize,
     /// Maximum search hits per call.
     pub search_hits: usize,
@@ -269,6 +294,9 @@ pub struct Limits {
     /// Characters of each of a command's streams (output and errors) its
     /// result keeps, from the end.
     pub command_output_chars: usize,
+    /// Bytes `read_bytes` may return per rolling hour, across all chats:
+    /// files copied into a chat's files, apart from the read budgets.
+    pub copy_bytes_per_hour: u64,
 }
 
 impl Default for Limits {
@@ -296,6 +324,7 @@ impl Default for Limits {
             command_processes: 256,
             commands_running: 4,
             command_output_chars: 20_000,
+            copy_bytes_per_hour: 100 * 1024 * 1024,
         }
     }
 }
@@ -366,6 +395,7 @@ mod tests {
             writable: true,
             commands: false,
             network: false,
+            read_budget: None,
         });
         config.deny.extra.push("*.secret".into());
         config.proxy = Some("http://proxy.example:3128".into());

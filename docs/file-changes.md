@@ -1,6 +1,6 @@
 # Changing files
 
-Status: built, 2026-10-03. The daemon can create, edit, move and delete files in the shared folders where the person allows it. Everything else stays read-only, except commands in folders that also allow them (`docs/commands.md`). This document is the design as built and the contract for the Chat with Work server. The wire details are in [PROTOCOL.md](../PROTOCOL.md) (sections 8.7 to 8.14, 9, 10), the control requests in [CONTROL.md](../CONTROL.md) (`roots_writable`), and the user-facing summary and threat model in the [README](../README.md).
+Status: built, 2026-10-03. The daemon can create, edit, move and delete files in the shared folders where the person allows it. Everything else stays read-only, except commands in folders that also allow them (`docs/commands.md`). This document is the design as built and the contract for the Chat with Work server. The wire details are in [PROTOCOL.md](../PROTOCOL.md) (sections 8.7 to 8.14, 8.20 for `patch`, 9, 10), the control requests in [CONTROL.md](../CONTROL.md) (`roots_writable`), and the user-facing summary and threat model in the [README](../README.md).
 
 ## Decisions
 
@@ -28,7 +28,7 @@ The rule behind the daemon is that every control that must hold against a compro
 
 ## Tools
 
-Offered only while at least one shared folder allows changes; until then `tools/list` has the four read-only tools and calling a change tool is an unknown tool (`-32602`). All use `root_id:relative/path`, take `dry_run`, and are `readOnlyHint: false`, `openWorldHint: false`.
+Offered only while at least one shared folder allows changes; until then `tools/list` has the read-only tools and calling a change tool is an unknown tool (`-32602`). All use `root_id:relative/path`, take `dry_run`, and are `readOnlyHint: false`, `openWorldHint: false`.
 
 | Tool | Arguments | Does | `destructiveHint` | `idempotentHint` | `_meta["com.chatwithwork/writeWhen"]` |
 |---|---|---|---|---|---|
@@ -39,10 +39,22 @@ Offered only while at least one shared folder allows changes; until then `tools/
 | `move` | `from`, `to`, `replace` (default false) | Move or rename, within or between folders that allow changes; with `replace`, a file at `to` goes to the trash first | **true** | false | `{"replace": false}` |
 | `delete` | `path` | Move a file or folder to the system trash | **true** | false | |
 | `create_document` | `path` (`.docx` or `.xlsx`), `content` (Markdown, for `.docx`), `sheets` (for `.xlsx`), `replace` (default false) | New Word or Excel file; with `replace`, the old file goes to the trash | **true** | false | `{"replace": false}` |
+| `patch` | `changes` (1 to 50, at most 20 files: edits `{path, old_text, new_text}` and new files `{path, content}`), `expected_sha256` (path to hash) | Several edits and new files approved together, all or nothing ([below](#patches)); old versions to the trash | false | false | |
 
 `writeWhen` names the argument values that make a call a plain write; a missing argument counts as its default. A tool without it has one effect for every call.
 
 Results carry `path`, `effect` (`created`, `replaced`, `appended`, `edited`, `created_folder`, `moved`, `trashed`, `unchanged`), `dry_run`, `kind`, and where they apply `from`, `size`, `sha256`, `previous` (`size`, `modified`, `sha256`, `in_trash`), `diff` and `entries`. PROTOCOL.md 8.7 has the full shape.
+
+## Patches
+
+`patch` makes several changes as one: edits to text files, with `edit`'s rules (several to one file apply in order, each to the text the one before left), and new text files, with `create`'s. It is a write, like `edit`, so the server shows it on one card, and "Allow for the rest of this chat" can cover it as it covers edits. It is all or nothing:
+
+1. **Check everything first.** Every change is checked against the files as they are, with every rule above and below (the folder allows changes, both deny lists, names, text only, sizes, `expected_sha256`), before anything is written, and the change budgets are counted for every file at once (one change per file, plus the bytes). If one fails, nothing changes, and the error names the change by its index and path: `Change 2 (app:src/lib.rs): old_text was not found in the file. ... No file was changed.`
+2. **Stage.** Each file's new version is written to a hidden file beside it (`O_CREAT | O_EXCL | O_NOFOLLOW`, with the old file's group, extended attributes and ACLs, or its access list on Windows, and the download mark) and flushed. A failure removes the hidden files: nothing changed.
+3. **Swap, one file at a time.** An edited file is swapped with its new version in one step (`RENAME_EXCHANGE`, `RENAME_SWAP`), or, where the filesystem can't (Windows, some Linux filesystems), moved aside to a hidden name and the new version renamed into place. Either way the previous version stays beside the file, under a hidden name. A new file is renamed into place without replacing anything. If a step fails, the files already changed get their previous versions back from beside them, new files are removed (only when they are still the files the patch made), and the hidden files go: the folders end as they started.
+4. **Trash, once every file is in place.** The previous versions go to the system trash, each recorded under its file's own name. If the trash refuses one, the patch is put back as well: files whose previous version is still beside them get it back from there, and those whose previous version already went to the trash are written again from the content read in step 1 (the trash keeps that copy too).
+
+Should putting a file back fail as well, the error names it and says its previous version is beside it under a hidden name or in the trash, never deleted. Patches run one at a time with every other change. The dry run answers each file's diff (64 KiB for all of them together, each counted against the read budget of its folder) and each edited file's SHA-256, for `expected_sha256`. The audit log gets one entry per file, as if each were its own change. Tests: `src/writer/tests.rs` (every refusal, the dry run, budgets, and a failure injected at each step, with files swapped in one step and moved aside as on Windows) and `src/tools_tests.rs` (budgets, bots, the audit log).
 
 ## Path rules (daemon)
 
@@ -81,11 +93,11 @@ Results carry `path`, `effect` (`created`, `replaced`, `appended`, `edited`, `cr
 
 ## What the server does (contract for the Rails side)
 
-1. **Load the tools from the list and their annotations.** Load every tool the daemon offers whose name is in an extended `Desktop::ACTIONS` (`roots search list read create write edit mkdir move delete create_document`), and record each call's effect from its annotations: `readOnlyHint: true` → `read`; otherwise `destructiveHint: false` → `write`; otherwise `destructive`, **unless** every argument named in `_meta["com.chatwithwork/writeWhen"]` has the value given (a missing argument counts as its default: `mode` is `"replace"`, `replace` is `false`), which makes it `write`. Per call that gives:
+1. **Load the tools from the list and their annotations.** Load every tool the daemon offers whose name is in an extended `Desktop::ACTIONS` (`roots search list read grep glob create write edit mkdir move delete create_document patch`; `read_bytes` is for the server's own copying, never the model), and record each call's effect from its annotations: `readOnlyHint: true` → `read`; otherwise `destructiveHint: false` → `write`; otherwise `destructive`, **unless** every argument named in `_meta["com.chatwithwork/writeWhen"]` has the value given (a missing argument counts as its default: `mode` is `"replace"`, `replace` is `false`), which makes it `write`. Per call that gives:
 
    | Call | Effect |
    |---|---|
-   | `create`, `edit`, `mkdir` | write |
+   | `create`, `edit`, `mkdir`, `patch` | write |
    | `write` with `mode: "append"` | write |
    | `write` without `mode`, or `mode: "replace"` | destructive |
    | `move` without `replace`, or `replace: false` | write |
@@ -105,8 +117,9 @@ Results carry `path`, `effect` (`created`, `replaced`, `appended`, `edited`, `cr
    - `move`: "Move `a.md` to `archive/a.md`", naming both folders when they differ; with `replace: true`, "replacing the file there, which goes to the trash" (the dry run's `previous` says whether one is there).
    - `delete`: "Move `old.md` to the trash on this computer"; for a folder, "with N files and folders" from the dry run's `entries`.
    - `create_document`: "Create the Word document `report.docx`" with the Markdown rendered, or "Create the Excel workbook `budget.xlsx`" with each sheet's first rows as a table; with `replace: true`, "replacing the current file, which goes to the trash".
+   - `patch`: "Change 3 files in App" with each file's diff from the dry run (`null` with `diff_cut` once the diffs were cut: show the file's name and its edits' `old_text` and `new_text`), and pass each edited file's `previous.sha256` back in `expected_sha256`.
 4. **Errors stay sentences.** Change tools refuse with tool errors whose messages are written for the model and the person: `not_writable` (names the folder and says the person can allow changes on their computer), `exists`, `denied` (deny list, never-changed list, links, hard links, special files, read-only or other users' files), `not_changeable` (programs, executables, binary files as text, Office files as text), `too_large`, `rate_limited`, `trash_unavailable`, `conflict`, `not_found`, `invalid_argument`, `invalid_path`. Show them as other tool errors.
-5. **Caching.** After a change that isn't a dry run, drop the cached text (`remote_resources`, provider `local`) of every path it touched: `path` for `create`, `write`, `edit`, `create_document` and `delete`; both `from` and `to` (the result's `path`) for `move`; and for a folder moved or deleted (`kind: "dir"`), every cached path under it. `mkdir` touches no file. The result's `sha256` identifies the new content.
+5. **Caching.** After a change that isn't a dry run, drop the cached text (`remote_resources`, provider `local`) of every path it touched: `path` for `create`, `write`, `edit`, `create_document` and `delete`; every `files[].path` for `patch`; both `from` and `to` (the result's `path`) for `move`; and for a folder moved or deleted (`kind: "dir"`), every cached path under it. `mkdir` touches no file. The result's `sha256` identifies the new content.
 6. **Audit and activity.** Record each change as its own event, for example `desktop.file_changed` with the device, chat, tool, root ID, relative path(s), `effect` and `dry_run`, never contents, and show it in the activity line: "Edited plan.md on Carmine's MacBook", "Moved a.md to archive/a.md on ...", "Moved old.md to the trash on ...". Dry runs the server makes for previews needn't be shown; the daemon logs them locally as checks.
 
 ## The clients

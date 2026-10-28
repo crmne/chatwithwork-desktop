@@ -1,12 +1,13 @@
-//! The MCP server: four read-only tools, the change tools when a shared
+//! The MCP server: seven read-only tools, the change tools when a shared
 //! folder allows changes, and the command tools when one also allows commands.
 //!
-//! `roots`, `search`, `list` and `read` are annotated `readOnlyHint: true`
-//! and `openWorldHint: false`, with no write, exec, or network code behind
-//! them. `create`, `write`, `edit`, `mkdir`, `move` and `delete` are listed
-//! only while at least one folder allows changes (the user's choice, made on
-//! this computer), with `create_document` for Word and Excel files; they are
-//! annotated `readOnlyHint: false`, with
+//! `roots`, `search`, `list`, `read`, `grep`, `glob` and `read_bytes` are
+//! annotated `readOnlyHint: true` and `openWorldHint: false`, with no
+//! write, exec, or network code behind them. `create`, `write`, `edit`,
+//! `mkdir`, `move` and `delete` are listed only while at least one folder
+//! allows changes (the user's choice, made on this computer), with
+//! `create_document` for Word and Excel files and `patch` for several
+//! changes approved together; they are annotated `readOnlyHint: false`, with
 //! `destructiveHint: true` for the ones that can replace or remove
 //! something, and run in the writer (see `crate::writer`). Every call
 //! passes, in order: pause check, rate limit, argument validation, then the
@@ -37,10 +38,13 @@ use crate::audit::{AuditEntry, AuditLog, Decision};
 use crate::browsing::tools::{Answer, BrowserTools, Kind, is_browser_tool};
 use crate::commands::tools::{COMMAND_TOOLS, CommandTools, Progress};
 use crate::error::{ErrorCode, ToolError};
-use crate::limits::Limiter;
+use crate::limits::{Limiter, ReadScope, read_budget_used_up};
+use crate::reader::code::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::reader::{
-    ListRequest, ListResponse, ReadRequest, ReadResponse, Reader, SearchRequest, SearchResponse,
+    ListRequest, ListResponse, ReadBytesRequest, ReadBytesResponse, ReadRequest, ReadResponse,
+    Reader, SearchRequest, SearchResponse,
 };
+use crate::writer::patch::{PatchRequest, PatchResult};
 use crate::writer::{
     ChangeResult, CreateRequest, DeleteRequest, DocumentRequest, EditRequest, MkdirRequest,
     MoveRequest, WriteRequest, Writer,
@@ -76,10 +80,18 @@ pub enum Caller {
     },
 }
 
-pub const READ_TOOLS: [&str; 4] = ["roots", "search", "list", "read"];
+pub const READ_TOOLS: [&str; 7] = [
+    "roots",
+    "search",
+    "list",
+    "read",
+    "grep",
+    "glob",
+    "read_bytes",
+];
 
 /// Offered only while a shared folder allows changes.
-pub const CHANGE_TOOLS: [&str; 7] = [
+pub const CHANGE_TOOLS: [&str; 8] = [
     "create",
     "write",
     "edit",
@@ -87,7 +99,12 @@ pub const CHANGE_TOOLS: [&str; 7] = [
     "move",
     "delete",
     "create_document",
+    "patch",
 ];
+
+/// What a `grep` or `glob` answer says when the read budget cut it.
+const BUDGET_NOTE: &str = "The hourly read budget ended here. The next page is at next_offset, \
+                           once the budget allows more.";
 
 /// Headroom kept below the message cap for the JSON-RPC envelope.
 const ENVELOPE_HEADROOM: usize = 2048;
@@ -236,10 +253,19 @@ impl LocalFiles {
         if args.get("dry_run") == Some(&Value::Bool(true)) {
             entry.dry_run = Some(true);
         }
+        // What `search` looks for, or the pattern of a `grep` or `glob`.
         entry.query = args
             .get("query")
+            .or_else(|| args.get("pattern"))
             .and_then(Value::as_str)
             .map(|s| s.chars().take(256).collect());
+        if name == "patch" {
+            // The first file it changes; each file gets its own entry once
+            // it's made.
+            entry.path = args["changes"][0]["path"]
+                .as_str()
+                .map(|s| s.chars().take(512).collect());
+        }
 
         let for_bot = match &caller {
             Caller::Bot { id, .. } => Some(format!("for bot {id}")),
@@ -247,6 +273,7 @@ impl LocalFiles {
         };
         entry.detail = for_bot.clone();
 
+        let mut patched: Vec<crate::writer::patch::PatchFile> = Vec::new();
         let started = std::time::Instant::now();
         let outcome = match self.admit(name, &args, &caller).await {
             Ok(only) => {
@@ -274,6 +301,10 @@ impl LocalFiles {
                         entry.path = change.from.clone();
                         entry.to = Some(change.path.clone());
                     }
+                }
+                if let Output::Patch(result) = &output {
+                    entry.effect = Some("patched".into());
+                    patched = result.files.clone();
                 }
                 if let Output::Browser(answer) = &output {
                     // The site, never the page.
@@ -314,7 +345,18 @@ impl LocalFiles {
             }
         };
         entry.duration_ms = Some((started.elapsed().as_secs_f64() * 10_000.0).round() / 10.0);
-        self.inner.audit.append(&entry);
+        if patched.is_empty() {
+            self.inner.audit.append(&entry);
+        }
+        // A patch: one entry per file, as if each were its own change.
+        for file in patched {
+            let mut entry = entry.clone();
+            entry.path = Some(file.path);
+            entry.effect = Some(file.effect.as_str().into());
+            entry.written = (file.written > 0).then_some(file.written);
+            entry.trash = file.trashed_to.map(|p| p.display().to_string());
+            self.inner.audit.append(&entry);
+        }
         Some(result)
     }
 
@@ -341,14 +383,25 @@ impl LocalFiles {
                 format!("the folder {root} isn't lent to this bot on this computer"),
             )
         };
-        for key in ["path", "from", "to", "root"] {
-            let Some(root) = args
-                .get(key)
-                .and_then(Value::as_str)
-                .map(|value| value.split(':').next().unwrap_or_default().to_string())
-            else {
-                continue;
-            };
+        // Every path the call names: its own, and those of a patch.
+        let mut named: Vec<&str> = ["path", "from", "to", "root"]
+            .iter()
+            .filter_map(|key| args.get(*key).and_then(Value::as_str))
+            .collect();
+        if name == "patch" {
+            named.extend(
+                args["changes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|change| change["path"].as_str()),
+            );
+            if let Some(expected) = args["expected_sha256"].as_object() {
+                named.extend(expected.keys().map(String::as_str));
+            }
+        }
+        for value in named {
+            let root = value.split(':').next().unwrap_or_default().to_string();
             let Some(loan) = reader.loan(&root, id) else {
                 return Err(refused(&root));
             };
@@ -386,7 +439,12 @@ impl LocalFiles {
                 ));
             }
         }
-        if name == "search" && args.get("root").is_none_or(Value::is_null) {
+        let everywhere = match name {
+            "search" => args.get("root").is_none_or(Value::is_null),
+            "grep" | "glob" => args.get("path").is_none_or(Value::is_null),
+            _ => false,
+        };
+        if everywhere {
             let lent = reader.lent_to(id);
             if lent.is_empty() {
                 return Err(ToolError::new(
@@ -467,14 +525,73 @@ impl LocalFiles {
             }
             "read" => {
                 let mut req: ReadRequest = parse_args(args)?;
-                let allowance = self.inner.limiter.read_allowance(chat)?;
+                let scope = self.scope_of(&req.path);
+                let allowance = self.inner.limiter.read_allowance(chat, &scope)?;
                 req.max_chars = Some(req.max_chars.unwrap_or(allowance).min(allowance));
                 let mut resp = blocking(move || reader.read(&req)).await?;
                 shrink_read_to_fit(&mut resp, self.budget());
                 self.inner
                     .limiter
-                    .record_read(chat, resp.text.chars().count());
+                    .record_read(chat, &scope, resp.text.chars().count());
                 Ok(Output::Read(resp))
+            }
+            "grep" => {
+                let mut req: GrepRequest = parse_args(args)?;
+                req.only = only;
+                if let Some(path) = &req.path {
+                    self.check_budget_left(chat, path)?;
+                }
+                let mut resp = blocking(move || reader.grep(&req)).await?;
+                while resp.len() > 1 && result_size(&resp) > self.budget() {
+                    resp.keep(resp.len() / 2, None);
+                }
+                let kept = self.charge(chat, &resp.costs())?;
+                resp.keep(kept, Some(BUDGET_NOTE));
+                Ok(Output::Grep(resp))
+            }
+            "glob" => {
+                let mut req: GlobRequest = parse_args(args)?;
+                req.only = only;
+                if let Some(path) = &req.path {
+                    self.check_budget_left(chat, path)?;
+                }
+                let mut resp = blocking(move || reader.glob(&req)).await?;
+                while resp.paths.len() > 1 && result_size(&resp) > self.budget() {
+                    resp.keep(resp.paths.len() / 2, None);
+                }
+                let kept = self.charge(chat, &resp.costs())?;
+                resp.keep(kept, Some(BUDGET_NOTE));
+                Ok(Output::Glob(resp))
+            }
+            "read_bytes" => {
+                let req: ReadBytesRequest = parse_args(args)?;
+                let wanted = req.max_bytes.unwrap_or(crate::reader::MAX_COPY_CHUNK_BYTES);
+                // The bytes travel twice in base64 (the structured answer
+                // and its text), within one message.
+                let fits = (self.budget().saturating_sub(16 * 1024) / 2 * 3 / 4) as u64;
+                let allowance = self.inner.limiter.copy_allowance(wanted.min(fits).max(1))?;
+                let resp = blocking(move || reader.read_bytes(&req, allowance)).await?;
+                let next = resp.next_offset.unwrap_or(resp.size);
+                self.inner.limiter.record_copy(next - resp.offset);
+                Ok(Output::ReadBytes(resp))
+            }
+            "patch" => {
+                let req: PatchRequest = parse_args(args)?;
+                if req.dry_run {
+                    // Its diffs read the files: refused once a folder's
+                    // read budget is spent, as a dry run of `edit` is.
+                    for change in &req.changes {
+                        if let Some(path) = change["path"].as_str() {
+                            self.check_budget_left(chat, path)?;
+                        }
+                    }
+                }
+                let writer = Arc::clone(&self.inner.writer);
+                let mut result = blocking(move || writer.patch(&req)).await?;
+                if result.dry_run {
+                    self.charge_diffs(chat, &mut result);
+                }
+                Ok(Output::Patch(result))
             }
             change if CHANGE_TOOLS.contains(&change) => {
                 // A dry run of `write` or `edit` answers with a diff of the
@@ -482,8 +599,9 @@ impl LocalFiles {
                 // read budget like one.
                 let shows_content = matches!(change, "write" | "edit")
                     && args.get("dry_run") == Some(&Value::Bool(true));
+                let scope = self.scope_of(args.get("path").and_then(Value::as_str).unwrap_or(""));
                 let allowance = if shows_content {
-                    Some(self.inner.limiter.read_allowance(chat)?)
+                    Some(self.inner.limiter.read_allowance(chat, &scope)?)
                 } else {
                     None
                 };
@@ -492,7 +610,9 @@ impl LocalFiles {
                 let mut result = blocking(move || run_change(&writer, &name, args)).await?;
                 if let (Some(allowance), Some(diff)) = (allowance, result.diff.as_mut()) {
                     cut_to_chars(diff, allowance);
-                    self.inner.limiter.record_read(chat, diff.chars().count());
+                    self.inner
+                        .limiter
+                        .record_read(chat, &scope, diff.chars().count());
                 }
                 Ok(Output::Change(result))
             }
@@ -501,13 +621,19 @@ impl LocalFiles {
                     unreachable!("checked against the tool names")
                 };
                 let allowance = if browser == "browser_read" {
-                    Some(self.inner.limiter.read_allowance(chat)?)
+                    Some(
+                        self.inner
+                            .limiter
+                            .read_allowance(chat, &ReadScope::Global)?,
+                    )
                 } else {
                     None
                 };
                 let answer = tools.call(browser, args, caller, allowance).await?;
                 if let Some(text) = answer.value.get("text").and_then(Value::as_str) {
-                    self.inner.limiter.record_read(chat, text.chars().count());
+                    self.inner
+                        .limiter
+                        .record_read(chat, &ReadScope::Global, text.chars().count());
                 }
                 Ok(Output::Browser(answer))
             }
@@ -519,6 +645,112 @@ impl LocalFiles {
                 Ok(Output::Command(value, detail))
             }
             _ => unreachable!("checked against the tool names"),
+        }
+    }
+
+    /// Whose read budget reads from `path` (or a root ID) count against.
+    fn scope_of(&self, path: &str) -> ReadScope {
+        self.inner
+            .reader
+            .read_scope(path.split(':').next().unwrap_or_default())
+    }
+
+    /// Refuse a read from `path` once its folder's budget is spent.
+    fn check_budget_left(&self, chat: &str, path: &str) -> Result<(), ToolError> {
+        let scope = self.scope_of(path);
+        if self.inner.limiter.read_remaining(chat, &scope) == 0 {
+            return Err(read_budget_used_up(&scope));
+        }
+        Ok(())
+    }
+
+    /// Count results (each its shared folder and the characters it
+    /// returns, in order) against their folders' read budgets for `chat`.
+    /// Returns how many fit before one doesn't; refused when not even the
+    /// first does.
+    fn charge(&self, chat: &str, costs: &[(String, usize)]) -> Result<usize, ToolError> {
+        let limiter = &self.inner.limiter;
+        let mut left: Vec<(ReadScope, usize, usize)> = Vec::new();
+        let mut kept = 0;
+        for (root, chars) in costs {
+            let scope = self.inner.reader.read_scope(root);
+            let at = match left.iter().position(|(s, _, _)| *s == scope) {
+                Some(at) => at,
+                None => {
+                    let remaining = limiter.read_remaining(chat, &scope);
+                    left.push((scope, remaining, 0));
+                    left.len() - 1
+                }
+            };
+            let (scope, remaining, spent) = &mut left[at];
+            if *chars > *remaining {
+                if kept == 0 {
+                    return Err(read_budget_used_up(scope));
+                }
+                break;
+            }
+            *remaining -= chars;
+            *spent += chars;
+            kept += 1;
+        }
+        for (scope, _, spent) in &left {
+            limiter.record_read(chat, scope, *spent);
+        }
+        Ok(kept)
+    }
+
+    /// Count a patch's dry-run diffs against their folders' read budgets,
+    /// cutting the diff where one runs out (later files get none), and
+    /// keep the answer within one message.
+    fn charge_diffs(&self, chat: &str, result: &mut PatchResult) {
+        let limiter = &self.inner.limiter;
+        let mut left: Vec<(ReadScope, usize, usize)> = Vec::new();
+        let mut cut = false;
+        for file in &mut result.files {
+            if cut {
+                file.diff = Some(Value::Null);
+                file.diff_cut = true;
+                continue;
+            }
+            let Some(Value::String(diff)) = file.diff.as_mut() else {
+                cut = true;
+                continue;
+            };
+            let scope = self.scope_of(&file.path);
+            let at = match left.iter().position(|(s, _, _)| *s == scope) {
+                Some(at) => at,
+                None => {
+                    let remaining = limiter.read_remaining(chat, &scope);
+                    left.push((scope, remaining, 0));
+                    left.len() - 1
+                }
+            };
+            let (_, remaining, spent) = &mut left[at];
+            if *remaining == 0 {
+                file.diff = Some(Value::Null);
+                file.diff_cut = true;
+                cut = true;
+                continue;
+            }
+            let chars = diff.chars().count();
+            if chars > *remaining {
+                cut_to_chars(diff, *remaining);
+                cut = true;
+            }
+            let shown = diff.chars().count().min(*remaining);
+            *remaining -= shown;
+            *spent += shown;
+        }
+        for (scope, _, spent) in &left {
+            limiter.record_read(chat, scope, *spent);
+        }
+        // Diffs that would make the answer too big for one message go,
+        // from the last.
+        let mut last = result.files.len();
+        while last > 0 && result_size(result) > self.budget() {
+            last -= 1;
+            result.files[last].diff = Some(Value::Null);
+            result.files[last].diff_cut = true;
         }
     }
 
@@ -603,7 +835,11 @@ enum Output {
     /// The page, and the offset it starts at.
     List(ListResponse, usize),
     Read(ReadResponse),
+    Grep(GrepResponse),
+    Glob(GlobResponse),
+    ReadBytes(ReadBytesResponse),
     Change(ChangeResult),
+    Patch(PatchResult),
     /// A command tool's result, and what the audit log says of it.
     Command(Value, Option<String>),
     /// A browser tool's answer, with a screenshot's picture.
@@ -639,6 +875,25 @@ impl Output {
             Output::Read(resp) => {
                 let (r, b) = success(&resp);
                 (r, b, None)
+            }
+            Output::Grep(resp) => {
+                let n = resp.len();
+                let (r, b) = success(&resp);
+                (r, b, Some(n))
+            }
+            Output::Glob(resp) => {
+                let n = resp.paths.len();
+                let (r, b) = success(&resp);
+                (r, b, Some(n))
+            }
+            Output::ReadBytes(resp) => {
+                let (r, b) = success(&resp);
+                (r, b, None)
+            }
+            Output::Patch(resp) => {
+                let n = resp.files.len();
+                let (r, b) = success(&resp);
+                (r, b, Some(n))
             }
             Output::Change(resp) => {
                 let (r, b) = success(&resp);
@@ -984,6 +1239,51 @@ pub fn change_tools() -> Vec<Tool> {
             false,
             Some(json!({ "replace": false })),
         ),
+        change_tool(
+            "patch",
+            "Change several local files",
+            "Make several changes at once, approved together, in shared folders that allow \
+             changes: edits to text files (`path`, `old_text`, `new_text`, with the rules of \
+             `edit`; several edits to one file apply in order, each to the text the one before \
+             left) and new text files (`path`, `content`, with the rules of `create`). All or \
+             nothing: when any change can't be made, no file changes, and the error names the \
+             change by its index. At most 50 changes to 20 files. Previous versions go to the \
+             system trash on the person's computer. `expected_sha256` maps a path to the \
+             SHA-256 its current content must have, as a dry run reports it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "description": "The changes, in order: an edit (path, old_text, new_text) or a new file (path, content).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "`<root_id>:relative/path` of the file." },
+                                "old_text": { "type": "string", "description": "For an edit: the exact text to replace; it must appear once." },
+                                "new_text": { "type": "string", "description": "For an edit: what replaces it." },
+                                "content": { "type": "string", "description": "For a new file: its text (UTF-8)." }
+                            },
+                            "required": ["path"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "expected_sha256": {
+                        "type": "object",
+                        "description": "Path of a file the patch edits to the SHA-256 (hex) its current content must have.",
+                        "additionalProperties": { "type": "string" }
+                    },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["changes"],
+                "additionalProperties": false
+            }),
+            false,
+            false,
+            None,
+        ),
     ]
 }
 
@@ -1007,7 +1307,7 @@ pub fn command_tools() -> Vec<Tool> {
         .collect()
 }
 
-/// The tools to offer: the read-only four, then the change tools when
+/// The tools to offer: the read-only seven, then the change tools when
 /// `changes` (a shared folder allows them).
 pub fn tools(changes: bool) -> Vec<Tool> {
     let mut all = read_tools();
@@ -1078,6 +1378,69 @@ fn read_tools() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         ),
+        tool(
+            "grep",
+            "Search code",
+            "Search the text of files in the shared folders for lines matching a regular \
+             expression (ripgrep's syntax), as ripgrep does: files Git ignores, hidden files and \
+             binary files are skipped. `output: \"content\"` (the default) answers the matching \
+             lines, with `context` lines before and after each; `\"files\"` the files that \
+             match; `\"count\"` how many lines match in each. `path` narrows it to a folder or \
+             a file, `glob` to file names (`*.rb`) or paths (`app/**/*.rb`). Pass `next_offset` \
+             back as `offset` for the next page.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "A regular expression, in ripgrep's syntax." },
+                    "path": { "type": "string", "description": "`<root_id>:` or `<root_id>:relative/path`: a folder or a file. Default: every shared folder." },
+                    "glob": { "type": "string", "description": "Only files matching this glob: without `/` the file name, with `/` the path. Case-insensitive." },
+                    "ignore_case": { "type": "boolean", "description": "Match regardless of case. Default false." },
+                    "output": { "type": "string", "enum": ["content", "files", "count"], "description": "Default `content`." },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 10, "description": "Lines before and after each match, with `content`. Default 0." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "Matching lines, or files, per page. Default 100." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Results to skip: the `next_offset` of the previous page." }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            "glob",
+            "Find local files",
+            "Find files by name in the shared folders: `**/*.rb`, `src/**/test_*.py`, `*.md`. \
+             Without a `/` the pattern matches file names at any depth; with one, paths \
+             relative to `path`. Case-sensitive. Files Git ignores are skipped, and hidden \
+             files unless `hidden: true`. Answers each file's path, size and modification \
+             time, sorted by path.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "minLength": 1, "maxLength": 500, "description": "The glob." },
+                    "path": { "type": "string", "description": "`<root_id>:` or a folder in it. Default: every shared folder." },
+                    "hidden": { "type": "boolean", "description": "Also hidden files and folders. Default false." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Files per page. Default 200." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Files to skip: the `next_offset` of the previous page." }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            "read_bytes",
+            "Copy a local file",
+            "Read a file's bytes, whatever it holds, in base64, one chunk at a time from \
+             `offset`, to copy it into a chat's files. Files up to 25 MiB.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "`<root_id>:relative/path` of a file." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Byte offset (default 0)." },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 65536, "description": "Bytes to return (default and maximum 65536)." }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 
@@ -1085,13 +1448,15 @@ impl ServerHandler for LocalFiles {
     fn get_info(&self) -> ServerConfig {
         let instructions = if self.inner.writer.enabled() {
             "Access to folders the user shared from their computer. Call `roots` first. Paths \
-             are always `<root_id>:relative/path`; absolute paths are refused. Folders with \
-             `writable: true` also take changes (`create`, `write`, `edit`, `mkdir`, `move`, \
-             `delete`, `create_document`); the others are read-only. Old versions and deleted \
-             files go to the system trash on the computer."
+             are always `<root_id>:relative/path`; absolute paths are refused. `grep` and \
+             `glob` search code by content and by file name. Folders with `writable: true` \
+             also take changes (`create`, `write`, `edit`, `mkdir`, `move`, `delete`, \
+             `create_document`, and `patch` for several at once); the others are read-only. \
+             Old versions and deleted files go to the system trash on the computer."
         } else {
             "Read-only access to folders the user shared from their computer. Call `roots` \
-             first. Paths are always `<root_id>:relative/path`; absolute paths are refused."
+             first. Paths are always `<root_id>:relative/path`; absolute paths are refused. \
+             `grep` and `glob` search code by content and by file name."
         };
         let instructions = if self.commands().is_some() {
             format!(
@@ -1119,7 +1484,7 @@ impl ServerHandler for LocalFiles {
     }
 
     // Only tools are served. rmcp answers these with empty lists by default;
-    // refuse them instead so the surface is exactly the four tools.
+    // refuse them instead so the surface is exactly the tools.
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -1244,6 +1609,10 @@ impl ServerHandler for LocalFiles {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "tools_tests.rs"]
+mod coding_tests;
 
 #[cfg(test)]
 mod tests {

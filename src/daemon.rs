@@ -912,6 +912,25 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
+    /// Give a folder a read budget of its own, or take it away. Only this
+    /// computer's user can: the request comes over the control channel.
+    async fn set_read_budget(&self, which: String, budget: Option<usize>) -> Result<Value> {
+        let root = self
+            .edit_config(move |config, _| crate::roots::set_read_budget(config, &which, budget))
+            .await?;
+        let mut entry = AuditEntry::event("root_read_budget_set");
+        entry.detail = Some(match root.read_budget {
+            Some(budget) => format!(
+                "{} ({}) to {budget} characters an hour",
+                root.id, root.label
+            ),
+            None => format!("{} ({}) to the shared budget", root.id, root.label),
+        });
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
     async fn remove_root(&self, which: String) -> Result<Value> {
         let root = self
             .edit_config(move |config, _| remove_root(config, &which))
@@ -1324,6 +1343,7 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
                     | ControlRequest::RootsBot { .. }
+                    | ControlRequest::RootsReadBudget { .. }
                     | ControlRequest::RootsLabel { .. }
                     | ControlRequest::Pause
                     | ControlRequest::Resume
@@ -1410,6 +1430,9 @@ impl ControlHandler for Daemon {
                 lent,
                 unattended,
             } => self.set_bot(root, bot, name, lent, unattended).await,
+            ControlRequest::RootsReadBudget { root, read_budget } => {
+                self.set_read_budget(root, read_budget).await
+            }
             ControlRequest::Browser => Ok(self.browser_json().await),
             ControlRequest::BrowserEnabled { enabled } => {
                 self.edit_browser(

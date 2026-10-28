@@ -192,7 +192,8 @@ enum RootsCommand {
     DenyChanges { root: String },
     /// Let Chat with Work run commands in a shared folder that allows
     /// changes (`bin/rails test`, `npm run build`), each approved in Chat
-    /// with Work and run in a sandbox that can change only that folder.
+    /// with Work (or run without asking in a chat set to Allow everything)
+    /// and run in a sandbox that can change only that folder.
     AllowCommands {
         root: String,
         /// Let those commands use the network (installing packages).
@@ -223,6 +224,16 @@ enum RootsCommand {
     },
     /// Stop lending a shared folder to a bot.
     StopLending { root: String, bot: String },
+    /// Set how many characters a chat may read from a shared folder in an
+    /// hour, for a folder worked in a lot, such as code: from the budget
+    /// every folder has (1,000,000 unless `[limits]` says otherwise) to
+    /// 20,000,000. All chats together may read twice it. `default` puts
+    /// the folder back on the budget every folder shares.
+    ReadBudget {
+        root: String,
+        /// Characters per chat per hour, or `default`.
+        characters: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -584,8 +595,9 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             let root = cww::roots::set_commands(&mut config, &root, true, network)?;
             config.save(paths)?;
             println!(
-                "Chat with Work can now run commands in {} ({}), {}. Each command asks you first \
-                 in Chat with Work and runs in a sandbox that can change only this folder.",
+                "Chat with Work can now run commands in {} ({}), {}. Each command is approved in \
+                 Chat with Work, or runs without asking in a chat where you chose Allow \
+                 everything, in a sandbox that can change only this folder.",
                 root.label,
                 root.path.display(),
                 if root.network {
@@ -635,6 +647,30 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 root.label,
                 root.path.display()
             );
+            notify_daemon(paths, "");
+        }
+        RootsCommand::ReadBudget { root, characters } => {
+            let budget = match characters.trim() {
+                "default" => None,
+                text => Some(text.replace(['_', ','], "").parse::<usize>().map_err(|_| {
+                    anyhow::anyhow!("{text:?} isn't a number of characters or `default`")
+                })?),
+            };
+            let root = cww::roots::set_read_budget(&mut config, &root, budget)?;
+            config.save(paths)?;
+            match root.read_budget {
+                Some(budget) => println!(
+                    "A chat may now read {budget} characters an hour from {} ({}), and all chats \
+                     together twice that.",
+                    root.label,
+                    root.path.display()
+                ),
+                None => println!(
+                    "{} ({}) is back on the read budget every folder shares.",
+                    root.label,
+                    root.path.display()
+                ),
+            }
             notify_daemon(paths, "");
         }
         RootsCommand::PrepareCommands => prepare_commands(&config)?,

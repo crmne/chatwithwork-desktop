@@ -9,6 +9,7 @@
 //! the writer (`crate::writer`), which makes changes through the same safe
 //! resolution (`safe_fs::ChangeDir`) in folders that allow them.
 
+pub mod code;
 pub mod extract;
 pub mod grep;
 pub mod index;
@@ -59,6 +60,10 @@ pub struct RootInfo {
     /// there start without anyone approving each one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattended: Option<bool>,
+    /// Characters a chat may read from this folder per rolling hour, when
+    /// the person gave it a budget of its own on this computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_budget: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -129,6 +134,32 @@ pub struct ReadRequest {
     #[serde(default)]
     pub max_chars: Option<usize>,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadBytesRequest {
+    pub path: String,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReadBytesResponse {
+    pub path: String,
+    pub offset: u64,
+    /// Offset of the next chunk, or null at the end of the file.
+    pub next_offset: Option<u64>,
+    pub size: u64,
+    pub modified: String,
+    /// The bytes, in standard base64.
+    pub data: String,
+}
+
+/// The largest file `read_bytes` copies, and the most one chunk holds.
+pub const MAX_COPY_FILE_BYTES: u64 = 25 * 1024 * 1024;
+pub const MAX_COPY_CHUNK_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReadResponse {
@@ -246,6 +277,7 @@ impl Reader {
                     },
                     indexed_files: s.map(|s| s.files),
                     unattended: None,
+                    read_budget: root.read_budget(&state.limits),
                 }
             })
             .collect()
@@ -470,6 +502,88 @@ impl Reader {
             modified: format_time(opened.modified),
             size: opened.size,
         })
+    }
+
+    /// One chunk of a file's bytes, whatever the file holds, for copying
+    /// it into a chat's files: at most `allowance` bytes (what the copy
+    /// budget and the message size leave). Resolved, and refused, exactly
+    /// as `read` is.
+    pub fn read_bytes(
+        &self,
+        req: &ReadBytesRequest,
+        allowance: u64,
+    ) -> Result<ReadBytesResponse, ToolError> {
+        use base64::Engine;
+        use std::io::{Read, Seek, SeekFrom};
+        let state = self.state.read().expect("reader state");
+        let path = ToolPath::parse(&req.path)?;
+        if path.rel.is_root() {
+            return Err(ToolError::new(
+                ErrorCode::NotAFile,
+                "this path is a directory",
+            ));
+        }
+        let max = req.max_bytes.unwrap_or(MAX_COPY_CHUNK_BYTES);
+        if !(1..=MAX_COPY_CHUNK_BYTES).contains(&max) {
+            return Err(ToolError::invalid_argument(format!(
+                "max_bytes must be from 1 to {MAX_COPY_CHUNK_BYTES}"
+            )));
+        }
+        let root = root_by_id(&state, &path.root_id)?;
+        let mut opened = root.open_file(&path.rel, policy(&state))?;
+        if opened.size > MAX_COPY_FILE_BYTES {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "the file is {} bytes; files up to {MAX_COPY_FILE_BYTES} bytes can be copied",
+                    opened.size
+                ),
+            ));
+        }
+        let offset = req.offset.unwrap_or(0);
+        if offset > opened.size {
+            return Err(ToolError::invalid_argument(format!(
+                "offset {offset} is past the end ({} bytes)",
+                opened.size
+            )));
+        }
+        let want = max.min(allowance).min(opened.size - offset);
+        opened
+            .file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| ToolError::internal(format!("reading file: {e}")))?;
+        let mut bytes = Vec::with_capacity(want as usize);
+        (&mut opened.file)
+            .take(want)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ToolError::internal(format!("reading file: {e}")))?;
+        let end = offset + bytes.len() as u64;
+        Ok(ReadBytesResponse {
+            path: path.to_string(),
+            offset,
+            next_offset: (end < opened.size).then_some(end),
+            size: opened.size,
+            modified: format_time(opened.modified),
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        })
+    }
+
+    /// Whose read budget reads from the shared folder `id` count against:
+    /// the folder's own, when the person gave it one, or the shared one.
+    pub fn read_scope(&self, id: &str) -> crate::limits::ReadScope {
+        let state = self.state.read().expect("reader state");
+        match state
+            .configured
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.read_budget(&state.limits))
+        {
+            Some(per_chat) => crate::limits::ReadScope::Folder {
+                id: id.to_string(),
+                per_chat,
+            },
+            None => crate::limits::ReadScope::Global,
+        }
     }
 
     /// What the writer needs to make a change: the open roots, the deny

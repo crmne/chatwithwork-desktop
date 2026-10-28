@@ -21,6 +21,7 @@
 
 pub mod kinds;
 pub mod office;
+pub mod patch;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -283,6 +284,13 @@ pub struct Writer {
     trash: Trash,
     lock: Mutex<()>,
     real_path: RealPathFn,
+    /// In tests: the step and file at which a patch fails, to check it
+    /// puts everything back.
+    #[cfg(test)]
+    fail_patch_at: Mutex<Option<(&'static str, usize)>>,
+    /// In tests: swap files as Windows does, moving the old one aside.
+    #[cfg(test)]
+    no_exchange: std::sync::atomic::AtomicBool,
 }
 
 /// A path a change acts on: its folder, opened, and its name there.
@@ -341,23 +349,34 @@ fn not_writable(root: &RootHandle) -> ToolError {
 
 /// A unified diff of `old` to `new`, cut to [`MAX_DIFF_BYTES`].
 fn unified_diff(path: &str, old: &str, new: &str) -> String {
+    let mut text = full_diff(path, old, new);
+    cut_diff(&mut text, MAX_DIFF_BYTES, "\n… (the diff goes on)\n");
+    text
+}
+
+/// A unified diff of `old` to `new`, whole.
+fn full_diff(path: &str, old: &str, new: &str) -> String {
     let diff = similar::TextDiff::configure()
         .timeout(std::time::Duration::from_millis(500))
         .diff_lines(old, new);
-    let mut text = diff
-        .unified_diff()
+    diff.unified_diff()
         .context_radius(3)
         .header(path, path)
-        .to_string();
-    if text.len() > MAX_DIFF_BYTES {
-        let mut cut = MAX_DIFF_BYTES;
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        text.truncate(cut);
-        text.push_str("\n… (the diff goes on)\n");
+        .to_string()
+}
+
+/// Cut `text` to `max` bytes, ending it with `more` when it was cut.
+fn cut_diff(text: &mut String, max: usize, more: &str) -> bool {
+    if text.len() <= max {
+        return false;
     }
-    text
+    let mut cut = max;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text.truncate(cut);
+    text.push_str(more);
+    true
 }
 
 impl Writer {
@@ -368,6 +387,10 @@ impl Writer {
             trash,
             lock: Mutex::new(()),
             real_path: Arc::new(ChangeDir::real_path),
+            #[cfg(test)]
+            fail_patch_at: Mutex::new(None),
+            #[cfg(test)]
+            no_exchange: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -818,46 +841,7 @@ impl Writer {
         let old_sha = sha256(&bytes);
         Self::check_sha(req.expected_sha256.as_deref(), &old_sha)?;
         let old = kinds::as_text(bytes, &t.name)?;
-        let (from, to) = match old.matches(req.old_text.as_str()).count() {
-            0 if old.contains("\r\n") && !req.old_text.contains('\r') => {
-                // The file uses Windows line endings and the text doesn't.
-                (
-                    req.old_text.replace('\n', "\r\n"),
-                    req.new_text.replace('\n', "\r\n"),
-                )
-            }
-            _ => (req.old_text.clone(), req.new_text.clone()),
-        };
-        if from.len() > EDIT_ALWAYS_BYTES
-            && (from.len() > EDIT_MAX_BYTES || from.len() * 2 > old.len())
-        {
-            return Err(ToolError::invalid_argument(format!(
-                "old_text is {} bytes, {}: edit changes a smaller part of a file. Use write \
-                 to replace the file's content.",
-                from.len(),
-                if from.len() > EDIT_MAX_BYTES {
-                    format!("more than {EDIT_MAX_BYTES} bytes")
-                } else {
-                    "more than half the file".to_string()
-                }
-            )));
-        }
-        match old.matches(from.as_str()).count() {
-            0 => {
-                return Err(ToolError::invalid_argument(
-                    "old_text was not found in the file. Read the file again and quote the text \
-                     exactly, whitespace included.",
-                ));
-            }
-            1 => {}
-            n => {
-                return Err(ToolError::invalid_argument(format!(
-                    "old_text appears {n} times in the file. Include more of the surrounding \
-                     text so it matches once."
-                )));
-            }
-        }
-        let new = old.replacen(from.as_str(), &to, 1);
+        let new = apply_edit(&old, &req.old_text, &req.new_text)?;
         kinds::check_text(&new, view.limits.max_change_file_bytes)?;
         self.finish_text_change(&t, &stat, old_sha, &old, &new, Effect::Edited, req.dry_run)
     }
@@ -1396,6 +1380,62 @@ impl Writer {
         }
         Ok(())
     }
+}
+
+/// `text` with `old_text`, which must appear in it exactly once, replaced
+/// by `new_text`: the rules of `edit`. When the text uses Windows line
+/// endings and `old_text` has none, `\n` in both matches `\r\n`.
+fn apply_edit(text: &str, old_text: &str, new_text: &str) -> Result<String, ToolError> {
+    if old_text.is_empty() {
+        return Err(ToolError::invalid_argument(
+            "old_text is empty. Quote the exact text to replace.",
+        ));
+    }
+    if old_text == new_text {
+        return Err(ToolError::invalid_argument(
+            "old_text and new_text are the same, so there is nothing to change.",
+        ));
+    }
+    let (from, to) = match text.matches(old_text).count() {
+        0 if text.contains("\r\n") && !old_text.contains('\r') => {
+            // The file uses Windows line endings and the text doesn't.
+            (
+                old_text.replace('\n', "\r\n"),
+                new_text.replace('\n', "\r\n"),
+            )
+        }
+        _ => (old_text.to_string(), new_text.to_string()),
+    };
+    if from.len() > EDIT_ALWAYS_BYTES
+        && (from.len() > EDIT_MAX_BYTES || from.len() * 2 > text.len())
+    {
+        return Err(ToolError::invalid_argument(format!(
+            "old_text is {} bytes, {}: edit changes a smaller part of a file. Use write \
+             to replace the file's content.",
+            from.len(),
+            if from.len() > EDIT_MAX_BYTES {
+                format!("more than {EDIT_MAX_BYTES} bytes")
+            } else {
+                "more than half the file".to_string()
+            }
+        )));
+    }
+    match text.matches(from.as_str()).count() {
+        0 => {
+            return Err(ToolError::invalid_argument(
+                "old_text was not found in the file. Read the file again and quote the text \
+                 exactly, whitespace included.",
+            ));
+        }
+        1 => {}
+        n => {
+            return Err(ToolError::invalid_argument(format!(
+                "old_text appears {n} times in the file. Include more of the surrounding \
+                 text so it matches once."
+            )));
+        }
+    }
+    Ok(text.replacen(from.as_str(), &to, 1))
 }
 
 /// Whether the file `name` in `dir` is a program: an execute bit (Unix), a
