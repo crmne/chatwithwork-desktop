@@ -53,8 +53,8 @@ pub fn open_display() -> Result<(), String> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn no_display(wayland: bool, x11: bool) -> &'static str {
     if wayland || x11 {
-        "Chat with Work couldn't open a window: the display this session names \
-         isn't answering. Start Chat with Work from your desktop."
+        "Chat with Work couldn't open a window: it couldn't connect to the \
+         display this session names (WAYLAND_DISPLAY or DISPLAY)."
     } else {
         "Chat with Work needs a desktop to open its windows, and this session \
          has none (neither WAYLAND_DISPLAY nor DISPLAY is set). Start Chat with \
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn no_display_says_whether_one_was_named() {
         assert!(no_display(false, false).contains("WAYLAND_DISPLAY"));
-        assert!(no_display(true, false).contains("isn't answering"));
-        assert!(no_display(false, true).contains("isn't answering"));
+        assert!(no_display(true, false).contains("couldn't connect"));
+        assert!(no_display(false, true).contains("couldn't connect"));
     }
 }
