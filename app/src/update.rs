@@ -77,6 +77,16 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
     )
 };
 
+/// What `--version` prints. Before installing a Mac update (and a Linux
+/// archive's), the running version's helper runs the downloaded app with
+/// `--version` and accepts only `<slug> <version>`, so on a Mac the app
+/// answers `chat-with-work 1.2.3`. Windows keeps `cww-app`, the program's
+/// name, since its installer's package isn't asked.
+pub fn version_line() -> String {
+    let name = if cfg!(windows) { "cww-app" } else { CONFIG.slug };
+    format!("{name} {VERSION}")
+}
+
 /// Releases come from GitHub, or for an end-to-end test from a feed on
 /// this computer (`CWW_UPDATE_FEED=http://127.0.0.1:<port>`, loopback HTTP
 /// only). The signature is required either way.
@@ -521,6 +531,14 @@ mod tests {
             assert_eq!(CONFIG.slug, "cww-app");
         }
         assert_eq!(CONFIG.publisher_key.unwrap().len(), 64);
+    }
+
+    #[test]
+    fn the_version_answers_the_helpers_probe() {
+        if !cfg!(windows) {
+            assert_eq!(version_line(), format!("{} {VERSION}", CONFIG.slug));
+        }
+        assert!(version_line().ends_with(VERSION));
     }
 
     #[test]
