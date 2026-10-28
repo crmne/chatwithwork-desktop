@@ -38,7 +38,7 @@ use crate::audit::{AuditEntry, AuditLog, Decision};
 use crate::browsing::tools::{Answer, BrowserTools, Kind, is_browser_tool};
 use crate::commands::tools::{COMMAND_TOOLS, CommandTools, Progress};
 use crate::error::{ErrorCode, ToolError};
-use crate::limits::{Limiter, ReadScope, read_budget_used_up};
+use crate::limits::{Limiter, ReadScope};
 use crate::reader::code::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::reader::{
     ListRequest, ListResponse, ReadBytesRequest, ReadBytesResponse, ReadRequest, ReadResponse,
@@ -659,7 +659,7 @@ impl LocalFiles {
     fn check_budget_left(&self, chat: &str, path: &str) -> Result<(), ToolError> {
         let scope = self.scope_of(path);
         if self.inner.limiter.read_remaining(chat, &scope) == 0 {
-            return Err(read_budget_used_up(&scope));
+            return Err(self.inner.limiter.read_budget_used_up(chat, &scope));
         }
         Ok(())
     }
@@ -685,7 +685,7 @@ impl LocalFiles {
             let (scope, remaining, spent) = &mut left[at];
             if *chars > *remaining {
                 if kept == 0 {
-                    return Err(read_budget_used_up(scope));
+                    return Err(limiter.read_budget_used_up(chat, scope));
                 }
                 break;
             }

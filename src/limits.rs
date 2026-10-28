@@ -84,9 +84,16 @@ impl Limiter {
         let mut w = self.windows.lock().expect("windows");
         prune(&mut w.calls, now, MINUTE, |t| *t);
         if w.calls.len() >= max {
+            let frees_in = w
+                .calls
+                .front()
+                .map_or(MINUTE, |t| MINUTE.saturating_sub(now.duration_since(*t)));
             return Err(ToolError::new(
                 ErrorCode::RateLimited,
-                format!("more than {max} tool calls in the last minute; try again shortly"),
+                format!(
+                    "This computer takes {max} tool calls a minute, and they are used up. {}",
+                    wait_message(frees_in)
+                ),
             ));
         }
         w.calls.push_back(now);
@@ -109,7 +116,7 @@ impl Limiter {
         let per_call = self.limits.lock().expect("limits").read_chars_per_call;
         let allowance = per_call.min(self.read_remaining_at(chat, scope, now));
         if allowance == 0 {
-            return Err(read_budget_used_up(scope));
+            return Err(self.read_budget_used_up_at(chat, scope, now));
         }
         Ok(allowance)
     }
@@ -142,6 +149,42 @@ impl Limiter {
         all_chats
             .saturating_sub(total)
             .min(per_chat.saturating_sub(chat_used))
+    }
+
+    /// The refusal for a read from `scope` once nothing is left of its
+    /// budget for `chat`, saying when it frees up.
+    pub fn read_budget_used_up(&self, chat: &str, scope: &ReadScope) -> ToolError {
+        self.read_budget_used_up_at(chat, scope, Instant::now())
+    }
+
+    fn read_budget_used_up_at(&self, chat: &str, scope: &ReadScope, now: Instant) -> ToolError {
+        let (per_chat, all_chats) = scope.budgets(&self.limits.lock().expect("limits"));
+        let key = scope.key();
+        let w = self.windows.lock().expect("windows");
+        // How long until the oldest read in `q` leaves the hour, when `q`
+        // has used up `budget`.
+        let frees = |q: Option<&Window>, budget: usize| {
+            q.filter(|q| q.iter().map(|(_, n)| n).sum::<usize>() >= budget)
+                .and_then(|q| q.front())
+                .map(|(t, _)| HOUR.saturating_sub(now.duration_since(*t)))
+        };
+        let frees_in = frees(w.chat_reads.get(&(key.clone(), chat.to_string())), per_chat)
+            .into_iter()
+            .chain(frees(w.reads.get(&key), all_chats))
+            .max()
+            .unwrap_or(HOUR);
+        let what = match scope {
+            ReadScope::Global => "The hourly reading allowance on this computer is used up.",
+            ReadScope::Folder { .. } => "The hourly reading allowance for this folder is used up.",
+        };
+        ToolError::new(
+            ErrorCode::RateLimited,
+            format!(
+                "{what} {} The person can raise a folder's allowance on the computer \
+                 (cww roots read-budget).",
+                wait_message(frees_in)
+            ),
+        )
     }
 
     /// Record characters returned by a read from `scope`.
@@ -208,16 +251,17 @@ impl Limiter {
     }
 }
 
-/// The error for a read from `scope` with nothing left of its budget.
-pub fn read_budget_used_up(scope: &ReadScope) -> ToolError {
-    ToolError::new(
-        ErrorCode::RateLimited,
-        match scope {
-            ReadScope::Global => "the hourly read budget is used up; try again later",
-            ReadScope::Folder { .. } => {
-                "the hourly read budget for this folder is used up; try again later"
-            }
-        },
+/// When a budget frees up, and what the caller should do until then: a
+/// model that keeps calling only spends its turns on refusals.
+pub fn wait_message(frees_in: Duration) -> String {
+    let seconds = frees_in.as_secs().max(1);
+    let when = if seconds < 90 {
+        format!("in about {seconds} seconds")
+    } else {
+        format!("in about {} minutes", seconds.div_ceil(60))
+    };
+    format!(
+        "It frees up {when}: stop calling this computer's tools until then, and tell the person."
     )
 }
 
@@ -403,6 +447,33 @@ mod tests {
         // Reads from the folder didn't touch the shared budget.
         assert_eq!(l.read_remaining_at("b", &G, t0), 150);
         assert_eq!(l.read_remaining_at("a", &code, t0 + HOUR), 300);
+    }
+
+    #[test]
+    fn a_used_up_budget_says_when_it_frees_up_and_to_stop_until_then() {
+        let l = Limiter::new(limits());
+        let t0 = Instant::now();
+        l.record_read_at("a", &G, 250, t0);
+        let err = l.read_allowance_at("a", &G, t0 + 40 * MINUTE).unwrap_err();
+        assert!(
+            err.message.contains("in about 20 minutes"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("stop calling"), "{}", err.message);
+        let calls = Limiter::new(Limits {
+            calls_per_minute: 1,
+            ..limits()
+        });
+        calls.check_call_at(t0).unwrap();
+        let err = calls
+            .check_call_at(t0 + Duration::from_secs(15))
+            .unwrap_err();
+        assert!(
+            err.message.contains("in about 45 seconds"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

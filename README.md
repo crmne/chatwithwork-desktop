@@ -115,7 +115,7 @@ A shared folder is read-only until you allow changes in it (and a folder you sha
 
 Symlinks are not followed. `--follow-symlinks` allows links that stay inside the folder; links that point outside are refused either way.
 
-A chat may read 1,000,000 characters an hour from your shared folders, and all chats together 2,000,000. A folder you work in a lot, such as code, can have a budget of its own: `cww roots read-budget <root> <characters>`, from 1,000,000 to 20,000,000 characters a chat an hour (all chats together twice it), counted for that folder alone; `default` puts it back on the shared budget. Only you can set it, here or over the control API (`roots_read_budget`); the server can't.
+A chat may read 5,000,000 characters an hour from your shared folders, and all chats together 10,000,000, enough for a working session on code. A folder you work in a lot, such as code, can have a budget of its own: `cww roots read-budget <root> <characters>`, from 5,000,000 to 20,000,000 characters a chat an hour (all chats together twice it), counted for that folder alone; `default` puts it back on the shared budget. Only you can set it, here or over the control API (`roots_read_budget`); the server can't.
 
 ## Run the daemon
 
@@ -343,10 +343,10 @@ remove = ["*.key"]                             # built-in patterns to drop (Keyn
 allow_hardlinks = false                        # reads only: changes never touch hard links
 
 [limits]
-calls_per_minute = 120
+calls_per_minute = 240
 read_chars_per_call = 32000
-read_chars_per_chat_hour = 1000000
-read_chars_per_hour = 2000000
+read_chars_per_chat_hour = 5000000
+read_chars_per_hour = 10000000
 copy_bytes_per_hour = 104857600  # 100 MiB of files read_bytes copies into chats
 changes_per_minute = 30          # changes: create, write, edit, mkdir, move, delete
 changes_per_day = 500

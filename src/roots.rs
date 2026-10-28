@@ -485,9 +485,9 @@ mod tests {
         let root = set_read_budget(&mut config, "app", Some(5_000_000)).unwrap();
         assert_eq!(root.read_budget, Some(5_000_000));
         assert_eq!(config.roots[0].read_budget(&config.limits), Some(5_000_000));
-        for wrong in [999_999, 20_000_001] {
+        for wrong in [4_999_999, 20_000_001] {
             let err = set_read_budget(&mut config, "app", Some(wrong)).unwrap_err();
-            assert!(err.to_string().contains("1000000"), "{err}");
+            assert!(err.to_string().contains("5000000"), "{err}");
         }
         assert_eq!(config.roots[0].read_budget, Some(5_000_000));
         let root = set_read_budget(&mut config, "App", None).unwrap();
@@ -495,7 +495,7 @@ mod tests {
         assert!(set_read_budget(&mut config, "nope", None).is_err());
         // A budget written by hand out of bounds counts within them.
         config.roots[0].read_budget = Some(10);
-        assert_eq!(config.roots[0].read_budget(&config.limits), Some(1_000_000));
+        assert_eq!(config.roots[0].read_budget(&config.limits), Some(5_000_000));
         config.roots[0].read_budget = Some(usize::MAX);
         assert_eq!(
             config.roots[0].read_budget(&config.limits),
