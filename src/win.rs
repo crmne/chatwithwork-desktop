@@ -70,6 +70,9 @@ pub fn default_owner_sid() -> Option<&'static str> {
 pub struct Grant {
     pub sid: String,
     pub mask: u32,
+    /// The entry's flags: `INHERIT_ONLY_ACE` (8) means it grants nothing on
+    /// the object itself, only on what inherits it.
+    pub flags: u8,
 }
 
 /// Who owns a file or folder and what its DACL allows.
@@ -189,6 +192,7 @@ pub fn file_security(handle: &impl AsRawHandle) -> Result<FileSecurity> {
                     grants.push(Grant {
                         sid: sid_string(sid)?,
                         mask: unsafe { (*allowed).Mask },
+                        flags: header.AceFlags,
                     });
                 }
                 // Deny entries only take rights away; audit and mandatory

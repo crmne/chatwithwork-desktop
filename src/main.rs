@@ -201,6 +201,11 @@ enum RootsCommand {
     },
     /// Stop running commands in a shared folder.
     DenyCommands { root: String },
+    /// Windows: let commands see the top of the drives they run on, which
+    /// Node.js, npm and cmd's `dir` look at and Windows keeps from
+    /// sandboxes. Sandboxed programs can then read the drive's own details,
+    /// never what's in it. Asks for an administrator's approval.
+    PrepareCommands,
     /// Lend a shared folder to a Chat with Work bot, by the number in its
     /// address in Chat with Work: the bot's chats then reach this folder,
     /// as the folder allows. Each change and command asks you first, unless
@@ -632,8 +637,49 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             );
             notify_daemon(paths, "");
         }
+        RootsCommand::PrepareCommands => prepare_commands(&config)?,
     }
     Ok(())
+}
+
+/// `cww roots prepare-commands`: let commands see the top of the system's
+/// drive and of the drives of the folders that allow them.
+#[cfg(windows)]
+fn prepare_commands(config: &Config) -> Result<()> {
+    use cww::commands::windows;
+    let folders: Vec<PathBuf> = config
+        .roots
+        .iter()
+        .filter(|r| r.runs_commands())
+        .map(|r| r.path.clone())
+        .collect();
+    let roots = windows::drive_roots(&windows::system_root(), &folders);
+    let names = windows::drive_names;
+    let missing: Vec<PathBuf> = roots
+        .iter()
+        .filter(|root| !windows::drive_prepared(root))
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        println!("Commands can already see the top of {}.", names(&roots));
+        return Ok(());
+    }
+    println!(
+        "Windows asks for an administrator to let sandboxed programs read the top of {} \
+         (never what's in it)...",
+        names(&missing)
+    );
+    let prepared = windows::prepare_drives(&missing, None).map_err(anyhow::Error::msg)?;
+    println!(
+        "Commands can now see the top of {}, so Node.js, npm and cmd's dir work there.",
+        names(&prepared)
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn prepare_commands(_config: &Config) -> Result<()> {
+    anyhow::bail!("only Windows keeps the top of a drive from the commands' sandbox")
 }
 
 /// `cww roots allow-changes` and `deny-changes`.
@@ -717,6 +763,36 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
             "answered"
         }
     );
+    // Windows only: whether this Windows can sandbox commands, and the
+    // drives whose top they can't see yet (docs/commands.md).
+    if let Some(commands) = status["commands"].as_object() {
+        if commands.get("available") == Some(&Value::Bool(true)) {
+            println!("Commands:   can run here, in a Windows process container");
+            let unprepared: Vec<String> = commands
+                .get("drives")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|d| d["prepared"] == Value::Bool(false))
+                .map(|d| str(&d["root"]).trim_end_matches('\\').to_string())
+                .collect();
+            if !unprepared.is_empty() {
+                println!(
+                    "            Node.js and cmd can't see the top of {} yet: \
+                     `cww roots prepare-commands` lets them",
+                    unprepared.join(" and ")
+                );
+            }
+        } else {
+            println!(
+                "Commands:   can't run here: {}",
+                commands
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no sandbox")
+            );
+        }
+    }
     println!("Roots:");
     let roots = status["roots"].as_array().cloned().unwrap_or_default();
     if roots.is_empty() {

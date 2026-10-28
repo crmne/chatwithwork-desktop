@@ -182,8 +182,11 @@ pub fn set_commands(
             root.id
         );
     }
-    if commands && cfg!(windows) {
-        bail!("commands can't run on Windows yet: it has no sandbox for them");
+    // Windows sandboxes commands only from Windows 11 24H2 with the August
+    // 2026 update: say so now rather than at the first command.
+    #[cfg(windows)]
+    if commands && let Err(e) = crate::commands::windows::supported() {
+        bail!("{}", e.message);
     }
     root.commands = commands;
     root.network = commands && network;
@@ -466,7 +469,7 @@ mod tests {
         );
         assert!(set_bot(&mut config, "app", "issue-fixer", None, true, false).is_err());
 
-        // As set_commands would where commands run (not on Windows yet).
+        // As set_commands would.
         config.roots[0].commands = true;
         let root = set_bot(&mut config, "app", "42", None, true, true).unwrap();
         assert_eq!(root.bots.len(), 1, "lending again replaces the loan");

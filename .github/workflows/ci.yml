@@ -166,6 +166,26 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # Commands on Windows run in a process container (docs/commands.md),
+  # which the x64 runners' Windows Server doesn't offer and Windows 11 on
+  # Arm does: the tests that run commands for real run here, and say why
+  # they don't where they can't.
+  commands-windows:
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: commands-windows-v1
+      # How long Windows PowerShell takes to start here, outside any sandbox:
+      # a fresh runner may not have compiled .NET's assemblies yet.
+      - run: Measure-Command { powershell -NoProfile -Command 'exit 0' } | Select-Object TotalSeconds
+        shell: pwsh
+      - run: "mbx test --locked -p cww --lib commands:: -- --nocapture --test-threads=1"
+        timeout-minutes: 30
+
   # The browser extension: unit tests, then Chromium with the extension and
   # cww as its native messaging host.
   browser:

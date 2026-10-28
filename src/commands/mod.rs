@@ -4,12 +4,14 @@
 //! (`sandbox.rs`). So it asks the unconfined process above it (the
 //! supervisor, see [`channel`]) to start each command in a sandbox of its
 //! own, built for that one run with MXC: Bubblewrap on Linux (Landlock where
-//! Bubblewrap can't create its namespaces), Seatbelt on macOS. The run reads the system and the language toolchains, writes only
-//! its folder and a home of its own, has no network unless the folder
-//! allows it, gets a clean environment, and has CPU time, memory and
-//! wall-clock limits. Whoever starts it checks the folder again from the
-//! config on disk: the worker names a folder by its ID and a relative path,
-//! never an absolute one.
+//! Bubblewrap can't create its namespaces), Seatbelt on macOS, a process
+//! container on Windows, where the daemon isn't confined and starts them
+//! itself (`windows.rs`). The run reads the system and the language
+//! toolchains, writes only its folder and a home of its own, has no network
+//! unless the folder allows it, gets a clean environment, and has CPU time,
+//! memory and wall-clock limits. Whoever starts it checks the folder again
+//! from the config on disk: the worker names a folder by its ID and a
+//! relative path, never an absolute one.
 //!
 //! Output is kept as it arrives: a window of the latest bytes for
 //! [`Runs::output`] (what a running command printed so far), and the end of
@@ -20,11 +22,11 @@ pub mod channel;
 mod channel_call;
 pub mod follow;
 mod plan;
-#[cfg(unix)]
 mod run;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
 pub mod tools;
+pub mod windows;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -42,7 +44,6 @@ pub const MAX_COMMAND_CHARS: usize = 8_000;
 /// Most bytes one [`Runs::output`] call returns.
 pub const MAX_OUTPUT_CHUNK: usize = 64 * 1024;
 /// Bytes of a run's latest output kept for [`Runs::output`].
-#[cfg(unix)]
 const WINDOW: usize = 1024 * 1024;
 /// Finished runs kept for their status and output.
 const FINISHED_KEPT: usize = 32;
@@ -112,8 +113,11 @@ pub struct Status {
     pub output_bytes: u64,
     /// Why it `failed`.
     pub error: Option<String>,
-    /// The limit that ended it: `cpu_time` (it `exited` with -1) or
-    /// `processes` (it was `stopped`). Its wall clock is `timed_out`.
+    /// The limit that ended it: `cpu_time` (it `exited` with -1),
+    /// `processes` (on Linux it was `stopped`; on Windows a process past
+    /// the limit couldn't start, and it `exited` with an error) or `memory`
+    /// (Windows: an allocation past the limit failed, and it `exited` with
+    /// an error). Its wall clock is `timed_out`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<String>,
 }
@@ -169,7 +173,6 @@ pub struct Summary {
     pub started_at: u64,
 }
 
-#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stream {
     Out,
@@ -179,11 +182,8 @@ enum Stream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
     Running,
-    #[cfg(unix)]
     Exited(i32),
-    #[cfg(unix)]
     TimedOut,
-    #[cfg(unix)]
     Stopped,
     Failed(String),
 }
@@ -213,7 +213,6 @@ struct Cell {
     err: VecDeque<u8>,
     out_total: u64,
     err_total: u64,
-    #[cfg(unix)]
     tail_bytes: usize,
 }
 
@@ -241,12 +240,10 @@ impl Cell {
             out_total: 0,
             err_total: 0,
             // UTF-8 takes at most 4 bytes a character.
-            #[cfg(unix)]
             tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
         }
     }
 
-    #[cfg(unix)]
     fn append(&mut self, stream: Stream, bytes: &[u8]) {
         self.window.extend(bytes);
         self.total += bytes.len() as u64;
@@ -277,11 +274,8 @@ impl Cell {
     fn status(&self) -> Status {
         let (state, exit_code, error) = match &self.state {
             State::Running => ("running", None, None),
-            #[cfg(unix)]
             State::Exited(code) => ("exited", Some(*code), None),
-            #[cfg(unix)]
             State::TimedOut => ("timed_out", None, None),
-            #[cfg(unix)]
             State::Stopped => ("stopped", None, None),
             State::Failed(error) => ("failed", None, Some(error.clone())),
         };
@@ -439,22 +433,9 @@ impl Runs {
         Ok(status)
     }
 
-    #[cfg(unix)]
     fn launch(&self, plan: Plan, cell: Arc<Mutex<Cell>>) {
         let runs = self.clone();
         run::spawn(plan, cell, move |id| runs.retire(id));
-    }
-
-    #[cfg(not(unix))]
-    fn launch(&self, _plan: Plan, cell: Arc<Mutex<Cell>>) {
-        let id = {
-            let mut cell = lock(&cell);
-            cell.finish(State::Failed(
-                "commands can't run on this system yet".into(),
-            ));
-            cell.id.clone()
-        };
-        self.retire(&id);
     }
 
     /// A run ended: keep it for a while, forgetting the oldest.
@@ -597,14 +578,12 @@ pub enum Runner {
 }
 
 impl Runner {
-    /// For a daemon that isn't confined: runs start here, checked against
-    /// the config on disk as the supervisor would.
+    /// For a daemon that isn't confined (the sandbox off, the tests, and
+    /// Windows, which has no sandbox for the daemon yet): runs start here,
+    /// checked against the config on disk as the supervisor would, each in
+    /// a sandbox of its own all the same.
     pub fn local(paths: &Paths) -> Self {
-        if cfg!(windows) {
-            Self::Off("Commands can't run on Windows yet: it has no sandbox for them".into())
-        } else {
-            Self::Local(Runs::new(paths.clone()))
-        }
+        Self::Local(Runs::new(paths.clone()))
     }
 
     async fn call(&self, call: channel_call::Call) -> Result<serde_json::Value, RunError> {

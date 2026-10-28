@@ -281,12 +281,45 @@ fn confine(config: &Config, paths: &Paths) {
     }
 }
 
-/// The folders that allow commands, and whether they may use the network.
+/// Whether this computer can run commands, for its own windows: on Windows,
+/// where that depends on the version of Windows and on the session the
+/// daemon runs in, with the drives commands may need to see the root of
+/// (`windows::DRIVE_ROOT_MASK`). Elsewhere `null`: the sandbox is checked
+/// at each run.
+fn commands_host(config: &Config) -> Value {
+    #[cfg(windows)]
+    {
+        use crate::commands::windows;
+        let folders: Vec<PathBuf> = config
+            .roots
+            .iter()
+            .filter(|r| r.runs_commands())
+            .map(|r| r.path.clone())
+            .collect();
+        let drives: Vec<Value> = windows::drive_roots(&windows::system_root(), &folders)
+            .into_iter()
+            .map(|root| json!({ "prepared": windows::drive_prepared(&root), "root": root }))
+            .collect();
+        match windows::sandbox() {
+            Ok(sandbox) => {
+                json!({ "available": true, "sandbox": sandbox.name(), "drives": drives })
+            }
+            Err(e) => json!({ "available": false, "detail": e.message, "drives": drives }),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = config;
+        Value::Null
+    }
+}
+
 /// A command call the runner refused, as the control channel says it.
 fn command_refusal(e: crate::commands::RunError) -> anyhow::Error {
     Refusal::new(&e.code, e.message).into()
 }
 
+/// The folders that allow commands, and whether they may use the network.
 fn command_roots(config: &Config) -> Vec<(String, String, bool)> {
     config
         .roots
@@ -1162,6 +1195,7 @@ impl Daemon {
             "paused": self.paused.load(Ordering::SeqCst),
             "roots": roots,
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
+            "commands": commands_host(&config),
         })
     }
 

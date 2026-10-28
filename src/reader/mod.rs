@@ -235,8 +235,8 @@ impl Reader {
                     label: root.label.clone(),
                     available,
                     writable: root.writable,
-                    allows_commands: cfg!(unix) && root.runs_commands(),
-                    network: cfg!(unix) && root.runs_commands() && root.network,
+                    allows_commands: root.runs_commands(),
+                    network: root.runs_commands() && root.network,
                     index: match (state.index_enabled, s.map(|s| s.state)) {
                         (false, _) => "disabled".into(),
                         (true, Some(IndexState::Ready)) => "ready".into(),

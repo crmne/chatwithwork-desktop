@@ -54,6 +54,7 @@ impl Listed {
         ) {
             (Some("cpu_time"), ..) => "CPU limit".into(),
             (Some("processes"), ..) => "process limit".into(),
+            (Some("memory"), ..) => "memory limit".into(),
             (_, "exited", Some(code)) => format!("exit {code}"),
             (_, "timed_out", _) => "timed out".into(),
             (_, state, _) => state.replace('_', " "),

@@ -28,6 +28,28 @@ pub struct Status {
     pub audit_file: Option<PathBuf>,
     /// The browser settings, and the browser attached (docs/browser.md).
     pub browser: BrowserStatus,
+    /// Whether commands can run here: only on Windows, where it depends on
+    /// the version of Windows (docs/commands.md); `None` elsewhere.
+    pub commands: Option<CommandsHost>,
+}
+
+/// What the daemon says of commands on Windows (CONTROL.md, `status`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CommandsHost {
+    pub available: bool,
+    /// Why not, when they can't.
+    pub detail: Option<String>,
+    /// The drives commands may need to see the top of, and whether they
+    /// can.
+    pub drives: Vec<DriveRoot>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DriveRoot {
+    pub root: PathBuf,
+    pub prepared: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
