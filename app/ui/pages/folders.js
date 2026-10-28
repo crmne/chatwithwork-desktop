@@ -197,7 +197,7 @@ function folderRow(app, root) {
       root.writable && !runsCommands && !root.allows_commands ? setting("Run commands", commandsUnavailable(app), null) : null,
       root.writable && (runsCommands || root.allows_commands) ? setting("Run commands", root.allows_commands
         ? "Chat with Work can run commands here, like tests or a build, in a sandbox that can change only this folder. Each is approved in Chat with Work, unless a chat allows everything."
-        : "Turn on to let Chat with Work run commands here, like tests or a build, each approved in Chat with Work.",
+        : "Turn on to let Chat with Work run commands here, like tests or a build. Each is approved in Chat with Work, unless a chat allows everything.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
           view.commanding = root.id;
