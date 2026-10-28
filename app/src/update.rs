@@ -83,7 +83,11 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
 /// answers `chat-with-work 1.2.3`. Windows keeps `cww-app`, the program's
 /// name, since its installer's package isn't asked.
 pub fn version_line() -> String {
-    let name = if cfg!(windows) { "cww-app" } else { CONFIG.slug };
+    let name = if cfg!(windows) {
+        "cww-app"
+    } else {
+        CONFIG.slug
+    };
     format!("{name} {VERSION}")
 }
 
