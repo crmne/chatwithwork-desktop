@@ -217,7 +217,8 @@ window.cwwEvent = (event, payload) => {
 const megabytes = (bytes) => Math.max(1, Math.round(bytes / 1e6));
 
 function packName(code) {
-  return state.packs?.find((p) => p.code === code)?.name || state.ocr.missing?.name || code;
+  const missing = state.ocr.missing?.code === code ? state.ocr.missing.name : null;
+  return state.packs?.find((p) => p.code === code)?.name || missing || code;
 }
 
 async function startAdding() {
