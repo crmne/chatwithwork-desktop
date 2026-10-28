@@ -119,6 +119,12 @@ impl Desktop {
         let app = self.app();
         crate::windows::tell_settings(&app, "update", self.updates.view());
         let ready = self.updates.ready();
+        // For end-to-end tests on machines driven over SSH, where nobody
+        // clicks: install a downloaded, verified update at once.
+        if ready.is_some() && std::env::var_os("CWW_UPDATE_INSTALL_WHEN_READY").is_some() {
+            let desktop = app.state::<Arc<Desktop>>().inner().clone();
+            std::thread::spawn(move || desktop.restart_to_update());
+        }
         let tray_app = app.clone();
         let _ = app.run_on_main_thread(move || {
             let desktop = tray_app.state::<Arc<Desktop>>();
