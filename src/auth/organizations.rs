@@ -357,6 +357,10 @@ mod tests {
         std::fs::write(file(&paths), b"{ damaged").unwrap();
         assert!(crate::auth::forget_all_secrets(&paths).is_err());
         assert!(file(&paths).exists());
+        // So does a damaged config, which names where the keys are.
+        std::fs::remove_file(file(&paths)).unwrap();
+        std::fs::write(paths.config_file(), b"secret_store = [").unwrap();
+        assert!(crate::auth::forget_all_secrets(&paths).is_err());
     }
 
     #[test]

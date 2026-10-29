@@ -388,9 +388,9 @@ pub fn logout(paths: &Paths) -> Result<bool> {
 /// Deletes every key this computer holds, its own and each organization
 /// sign-in's, before a purge deletes the files that name them. Unlike
 /// [`logout`], a keychain that refuses a delete is an error, so a purge
-/// never reports success with keys left behind; a config that can't be read
-/// still deletes what the default store holds, and a damaged list of
-/// organization sign-ins stops the purge before the files go.
+/// never reports success with keys left behind; a config or a list of
+/// organization sign-ins that can't be read stops the purge before the files
+/// go.
 pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
     // Supersede any pairing still waiting for approval, as logout does, so
     // none writes new keys after these deletes. The lock is released before
@@ -399,7 +399,9 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
         let lock = lock_pairing(paths)?;
         next_generation(paths, &lock)?;
     }
-    let config = Config::load(paths).unwrap_or_default();
+    // A config that can't be read stops the purge: it names the store the
+    // keys are in. One that doesn't exist means nothing was paired.
+    let config = Config::load(paths)?;
     // Only a computer that was paired has keys of its own: the keychain's
     // entries aren't scoped to these folders, so an install that never
     // paired leaves another install's alone. The 0600 file is always this
