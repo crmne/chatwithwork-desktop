@@ -400,9 +400,18 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
         next_generation(paths, &lock)?;
     }
     let config = Config::load(paths).unwrap_or_default();
-    let store = SecretStore::recorded(&config, paths);
-    store.delete(DEVICE_KEY)?;
-    store.delete(REFRESH_TOKEN)?;
+    // Only a computer that was paired has keys of its own: the keychain's
+    // entries aren't scoped to these folders, so an install that never
+    // paired leaves another install's alone. The 0600 file is always this
+    // install's, and goes either way.
+    let file = SecretStore::File(paths.secrets_file());
+    file.delete(DEVICE_KEY)?;
+    file.delete(REFRESH_TOKEN)?;
+    if config.server.is_some() || config.secret_store.is_some() {
+        let store = SecretStore::recorded(&config, paths);
+        store.delete(DEVICE_KEY)?;
+        store.delete(REFRESH_TOKEN)?;
+    }
     // A damaged list fails the purge: deleting it would leave keys nothing
     // names any more.
     organizations::forget_all(paths)?;
