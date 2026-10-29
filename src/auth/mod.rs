@@ -391,8 +391,10 @@ pub fn logout(paths: &Paths) -> Result<bool> {
 /// never reports success with keys left behind; a config or list that can't
 /// be read still deletes what the default store holds.
 pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
-    for organization in organizations::list(paths).unwrap_or_default() {
-        organizations::forget(paths, &organization.id)?;
+    // A list that can't be read names nothing to delete; its keys stay
+    // only if it was damaged, and the files go either way.
+    if organizations::list(paths).is_ok() {
+        organizations::forget_all(paths)?;
     }
     let config = Config::load(paths).unwrap_or_default();
     let store = SecretStore::for_config(&config, paths);

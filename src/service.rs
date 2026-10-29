@@ -457,8 +457,9 @@ mod windows_task {
             removed.push(shortcut);
         }
         // Waits for the agent to exit, so a purge after this can remove the
-        // files it held open (the index, the log).
-        let _ = stop_existing(paths);
+        // files it held open (the index, the log). An agent that won't stop
+        // fails the uninstall, after the task is gone, so no purge follows.
+        let stopped = stop_existing(paths);
         let _ = Command::new("schtasks")
             .args(["/End", "/TN", TASK_NAME])
             .output();
@@ -474,6 +475,7 @@ mod windows_task {
             std::fs::remove_file(&file)?;
             removed.push(file);
         }
+        stopped?;
         Ok(removed)
     }
 
@@ -514,8 +516,10 @@ mod windows_task {
                 request(&paths.socket_path(), ControlRequest::Status),
                 Ok(Some(_))
             ) {
-                if let Some(pid) = pid {
-                    wait_for_exit(pid, std::time::Duration::from_secs(15));
+                if let Some(pid) = pid
+                    && !wait_for_exit(pid, std::time::Duration::from_secs(15))
+                {
+                    bail!("The background agent is still stopping. Try again in a moment.");
                 }
                 return Ok(());
             }
@@ -524,9 +528,10 @@ mod windows_task {
         bail!("The previous background agent did not stop. Try again in a moment.")
     }
 
-    /// Waits up to `limit` for process `pid` to end (Windows; elsewhere the
-    /// service manager waits).
-    fn wait_for_exit(pid: u32, limit: std::time::Duration) {
+    /// Waits up to `limit` for process `pid` to end, and says whether it did
+    /// (Windows; elsewhere the service manager waits, and this says yes). A
+    /// process that's already gone, or can't be opened, has ended.
+    fn wait_for_exit(pid: u32, limit: std::time::Duration) -> bool {
         #[cfg(windows)]
         {
             use windows_sys::Win32::Foundation::CloseHandle;
@@ -537,14 +542,21 @@ mod windows_task {
             // waited on and closed here, and nothing else uses it.
             unsafe {
                 let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-                if !process.is_null() {
-                    WaitForSingleObject(process, limit.as_millis().min(u32::MAX as u128) as u32);
-                    CloseHandle(process);
+                if process.is_null() {
+                    return true;
                 }
+                let waited =
+                    WaitForSingleObject(process, limit.as_millis().min(u32::MAX as u128) as u32);
+                CloseHandle(process);
+                // WAIT_OBJECT_0: it ended.
+                waited == 0
             }
         }
         #[cfg(not(windows))]
-        let _ = (pid, limit);
+        {
+            let _ = (pid, limit);
+            true
+        }
     }
 
     fn wait_for_start(paths: &Paths) -> Result<()> {

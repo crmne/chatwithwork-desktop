@@ -220,6 +220,21 @@ pub fn forget(paths: &Paths, id: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Deletes every organization sign-in's keys, then the list, for a purge.
+/// Unlike [`forget`], the list keeps each one until its keys are gone, so a
+/// keychain that refuses leaves what a later purge needs to try again.
+pub fn forget_all(paths: &Paths) -> Result<()> {
+    let _lock = lock_pairing(paths)?;
+    let saved = list(paths)?;
+    for organization in &saved {
+        organization.forget_secrets(paths)?;
+    }
+    if !saved.is_empty() {
+        write(paths, Vec::new())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +342,35 @@ mod tests {
         std::fs::create_dir(&secret).unwrap();
         assert!(forget(&paths, &profile.id).is_err());
         assert!(list(&paths).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_purge_keeps_a_sign_in_whose_keys_it_couldnt_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        let origin = ServerUrl::parse("https://example.com").unwrap();
+        let profile = save_grant(
+            &paths,
+            &origin,
+            &DeviceKey::generate().unwrap(),
+            token("123456789"),
+            "file",
+        )
+        .unwrap();
+        let SecretStore::File(secret) = profile.store(&paths).unwrap() else {
+            panic!("file store");
+        };
+        let keys = std::fs::read(&secret).unwrap();
+        std::fs::remove_file(&secret).unwrap();
+        std::fs::create_dir(&secret).unwrap();
+        assert!(forget_all(&paths).is_err());
+        assert_eq!(list(&paths).unwrap(), std::slice::from_ref(&profile));
+        // Once the keychain lets it, the next purge finishes.
+        std::fs::remove_dir(&secret).unwrap();
+        std::fs::write(&secret, keys).unwrap();
+        forget_all(&paths).unwrap();
+        assert!(list(&paths).unwrap().is_empty());
+        assert!(profile.credentials(&paths).is_err());
     }
 
     #[test]
