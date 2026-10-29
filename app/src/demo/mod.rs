@@ -1948,6 +1948,7 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
         crate::state::AppState {
             onboarded: true,
             notifications_asked: true,
+            ..Default::default()
         }
         .save(&paths)?;
     }

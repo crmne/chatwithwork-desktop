@@ -61,6 +61,14 @@
         <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="DesktopApp" Type="integer" Value="1" KeyPath="yes" />
       </Component>
+      <!-- The installer's marker beside cww-app.exe: the app updates itself
+           through this package (fastframe-update's WindowsInstaller kind,
+           app/src/update.rs) only where it finds it. -->
+      <Component Id="UpdateMarker" Guid="{32FDB438-BFF5-4FBE-AEE2-76560754FCF0}">
+        <File Id="InstallerMarker" Name="cww-installer.txt" Source="$(SourceDir)\cww-installer.txt" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
+          Name="UpdateMarker" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
       <Component Id="Scanning" Guid="{2E0B7C51-6A4D-4F0E-9C3B-8D17F5A2E964}">
         <!-- 32-bit, as most scanners' TWAIN drivers are, on x64 and arm64 alike. -->
         <File Id="ScanHelperExe" Name="cww-scan-helper.exe" Source="$(SourceDir)\cww-scan-helper.exe" KeyPath="no" />

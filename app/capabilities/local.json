@@ -28,6 +28,10 @@
     "allow-set-dictation",
     "allow-download-model",
     "allow-cancel-download",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-restart",
+    "allow-set-update-checks",
     "allow-remove-model"
   ]
 }

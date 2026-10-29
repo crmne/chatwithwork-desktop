@@ -387,8 +387,8 @@ fn snapshot_theme() -> Option<tauri::Theme> {
     }
 }
 
-/// Whether any window is open, for macOS's Dock icon.
-#[cfg(target_os = "macos")]
+/// Whether any window is open: for macOS's Dock icon, and what an update
+/// relaunches with.
 pub fn any_open(app: &AppHandle) -> bool {
     !app.webview_windows().is_empty()
 }

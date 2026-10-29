@@ -42,6 +42,8 @@ pub struct Desktop {
     /// What the web app's pages last heard of this computer, so an audit
     /// entry that changes nothing they see sends them nothing.
     computer_view: Mutex<Option<serde_json::Value>>,
+    /// Updating the app by itself (update.rs).
+    pub updates: Arc<crate::update::Updates>,
 }
 
 impl Desktop {
@@ -109,6 +111,42 @@ impl Desktop {
 
     pub fn take_wanted(&self) -> Option<tauri::Url> {
         self.wanted.lock().expect("wanted lock").take()
+    }
+
+    /// An update's state changed: the settings hear it, and the tray
+    /// offers Restart to Update while one is ready.
+    pub fn update_changed(&self) {
+        let app = self.app();
+        crate::windows::tell_settings(&app, "update", self.updates.view());
+        let ready = self.updates.ready();
+        // For end-to-end tests on machines driven over SSH, where nobody
+        // clicks: install a downloaded, verified update at once.
+        if ready.is_some() && std::env::var_os("CWW_UPDATE_INSTALL_WHEN_READY").is_some() {
+            let desktop = app.state::<Arc<Desktop>>().inner().clone();
+            std::thread::spawn(move || desktop.restart_to_update());
+        }
+        let tray_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let desktop = tray_app.state::<Arc<Desktop>>();
+            if let Some(tray) = desktop.tray.lock().expect("tray lock").as_mut() {
+                tray.set_update(&tray_app, ready.as_deref());
+            }
+        });
+    }
+
+    /// Installs the downloaded update: its helper waits for the app to
+    /// quit, installs it and starts the new version.
+    pub fn restart_to_update(&self) -> Result<(), String> {
+        let relaunch = crate::update::relaunch_arguments(windows::any_open(&self.app()));
+        let result = self.updates.restart(relaunch);
+        match &result {
+            Ok(()) => self.quit(),
+            Err(e) => {
+                log::warn!("{e}");
+                self.update_changed();
+            }
+        }
+        result
     }
 
     pub fn quit(&self) {
@@ -231,8 +269,47 @@ pub fn tray_action(app: &AppHandle, id: &str) {
                 }
             });
         }
+        Some(Action::RestartToUpdate) => {
+            let desktop = desktop.clone();
+            std::thread::spawn(move || desktop.restart_to_update());
+        }
         Some(Action::Quit) => desktop.quit(),
         None => {}
+    }
+}
+
+/// Checks for updates, and finishes the one this launch installed.
+fn start_updates(desktop: &Arc<Desktop>, receipt: Option<fastframe_update::Receipt>) {
+    let told = desktop.clone();
+    desktop.updates.spawn(move || told.update_changed());
+    // An update that didn't start was rolled back: say so once.
+    if let Some(problem) = desktop.updates.view()["problem"].as_str() {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+        log::warn!("the last update was rolled back");
+        desktop
+            .app()
+            .dialog()
+            .message(problem)
+            .title("Chat with Work")
+            .kind(MessageDialogKind::Warning)
+            .show(|_| {});
+    }
+    if let Some(receipt) = receipt {
+        let waiting = desktop.clone();
+        let _ = std::thread::Builder::new()
+            .name("cww-updated".into())
+            .spawn(move || {
+                crate::update::finish(receipt, || {
+                    // The agent's status, once the watcher has heard.
+                    for _ in 0..50 {
+                        if waiting.status_known.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    waiting.status().map(|status| status.version)
+                })
+            });
     }
 }
 
@@ -257,7 +334,11 @@ fn open(app: &AppHandle, open: &Open) {
     }
 }
 
-pub fn run(options: Options) -> anyhow::Result<()> {
+pub fn run(
+    options: Options,
+    receipt: Option<fastframe_update::Receipt>,
+    update_error: Option<String>,
+) -> anyhow::Result<()> {
     #[cfg(feature = "demo")]
     let demo = match options.demo {
         Some(fresh) => {
@@ -300,6 +381,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         }
         other => other.clone(),
     };
+    let update_checks = !crate::state::AppState::load(&paths).update_checks_off;
     let desktop = Arc::new(Desktop {
         app: OnceLock::new(),
         client: Client::new(paths.socket_path()),
@@ -317,6 +399,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         quitting: AtomicBool::new(false),
         asking: Default::default(),
         computer_view: Mutex::new(None),
+        updates: Arc::new(crate::update::Updates::new(update_checks, update_error)),
     });
 
     let mut builder = tauri::Builder::default();
@@ -400,6 +483,10 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::local::download_model,
             crate::local::cancel_download,
             crate::local::remove_model,
+            crate::local::update_status,
+            crate::local::update_check,
+            crate::local::update_restart,
+            crate::local::set_update_checks,
             crate::scan::scan_info,
             crate::scan::scan_devices,
             crate::scan::scan_capabilities,
@@ -450,6 +537,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             if single {
                 crate::first_launch::ask_once(desktop.paths.clone());
             }
+            start_updates(&desktop, receipt);
             #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]
             if let Some(dir) = crate::snapshot::requested() {
                 std::thread::spawn(move || crate::snapshot::run(handle, dir));

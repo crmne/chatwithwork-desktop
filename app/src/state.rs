@@ -11,6 +11,8 @@ pub struct AppState {
     pub onboarded: bool,
     /// The first launch asked for notification permission (first_launch.rs).
     pub notifications_asked: bool,
+    /// The person turned off checking for updates (update.rs).
+    pub update_checks_off: bool,
 }
 
 impl AppState {

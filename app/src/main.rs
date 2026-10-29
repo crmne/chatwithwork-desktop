@@ -52,12 +52,17 @@ mod speech;
 mod state;
 mod time;
 mod tray;
+mod update;
 mod user_agent;
 mod windows;
 
 use cww_notification_broker as notifications;
 
 fn main() {
+    // First, before any state: `--apply-update` makes this process the
+    // update helper (update.rs), which installs and exits; an update's
+    // receipt or rollback message is taken off the command line.
+    let launch = fastframe_update::intercept(&update::CONFIG);
     // Crash reports, only where the person turned them on (config.toml's
     // crash_reports or CWW_CRASH_REPORTS). Starts no thread.
     if let Ok(paths) = cww::paths::Paths::from_env() {
@@ -98,7 +103,12 @@ fn main() {
         std::process::exit(speech::run(model));
     }
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("CWW_APP_LOG", "warn")).init();
-    match args::parse(std::env::args().skip(1)) {
+    let arguments = launch
+        .arguments
+        .iter()
+        .skip(1)
+        .map(|argument| argument.to_string_lossy().into_owned());
+    match args::parse(arguments) {
         Ok(args::Parsed::Run(options)) => {
             // Before GTK or any other thread starts.
             linux::prepare_web_view();
@@ -107,7 +117,7 @@ fn main() {
                 eprintln!("{message}");
                 std::process::exit(1);
             }
-            if let Err(e) = desktop::run(options) {
+            if let Err(e) = desktop::run(options, launch.receipt, launch.error) {
                 log::error!("{e:#}");
                 eprintln!("error: {e:#}");
                 std::process::exit(1);

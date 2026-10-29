@@ -103,7 +103,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             "--demo" if cfg!(feature = "demo") => options.demo = Some(false),
             "--demo-fresh" if cfg!(feature = "demo") => options.demo = Some(true),
             "--version" | "-V" => {
-                println!("cww-app {}", env!("CARGO_PKG_VERSION"));
+                println!("{}", crate::update::version_line());
                 return Ok(Parsed::Printed);
             }
             "--help" | "-h" => {
