@@ -124,8 +124,7 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
         let app_data = desktop_app_data();
         for dir in paths.all_dirs().into_iter().chain(app_data.as_deref()) {
             if dir.exists() {
-                remove_dir_patiently(dir)
-                    .with_context(|| format!("removing {}", dir.display()))?;
+                remove_dir_patiently(dir).with_context(|| format!("removing {}", dir.display()))?;
                 removed.push(dir.to_path_buf());
             }
         }
