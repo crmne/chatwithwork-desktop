@@ -152,6 +152,14 @@ impl PendingLogin {
             "Use the organization sign-in to save this grant."
         );
         let token = self.await_token(cancel)?;
+        self.save_pairing(token, cancel)
+    }
+
+    fn save_pairing(
+        self,
+        token: client::TokenResponse,
+        cancel: &AtomicBool,
+    ) -> Result<ServerConfig> {
         let device_id = token.device_id.clone().expect("checked in poll_pairing");
         let refresh = token
             .refresh_token
@@ -163,7 +171,7 @@ impl PendingLogin {
             let mut config = Config::load(paths)?;
             // Forget an earlier pairing, wherever its secrets were.
             if config.server.is_some() {
-                let old_store = SecretStore::for_config(&config, paths);
+                let old_store = SecretStore::recorded(&config, paths);
                 let _ = old_store.delete(DEVICE_KEY);
                 let _ = old_store.delete(REFRESH_TOKEN);
             }
@@ -478,6 +486,65 @@ mod tests {
         let err = p.wait(&cancel).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn pairing_again_clears_the_recorded_store_before_using_an_override() {
+        // Change the environment only in a fresh test process. The unit
+        // test's keyring refuses access to the person's real credentials.
+        const CHILD: &str = "CWW_TEST_PAIRING_STORE_OVERRIDE";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::pairing_again_clears_the_recorded_store_before_using_an_override",
+                ])
+                .env(CHILD, "1")
+                .env("CWW_SECRET_STORE", "keyring")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        let previous = SecretStore::File(paths.secrets_file());
+        previous.set(DEVICE_KEY, "old-key").unwrap();
+        previous.set(REFRESH_TOKEN, "old-refresh").unwrap();
+        Config {
+            server: Some(ServerConfig {
+                url: "https://old.example.com".into(),
+                device_id: "old-device".into(),
+            }),
+            secret_store: Some("file".into()),
+            ..Config::default()
+        }
+        .save(&paths)
+        .unwrap();
+        let next = SecretStore::File(tmp.path().join("next-secrets.json"));
+        let mut login = pending("https://chatwithwork.com/device", None);
+        login.attempt = begin_attempt(&paths).unwrap();
+        login.paths = paths.clone();
+        login.store = Some(next.clone());
+        let token = serde_json::from_value(serde_json::json!({
+            "access_token": "new-access", "token_type": "DPoP", "expires_in": 600,
+            "refresh_token": "new-refresh", "device_id": "new-device"
+        }))
+        .unwrap();
+        login.save_pairing(token, &AtomicBool::new(false)).unwrap();
+
+        assert_eq!(previous.get(DEVICE_KEY).unwrap(), None);
+        assert_eq!(previous.get(REFRESH_TOKEN).unwrap(), None);
+        assert!(next.get(DEVICE_KEY).unwrap().is_some());
+        assert_eq!(
+            next.get(REFRESH_TOKEN).unwrap().as_deref(),
+            Some("new-refresh")
+        );
+        assert_eq!(
+            Config::load(&paths).unwrap().server.unwrap().device_id,
+            "new-device"
+        );
     }
 
     #[test]
