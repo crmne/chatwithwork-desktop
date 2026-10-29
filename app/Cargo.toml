@@ -48,7 +48,7 @@ tauri-plugin-dialog = "2"
 # fastframe-audio: on Linux it goes to PipeWire, then PulseAudio, then ALSA,
 # so building needs libpipewire's headers and clang, and the binary links
 # libpipewire-0.3.so.0.
-fastframe-audio = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-audio = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.3" }
 # The recorder's lock-free queue from the capture callback, which must not
 # wait.
 crossbeam-channel = "0.5"
