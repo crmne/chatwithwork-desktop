@@ -72,7 +72,7 @@ The background agent's opt-in crash reports (README, "Crash reports") go to the 
 
 ## Releasing
 
-1. Bump `version` in `Cargo.toml` and `app/Cargo.toml` (they move together) and run `mbx build` so `Cargo.lock` follows.
+1. Bump `version` in `Cargo.toml`, `app/Cargo.toml`, `notification-broker/Cargo.toml` and `scan/Cargo.toml` (they move together) and run `mbx build` so `Cargo.lock` follows.
 2. Write `packaging/release-notes/vX.Y.Z.md`, starting from `TEMPLATE.md`.
 3. Push `main`, wait for CI, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
