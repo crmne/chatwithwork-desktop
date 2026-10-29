@@ -121,15 +121,47 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
     }
     if purge {
         let _ = crate::auth::logout(paths);
-        for dir in paths.all_dirs() {
+        let app_data = desktop_app_data();
+        for dir in paths.all_dirs().into_iter().chain(app_data.as_deref()) {
             if dir.exists() {
-                std::fs::remove_dir_all(dir)
+                remove_dir_patiently(dir)
                     .with_context(|| format!("removing {}", dir.display()))?;
                 removed.push(dir.to_path_buf());
             }
         }
     }
     Ok(removed)
+}
+
+/// Removes `dir`, trying again for a few seconds: on Windows a process that
+/// just exited (the agent, the app's web view) can hold a file open a
+/// moment longer.
+fn remove_dir_patiently(dir: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if tries >= 20 => return Err(error),
+            Err(_) => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+    }
+}
+
+/// The desktop app's web view data on Windows (its sign-in cookies and
+/// cache), `%LOCALAPPDATA%\com.chatwithwork.desktop`, which a purge removes
+/// with the agent's own. Not with `CWW_HOME`, which keeps tests and custom
+/// installs to their own folder.
+fn desktop_app_data() -> Option<PathBuf> {
+    if !cfg!(windows) || custom_home().is_some() {
+        return None;
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|base| PathBuf::from(base).join("com.chatwithwork.desktop"))
 }
 
 /// `CWW_HOME`, when set, so the service uses the same directories as the
@@ -401,10 +433,9 @@ mod windows_task {
         if let Some(shortcut) = windows_startup::remove()? {
             removed.push(shortcut);
         }
-        let _ = crate::control::request(
-            &paths.socket_path(),
-            crate::control::ControlRequest::Shutdown,
-        );
+        // Waits for the agent to exit, so a purge after this can remove the
+        // files it held open (the index, the log).
+        let _ = stop_existing(paths);
         let _ = Command::new("schtasks")
             .args(["/End", "/TN", TASK_NAME])
             .output();

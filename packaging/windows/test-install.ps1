@@ -102,6 +102,12 @@ try {
     & (Join-Path $dir 'cww.exe') daemon install
     if ($LASTEXITCODE -ne 0) { throw 'Starting the agent again as a standard user failed' }
   }
+  # Uninstalling closes the running app and removes what the agent kept
+  # (shared folders, the index, the log, keys) and the app's web view data.
+  $appProcess = Start-Process -FilePath (Join-Path $dir 'cww-app.exe') -ArgumentList '--background' -PassThru
+  Start-Sleep -Seconds 5
+  if ($appProcess.HasExited) { throw "The desktop app didn't stay running before the uninstall test: $($appProcess.ExitCode)" }
+  if (-not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'cww'))) { throw 'The agent kept nothing to remove' }
 } catch {
   if ($env:CWW_HOME) {
     $agentLog = Join-Path $env:CWW_HOME 'state\daemon.log'
@@ -123,3 +129,7 @@ foreach ($shortcut in "Chat with Work.lnk", "Chat with Work (Terminal).lnk") {
   if (Test-Path (Join-Path $programs $shortcut)) { throw "Uninstall left $shortcut" }
 }
 if (Test-Path -LiteralPath $startup) { throw 'Uninstall left the startup shortcut' }
+if ($appProcess -and -not $appProcess.WaitForExit(15000)) { $appProcess.Kill(); throw 'Uninstall left the desktop app running' }
+foreach ($data in (Join-Path $env:LOCALAPPDATA 'cww'), (Join-Path $env:LOCALAPPDATA 'com.chatwithwork.desktop')) {
+  if (Test-Path -LiteralPath $data) { throw "Uninstall left $data" }
+}
