@@ -105,9 +105,12 @@ Each shared folder lists the Chat with Work bots it is lent to (`status`'s `root
 
 `cargo test -p cww-app` covers the parts that decide something: the navigation rules, the server and its pages, the user agent, the loopback callback, the download names, the allow-list, the activity log's sentences, the tray's labels, what pages may see and change of this computer (and what asks first), and the NVIDIA rule.
 
+`node --test app/tests/*.test.mjs` drives the welcome, pairing and folder
+controls and the page bridge with synthetic state and recorded commands.
+The real native windows are checked with the snapshots below.
+
 `cargo run -p cww-app --features demo -- --demo` runs against a stand-in daemon with sample folders and activity (`--demo-fresh` for a first run). On Linux, `CWW_APP_SNAPSHOT=<dir>` makes a demo build save each settings page as a PNG and quit (`CWW_APP_SNAPSHOT_PAGES`, `CWW_APP_SNAPSHOT_THEME`; `main` is the Chat with Work window). WebKitGTK paints the pictures itself, so they work with the window on a hidden workspace. `main:/path` pictures the Chat with Work window on a server's page (`--server` a development server, `CWW_APP_SNAPSHOT_LOGIN=email:password` to sign in first, and `CWW_DEMO_DEVICE_ID` so the stand-in daemon is one of its computers), `probe:<file>` runs a script there and prints the title it leaves, and `shot:<name>` pictures that window as it is.
 
 ## Not done yet
 
-- The settings pages are not covered by automated UI tests; the egui app's snapshot tests went with it.
 - On macOS and Windows, losing the network while a page is open shows the web view's own error page until the window is reopened or moved; only Linux reports failed loads.

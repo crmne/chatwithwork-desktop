@@ -15,7 +15,7 @@ Options:
   --settings           Open the settings window instead of Chat with Work
   --scan               Open the scan window
   --page <name>        Open the settings window on a page: welcome, folders,
-                       privacy, activity, account, notifications, general
+                       browser, privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
   --server <url>       Show this Chat with Work server instead of the paired
                        one (for development)
@@ -25,9 +25,10 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 /// The settings pages, as the bundled pages name them.
-pub const PAGES: [&str; 7] = [
+pub const PAGES: [&str; 8] = [
     "welcome",
     "folders",
+    "browser",
     "privacy",
     "activity",
     "account",
@@ -137,6 +138,10 @@ mod tests {
         assert_eq!(login.open, Open::Nothing);
         assert_eq!(args(&["--settings"]).unwrap().open, Open::Settings(None));
         assert_eq!(args(&["--scan"]).unwrap().open, Open::Scan);
+        assert_eq!(
+            args(&["--page", "browser"]).unwrap().open,
+            Open::Settings(Some("browser"))
+        );
         assert_eq!(
             args(&["--page", "activity"]).unwrap().open,
             Open::Settings(Some("activity"))
