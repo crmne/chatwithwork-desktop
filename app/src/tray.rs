@@ -4,7 +4,8 @@
 //! more to say: indexing, or the last access), then Open Chat with Work,
 //! Scan…, Pause Sharing, Stop Using the Browser while the browser is on,
 //! Settings and Quit. Settings opens this computer's part of Chat with
-//! Work's own Settings once the computer is paired.
+//! Work's own Settings once the computer is paired and the Chat with Work
+//! window is signed in, else the app's own settings window.
 
 use tauri::AppHandle;
 use tauri::image::Image;
