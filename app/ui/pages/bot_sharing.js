@@ -22,7 +22,7 @@ async function change(app, request) {
 export function render(app) {
   const view = app.view("bot-sharing");
   const bot = app.context?.bot;
-  const page = h("div", { class: "page" }, pageHeader("Share this computer", bot
+  const page = h("div", { class: "page page--bot-sharing" }, pageHeader("Share this computer", bot
     ? `Choose what ${bot.name} can use. This computer asks before sharing more.`
     : "Open this from a bot’s computer integration."));
   if (!app.status) { append(page, agentMissing(app)); return page; }

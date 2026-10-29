@@ -180,6 +180,7 @@ code,
 }
 .embedded .nav { display: none; }
 .embedded .main { padding: 0 0.75rem 2rem 0; }
+.embedded .main:has(.page--bot-sharing) { padding: 1rem; }
 .embedded .page { max-inline-size: none; }
 .embedded .page__header h1 { font-size: 1rem; }
 
