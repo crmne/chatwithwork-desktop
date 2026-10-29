@@ -121,12 +121,35 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
     }
     if purge {
         let _ = crate::auth::logout(paths);
-        let app_data = desktop_app_data();
-        for dir in paths.all_dirs().into_iter().chain(app_data.as_deref()) {
-            if dir.exists() {
-                remove_dir_patiently(dir).with_context(|| format!("removing {}", dir.display()))?;
-                removed.push(dir.to_path_buf());
-            }
+        removed.extend(purge_files(paths, desktop_app_data().as_deref())?);
+    }
+    Ok(removed)
+}
+
+/// Deletes the agent's folders (keys, config, index, logs) and `app_data`,
+/// then their own emptied folder.
+fn purge_files(paths: &Paths, app_data: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for dir in paths.all_dirs().into_iter().chain(app_data) {
+        if dir.exists() {
+            remove_dir_patiently(dir).with_context(|| format!("removing {}", dir.display()))?;
+            removed.push(dir.to_path_buf());
+        }
+    }
+    // On Windows (and under CWW_HOME) the agent's folders sit in one of
+    // their own, `%LOCALAPPDATA%\cww`, left empty now: remove it too, only
+    // when it's named cww and empty. Elsewhere their parents are ~/.config
+    // and the like, which stay whatever they hold.
+    let mut parents: Vec<&Path> = paths
+        .all_dirs()
+        .into_iter()
+        .filter_map(Path::parent)
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "cww"))
+        .collect();
+    parents.dedup();
+    for parent in parents {
+        if std::fs::remove_dir(parent).is_ok() {
+            removed.push(parent.to_path_buf());
         }
     }
     Ok(removed)
@@ -624,6 +647,26 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_purge_leaves_no_folder_of_its_own_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&temp.path().join("cww"));
+        paths.ensure().unwrap();
+        std::fs::write(paths.config_dir.join("config.toml"), "x").unwrap();
+        let web = temp.path().join("com.chatwithwork.desktop");
+        std::fs::create_dir(&web).unwrap();
+        purge_files(&paths, Some(&web)).unwrap();
+        assert!(!temp.path().join("cww").exists());
+        assert!(!web.exists());
+        // A parent holding anything else stays.
+        let shared = temp.path().join("cww-shared").join("cww");
+        let paths = Paths::under(&shared);
+        paths.ensure().unwrap();
+        std::fs::write(shared.join("other"), "keep").unwrap();
+        purge_files(&paths, None).unwrap();
+        assert!(shared.join("other").exists());
+    }
 
     #[test]
     fn launchd_waits_until_the_old_registration_is_gone() {
