@@ -1970,8 +1970,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-dirs"
-version = "0.15.2"
-source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
+version = "0.15.3"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.3#a6a913933d89718f7e5880f0611b0504fa6a5d7d"
 dependencies = [
  "directories",
 ]
@@ -2010,8 +2010,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-update"
-version = "0.15.2"
-source = "git+https://github.com/crmne/fastframe?tag=v0.15.2#4d115b5e5838c207c0879205e6b1bc16fc1e9a9c"
+version = "0.15.3"
+source = "git+https://github.com/crmne/fastframe?tag=v0.15.3#a6a913933d89718f7e5880f0611b0504fa6a5d7d"
 dependencies = [
  "anyhow",
  "fastframe-dirs",
