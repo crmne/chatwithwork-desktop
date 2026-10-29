@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -220,6 +221,15 @@ cp "$TEST_RELEASE/$name" "$output"
         self.assertIn("releases/latest", row)
         self.assertIn("cww-installer.ps1", readme)
         self.assertIn("winget-pkgs/pull/460095", readme)
+
+    def test_readme_names_the_windows_that_runs_commands(self):
+        # Commands need a BaseContainer: Windows 11 24H2 with its August 2026
+        # update or later (docs/commands.md). Every mention says so.
+        readme = (ROOT / "README.md").read_text()
+        mentions = [m for m in re.finditer(r"Windows 11 24H2", readme)]
+        self.assertTrue(mentions)
+        for mention in mentions:
+            self.assertIn("August 2026 update", readme[mention.start():mention.start() + 80])
 
 if __name__ == "__main__":
     unittest.main()
