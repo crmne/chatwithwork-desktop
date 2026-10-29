@@ -1549,6 +1549,10 @@ impl ControlHandler for Daemon {
             }
             ControlRequest::SuggestedRoots => Ok(self.suggested_roots().await),
             ControlRequest::Chats => self.chat(|client| client.list()).await,
+            ControlRequest::SettingsContext { bot } => {
+                self.chat(move |client| client.settings_context(bot.as_deref()))
+                    .await
+            }
             ControlRequest::NotificationPreferences => {
                 self.chat(|client| client.notification_preferences()).await
             }

@@ -522,6 +522,10 @@ impl Demo {
         }
         match cmd {
             "status" => self.state.lock().expect("demo lock").status.clone(),
+            "settings_context" => {
+                json!({ "ok": true, "account": std::env::var("CWW_DEMO_ACCOUNT_ID").unwrap_or_else(|_| "123456789".into()), "device_id": std::env::var("CWW_DEMO_DEVICE_ID").unwrap_or_else(|_| "42".into()), "commands_allowed": false, "can_manage_policy": true,
+                "bot": request["bot"].as_str().map(|id| json!({ "id": id, "name": std::env::var("CWW_DEMO_BOT_NAME").unwrap_or_else(|_| "Issue fixer".into()) })) })
+            }
             "pause" | "resume" => {
                 let paused = cmd == "pause";
                 self.change(|s| {

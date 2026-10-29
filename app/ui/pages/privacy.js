@@ -3,7 +3,7 @@
 
 import { agentMissing, append, button, call, control, group, h, notice, pageHeader } from "../app.js";
 
-export const title = "Always Private";
+export const title = "Excluded files and folders";
 export const icon = "lock-simple";
 
 const patterns = (list, removed = false) =>
@@ -19,20 +19,20 @@ async function load(app) {
     view.error = error.message;
   }
   view.loading = false;
-  if (app.page === "privacy") app.render();
+  if (app.page === "privacy" || app.page === "folders") app.render();
 }
 
 // Reloaded on every visit and change: an edited config.toml can change it.
 export const enter = load;
 
 export function statusChanged(app) {
-  if (app.page === "privacy") load(app);
+  if (app.page === "privacy" || app.page === "folders") load(app);
 }
 
-export function render(app) {
+export function render(app, embedded = false) {
   const view = app.view("privacy");
   const page = h("div", { class: "page" },
-    pageHeader("Always Private", "These files are never shared, even inside a shared folder. Chat with Work can't change this list."));
+    embedded ? h("header", {}, h("h2", {}, "Excluded files and folders"), h("p", { class: "muted" }, "These files stay private, even inside a shared folder.")) : pageHeader("Excluded files and folders", "These files stay private, even inside a shared folder."));
   if (!app.status) {
     append(page, agentMissing(app));
     return page;

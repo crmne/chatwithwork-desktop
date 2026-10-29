@@ -147,12 +147,14 @@ enum BrowserCommand {
     Resume,
     /// Let a Chat with Work bot's chats use the browser, by the number in
     /// the bot's address in Chat with Work.
+    #[command(name = "share", alias = "lend")]
     Lend {
         bot: String,
         #[arg(long)]
         name: Option<String>,
     },
-    /// Stop lending the browser to a bot.
+    /// Stop sharing the browser with a bot.
+    #[command(name = "unshare", alias = "stop-lending")]
     StopLending { bot: String },
 }
 
@@ -207,10 +209,11 @@ enum RootsCommand {
     /// sandboxes. Sandboxed programs can then read the drive's own details,
     /// never what's in it. Asks for an administrator's approval.
     PrepareCommands,
-    /// Lend a shared folder to a Chat with Work bot, by the number in its
+    /// Share a folder with a Chat with Work bot, by the number in its
     /// address in Chat with Work: the bot's chats then reach this folder,
     /// as the folder allows. Each change and command asks you first, unless
     /// `--unattended` lets its commands here start without asking.
+    #[command(name = "share", alias = "lend")]
     Lend {
         root: String,
         bot: String,
@@ -222,7 +225,8 @@ enum RootsCommand {
         #[arg(long)]
         unattended: bool,
     },
-    /// Stop lending a shared folder to a bot.
+    /// Stop sharing a folder with a bot.
+    #[command(name = "unshare", alias = "stop-lending")]
     StopLending { root: String, bot: String },
     /// Set how many characters a chat may read from a shared folder in an
     /// hour, for a folder worked in a lot, such as code: from the budget
@@ -618,7 +622,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 cww::roots::set_bot(&mut config, &root, &bot, name.as_deref(), true, unattended)?;
             config.save(paths)?;
             println!(
-                "{} ({}) is lent to bot {bot}. {}",
+                "{} ({}) is shared with bot {bot}. {}",
                 root.label,
                 root.path.display(),
                 if unattended {
@@ -633,7 +637,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             let root = cww::roots::set_bot(&mut config, &root, &bot, None, false, false)?;
             config.save(paths)?;
             println!(
-                "{} ({}) isn't lent to bot {bot} now.",
+                "{} ({}) is no longer shared with bot {bot} now.",
                 root.label,
                 root.path.display()
             );
@@ -855,7 +859,7 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
         );
         for loan in r["bots"].as_array().cloned().unwrap_or_default() {
             println!(
-                "    lent to bot {}{}{}",
+                "    shared with bot {}{}{}",
                 str(&loan["id"]),
                 Some(str(&loan["name"]))
                     .filter(|n| !n.is_empty())

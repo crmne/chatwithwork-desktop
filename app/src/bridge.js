@@ -9,6 +9,15 @@
   const internals = window.__TAURI_INTERNALS__;
   if (!internals || typeof internals.invoke !== "function") return;
   const invoke = (command, args) => internals.invoke(command, args || {});
+  // This content belongs to a separate native webview. The proof stays in
+  // this main-frame closure; embedded frames cannot place a local pane.
+  const preferences = window.top === window ? Object.freeze({
+    present: (request) => invoke("settings_present", {
+      proof: __SETTINGS_PROOF__,
+      request: { ...request, viewport: { width: window.innerWidth, height: window.innerHeight } },
+    }),
+    hide: () => invoke("settings_hide", { proof: __SETTINGS_PROOF__ }),
+  }) : undefined;
 
   const change = (action, fields) => invoke("computer_change", { change: { action, ...fields } });
 
@@ -57,6 +66,7 @@
     openPreferences: (page) => invoke("open_preferences", page ? { page: String(page) } : {}),
     listen: () => invoke("listen"),
     computer,
+    preferences,
     scan,
     pendingScan,
   });

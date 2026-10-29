@@ -39,6 +39,7 @@ pub struct Desktop {
     quitting: AtomicBool,
     /// One of the app's questions to the person is showing (computer.rs).
     pub asking: crate::computer::Asking,
+    pub preferences: crate::preferences::Panels,
     /// What the web app's pages last heard of this computer, so an audit
     /// entry that changes nothing they see sends them nothing.
     computer_view: Mutex<Option<serde_json::Value>>,
@@ -74,7 +75,7 @@ impl Desktop {
         }
         let script = crate::computer::event(&view);
         let server = self.server();
-        for (label, window) in app.webview_windows() {
+        for (label, window) in app.webviews() {
             if windows::is_remote_label(&label) && window.url().is_ok_and(|url| server.owns(&url)) {
                 let _ = window.eval(&script);
             }
@@ -96,12 +97,12 @@ impl Desktop {
     /// Hands a loopback callback to the page that asked for it, if that
     /// window still shows a page of the server.
     pub fn deliver_callback(&self, label: &str, detail: serde_json::Value) {
-        let Some(window) = self.app().get_webview_window(label) else {
+        let Some(window) = self.app().get_webview(label) else {
             return;
         };
         if window.url().is_ok_and(|url| self.server().owns(&url)) {
             let _ = window.eval(crate::bridge::callback_event(&detail));
-            let _ = window.set_focus();
+            let _ = window.window().set_focus();
         }
     }
 
@@ -186,8 +187,8 @@ impl Desktop {
             }
             // The window's bridge script names its server, so the window is
             // made again for the new one.
-            if let Some(window) = app.get_webview_window(MAIN) {
-                let _ = window.destroy();
+            if let Some(window) = app.get_webview(MAIN) {
+                let _ = window.window().destroy();
                 let app = app.clone();
                 std::thread::spawn(move || {
                     let _ = windows::show_main(&app, None);
@@ -207,6 +208,8 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .windows([MAIN.to_string(), format!("{}*", windows::POPUP_PREFIX)])
             .permission("allow-open-external")
             .permission("allow-open-preferences")
+            .permission("allow-settings-present")
+            .permission("allow-settings-hide")
             .permission("allow-listen")
             .permission("allow-computer")
             .permission("allow-computer-change")
@@ -398,6 +401,7 @@ pub fn run(
         tray: Mutex::new(None),
         quitting: AtomicBool::new(false),
         asking: Default::default(),
+        preferences: Default::default(),
         computer_view: Mutex::new(None),
         updates: Arc::new(crate::update::Updates::new(update_checks, update_error)),
     });
@@ -450,6 +454,8 @@ pub fn run(
         .invoke_handler(tauri::generate_handler![
             crate::bridge::open_external,
             crate::bridge::open_preferences,
+            crate::preferences::settings_present,
+            crate::preferences::settings_hide,
             crate::bridge::listen,
             crate::bridge::computer,
             crate::bridge::computer_change,
@@ -522,6 +528,7 @@ pub fn run(
             let handle = app.handle().clone();
             let _ = desktop.app.set(handle.clone());
             add_remote_capability(&handle, &desktop.server())?;
+            crate::preferences::watch(handle.clone());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             match Tray::new(&handle, &TrayView::new(None)) {

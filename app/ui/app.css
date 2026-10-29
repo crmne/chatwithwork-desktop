@@ -173,6 +173,26 @@ code,
   padding: 2rem 2.5rem 4rem;
 }
 
+/* Same-window settings: the server owns navigation, this isolated native
+   webview owns every local field and scrolls within its allotted area. */
+.embedded .shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+.embedded .nav { display: none; }
+.embedded .main { padding: 0 0.75rem 2rem 0; }
+.embedded .page { max-inline-size: none; }
+.embedded .page__header h1 { font-size: 1rem; }
+
+.group__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-block-start: var(--hairline);
+}
+
 .page {
   display: flex;
   flex-direction: column;
@@ -950,3 +970,7 @@ body.offline {
   justify-content: center;
   margin-block: 0.5rem;
 }
+
+/* Links inside local explanatory text behave like the web Settings links. */
+.text-link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.embedded .page { gap: 1.25rem; }

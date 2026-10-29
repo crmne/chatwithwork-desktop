@@ -345,6 +345,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
         "/desktop/connector_handoff",
         "/desktop/memory_preference",
         "/desktop/memories/",
+        "/desktop/settings_context",
         "/desktop/notification_preferences",
         "/desktop/notification_browser_link",
     ]
@@ -421,6 +422,19 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
         || claims["ath"] != ath
     {
         return (401, json!({ "error": "invalid_token" }));
+    }
+    if method == "GET" && path.starts_with("/desktop/settings_context") {
+        return match path {
+            "/desktop/settings_context" => (
+                200,
+                json!({"account":"1000001","device_id":"device-42","commands_allowed":false}),
+            ),
+            "/desktop/settings_context?bot=42" => (
+                200,
+                json!({"account":"1000001","device_id":"device-42","commands_allowed":false,"bot":{"id":42,"name":"Issue fixer"}}),
+            ),
+            _ => (403, json!({"error":"forbidden"})),
+        };
     }
     let approve_url = format!("{origin}/1000001/settings?tab=connectors#computers");
     if path == "/desktop/chat_access_request" {
@@ -2464,6 +2478,40 @@ async fn relays_chats_for_the_terminal() {
         .expect("the daemon connects")
         .unwrap();
     let chats = Chats::new(&fx.paths.socket_path());
+
+    // Computer settings authenticate as the device without enabling chat access.
+    let socket = fx.paths.socket_path();
+    let contexts = tokio::task::spawn_blocking(move || {
+        let mut client = cww::control::Client::connect(&socket).unwrap().unwrap();
+        let plain = client
+            .call(&cww::control::ControlRequest::SettingsContext { bot: None })
+            .unwrap();
+        let bot = client
+            .call(&cww::control::ControlRequest::SettingsContext {
+                bot: Some("42".into()),
+            })
+            .unwrap();
+        assert!(
+            client
+                .call(&cww::control::ControlRequest::SettingsContext {
+                    bot: Some("43".into())
+                })
+                .is_err()
+        );
+        assert!(
+            client
+                .call(&cww::control::ControlRequest::SettingsContext {
+                    bot: Some("../chats".into())
+                })
+                .is_err()
+        );
+        (plain, bot)
+    })
+    .await
+    .unwrap();
+    assert_eq!(contexts.0["account"], "1000001");
+    assert_eq!(contexts.1["bot"]["id"], 42);
+    assert!(!server.state.lock().unwrap().chat_access);
 
     // Not allowed yet: the TUI learns why and where to allow it.
     let c = chats.clone();

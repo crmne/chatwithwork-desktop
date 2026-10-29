@@ -10,7 +10,6 @@ use crate::desktop::Desktop;
 use crate::policy::{self, Decision};
 
 pub const MAIN: &str = "main";
-pub const SETTINGS: &str = "settings";
 /// The bundled scan page (scan.rs).
 pub const SCAN: &str = "scan";
 /// Windows the web app opens for itself (`target="_blank"` on its own pages).
@@ -32,6 +31,10 @@ pub fn is_local_url(url: &Url) -> bool {
     }
 }
 
+pub fn is_settings_shell(url: &Url) -> bool {
+    is_local_url(url) && url.path() == format!("/{}", crate::preferences::SHELL)
+}
+
 /// Opens `url` in the default browser or mail app, if it may go there.
 pub fn open_externally(url: &Url) {
     if policy::openable_externally(url)
@@ -41,7 +44,7 @@ pub fn open_externally(url: &Url) {
     }
 }
 
-fn bring_forward(window: &WebviewWindow) {
+fn bring_forward(window: &tauri::Window) {
     #[cfg(target_os = "macos")]
     {
         let _ = window
@@ -56,18 +59,23 @@ fn bring_forward(window: &WebviewWindow) {
 /// Shows the web app, at `url` or where it was (its start page when it
 /// opens).
 pub fn show_main(app: &AppHandle, url: Option<Url>) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(MAIN) {
+    if let Some(window) = app.get_webview(MAIN) {
         if let Some(url) = url {
             navigate_main(app, url)?;
+        } else if window.url().is_ok_and(|url| is_settings_shell(&url)) {
+            let desktop = app.state::<std::sync::Arc<Desktop>>();
+            navigate_main(app, desktop.server().start_url())?;
+        } else {
+            crate::preferences::hide(app, MAIN);
         }
-        bring_forward(&window);
+        bring_forward(&window.window());
         return Ok(());
     }
     let desktop = app.state::<std::sync::Arc<Desktop>>();
     let url = url.unwrap_or_else(|| desktop.server().start_url());
     navigate_main(app, url)?;
-    if let Some(window) = app.get_webview_window(MAIN) {
-        bring_forward(&window);
+    if let Some(window) = app.get_webview(MAIN) {
+        bring_forward(&window.window());
     }
     Ok(())
 }
@@ -90,7 +98,8 @@ pub fn navigate_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
 /// Takes the Chat with Work window to `url` without checking the server,
 /// making the window if it isn't open.
 pub fn go_main(app: &AppHandle, url: Url) -> tauri::Result<()> {
-    match app.get_webview_window(MAIN) {
+    crate::preferences::close(app, MAIN);
+    match app.get_webview(MAIN) {
         Some(window) => window.navigate(url),
         None => remote_window(app, MAIN, url).map(drop),
     }
@@ -119,23 +128,27 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
     // report the same one (WebView2 reports a stopped load as finished).
     let handed_off: std::sync::Mutex<Option<Url>> = std::sync::Mutex::new(None);
     let new_window = desktop.clone();
-    let webview_url = if crate::offline::is_page(&url) {
-        WebviewUrl::App(crate::offline::PAGE.into())
+    let webview_url = if crate::offline::is_page(&url) || is_settings_shell(&url) {
+        WebviewUrl::App(url.path().trim_start_matches('/').into())
     } else {
         WebviewUrl::External(url)
     };
     let window = WebviewWindowBuilder::new(app, label, webview_url)
         .title("Chat with Work")
         .inner_size(1200.0, 820.0)
+        .resizable(!snapshots())
         .min_inner_size(380.0, 480.0)
         .user_agent(&crate::user_agent::user_agent(env!("CARGO_PKG_VERSION")))
-        .initialization_script(crate::bridge::script(&server))
+        .initialization_script(crate::bridge::script(
+            &server,
+            &desktop.preferences.register(label),
+        ))
         // Files dropped on the window go to the page as an HTML drop, so the
         // composer takes them as uploads, as in a browser.
         .disable_drag_drop_handler()
         .zoom_hotkeys_enabled(true)
         .on_navigation(move |url| {
-            if crate::offline::is_page(url) {
+            if crate::offline::is_page(url) || is_settings_shell(url) {
                 return true;
             }
             match policy::navigation(&navigation.server(), url) {
@@ -148,7 +161,10 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
             }
         })
         .on_page_load(move |window, payload| {
-            if crate::offline::is_page(payload.url()) {
+            if payload.event() == PageLoadEvent::Started && !is_settings_shell(payload.url()) {
+                crate::preferences::close(window.app_handle(), window.label());
+            }
+            if crate::offline::is_page(payload.url()) || is_settings_shell(payload.url()) {
                 return;
             }
             let decision = policy::top_level(&page_load.server(), payload.url());
@@ -233,7 +249,7 @@ fn watch_failed_loads(window: &WebviewWindow, desktop: std::sync::Arc<Desktop>) 
                         return;
                     }
                     desktop.set_wanted(url);
-                    if let Some(window) = app.get_webview_window(MAIN) {
+                    if let Some(window) = app.get_webview(MAIN) {
                         let _ = window.navigate(local_url(crate::offline::PAGE));
                     }
                 });
@@ -249,13 +265,18 @@ fn watch_failed_loads(window: &WebviewWindow, desktop: std::sync::Arc<Desktop>) 
 /// the page's own `window.cwwEvent` rather than Tauri's event system, so the
 /// pages need no core permissions at all.
 pub fn tell_settings(app: &AppHandle, event: &str, payload: impl serde::Serialize) {
-    tell_window(app, SETTINGS, event, payload);
+    let payload = serde_json::to_value(payload).unwrap_or_default();
+    for (label, _) in app.webviews() {
+        if crate::preferences::is_child(&label) {
+            tell_window(app, &label, event, &payload);
+        }
+    }
 }
 
 /// Hands an event to a bundled page in the window `label`, if it's open on
 /// one.
 pub fn tell_window(app: &AppHandle, label: &str, event: &str, payload: impl serde::Serialize) {
-    let Some(window) = app.get_webview_window(label) else {
+    let Some(window) = app.get_webview(label) else {
         return;
     };
     if !window.url().is_ok_and(|url| is_local_url(&url)) {
@@ -280,7 +301,7 @@ pub const COMPUTER_SETTINGS: &str = "/settings?tab=computer";
 
 /// Settings, from the tray: once the computer is paired and the Chat with
 /// Work window is signed in, Chat with Work's Settings on This computer
-/// there; otherwise the app's own settings window, which shares folders,
+/// there; otherwise the app-owned settings in the same window, which shares folders,
 /// pairs and disconnects without signing in. Pairing approves the computer
 /// in the browser, which signs nobody in to the window, so This computer
 /// would only have asked to sign in again. Call it off the main thread:
@@ -309,7 +330,7 @@ enum ComputerSettings {
 /// server signs the desktop in with "remember me", whose cookie outlives
 /// the window. No window, or cookies it can't read, count as signed out.
 fn signed_in(app: &AppHandle, url: &tauri::Url) -> bool {
-    app.get_webview_window(MAIN)
+    app.get_webview(MAIN)
         .and_then(|window| window.cookies_for_url(url.clone()).ok())
         .is_some_and(|cookies| signs_in(cookies.iter().map(|cookie| cookie.name())))
 }
@@ -327,48 +348,16 @@ fn computer_settings(paired: bool, signed_in: bool) -> ComputerSettings {
     }
 }
 
-/// Shows the settings window, on `page` or where it was.
+/// Shows the local settings pane, on `page` or where it was.
 pub fn show_settings(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(SETTINGS) {
-        if let Some(page) = page {
-            tell_settings(app, "navigate", page);
-        }
-        bring_forward(&window);
-        return Ok(());
-    }
-    let path = match page {
-        Some(page) => format!("index.html#{page}"),
-        None => "index.html".to_string(),
-    };
-    // A fixed size for pictures, which tiling compositors leave floating.
-    let fixed = snapshots();
-    let window = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(path.into()))
-        .title("Chat with Work Desktop Settings")
-        .inner_size(920.0, 660.0)
-        .resizable(!fixed)
-        .min_inner_size(560.0, 420.0)
-        .zoom_hotkeys_enabled(true)
-        .on_navigation(|url| {
-            if is_local_url(url) || matches!(url.scheme(), "about" | "data" | "blob") {
-                return true;
-            }
-            open_externally(url);
-            false
-        })
-        .on_new_window(|url, _| {
-            open_externally(&url);
-            NewWindowResponse::Deny
-        })
-        .build()?;
-    bring_forward(&window);
-    Ok(())
+    crate::preferences::standalone(app, page.unwrap_or("folders"))
 }
 
 /// Shows the scan window. Closing it deletes the pages not sent and stops
 /// the scanner's helper.
 pub fn show_scan(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(SCAN) {
-        bring_forward(&window);
+    if app.get_webview_window(SCAN).is_some() {
+        bring_forward(&app.get_window(SCAN).expect("scan window"));
         return Ok(());
     }
     let fixed = snapshots();
@@ -396,7 +385,7 @@ pub fn show_scan(app: &AppHandle) -> tauri::Result<()> {
             std::thread::spawn(move || scans.close(&desktop.paths));
         }
     });
-    bring_forward(&window);
+    bring_forward(&app.get_window(SCAN).expect("scan window"));
     Ok(())
 }
 
@@ -426,7 +415,7 @@ fn snapshot_theme() -> Option<tauri::Theme> {
 /// Whether any window is open: for macOS's Dock icon, and what an update
 /// relaunches with.
 pub fn any_open(app: &AppHandle) -> bool {
-    !app.webview_windows().is_empty()
+    !app.windows().is_empty()
 }
 
 #[cfg(test)]
@@ -468,7 +457,7 @@ mod tests {
     fn only_the_web_apps_windows_are_remote() {
         assert!(is_remote_label(MAIN));
         assert!(is_remote_label("page-3"));
-        assert!(!is_remote_label(SETTINGS));
+        assert!(!is_remote_label("settings"));
     }
 
     #[test]

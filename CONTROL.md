@@ -112,7 +112,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `roots[].index` is `pending`, `indexing`, `ready`, `error` or `disabled`. During the first pass, `indexed_files` counts files seen so far. `available` is false when the folder is missing, for example on an unmounted drive.
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
-- `bots` lists the Chat with Work bots the folder is lent to (see `roots_bot`), empty when none.
+- `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
 - `read_budget` is there when the folder has a read budget of its own (see `roots_read_budget`): the characters a chat may read from it per rolling hour.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
 
@@ -250,11 +250,11 @@ Answers with the updated `root` and writes a `root_read_budget_set` audit entry;
 {"cmd": "roots_bot", "root": "app", "bot": "42", "name": "Issue fixer", "lent": true, "unattended": false}
 ```
 
-Lends a shared folder to a Chat with Work bot (`lent: true`), or stops lending it (`false`), and says whether the bot's commands there may start without a person approving each one (`unattended`). `bot` is the bot's ID, the number in its address in Chat with Work (`/bots/42`); `name` is shown only here, to recognize it, and is kept when left out. Lending again replaces the loan, so the same request changes `unattended`. `unattended: true` is refused where the folder doesn't allow commands. While a folder is lent to a bot, that bot's chats reach it as the folder allows (PROTOCOL.md 7.2.1), and no other folder: reads, changes where changes are allowed, and commands where commands are allowed, each change and command approved in Chat with Work unless the bot's own policy there, and for commands this loan, let it run. Clients should say that, and ask, before lending a folder or turning `unattended` on; stopping needs no question, and takes effect at the next call. Only this channel and `config.toml` can change it, never the server.
+Shares a folder with a Chat with Work bot (`lent: true`), or stops sharing it (`false`), and says whether the bot's commands there may start without a person approving each one (`unattended`). `bot` is the bot's ID, the number in its address in Chat with Work (`/bots/42`); `name` is shown only here, to recognize it, and is kept when left out. Sharing again replaces the grant, so the same request changes `unattended`. `unattended: true` is refused where the folder doesn't allow commands. While a folder is shared with a bot, that bot's chats reach it as the folder allows (PROTOCOL.md 7.2.1), and no other folder: reads, changes where changes are allowed, and commands where commands are allowed, each change and command approved in Chat with Work unless the bot's own policy there, and for commands this loan, let it run. Clients should say that, and ask, before sharing a folder or turning `unattended` on; stopping needs no question, and takes effect at the next call. Only this channel and `config.toml` can change it, never the server.
 
-Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots lend <root> <bot> [--name <name>] [--unattended]` and `cww roots stop-lending <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
+Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots share <root> <bot> [--name <name>] [--unattended]` and `cww roots unshare <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
 
-The desktop app doesn't show loans yet. Its settings page is to list each shared folder's loans with a switch for unattended commands per bot, and let the owner lend a folder to a bot by its ID (the bot's page in Chat with Work shows it, with the command to type here).
+The desktop app lists these grants in Shared folders. Selection and unattended command controls live in the bot’s computer integration, in an app-owned settings pane; native confirmation is required to widen access. The old `lend` and `stop-lending` CLI names remain hidden aliases.
 
 ### Browser
 
@@ -278,9 +278,9 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 | `{"cmd": "browser_changes", "changes": true}` | Also offers the tools that act on pages (open, click, type, choose, close, save files), or only the reads. Clients should say what that means, and ask, before turning it on; turning it off needs no question. Reconnects for a new tool list. Writes `browser_changes_allowed` or `browser_changes_stopped`. |
 | `{"cmd": "browser_site", "site": "github.com", "allowed": true}` | Allows a site, or stops allowing it: a host (it and its subdomains, over HTTPS) or an origin (`http://localhost:3000`, exactly). Refused for anything else. Writes `browser_site_allowed` or `browser_site_removed` with the site. |
 | `{"cmd": "browser_stopped", "stopped": true}` | The kill switch: every browser call is refused (`browser_stopped`) and the extension detaches from its tabs at once, until `false`. Pausing the computer does the same. Writes `browser_stopped` or `browser_resumed`. |
-| `{"cmd": "browser_bot", "bot": "42", "name": "Researcher", "lent": true}` | Lends the browser to a bot (its chats may use it on the same sites, each change still approved in Chat with Work), or stops. Writes `browser_bot_lent` or `browser_bot_withdrawn`. |
+| `{"cmd": "browser_bot", "bot": "42", "name": "Researcher", "lent": true}` | Shares the browser with a bot (its chats may use it on the same sites, each change still approved in Chat with Work), or stops. Writes `browser_bot_lent` or `browser_bot_withdrawn`. |
 
-Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|stop|resume|lend|stop-lending|status` edit `config.toml` the same way and send `reload`.
+Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|stop|resume|share|unshare|status` edit `config.toml` the same way and send `reload`.
 
 **`browser_attach`** is for the native messaging host only (`cww` started by the browser with the extension's origin as its argument):
 
@@ -764,3 +764,7 @@ include `account`, the displayed nine-digit organization ID. They return the
 refreshed page and notice, or a confirmed own departure with account, `left: true`
 and notice. Only the server decides permissions and applies membership,
 invitation, revocation and organization-policy changes.
+
+### Settings context
+
+`{"cmd":"settings_context","bot":"42"}` reads the paired account, device ID and organization command policy through `/desktop/settings_context`. `bot` is optional; when present the server must verify a visible shared bot and its existing computer integration owned by this device’s person. This read does not require model consent and cannot grant access. It is for the native app’s mounting/authorization check, never in the local page’s generic control allow-list. A revoked device or unavailable server fails closed.

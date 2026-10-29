@@ -9,6 +9,8 @@ const COMMANDS: &[&str] = &[
     // The bridge, for the web app's pages (bridge.rs).
     "open_external",
     "open_preferences",
+    "settings_present",
+    "settings_hide",
     "listen",
     "computer",
     "computer_change",

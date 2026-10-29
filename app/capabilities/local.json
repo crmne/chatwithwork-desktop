@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "local",
-  "description": "The bundled settings pages in the settings window: the daemon through local.rs's allow-list, pairing, folders and the app's settings, with events from the app delivered into the page (windows::tell_settings), so no core permissions. Pages from the network never get this: it names no remote URL.",
-  "windows": ["settings"],
+  "description": "The bundled settings pages in app-owned child webviews: the daemon through local.rs's allow-list, pairing, folders and the app's settings, with events from the app delivered into the page (windows::tell_settings), so no core permissions. Pages from the network never get this: it names no remote URL or parent window.",
+  "webviews": ["computer-pane-main", "computer-pane-page-*"],
   "local": true,
   "permissions": [
     "allow-control",

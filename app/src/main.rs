@@ -44,6 +44,7 @@ mod offline;
 mod pairing;
 mod paths;
 mod policy;
+mod preferences;
 mod scan;
 mod server;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "demo"))]

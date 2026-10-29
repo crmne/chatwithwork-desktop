@@ -5,7 +5,7 @@
 
 import { agentMissing, append, button, call, control, group, h, notice, pageHeader, section, switchInput } from "../app.js";
 
-export const title = "Your Browser";
+export const title = "Browser";
 export const icon = "browser";
 
 const EXTENSION_URL = "https://github.com/crmne/chatwithwork-desktop/tree/main/browser#readme";
@@ -94,61 +94,16 @@ function sites(app, browser) {
 }
 
 function bots(app, browser) {
-  const view = app.view("browser");
-  const lending = view.lending;
-  const loanName = (loan) => loan.name || `Bot ${loan.id}`;
-  const rows = [
-    h("div", { class: "row" },
-      h("div", { class: "row__body" },
-        h("h3", {}, "Lent to bots"),
-        h("p", {}, browser.bots.length
-          ? "These Chat with Work bots can use your browser too, on the same sites, each change asking in Chat with Work."
-          : "A Chat with Work bot uses your browser only if you lend it here.")),
-      !lending ? h("div", { class: "row__actions" }, button("Lend to a Bot…", () => {
-        view.lending = { bot: "", name: "" };
-        app.render();
-      }, { disabled: view.busy })) : null),
-    ...browser.bots.map((loan) =>
-      h("div", { class: "row" },
-        h("div", { class: "row__body" }, h("h3", {}, loanName(loan)), h("span", { class: "micro" }, `Bot ${loan.id}`)),
-        h("div", { class: "row__actions" },
-          button("Stop Lending", () => change(app, { cmd: "browser_bot", bot: loan.id, lent: false }),
-            { kind: "btn-subtle-negative", disabled: view.busy })))),
-  ];
-  if (lending) {
-    const id = lending.bot.trim();
-    const valid = /^[0-9]{1,20}$/.test(id);
-    rows.push(h("form", { class: "confirm", onsubmit: (event) => {
-      event.preventDefault();
-      if (!valid) return;
-      view.lending = null;
-      change(app, { cmd: "browser_bot", bot: id, name: lending.name.trim() || undefined, lent: true });
-    } },
-      h("div", { class: "inline" },
-        h("input", { class: "input", inputMode: "numeric", placeholder: "Bot ID, like 42", "aria-label": "Bot ID",
-          value: lending.bot, "data-key": "browser-bot-id", oninput: (event) => {
-            const was = /^[0-9]{1,20}$/.test(lending.bot.trim());
-            lending.bot = event.target.value;
-            if (was !== /^[0-9]{1,20}$/.test(lending.bot.trim())) app.render();
-          } }),
-        h("input", { class: "input", placeholder: "Name, to recognize it (optional)", "aria-label": "Bot name", maxLength: 80,
-          value: lending.name, "data-key": "browser-bot-name", oninput: (event) => (lending.name = event.target.value) })),
-      h("p", { class: "note" }, "The bot's ID is the number in its address in Chat with Work (/bots/42)."),
-      h("p", {}, "Lend your browser to this bot? Its chats can read, and if you allow actions act, in the browser's “Chat with Work” tab group, on the sites above, with your sign-ins there. Each action asks in Chat with Work first."),
-      h("div", { class: "inline" },
-        button("Cancel", () => {
-          view.lending = null;
-          app.render();
-        }),
-        h("button", { type: "submit", class: "btn btn-primary", disabled: !valid }, "Lend Browser"))));
-  }
-  return section("Bots", null, group(...rows));
+  return section("Shared with bots", null, group(h("div", { class: "row" },
+    h("div", { class: "row__body" },
+      h("p", {}, browser.bots.length ? browser.bots.map(bot => bot.name || `Bot ${bot.id}`).join(", ") : "No bots use this browser."),
+      h("p", { class: "note" }, "Choose browser access in each bot’s settings. Site restrictions and approval requirements still apply.")))));
 }
 
 export function render(app) {
   const view = app.view("browser");
   const page = h("div", { class: "page" },
-    pageHeader("Your Browser", "With the Chat with Work extension, Chat with Work can use your own Chrome, Edge, Brave or Chromium, with your sign-ins, only in its own “Chat with Work” tab group and only on the sites you allow here."));
+    pageHeader("Browser", "With the Chat with Work extension, Chat with Work can use your own Chrome, Edge, Brave or Chromium, with your sign-ins, only in its own “Chat with Work” tab group and only on the sites you allow here."));
   const status = app.status;
   if (!status) {
     append(page, agentMissing(app));

@@ -33,7 +33,7 @@ use crate::server::Server;
 
 /// The script every page of the main window runs before its own. It does
 /// nothing on pages from anywhere else.
-pub fn script(server: &Server) -> String {
+pub fn script(server: &Server, proof: &str) -> String {
     const TEMPLATE: &str = include_str!("bridge.js");
     TEMPLATE
         .replace("__ORIGIN__", &json!(server.origin()).to_string())
@@ -42,6 +42,7 @@ pub fn script(server: &Server) -> String {
             &json!(crate::user_agent::COMPONENTS).to_string(),
         )
         .replace("__VERSION__", &json!(env!("CARGO_PKG_VERSION")).to_string())
+        .replace("__SETTINGS_PROOF__", &json!(proof).to_string())
 }
 
 /// The caller's page, if it is the server's and in one of the web app's
@@ -141,7 +142,7 @@ pub async fn computer_add_folder(
 ) -> Result<Value, String> {
     server_page(&desktop, &webview)?;
     let desktop = desktop.inner().clone();
-    let parent = app.get_webview_window(webview.label());
+    let parent = app.get_window(webview.window().label());
     tauri::async_runtime::spawn_blocking(move || {
         let Some(_asking) = desktop.asking.start() else {
             return Err("Answer the question Chat with Work Desktop is asking first.".to_string());
@@ -306,7 +307,7 @@ fn show_page_dialog(app: &AppHandle, label: &str, title: &str, dialog: &PageDial
         .title(title)
         .kind(kind)
         .buttons(buttons);
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = app.get_window(label) {
         message = message.parent(&window);
     }
     message.blocking_show() || dialog.kind == PageDialogKind::Alert
@@ -315,7 +316,7 @@ fn show_page_dialog(app: &AppHandle, label: &str, title: &str, dialog: &PageDial
 /// Asks the person in a dialog the app draws, over the page's window.
 /// Demo builds can answer it for pictures and checks
 /// (`CWW_DEMO_CONFIRM=yes|no`); real builds always ask.
-fn confirm(app: &AppHandle, label: &str, question: &crate::computer::Question) -> bool {
+pub(crate) fn confirm(app: &AppHandle, label: &str, question: &crate::computer::Question) -> bool {
     #[cfg(feature = "demo")]
     if let Ok(answer) = std::env::var("CWW_DEMO_CONFIRM") {
         return answer == "yes";
@@ -330,16 +331,13 @@ fn confirm(app: &AppHandle, label: &str, question: &crate::computer::Question) -
             question.yes.clone(),
             "Cancel".into(),
         ));
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = app.get_window(label) {
         dialog = dialog.parent(&window);
     }
     dialog.blocking_show()
 }
 
-fn pick_folder(
-    app: &AppHandle,
-    parent: Option<&tauri::WebviewWindow>,
-) -> Option<std::path::PathBuf> {
+fn pick_folder(app: &AppHandle, parent: Option<&tauri::Window>) -> Option<std::path::PathBuf> {
     #[cfg(feature = "demo")]
     if let Some(path) = std::env::var_os("CWW_DEMO_PICK_FOLDER") {
         return Some(path.into());
@@ -444,7 +442,10 @@ mod tests {
 
     #[test]
     fn the_script_names_only_its_server_and_escapes_what_it_inlines() {
-        let script = script(&Server::parse("https://work.example").unwrap());
+        let script = script(
+            &Server::parse("https://work.example").unwrap(),
+            "test-proof",
+        );
         assert!(script.contains(r#"const ORIGIN = "https://work.example";"#));
         assert!(script.contains(r#""auth-session""#));
         assert!(!script.contains("__ORIGIN__") && !script.contains("__COMPONENTS__"));

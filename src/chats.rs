@@ -355,6 +355,14 @@ impl ChatClient {
         self.call("GET", "desktop/chats", Body::Empty)
     }
 
+    pub fn settings_context(&self, bot: Option<&str>) -> Result<Value> {
+        let path = match bot {
+            Some(bot) => format!("desktop/settings_context?bot={}", chat_number(bot)?),
+            None => "desktop/settings_context".into(),
+        };
+        self.call("GET", &path, Body::Empty)
+    }
+
     pub fn workspace(&self, project: Option<u64>) -> Result<Value> {
         self.call("GET", &workspace_path("new_chat", project), Body::Empty)
     }

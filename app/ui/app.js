@@ -11,9 +11,10 @@ import activity from "./pages/activity.js";
 import account from "./pages/account.js";
 import notifications from "./pages/notifications.js";
 import general from "./pages/general.js";
+import botSharing from "./pages/bot_sharing.js";
 
-const PAGES = { welcome, folders, browser, privacy, activity, account, notifications, general };
-const NAV = ["folders", "browser", "privacy", "activity", "account", "notifications", "general"];
+const PAGES = { welcome, folders, browser, privacy, activity, account, notifications, general, "bot-sharing": botSharing };
+const NAV = ["folders", "browser", "general", "notifications", "account", "activity"];
 
 // The app's commands. A refusal comes back as { code, message }.
 const internals = window.__TAURI_INTERNALS__;
@@ -143,6 +144,8 @@ export function agentMissing(app) {
 
 const app = {
   info: {},
+  context: {},
+  embedded: false,
   // The daemon's status (null while it isn't running), whether the app has
   // heard from it yet, and its health as the tray words it.
   status: null,
@@ -157,6 +160,7 @@ const app = {
     return (this.views[name] ||= {});
   },
   go(page) {
+    if (page === "privacy") page = "folders";
     if (!PAGES[page]) page = "folders";
     if (this.page !== page) {
       this.page = page;
@@ -189,6 +193,7 @@ const app = {
 };
 
 function renderNav() {
+  if (app.embedded) return;
   const nav = document.getElementById("nav");
   nav.replaceChildren(
     h("div", { class: "nav__brand" }, h("img", { src: "mark.svg", alt: "" }), "Chat with Work"),
@@ -224,6 +229,22 @@ async function start() {
   });
   await on("navigate", (page) => app.go(page));
   for (const page of Object.values(PAGES)) await page.listen?.(app, on);
+  const present = (presentation) => {
+    app.embedded = true;
+    document.documentElement.classList.add("embedded");
+    document.documentElement.style.colorScheme = presentation.theme;
+    const context = presentation.context || {};
+    const changed = JSON.stringify(context) !== JSON.stringify(app.context);
+    app.context = context;
+    if (app.page !== presentation.page) app.go(presentation.page);
+    else if (changed) app.render();
+  };
+  await on("presentation", present);
+  await on("context", (context) => { app.context = context; app.render(); });
+  if (window.CWW_SETTINGS_PANE) {
+    present(window.CWW_SETTINGS_PANE);
+    return;
+  }
   const wanted = location.hash.slice(1);
   app.go(PAGES[wanted] ? wanted : app.info.onboarded ? "folders" : "welcome");
 }

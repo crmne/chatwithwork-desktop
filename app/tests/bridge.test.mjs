@@ -10,10 +10,11 @@ const ORIGIN = "https://work.example";
 const template = readFileSync(new URL("../src/bridge.js", import.meta.url), "utf8")
   .replace("__ORIGIN__", JSON.stringify(ORIGIN))
   .replace("__COMPONENTS__", JSON.stringify(["external", "computer"]))
-  .replace("__VERSION__", JSON.stringify("0.0.0"));
+  .replace("__VERSION__", JSON.stringify("0.0.0"))
+  .replaceAll("__SETTINGS_PROOF__", JSON.stringify("test-proof"));
 
 // A page at `origin` whose app answers each invoke with `answer(command, args)`.
-function page({ origin = ORIGIN, answer = () => true } = {}) {
+function page({ origin = ORIGIN, answer = () => true, frame = false } = {}) {
   const calls = [];
   const listeners = {};
   const on = (target) => (type, listener) => (listeners[`${target}:${type}`] ||= []).push(listener);
@@ -29,6 +30,8 @@ function page({ origin = ORIGIN, answer = () => true } = {}) {
     },
     addEventListener: on("window"),
   };
+  window.top = frame ? {} : window;
+  window.innerWidth = 1000; window.innerHeight = 800;
   // The dialog plugin's, which these pages may not call.
   window.alert = () => assert.fail("the plugin's alert ran");
   window.confirm = () => assert.fail("the plugin's confirm ran");
@@ -153,4 +156,14 @@ test("no pending scan, no file", async () => {
   const { window, calls } = page({ answer: () => null });
   assert.equal(await window.ChatWithWorkDesktop.pendingScan(), null);
   assert.deepEqual(calls.map(({ command }) => command), ["scan_pending"]);
+});
+
+
+test("only the top frame gets placement, with app-supplied proof and actual viewport", async () => {
+  const {window, calls} = page();
+  await window.ChatWithWorkDesktop.preferences.present({page:"folders",bounds:{x:200,y:90,width:700,height:600},theme:"light",viewport:{width:1,height:1}});
+  assert.equal(calls[0].command, "settings_present");
+  assert.equal(calls[0].args.proof, "test-proof");
+  assert.deepEqual(calls[0].args.request.viewport, {width:1000,height:800});
+  assert.equal(page({frame:true}).window.ChatWithWorkDesktop.preferences, undefined);
 });

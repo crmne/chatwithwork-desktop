@@ -1,9 +1,11 @@
 // Shared folders: add with the native picker, rename, remove, allow changes
 // and commands, and see each folder's index state.
 
+import privacy from "./privacy.js";
+
 import { agentMissing, append, button, call, control, group, h, notice, pageHeader, switchInput, thousands } from "../app.js";
 
-export const title = "Shared Folders";
+export const title = "Shared folders";
 export const icon = "folder-simple";
 
 // The index state of a folder, as a label and a tone.
@@ -89,6 +91,7 @@ async function change(app, id, request) {
 }
 
 export function enter(app) {
+  privacy.enter(app);
   const view = app.view("folders");
   documentsToOffer(app).then((documents) => {
     view.documents = documents;
@@ -126,7 +129,7 @@ function folderRow(app, root) {
           app.render();
           document.querySelector(`[data-key="rename-${CSS.escape(root.id)}"]`)?.select();
         }, { disabled: busy }),
-        button("Remove…", () => {
+        button("Stop sharing…", () => {
           view.removing = root.id;
           view.renaming = null;
           app.render();
@@ -160,7 +163,7 @@ function folderRow(app, root) {
           view.removing = null;
           app.render();
         }),
-        button("Stop Sharing", () => {
+        button("Stop sharing", () => {
           view.removing = null;
           change(app, root.id, { cmd: "roots_remove", root: root.id });
         }, { kind: "btn-subtle-negative" }))) : null,
@@ -168,8 +171,8 @@ function folderRow(app, root) {
     h("div", { class: "group group--sunken" },
       // Allow changes: on asks first, off is at once.
       setting("Allow changes", root.writable
-        ? "Chat with Work can create, edit, move and delete files here, each after you approve it. Old versions and deleted files go to the trash."
-        : "Read-only. Turn on to let Chat with Work create, edit, move and delete files here, each after you approve it.",
+        ? "File changes ask for approval. Old versions stay in Trash."
+        : "Read only. Turn on to allow approved file changes.",
       switchInput(root.writable || allowing, (on) => {
         if (on) {
           view.allowing = root.id;
@@ -194,10 +197,11 @@ function folderRow(app, root) {
       // Run commands: only where changes are allowed, and on Windows only
       // where the daemon says this Windows can. A folder that allows them
       // keeps its switch even then, so they can be turned off.
+      !root.writable ? setting("Run commands", "Allow changes first to run code, tests or builds here.", null) : null,
       root.writable && !runsCommands && !root.allows_commands ? setting("Run commands", commandsUnavailable(app), null) : null,
       root.writable && (runsCommands || root.allows_commands) ? setting("Run commands", root.allows_commands
-        ? "Chat with Work can run commands here, like tests or a build, in a sandbox that can change only this folder. Each is approved in Chat with Work, unless a chat allows everything."
-        : "Turn on to let Chat with Work run commands here, like tests or a build. Each is approved in Chat with Work, unless a chat allows everything.",
+        ? "Runs approved commands in this folder’s sandbox."
+        : "Run code, tests or builds in this folder’s sandbox.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
           view.commanding = root.id;
@@ -271,105 +275,24 @@ function drivesRow(app, drives) {
       }, { disabled: !!view.preparing })));
 }
 
-// What lending a folder lets a bot do, in the words CONTROL.md asks for.
-function lendQuestion(root) {
-  const can = ["read the files in it"];
-  if (root.writable) can.push("change them");
-  if (root.writable && root.allows_commands) can.push("run commands");
-  const reach = can.length > 1 ? `${can.slice(0, -1).join(", ")} and ${can[can.length - 1]}` : can[0];
-  return `Lend “${root.label}” to this bot? Its chats can ${reach} here, and reach no other folder on this computer. Each change and command asks in Chat with Work first, unless the bot's own settings there let it run. You can stop lending at any time.`;
-}
-
-// Bots this folder is lent to (PR #18's roots_bot): one control request
-// lends, changes unattended commands, and stops lending.
-function bots(app, root, busy) {
-  const view = app.view("folders");
-  const loans = root.bots || [];
-  const lending = view.lending?.root === root.id ? view.lending : null;
-  const unattending = view.unattending?.root === root.id ? view.unattending : null;
-  const commands = root.writable && root.allows_commands;
-  const loanName = (loan) => loan.name || `Bot ${loan.id}`;
-  const rows = [
-    h("div", { class: "row" },
-      h("div", { class: "row__body" },
-        h("h3", {}, "Lent to bots"),
-        h("p", {}, loans.length
-          ? "These Chat with Work bots can use this folder, and no other on this computer."
-          : "A Chat with Work bot reaches this computer only through folders you lend it here.")),
-      !lending ? h("div", { class: "row__actions" }, button("Lend to a Bot…", () => {
-        view.lending = { root: root.id, bot: "", name: "" };
-        app.render();
-        document.querySelector(`[data-key="bot-id-${CSS.escape(root.id)}"]`)?.focus();
-      }, { disabled: busy })) : null),
-  ];
-  for (const loan of loans) {
-    rows.push(h("div", { class: "row" },
-      h("div", { class: "row__body" },
-        h("h3", {}, loanName(loan)),
-        h("span", { class: "micro" }, `Bot ${loan.id}${loan.unattended ? " · commands start without approval" : ""}`)),
-      h("div", { class: "row__actions" },
-        commands ? h("label", { class: "check" },
-          switchInput(loan.unattended || unattending?.bot === loan.id, (on) => {
-            if (on) {
-              view.unattending = { root: root.id, bot: loan.id };
-              app.render();
-            } else {
-              change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: true, unattended: false });
-            }
-          }, { label: `Unattended commands for ${loanName(loan)}`, disabled: busy || !!unattending }),
-          "Unattended") : null,
-        button("Stop Lending", () =>
-          change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: false }),
-        { kind: "btn-subtle-negative", disabled: busy }))));
-    if (unattending?.bot === loan.id) {
-      rows.push(h("div", { class: "confirm" },
-        h("p", {}, `Let ${loanName(loan)}'s commands in “${root.label}” start without anyone approving each one? They run in the same sandbox and limits as any command here, and can change or delete anything in this folder, and nothing outside it.`),
-        h("div", { class: "inline" },
-          button("Cancel", () => {
-            view.unattending = null;
-            app.render();
-          }),
-          button("Allow Unattended Commands", () => {
-            view.unattending = null;
-            change(app, root.id, { cmd: "roots_bot", root: root.id, bot: loan.id, lent: true, unattended: true });
-          }, { kind: "btn-primary" }))));
-    }
-  }
-  if (lending) {
-    const id = lending.bot.trim();
-    const valid = /^[0-9]{1,20}$/.test(id);
-    rows.push(h("form", { class: "confirm", onsubmit: (event) => {
-      event.preventDefault();
-      if (!valid) return;
-      view.lending = null;
-      change(app, root.id, { cmd: "roots_bot", root: root.id, bot: id, name: lending.name.trim() || undefined, lent: true, unattended: false });
-    } },
-      h("div", { class: "inline" },
-        h("input", { class: "input", inputMode: "numeric", placeholder: "Bot ID, like 42", "aria-label": "Bot ID",
-          value: lending.bot, "data-key": `bot-id-${root.id}`, oninput: (event) => {
-            const wasValid = /^[0-9]{1,20}$/.test(lending.bot.trim());
-            lending.bot = event.target.value;
-            if (wasValid !== /^[0-9]{1,20}$/.test(lending.bot.trim())) app.render();
-          } }),
-        h("input", { class: "input", placeholder: "Name, to recognize it (optional)", "aria-label": "Bot name", maxLength: 80,
-          value: lending.name, "data-key": `bot-name-${root.id}`, oninput: (event) => (lending.name = event.target.value) })),
-      h("p", { class: "note" }, "The bot's ID is the number in its address in Chat with Work (/bots/42); its page shows it."),
-      h("p", {}, lendQuestion(root)),
-      h("div", { class: "inline" },
-        button("Cancel", () => {
-          view.lending = null;
-          app.render();
-        }),
-        h("button", { type: "submit", class: "btn btn-primary", disabled: !valid }, "Lend Folder"))));
-  }
-  return rows;
+// This page reports existing grants. Choose folders from the bot's settings,
+// where a native pane confirms each increase in access on this computer.
+function bots(app, root) {
+  const grants = root.bots || [];
+  return h("div", { class: "row" }, h("div", { class: "row__body" },
+    h("h3", {}, "Shared with bots"),
+    h("p", {}, grants.length ? grants.map(bot => `${bot.name || `Bot ${bot.id}`}${bot.unattended ? " (unattended commands)" : ""}`).join(", ") : "No bots use this folder."),
+    ));
 }
 
 export function render(app) {
   const view = app.view("folders");
   const status = app.status;
   const page = h("div", { class: "page" },
-    pageHeader("Shared Folders", "Chat with Work can search and read the files in these folders, and nothing else on this computer. It changes files only in folders where you allow it."));
+    pageHeader("Shared folders", "Only these folders are shared. You choose which allow file changes, code and network access."),
+    app.context?.commands_allowed === false ? h("div", { class:"note" },
+      app.context.can_manage_policy ? "Commands are off for this organization. " : "Ask an organization owner or admin to enable commands.",
+      app.context.can_manage_policy ? h("button", { type:"button", class:"text-link", onclick:() => call("show_main", {path:`/${app.context.account}/settings?tab=organization#policies`}) }, "Organization policy") : null) : null);
   if (!status) {
     append(page, agentMissing(app));
     return page;
@@ -378,20 +301,17 @@ export function render(app) {
   const unprepared = commandsHere(app) && status.roots.some((root) => root.allows_commands)
     ? (status.commands?.drives || []).filter((drive) => !drive.prepared)
     : [];
+  const footer = h("div", { class: "group__footer" },
+    h("p", { class: "note" }, "Choose bot access in each bot’s settings."),
+    button(view.adding ? "Adding…" : "Add folder…", () => pickFolder(app), { kind: "btn-primary", disabled: busy }));
   append(page,
-    status.roots.length === 0
-      ? group(h("div", { class: "empty" },
-        h("strong", {}, "Nothing is shared yet"),
-        h("p", {}, "Add a folder to let Chat with Work search it. Share narrow folders: anything inside can be read, except the private files listed under Always Private.")))
-      : group(...status.roots.map((root) => folderRow(app, root))),
+    group(...(status.roots.length ? status.roots.map(root => folderRow(app, root)) : [h("div", { class: "empty" },
+      h("strong", {}, "Nothing is shared yet"),
+      h("p", {}, "Choose a folder to let Chat with Work search it. Private files stay excluded."))]), footer),
+    view.error ? notice(view.error) : null,
+    view.note ? notice(view.note, "positive") : null,
     unprepared.length ? group(drivesRow(app, unprepared)) : null,
-    h("div", { class: "section" },
-      h("div", { class: "inline" },
-        button(view.adding ? "Adding…" : "Add Folder…", () => pickFolder(app), { kind: "btn-primary", disabled: busy }),
-        view.documents ? button("Share Documents", () => addFolder(app, view.documents.path), { disabled: busy }) : null),
-      view.error ? notice(view.error) : null,
-      view.note ? notice(view.note, "positive") : null,
-      h("p", { class: "note" }, "Labels are what Chat with Work sees. It never sees where a folder is on this computer.")));
+    privacy.render(app, true));
   return page;
 }
 

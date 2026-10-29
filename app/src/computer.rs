@@ -17,7 +17,7 @@
 //! - One question at a time, so a page can't stack dialogs.
 //! - Pages never see where a folder is on this computer (`local_path`), the
 //!   activity log, the deny list, the config file or the proxy. Those, and
-//!   lending folders to bots, stay in the app's own settings window.
+//!   sharing folders with bots, stay in app-owned child webviews.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

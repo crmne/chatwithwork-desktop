@@ -1,7 +1,7 @@
 //! What the bundled settings pages may ask of the app. Only pages served
 //! from the app itself (`tauri://localhost`, `http://tauri.localhost` on
-//! Windows) in the settings window get these: the capability in
-//! capabilities/local.json names that window and no remote URL, and every
+//! Windows) in an app-owned child webview get these: the capability in
+//! capabilities/local.json names that webview and no remote URL, and every
 //! command checks its caller's page again. The web app's pages never reach
 //! the daemon.
 //!
@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, State, Webview};
 
 use crate::desktop::Desktop;
-use crate::windows::{SETTINGS, is_local_url};
 
 /// Control requests the settings pages may send (CONTROL.md).
 pub const ALLOWED: [&str; 23] = [
@@ -53,9 +52,12 @@ fn refusal(code: &str, message: impl Into<String>) -> Value {
     json!({ "code": code, "message": message.into() })
 }
 
-/// The caller must be a bundled page in the settings window.
+/// The caller must be a bundled page in an app-owned child webview.
 fn local_page(webview: &Webview) -> Result<(), Value> {
-    let local = webview.label() == SETTINGS && webview.url().is_ok_and(|url| is_local_url(&url));
+    let local = crate::preferences::is_child(webview.label())
+        && webview
+            .url()
+            .is_ok_and(|url| crate::preferences::is_document(&url));
     if local {
         Ok(())
     } else {
@@ -90,13 +92,34 @@ async fn blocking<T: Send + 'static>(
 pub async fn control(webview: Webview, desktop: State<'_, Arc<Desktop>>, request: Value) -> Answer {
     local_page(&webview)?;
     let request = allowed(request)?;
-    let client = desktop.client.clone();
-    blocking(move || client.request(&request))
-        .await?
-        .map_err(|e| match e {
+    let desktop = desktop.inner().clone();
+    blocking(move || {
+        let app = desktop.app();
+        let context = crate::preferences::grant_context(&app, &desktop, &webview, &request)
+            .map_err(|e| refusal("forbidden", e))?;
+        let status = desktop
+            .client
+            .status()
+            .map_err(|e| refusal("not_running", e.to_string()))?;
+        if let Some(question) = crate::preferences::question(&request, &status, &context)
+            .map_err(|e| refusal("refused", e))?
+        {
+            let Some(_asking) = desktop.asking.start() else {
+                return Err(refusal("busy", "Answer the app’s current question first."));
+            };
+            if !crate::bridge::confirm(&app, webview.window().label(), &question) {
+                return Err(refusal("declined", "No changes made."));
+            }
+            // A dialog can outlive navigation or bot removal.
+            crate::preferences::grant_context(&app, &desktop, &webview, &request)
+                .map_err(|e| refusal("forbidden", e))?;
+        }
+        desktop.client.request(&request).map_err(|e| match e {
             crate::control::ControlError::NotRunning => refusal("not_running", e.to_string()),
             other => refusal("refused", other.to_string()),
         })
+    })
+    .await?
 }
 
 /// The activity log, newest first, as sentences (activity.rs).
@@ -157,7 +180,11 @@ pub fn set_onboarded(
 pub async fn pick_folder(webview: Webview, app: AppHandle) -> Answer {
     local_page(&webview)?;
     use tauri_plugin_dialog::DialogExt;
-    let mut dialog = app.dialog().file().set_title("Share a Folder");
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Share a Folder")
+        .set_parent(&webview.window());
     if let Some(documents) = crate::paths::documents_dir() {
         dialog = dialog.set_directory(documents);
     }
@@ -235,19 +262,31 @@ pub async fn logout(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answe
 /// extension's native messaging host for this user's browsers and turns
 /// the tools on; `disable` removes both. Answers what `cww` said.
 #[tauri::command]
-pub async fn browser_enable(webview: Webview, enabled: bool) -> Answer {
+pub async fn browser_enable(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    enabled: bool,
+) -> Answer {
     local_page(&webview)?;
-    blocking(move || crate::agent::browser(enabled))
-        .await?
-        .map(|said| json!({ "said": said }))
-        .map_err(|e| refusal("failed", format!("{e:#}")))
+    let desktop = desktop.inner().clone();
+    blocking(move || {
+        if enabled {
+            let request = ControlRequest::BrowserEnabled { enabled:true };
+            crate::preferences::grant_context(&desktop.app(), &desktop, &webview, &request).map_err(|e| refusal("forbidden", e))?;
+            let Some(_asking) = desktop.asking.start() else { return Err(refusal("busy", "Answer the app’s current question first.")); };
+            let question = crate::computer::Question { title: "Connect this browser".into(), message: "Let Chat with Work connect to its browser extension on this computer? It uses only its tab group and the sites you allow, with your sign-ins.".into(), yes: "Connect browser".into() };
+            if !crate::bridge::confirm(&desktop.app(), webview.window().label(), &question) { return Err(refusal("declined", "No changes made.")); }
+            crate::preferences::grant_context(&desktop.app(), &desktop, &webview, &request).map_err(|e| refusal("forbidden", e))?;
+        }
+        crate::agent::browser(enabled).map(|said| json!({ "said": said })).map_err(|e| refusal("failed", format!("{e:#}")))
+    }).await?
 }
 
 /// Windows: let commands see the top of the drives they run on, which
 /// Node.js, npm and cmd's `dir` look at and Windows keeps from sandboxes
 /// (`cww::commands::windows::DRIVE_ROOT_MASK`). The drives are the ones the
 /// daemon names in its status; Windows asks an administrator, over the
-/// settings window.
+/// application window.
 #[tauri::command]
 pub async fn prepare_command_drives(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
     local_page(&webview)?;

@@ -12,9 +12,9 @@ Usage: cww-app [options]
 Options:
   --background         Start in the tray without opening a window (how the
                        app starts at login)
-  --settings           Open the settings window instead of Chat with Work
+  --settings           Open settings in the Chat with Work window
   --scan               Open the scan window
-  --page <name>        Open the settings window on a page: welcome, folders,
+  --page <name>        Open settings on a page: welcome, folders,
                        browser, privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
   --server <url>       Show this Chat with Work server instead of the paired
@@ -42,7 +42,7 @@ pub enum Open {
     Main,
     /// A chat a notification pointed at.
     Chat(Target),
-    /// The settings window, on a page or the one it opens on.
+    /// Local settings in the same window, on the named page.
     Settings(Option<&'static str>),
     /// The scan window.
     Scan,

@@ -35,7 +35,7 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 url = "2.5"
 # The window, the tray and the bundled local pages. Tauri uses the system
 # web view: WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows.
-tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "unstable"] }
 # A second launch (a notification's chat, the applications menu) hands its
 # arguments to the running app instead of starting another.
 tauri-plugin-single-instance = "2"

@@ -221,6 +221,12 @@ pub enum ControlRequest {
     },
     /// The owner's chats, newest first, as the server lists them.
     Chats,
+    /// The paired device's account and optional bot scope for app-owned
+    /// settings. No chat content or chat consent is involved.
+    SettingsContext {
+        #[serde(default)]
+        bot: Option<String>,
+    },
     NotificationPreferences,
     NotificationPreferencesUpdate {
         preferences: serde_json::Value,

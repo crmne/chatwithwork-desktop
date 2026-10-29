@@ -15,8 +15,6 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::windows::SETTINGS;
-
 pub fn requested() -> Option<PathBuf> {
     std::env::var_os("CWW_APP_SNAPSHOT").map(PathBuf::from)
 }
@@ -44,12 +42,15 @@ pub fn run(app: AppHandle, dir: PathBuf) {
         // Never shorter than the window takes to open.
         .max(3);
     std::thread::sleep(Duration::from_secs(delay));
-    let Some(window) = app.get_webview_window(SETTINGS) else {
+    let Some(window) = app
+        .get_webview(&crate::preferences::child_label(crate::windows::MAIN))
+        .or_else(|| app.get_webview(crate::windows::MAIN))
+    else {
         log::error!("snapshot: no settings window");
         app.exit(1);
         return;
     };
-    let _ = window.set_theme(Some(if theme == "dark" {
+    let _ = window.window().set_theme(Some(if theme == "dark" {
         tauri::Theme::Dark
     } else {
         tauri::Theme::Light
@@ -75,9 +76,45 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             probe(&app, Path::new(file));
             continue;
         }
+        #[cfg(target_os = "linux")]
+        if let Some(file) = page.strip_prefix("local-probe:") {
+            if let (Some(pane), Ok(script)) = (
+                app.get_webview(&crate::preferences::child_label(crate::windows::MAIN)),
+                std::fs::read_to_string(file),
+            ) {
+                let _ = pane.eval(script);
+                std::thread::sleep(Duration::from_secs(2));
+                let _ = pane.with_webview(|handle| {
+                    use gtk::prelude::*;
+                    use webkit2gtk::WebViewExt;
+                    println!(
+                        "local probe: visible={} {}",
+                        handle.inner().is_visible(),
+                        handle.inner().title().unwrap_or_default()
+                    );
+                });
+            }
+            continue;
+        }
+        // The isolated native pane, for multi-webview integration checks.
+        if let Some(name) = page.strip_prefix("pane:") {
+            if let Some(pane) =
+                app.get_webview(&crate::preferences::child_label(crate::windows::MAIN))
+            {
+                let path = dir.join(format!("pane-{name}-{theme}.png"));
+                println!("pane bounds: {:?}, URL: {:?}", pane.bounds(), pane.url());
+                match capture(&pane, &path) {
+                    Ok(()) => println!("{}", path.display()),
+                    Err(error) => log::error!("pane: {error}"),
+                }
+            } else {
+                println!("pane: absent");
+            }
+            continue;
+        }
         // `shot:<name>`: the web app's window as it is now, after a probe.
         if let Some(name) = page.strip_prefix("shot:") {
-            if let Some(main) = app.get_webview_window(crate::windows::MAIN) {
+            if let Some(main) = app.get_webview(crate::windows::MAIN) {
                 let path = dir.join(format!("{name}-{theme}.png"));
                 match capture(&main, &path) {
                     Ok(()) => println!("{}", path.display()),
@@ -97,7 +134,7 @@ pub fn run(app: AppHandle, dir: PathBuf) {
                 .and_then(|path| desktop.server().page(path));
             let _ = crate::windows::show_main(&app, url);
             std::thread::sleep(Duration::from_secs(6));
-            if let Some(main) = app.get_webview_window(crate::windows::MAIN) {
+            if let Some(main) = app.get_webview(crate::windows::MAIN) {
                 if let Some((email, password)) = login.take() {
                     let script = format!(
                         r#"(() => {{ const f = document.querySelector('input[name="identity[password]"]')?.form; if (!f) return; f.querySelector('[name="identity[email]"]').value = {}; f.querySelector('[name="identity[password]"]').value = {}; f.requestSubmit(); }})()"#,
@@ -165,7 +202,7 @@ pub fn run(app: AppHandle, dir: PathBuf) {
 }
 
 #[cfg(target_os = "linux")]
-fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
+fn capture(window: &tauri::Webview, path: &Path) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
     window
@@ -194,7 +231,7 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
 /// On macOS, WKWebView draws its own content into an image, which needs no
 /// screen-recording permission (a process started over SSH has none).
 #[cfg(target_os = "macos")]
-fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
+fn capture(window: &tauri::Webview, path: &Path) -> Result<(), String> {
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
     use objc2_foundation::{NSDictionary, NSError};
     use objc2_web_kit::WKWebView;
@@ -236,7 +273,7 @@ fn capture(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
 
 fn probe(app: &AppHandle, file: &Path) {
     let (Some(main), Ok(script)) = (
-        app.get_webview_window(crate::windows::MAIN),
+        app.get_webview(crate::windows::MAIN),
         std::fs::read_to_string(file),
     ) else {
         println!("probe: no main window or no script at {}", file.display());
@@ -248,11 +285,11 @@ fn probe(app: &AppHandle, file: &Path) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
     std::thread::sleep(Duration::from_secs(wait));
-    println!("probe: {}", main.title().unwrap_or_default());
+    println!("probe: {}", main.window().title().unwrap_or_default());
 }
 
 fn bridge_check(app: &AppHandle) {
-    let Some(main) = app.get_webview_window(crate::windows::MAIN) else {
+    let Some(main) = app.get_webview(crate::windows::MAIN) else {
         println!("bridge: no main window");
         return;
     };
@@ -272,7 +309,7 @@ fn bridge_check(app: &AppHandle) {
         })()"#,
     );
     std::thread::sleep(Duration::from_secs(2));
-    let title = main.title().unwrap_or_default();
+    let title = main.window().title().unwrap_or_default();
     println!("{title}");
     if let Some(callback) = title.strip_prefix("bridge:listening:") {
         let address = callback.trim_start_matches("http://");
@@ -291,7 +328,7 @@ fn bridge_check(app: &AppHandle) {
             );
         }
         std::thread::sleep(Duration::from_secs(2));
-        println!("{}", main.title().unwrap_or_default());
+        println!("{}", main.window().title().unwrap_or_default());
     }
 }
 
@@ -311,10 +348,10 @@ fn scan_step(app: &AppHandle, step: &str, dir: &Path, theme: &str) {
         return;
     };
     std::thread::sleep(Duration::from_secs(if step.is_empty() { 4 } else { 1 }));
-    let Some(window) = app.get_webview_window(crate::windows::SCAN) else {
+    let Some(window) = app.get_webview(crate::windows::SCAN) else {
         return;
     };
-    let _ = window.set_theme(Some(if theme == "dark" {
+    let _ = window.window().set_theme(Some(if theme == "dark" {
         tauri::Theme::Dark
     } else {
         tauri::Theme::Light

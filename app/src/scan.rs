@@ -1129,7 +1129,7 @@ pub async fn scan_attach(
     match waiting {
         Some(waiting) => {
             let _ = waiting.reply.send(Some(answer));
-            if let Some(window) = app.get_webview_window(&label) {
+            if let Some(window) = app.get_webview(&label) {
                 let _ = window.set_focus();
             }
         }
