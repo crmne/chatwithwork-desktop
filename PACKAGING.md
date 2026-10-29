@@ -27,7 +27,7 @@ A release carries only what people download or something reads; anything else st
 | `chatwithwork-desktop_X.Y.Z_amd64.deb`, `_arm64.deb` | Debian and Ubuntu users. Attached by `packaging.yml`. |
 | `chatwithwork-desktop-X.Y.Z-1.x86_64.rpm`, `.aarch64.rpm` | Fedora and openSUSE users. Attached by `packaging.yml`. |
 | `cww-installer.sh` | The README's one-line installer for macOS and Linux, at `releases/latest/download/`. |
-| `cww-installer.ps1` | The README's one-line installer for Windows without WinGet. |
+| `cww-installer.ps1` | The README's one-line installer for Windows. |
 | `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` | Terminal-only `cww` and `cww-notify`, for servers and distributions older than glibc 2.39. |
 | `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` | The portable Linux app and `cww`. The input for the `.deb` and `.rpm` builds; the Homebrew formula on Linux, AUR `-bin` and `cww-installer.sh` download it. |
 | `cww-vX.Y.Z-macos-universal.tar.gz` | The app and a signed `cww`, for the Homebrew formula and `cww-installer.sh`. |
@@ -179,7 +179,7 @@ Individual developer accounts are free. Microsoft signs Store packages itself, s
 
 **The desktop app** is included in every package recipe alongside the terminal agent. Updating the existing package upgrades users to the complete installation; there is no separate Linux GUI package to discover.
 
-**WinGet.** `packaging/windows/winget-submit.sh X.Y.Z` renders the manifests from the tag's `packaging/winget/*.yaml.in` with the MSIs' SHA-256s from the release's `checksums.txt`, checks that every manifest names `ChatWithWork.Desktop` and the version and that each installer URL matches its hash, and prepares a branch in `crmne/winget-pkgs` with `manifests/c/ChatWithWork/Desktop/X.Y.Z/`. Validate it on Windows (`winget validate --manifest <dir>` and `winget install --manifest <dir>`), then run it again with `--open` to push and open the pull request. The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version, 0.3 installs included.
+**WinGet.** The first submission, 0.6.3, is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095), so the README and the release notes' template don't offer `winget install` yet. Once it's merged, add `packaging/winget/PUBLISHED` (`test-packaging.py` then lets them) and put the command back. `packaging/windows/winget-submit.sh X.Y.Z` renders the manifests from the tag's `packaging/winget/*.yaml.in` with the MSIs' SHA-256s from the release's `checksums.txt`, checks that every manifest names `ChatWithWork.Desktop` and the version and that each installer URL matches its hash, and prepares a branch in `crmne/winget-pkgs` with `manifests/c/ChatWithWork/Desktop/X.Y.Z/`. Validate it on Windows (`winget validate --manifest <dir>` and `winget install --manifest <dir>`), then run it again with `--open` to push and open the pull request. The manifests use the MSI's fixed UpgradeCode, so upgrades replace the previous version, 0.3 installs included.
 
 ## Existing releases
 

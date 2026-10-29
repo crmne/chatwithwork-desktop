@@ -15,7 +15,7 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 | Platform | Install | Open |
 |---|---|---|
 | macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
-| Windows 10 and 11 | `winget install ChatWithWork.Desktop`, or download the `.msi` from the latest release | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
+| Windows 10 and 11 | Download the installer from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest): `cww-vX.Y.Z-x86_64-pc-windows-msvc.msi`, or `cww-vX.Y.Z-aarch64-pc-windows-msvc.msi` on Arm. Or run the PowerShell one-liner below. WinGet (`ChatWithWork.Desktop`) is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095) and isn't available yet. | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
 | Arch | `yay -S chatwithwork-desktop-bin` (or `chatwithwork-desktop` to build from source, `chatwithwork-desktop-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
 | Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-desktop_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
 | Fedora, RHEL, openSUSE | Download the `.rpm`, then `sudo dnf install ./chatwithwork-desktop-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
@@ -28,7 +28,7 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 
 | Installation | Startup |
 |---|---|
-| Windows MSI / WinGet / PowerShell | The installer registers and starts the agent for your account, now and at every login. |
+| Windows MSI / PowerShell one-liner | The installer registers and starts the agent for your account, now and at every login. |
 | macOS `.pkg` | The installer tries to register and start the agent for the logged-in console user. If nobody is logged in, finish setup after login. |
 | Linux packages, Nix, Homebrew, portable app | Open the app and choose **Start Background Agent**, or run `cww daemon install` as your own user. System-wide package installation cannot choose which user account should run the agent. |
 | macOS / Linux one-line installer | Tries `cww daemon install` for the installing user and prints recovery instructions if no user service manager is available. |
@@ -47,13 +47,13 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desk
 
 It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, and registers the desktop launcher and icon on Linux. On macOS the app goes in `~/Applications`. Set `CWW_INSTALL_DIR` to change the command directory. The installer uses `XDG_DATA_HOME` for Linux desktop files and `XDG_CACHE_HOME` for temporary downloads, defaulting to `~/.local/share` and `~/.cache`.
 
-**Windows without WinGet**
+**One line, Windows**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
-Windows builds are not signed yet. If SmartScreen warns, choose **More info**, then **Run anyway**. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
+Windows installers and programs are signed by PlentyLabs. While the signature builds a reputation, SmartScreen may still warn about a downloaded installer: choose **More info**, then **Run anyway**. The one-liner doesn't trigger it. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
 
 **Portable Linux desktop app**
 

@@ -202,5 +202,24 @@ cp "$TEST_RELEASE/$name" "$output"
                 self.assertIn(text, result.stdout)
 
 
+    def test_windows_install_instructions_work_before_winget_has_the_package(self):
+        # ChatWithWork.Desktop is waiting for review in microsoft/winget-pkgs;
+        # until packaging/winget/PUBLISHED exists, no install instruction
+        # may offer `winget install`, and each names a download that works.
+        if (ROOT / "packaging/winget/PUBLISHED").exists():
+            self.skipTest("the WinGet package is published")
+        for path in ("README.md", "packaging/release-notes/TEMPLATE.md"):
+            text = (ROOT / path).read_text()
+            windows = [line for line in text.splitlines() if line.startswith("| Windows")]
+            self.assertTrue(windows, path)
+            for line in windows:
+                self.assertNotIn("winget install", line, path)
+            self.assertNotIn("`winget upgrade`", text, path)
+        readme = (ROOT / "README.md").read_text()
+        row = next(line for line in readme.splitlines() if line.startswith("| Windows 10 and 11"))
+        self.assertIn("releases/latest", row)
+        self.assertIn("cww-installer.ps1", readme)
+        self.assertIn("winget-pkgs/pull/460095", readme)
+
 if __name__ == "__main__":
     unittest.main()
