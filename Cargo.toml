@@ -97,7 +97,7 @@ similar = "3.2"
 # Documents `create_document` writes: Word from Markdown, Excel from rows.
 # Both write through the zip and quick-xml above; no images, no macros.
 docx-rs = { version = "0.4.22", default-features = false }
-rust_xlsxwriter = { version = "0.101", default-features = false }
+rust_xlsxwriter = { version = "0.102", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 
 # One allocator everywhere that hands freed memory back to the system:
