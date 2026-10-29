@@ -172,8 +172,12 @@ impl PendingLogin {
             // Forget an earlier pairing, wherever its secrets were.
             if config.server.is_some() {
                 let old_store = SecretStore::recorded(&config, paths);
-                let _ = old_store.delete(DEVICE_KEY);
-                let _ = old_store.delete(REFRESH_TOKEN);
+                old_store
+                    .delete(DEVICE_KEY)
+                    .context("removing the previous pairing's device key")?;
+                old_store
+                    .delete(REFRESH_TOKEN)
+                    .context("removing the previous pairing's refresh token")?;
             }
 
             let store = self.store.unwrap_or_else(|| SecretStore::choose(paths));
@@ -545,6 +549,45 @@ mod tests {
             Config::load(&paths).unwrap().server.unwrap().device_id,
             "new-device"
         );
+    }
+
+    #[test]
+    fn pairing_again_does_not_forget_a_store_that_refuses_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        let previous = Config {
+            server: Some(ServerConfig {
+                url: "https://old.example.com".into(),
+                device_id: "old-device".into(),
+            }),
+            secret_store: Some("keyring".into()),
+            ..Config::default()
+        };
+        previous.save(&paths).unwrap();
+        let mut login = pending("https://chatwithwork.com/device", None);
+        login.attempt = begin_attempt(&paths).unwrap();
+        login.paths = paths.clone();
+        login.store = Some(SecretStore::File(paths.secrets_file()));
+        let token = serde_json::from_value(serde_json::json!({
+            "access_token": "new-access", "token_type": "DPoP", "expires_in": 600,
+            "refresh_token": "new-refresh", "device_id": "new-device"
+        }))
+        .unwrap();
+        // Unit tests always refuse keychain access. A failure there must
+        // keep naming the old store, rather than strand its credentials.
+        let error = login
+            .save_pairing(token, &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(error.to_string().contains("previous pairing"));
+        assert_eq!(
+            Config::load(&paths).unwrap().server.unwrap().device_id,
+            "old-device"
+        );
+        assert_eq!(
+            Config::load(&paths).unwrap().secret_store.as_deref(),
+            Some("keyring")
+        );
+        assert!(!paths.secrets_file().exists());
     }
 
     #[test]
