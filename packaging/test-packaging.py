@@ -231,5 +231,15 @@ cp "$TEST_RELEASE/$name" "$output"
         for mention in mentions:
             self.assertIn("August 2026 update", readme[mention.start():mention.start() + 80])
 
+    def test_installer_source_is_well_formed_and_purges_only_on_uninstall(self):
+        from xml.etree import ElementTree
+        wxs = ElementTree.parse(ROOT / "packaging/windows/cww.wxs").getroot()
+        ns = {"w": "http://wixtoolset.org/schemas/v4/wxs", "u": "http://wixtoolset.org/schemas/v4/wxs/util"}
+        actions = {c.get("Action"): c.get("Condition") for c in wxs.iterfind(".//w:Custom", ns)}
+        self.assertIn("NOT UPGRADINGPRODUCTCODE", actions["PurgeDaemon"])
+        self.assertNotIn("NOT", actions["UnregisterDaemon"])
+        close = wxs.find(".//u:CloseApplication", ns)
+        self.assertEqual(close.get("Target"), "cww-app.exe")
+
 if __name__ == "__main__":
     unittest.main()
