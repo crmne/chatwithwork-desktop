@@ -27,6 +27,15 @@ pub enum SecretStore {
 }
 
 impl SecretStore {
+    /// The store the config recorded at pairing, whatever the environment
+    /// says now: where a purge finds what pairing wrote.
+    pub fn recorded(config: &Config, paths: &Paths) -> Self {
+        match config.secret_store.as_deref() {
+            Some("file") => Self::File(paths.secrets_file()),
+            _ => Self::Keyring,
+        }
+    }
+
     /// The store recorded in the config, unless the environment overrides it.
     pub fn for_config(config: &Config, paths: &Paths) -> Self {
         let choice = std::env::var("CWW_SECRET_STORE")

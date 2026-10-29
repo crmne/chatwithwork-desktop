@@ -392,8 +392,15 @@ pub fn logout(paths: &Paths) -> Result<bool> {
 /// still deletes what the default store holds, and a damaged list of
 /// organization sign-ins stops the purge before the files go.
 pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
+    // Supersede any pairing still waiting for approval, as logout does, so
+    // none writes new keys after these deletes. The lock is released before
+    // the organizations, which take it themselves.
+    {
+        let lock = lock_pairing(paths)?;
+        next_generation(paths, &lock)?;
+    }
     let config = Config::load(paths).unwrap_or_default();
-    let store = SecretStore::for_config(&config, paths);
+    let store = SecretStore::recorded(&config, paths);
     store.delete(DEVICE_KEY)?;
     store.delete(REFRESH_TOKEN)?;
     // A damaged list fails the purge: deleting it would leave keys nothing
