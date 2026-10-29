@@ -4,7 +4,7 @@
                                │  and nothing else on this computer. It changes files only in
   SETTINGS                     │  folders where you allow it.
  ▌ Shared folders              │
-   Always private              │  ▌● Work docs                               Indexed · 1,532 files
+   Excluded files              │  ▌● Work docs                               Indexed · 1,532 files
    Activity                    │     /home/carmine/Work docs · work-docs:                Read-only
    Account                     │
    General                     │  a share a folder   r rename   w allow changes   d stop sharing

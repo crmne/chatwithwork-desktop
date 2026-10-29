@@ -4,7 +4,7 @@
                                │
   SETTINGS                     │  Chat with Work  chatwithwork.com
    Shared folders              │  Connection      ● Online since 08:14
-   Always private              │  Device ID       42
+   Excluded files              │  Device ID       42
    Activity                    │  Chats here      Allowed
  ▌ Account                     │  Organization    Plenty
    General                     │  Credits         1,250 of 5,000 credits left

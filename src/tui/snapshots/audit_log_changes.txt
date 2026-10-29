@@ -4,7 +4,7 @@
                                │  The log never leaves it.
   SETTINGS                     │
    Shared folders              │  TIME      RESULT   TOOL        DETAIL                  6 entries
-   Always private              │  08:15:00  allowed  create      work-docs:plans/q4.md → created ·
+   Excluded files              │  08:15:00  allowed  create      work-docs:plans/q4.md → created ·
  ▌ Activity                    │  08:16:00  allowed  write       work-docs:plans/q4.md → checked,
    Account                     │  08:16:30  allowed  write       work-docs:plans/q4.md → replaced,
    General                     │  08:17:00  allowed  move        work-docs:plans/q4.md to work-doc

@@ -1,10 +1,10 @@
- ◆ Chat with Work              │  Always private
+ ◆ Chat with Work              │  Excluded files
                                │
   ← Chats                  esc │  These files are never shared, even inside a shared folder. Chat
                                │  with Work can't change this list.
   SETTINGS                     │
    Shared folders              │  Built in
- ▌ Always private              │  Keys, credentials, password stores, mail, messages and browser
+ ▌ Excluded files              │  Keys, credentials, password stores, mail, messages and browser
    Activity                    │  profiles. A pattern matches a file or folder name anywhere in a
    Account                     │  path.
    General                     │  .ssh  .gnupg  .aws  .env*  *.pem  *.key  id_*  *.kdbx

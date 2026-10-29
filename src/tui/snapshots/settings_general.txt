@@ -4,7 +4,7 @@
                                │
   SETTINGS                     │  Agent           ● Running · cww 0.1.0
    Shared folders              │  Sharing         Answering Chat with Work
-   Always private              │  Crash reports   Off
+   Excluded files              │  Crash reports   Off
    Activity                    │  Configuration   /srv/cww/config.toml
    Account                     │  Activity log    /srv/cww/audit.jsonl
  ▌ General                     │

@@ -205,7 +205,7 @@ pub enum View {
     Settings(Page),
 }
 
-/// A page of the settings, as the desktop app has them.
+/// A page of the terminal’s local settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Folders,
@@ -228,7 +228,7 @@ impl Page {
     pub fn title(self) -> &'static str {
         match self {
             Page::Folders => "Shared folders",
-            Page::Privacy => "Always private",
+            Page::Privacy => "Excluded files",
             Page::Activity => "Activity",
             Page::Account => "Account",
             Page::General => "General",
@@ -1384,7 +1384,7 @@ pub struct App {
     pub log_scroll: usize,
     /// The selected page of the web's settings, on the Account page.
     pub selected_link: usize,
-    /// Lines the Always private page is scrolled down by.
+    /// Lines the Excluded files page is scrolled down by.
     pub page_scroll: usize,
     pub modal: Option<Modal>,
     pub notice: Option<Notice>,

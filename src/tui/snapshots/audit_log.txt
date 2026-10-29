@@ -4,7 +4,7 @@
                                │  The log never leaves it.
   SETTINGS                     │
    Shared folders              │  TIME      RESULT   TOOL        DETAIL                  8 entries
-   Always private              │  08:14:00  ·        started
+   Excluded files              │  08:14:00  ·        started
  ▌ Activity                    │  08:14:03  ·        connected   https://chatwithwork.com
    Account                     │  08:16:10  allowed  read        work-docs:plans/q3.md → 5.1 KB ·
    General                     │  08:17:30  denied   read        work-docs:.env · chat 1234

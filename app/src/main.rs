@@ -5,7 +5,8 @@
 //!   is paired with (or chatwithwork.com), the way the phone apps wrap the
 //!   site, so it is always the web app as it is today. Its pages get no IPC
 //!   but a small bridge (bridge.rs).
-//! - The settings window shows pages bundled in the binary (ui/): pairing,
+//! - An app-owned child webview shows the bundled settings (ui/) inside that
+//!   same window: pairing,
 //!   shared folders, what is never shared, activity, notifications and
 //!   general settings. They work offline and unpaired, and only they reach
 //!   the daemon's control channel (CONTROL.md), through an allow-list
