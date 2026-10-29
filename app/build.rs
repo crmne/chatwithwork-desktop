@@ -62,6 +62,9 @@ const COMMANDS: &[&str] = &[
     "scan_reveal",
     "scan_open_account",
     "scan_add_language",
+    "scan_language_packs",
+    "scan_download_language",
+    "scan_cancel_language",
     // The offline page in the Chat with Work window (offline.rs).
     "offline_info",
     "offline_retry",

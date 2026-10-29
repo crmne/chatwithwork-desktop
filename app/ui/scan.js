@@ -82,7 +82,15 @@ const state = {
   dragging: null,
   saving: false,
   menuOpen: false,
+  // Adding an OCR language: the packs this computer can download, the one
+  // picked, and the download under way ({ code, name, bytes, total }).
+  adding: false,
+  packs: null,
+  pack: null,
+  languageDownload: null,
 };
+
+const ADD_LANGUAGE = "__add__";
 
 // ---- Talking to the app ---------------------------------------------------
 
@@ -197,9 +205,114 @@ window.cwwEvent = (event, payload) => {
     case "attaching":
       state.attaching = Boolean(payload.attaching);
       break;
+    case "language":
+      languageProgress(payload);
+      return;
   }
   render();
 };
+
+// ---- Adding a language ----------------------------------------------------
+
+const megabytes = (bytes) => Math.max(1, Math.round(bytes / 1e6));
+
+function packName(code) {
+  const missing = state.ocr.missing?.code === code ? state.ocr.missing.name : null;
+  return state.packs?.find((p) => p.code === code)?.name || missing || code;
+}
+
+async function startAdding() {
+  if (!state.ocr.can_download) {
+    // Windows adds OCR languages in its own settings.
+    call("scan_add_language").catch(() => {});
+    state.notice = { tone: "attention", text: "Add the language in Windows Settings with \"Optical character recognition\" ticked, then check again.", action: ["Check Again", checkLanguages] };
+    render();
+    return;
+  }
+  state.adding = true;
+  state.error = null;
+  render();
+  try {
+    state.packs = (await call("scan_language_packs")).packs;
+    state.pack = state.pack && state.packs.some((p) => p.code === state.pack) ? state.pack : state.packs[0]?.code || null;
+  } catch (error) {
+    state.error = error.message;
+  }
+  render();
+}
+
+async function downloadLanguage(code) {
+  state.error = null;
+  state.notice = null;
+  state.languageDownload = { code, name: packName(code), bytes: 0, total: 0 };
+  render();
+  try {
+    await call("scan_download_language", { code });
+  } catch (error) {
+    state.languageDownload = null;
+    state.error = error.message;
+    render();
+  }
+}
+
+// The download's progress, then its end: the language joins the list and
+// is chosen, so the next scan reads in it.
+async function languageProgress(payload) {
+  if (!payload.done) {
+    state.languageDownload = { ...(state.languageDownload || {}), code: payload.code, name: packName(payload.code), bytes: payload.bytes, total: payload.total };
+    render();
+    return;
+  }
+  const name = state.languageDownload?.name || packName(payload.code);
+  state.languageDownload = null;
+  if (payload.error) {
+    if (!/cancelled/i.test(payload.error)) state.error = payload.error;
+    render();
+    return;
+  }
+  try {
+    const info = await call("scan_info");
+    state.languages = info.languages;
+    state.ocr = info.ocr;
+  } catch (error) {
+    state.error = error.message;
+  }
+  state.settings.ocr = payload.code;
+  state.lastLanguage = payload.code;
+  state.adding = false;
+  state.packs = null;
+  saveSettings();
+  state.notice = { tone: "positive", text: `${name} is ready. Scans are read in it now.` };
+  render();
+}
+
+function addingLanguage(busy) {
+  const download = state.languageDownload;
+  if (download) {
+    const percent = download.total ? Math.min(100, (100 * download.bytes) / download.total) : 0;
+    return h("div", { class: "field scan__adding", "data-key": "language-download" },
+      h("span", { class: "field__label" }, `Adding ${download.name}`),
+      h("div", { class: "meter", role: "progressbar", "aria-label": `Downloading ${download.name}`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(percent)) },
+        h("span", { style: `inline-size: ${percent.toFixed(1)}%` })),
+      h("div", { class: "field__row" },
+        h("small", { class: "scan__adding-note" }, download.total ? `${megabytes(download.bytes)} of ${megabytes(download.total)} MB` : "Starting…"),
+        h("button", { type: "button", class: "btn", "data-key": "cancel-language", onclick: () => call("scan_cancel_language") }, "Cancel")));
+  }
+  if (!state.adding) return null;
+  const packs = state.packs;
+  return h("div", { class: "field scan__adding" },
+    h("label", { for: "add-language" }, "Add a language"),
+    packs && packs.length
+      ? h("select", { class: "select", id: "add-language", "data-key": "add-language", disabled: busy,
+        onchange: (event) => { state.pack = event.target.value; } },
+      packs.map((p) => h("option", { value: p.code, selected: p.code === state.pack }, `${p.name} (${megabytes(p.bytes)} MB)`)))
+      : h("small", { class: "scan__adding-note" }, packs ? "This computer reads every language there is to add." : "Looking for languages…"),
+    h("small", { class: "scan__adding-note" }, "Downloaded once from Tesseract's own models, checked, and kept on this computer."),
+    h("div", { class: "field__row" },
+      h("button", { type: "button", class: "btn btn-primary", "data-key": "download-language", disabled: busy || !state.pack,
+        onclick: () => downloadLanguage(state.pack) }, "Download"),
+      h("button", { type: "button", class: "btn", "data-key": "cancel-adding", onclick: () => { state.adding = false; render(); } }, "Cancel")));
+}
 
 async function edit(page, change) {
   try {
@@ -393,15 +506,27 @@ function renderSettings() {
   // A chosen language this computer can't read stays chosen, said so, with
   // the way to add it; nothing silently reads in another language.
   const missing = missingLanguage();
+  // The list ends with "Add a language…", where this computer can add one:
+  // downloaded here on Linux, in Windows Settings on Windows.
+  const canAdd = state.ocr.can_download || state.ocr.can_add;
   const language = ocrOn ? field("Language", h("select", {
-    class: "select", id: "language", "data-key": "language", disabled: busy,
-    onchange: (event) => { s.ocr = event.target.value; state.lastLanguage = s.ocr; state.ocr.missing = null; saveSettings(); render(); },
+    class: "select", id: "language", "data-key": "language", disabled: busy || Boolean(state.languageDownload),
+    onchange: (event) => {
+      if (event.target.value === ADD_LANGUAGE) {
+        event.target.value = s.ocr;
+        startAdding();
+        return;
+      }
+      s.ocr = event.target.value; state.lastLanguage = s.ocr; state.ocr.missing = null; saveSettings(); render();
+    },
   },
   missing ? h("option", { value: missing.code, selected: true }, `${missing.name} (not available)`) : null,
-  state.languages.map((l) => h("option", { value: l.code, selected: l.code === s.ocr }, l.name))), "language") : null;
+  state.languages.map((l) => h("option", { value: l.code, selected: l.code === s.ocr }, l.name)),
+  canAdd ? h("option", { value: ADD_LANGUAGE }, "Add a language…") : null), "language") : null;
   const missingNote = ocrOn && missing ? h("div", { class: "notice notice--attention scan__missing", role: "status" },
     h("p", {}, `This computer can't read ${missing.name} yet. `, withCode(missing.how)),
     h("div", { class: "inline" },
+      missing.pack && !state.languageDownload ? h("button", { type: "button", class: "btn btn-primary", "data-key": "download-missing", onclick: () => downloadLanguage(missing.code) }, `Download ${missing.name}`) : null,
       state.ocr.can_add ? h("button", { type: "button", class: "btn", "data-key": "add-language", onclick: () => call("scan_add_language") }, "Open Language Settings") : null,
       h("button", { type: "button", class: "btn", "data-key": "check-languages", onclick: checkLanguages }, "Check Again"))) : null;
 
@@ -414,6 +539,7 @@ function renderSettings() {
     toggle("remove_blank_pages", "Remove blank pages", "Leaves out empty backs; you can bring them back"),
     ocr,
     language,
+    ocrOn ? addingLanguage(busy) : null,
     missingNote,
     h("button", {
       type: "button", class: "btn btn-primary scan__go", "data-key": "scan",

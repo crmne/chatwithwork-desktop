@@ -251,7 +251,7 @@ On first run it opens the welcome page: it starts the agent, pairs, offers to sh
 cargo run --release -p cww-app
 ```
 
-Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install; scanning also needs SANE and Tesseract with your language, which the packages recommend. On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
+Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install; scanning also needs SANE and Tesseract, which the packages recommend; the scan window adds the languages you read itself (Add a language…). On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
 
 Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, for anyone who wants to revive a fully native app.
 
@@ -375,6 +375,7 @@ Run `cww reload` after editing the file. The `cww roots` commands reload the dae
 |---|---|
 | `~/.config/cww/` | `config.toml`, `dictation.json`, and `secrets.json` if no keychain is available |
 | `~/.local/share/cww/speech-models/` | Explicitly downloaded Whisper models, verified before use (`0700`, files `0600`), removable in General settings |
+| `~/.local/share/cww/ocr-languages/` | OCR languages added in the scan window on Linux (`<code>.traineddata`), verified before they are kept (`0700`, files `0600`) |
 | `~/.local/share/cww/index/` | The search index (`0700`) |
 | `~/.local/share/cww/chat-assets/` | The logos and file-type icons the desktop app's chats show, as the paired server sent them, kept so each is fetched once (`0700`, files `0600`) |
 | `~/.local/state/cww/audit.jsonl` | The audit log (`0600`, rotated at 10 MB, never uploaded) |

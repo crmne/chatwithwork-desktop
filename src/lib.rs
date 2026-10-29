@@ -19,6 +19,7 @@ pub mod crash_reports;
 pub mod daemon;
 pub mod dictation;
 pub mod error;
+pub mod fetch;
 pub mod limits;
 pub mod logging;
 pub mod notification_delivery;

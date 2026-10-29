@@ -338,7 +338,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             }
         }));
     }
-    let scans = Arc::new(crate::scan::Scans::default());
+    let scans = Arc::new(crate::scan::Scans::new(&desktop.paths));
     let startup_scans = scans.clone();
     let setup_desktop = desktop.clone();
     let app = builder
@@ -418,6 +418,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             crate::scan::scan_reveal,
             crate::scan::scan_open_account,
             crate::scan::scan_add_language,
+            crate::scan::scan_language_packs,
+            crate::scan::scan_download_language,
+            crate::scan::scan_cancel_language,
             crate::offline::offline_info,
             crate::offline::offline_retry,
             crate::offline::offline_open_anyway,
