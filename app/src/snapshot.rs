@@ -54,6 +54,12 @@ pub fn run(app: AppHandle, dir: PathBuf) {
     } else {
         tauri::Theme::Light
     }));
+    // WebKitGTK's preferred scheme follows GTK, not set_theme on this
+    // window. Make both review themes explicit in the bundled page too.
+    let _ = window.eval(format!(
+        "document.documentElement.style.colorScheme = {}",
+        serde_json::json!(theme)
+    ));
     for page in pages {
         // `bridge`: checks the web app's bridge in the real window. The page
         // asks for a loopback callback, the check plays the browser coming

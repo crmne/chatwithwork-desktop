@@ -94,3 +94,12 @@ test("a failed start-at-login change is reported before completion", async () =>
   assert.ok(byText(app.tree, "div", "Could not change start at login."));
   assert.equal(calls.some(({command}) => command === "show_main"), false);
 });
+
+test("the start-at-login choice is saved even before its current value arrives", async () => {
+  const app = settings();
+  delete app.view("general").autostart;
+  byKey(app.tree, "welcome-open").fire("click");
+  await settled();
+  assert.deepEqual(calls.find(({command}) => command === "set_autostart")?.args, { enabled: true });
+  assert.equal(app.info.onboarded, true);
+});

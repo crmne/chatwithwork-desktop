@@ -36,7 +36,7 @@ async function finish(app) {
   view.error = null;
   app.render();
   try {
-    if (general.autostart !== undefined && view.autostart !== general.autostart) {
+    if (view.autostart !== general.autostart) {
       await setAutostart(app, view.autostart);
       if (general.error) throw { message: general.error };
     }
