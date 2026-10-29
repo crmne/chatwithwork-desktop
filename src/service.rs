@@ -120,16 +120,98 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
         removed.extend(windows_task::uninstall(paths)?);
     }
     if purge {
-        let _ = crate::auth::logout(paths);
-        for dir in paths.all_dirs() {
-            if dir.exists() {
-                std::fs::remove_dir_all(dir)
-                    .with_context(|| format!("removing {}", dir.display()))?;
-                removed.push(dir.to_path_buf());
-            }
+        crate::auth::forget_all_secrets(paths)
+            .context("deleting this computer's keys from the system's keychain")?;
+        close_desktop_app();
+        removed.extend(purge_files(paths, desktop_app_data().as_deref())?);
+    }
+    Ok(removed)
+}
+
+/// Closes the desktop app before a purge deletes its web view data
+/// (Windows: the installer's own close may come after the purge, and the
+/// app holds those files open). Only this user's copies.
+fn close_desktop_app() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let user = std::env::var("USERNAME").unwrap_or_default();
+        if user.is_empty() {
+            return;
+        }
+        let _ = Command::new("taskkill")
+            .args([
+                "/F",
+                "/IM",
+                "cww-app.exe",
+                "/FI",
+                &format!("USERNAME eq {user}"),
+            ])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+        // Its web view processes let go of their files a moment later.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+/// Deletes the agent's folders (keys, config, index, logs) and `app_data`,
+/// then their own emptied folder.
+fn purge_files(paths: &Paths, app_data: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for dir in paths.all_dirs().into_iter().chain(app_data) {
+        if dir.exists() {
+            remove_dir_patiently(dir).with_context(|| format!("removing {}", dir.display()))?;
+            removed.push(dir.to_path_buf());
+        }
+    }
+    // On Windows (and under CWW_HOME) the agent's folders sit in one of
+    // their own, `%LOCALAPPDATA%\cww`, left empty now: remove it too, only
+    // when it's named cww and empty. Elsewhere their parents are ~/.config
+    // and the like, which stay whatever they hold.
+    let mut parents: Vec<&Path> = paths
+        .all_dirs()
+        .into_iter()
+        .filter_map(Path::parent)
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "cww"))
+        .collect();
+    parents.dedup();
+    for parent in parents {
+        if std::fs::remove_dir(parent).is_ok() {
+            removed.push(parent.to_path_buf());
         }
     }
     Ok(removed)
+}
+
+/// Removes `dir`, trying again for a few seconds: on Windows a process that
+/// just exited (the agent, the app's web view) can hold a file open a
+/// moment longer.
+fn remove_dir_patiently(dir: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if tries >= 20 => return Err(error),
+            Err(_) => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+    }
+}
+
+/// The desktop app's web view data on Windows (its sign-in cookies and
+/// cache), `%LOCALAPPDATA%\com.chatwithwork.desktop`, which a purge removes
+/// with the agent's own. Not with `CWW_HOME`, which keeps tests and custom
+/// installs to their own folder.
+fn desktop_app_data() -> Option<PathBuf> {
+    if !cfg!(windows) || custom_home().is_some() {
+        return None;
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|base| PathBuf::from(base).join("com.chatwithwork.desktop"))
 }
 
 /// `CWW_HOME`, when set, so the service uses the same directories as the
@@ -401,10 +483,10 @@ mod windows_task {
         if let Some(shortcut) = windows_startup::remove()? {
             removed.push(shortcut);
         }
-        let _ = crate::control::request(
-            &paths.socket_path(),
-            crate::control::ControlRequest::Shutdown,
-        );
+        // Waits for the agent to exit, so a purge after this can remove the
+        // files it held open (the index, the log). An agent that won't stop
+        // fails the uninstall, after the task is gone, so no purge follows.
+        let stopped = stop_existing(paths);
         let _ = Command::new("schtasks")
             .args(["/End", "/TN", TASK_NAME])
             .output();
@@ -420,6 +502,7 @@ mod windows_task {
             std::fs::remove_file(&file)?;
             removed.push(file);
         }
+        stopped?;
         Ok(removed)
     }
 
@@ -446,17 +529,61 @@ mod windows_task {
 
     fn stop_existing(paths: &Paths) -> Result<()> {
         use crate::control::{ControlRequest, request};
+        // Its process, to wait for after the control pipe closes: the agent
+        // goes on stopping commands and writing its last audit entry, with
+        // its files open, a moment longer.
+        let pid = request(&paths.socket_path(), ControlRequest::Status)
+            .ok()
+            .flatten()
+            .and_then(|status| status.get("pid")?.as_u64())
+            .and_then(|pid| u32::try_from(pid).ok());
         let _ = request(&paths.socket_path(), ControlRequest::Shutdown);
         for _ in 0..50 {
             if !matches!(
                 request(&paths.socket_path(), ControlRequest::Status),
                 Ok(Some(_))
             ) {
+                if let Some(pid) = pid
+                    && !wait_for_exit(pid, std::time::Duration::from_secs(15))
+                {
+                    bail!("The background agent is still stopping. Try again in a moment.");
+                }
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         bail!("The previous background agent did not stop. Try again in a moment.")
+    }
+
+    /// Waits up to `limit` for process `pid` to end, and says whether it did
+    /// (Windows; elsewhere the service manager waits, and this says yes). A
+    /// process that's already gone, or can't be opened, has ended.
+    fn wait_for_exit(pid: u32, limit: std::time::Duration) -> bool {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+            };
+            // SAFETY: OpenProcess returns a handle we own or null; it's
+            // waited on and closed here, and nothing else uses it.
+            unsafe {
+                let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+                if process.is_null() {
+                    return true;
+                }
+                let waited =
+                    WaitForSingleObject(process, limit.as_millis().min(u32::MAX as u128) as u32);
+                CloseHandle(process);
+                // WAIT_OBJECT_0: it ended.
+                waited == 0
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (pid, limit);
+            true
+        }
     }
 
     fn wait_for_start(paths: &Paths) -> Result<()> {
@@ -594,6 +721,26 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_purge_leaves_no_folder_of_its_own_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&temp.path().join("cww"));
+        paths.ensure().unwrap();
+        std::fs::write(paths.config_dir.join("config.toml"), "x").unwrap();
+        let web = temp.path().join("com.chatwithwork.desktop");
+        std::fs::create_dir(&web).unwrap();
+        purge_files(&paths, Some(&web)).unwrap();
+        assert!(!temp.path().join("cww").exists());
+        assert!(!web.exists());
+        // A parent holding anything else stays.
+        let shared = temp.path().join("cww-shared").join("cww");
+        let paths = Paths::under(&shared);
+        paths.ensure().unwrap();
+        std::fs::write(shared.join("other"), "keep").unwrap();
+        purge_files(&paths, None).unwrap();
+        assert!(shared.join("other").exists());
+    }
 
     #[test]
     fn launchd_waits_until_the_old_registration_is_gone() {

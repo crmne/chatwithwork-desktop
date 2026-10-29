@@ -68,7 +68,7 @@ Chat with Work's Settings has a This computer page, and the new chat page's pane
 
 `status()` answers `{ running, paired, server, device_id, paused, connection, health: { label, tone }, folders: [{ id, label, available, index, indexed_files, changes, commands, network, bots }], commands }` (`commands`: whether this computer runs commands: everywhere but Windows, and there where the daemon's status says it can, from Windows 11 24H2 with the August 2026 update). The server matches `device_id` with its own row for the computer.
 
-Settings in the tray opens This computer in the Chat with Work window once the computer is paired, and the settings window before that or while the agent isn't running (`windows::show_computer_settings`).
+Settings in the tray opens This computer in the Chat with Work window once the computer is paired and that window is signed in (its "remember me" cookie for the server), and the app's own settings window otherwise: before pairing, while the agent isn't running, and after pairing before anyone signs in to the window, since approving the computer in the browser signs nobody in there (`windows::show_computer_settings`).
 
 ## The settings pages and the daemon
 

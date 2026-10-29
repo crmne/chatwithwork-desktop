@@ -8,13 +8,13 @@ Pick one file for your computer. The other files on this page are for package ma
 | Your computer | Download |
 |---|---|
 | Mac (Apple silicon or Intel) | [Chat with Work for Mac](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chat-with-work-vX.Y.Z-macos-universal.dmg) (`.dmg`), or `brew install --cask crmne/tap/chat-with-work` |
-| Windows | [Windows installer](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/cww-vX.Y.Z-x86_64-pc-windows-msvc.msi), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/cww-vX.Y.Z-aarch64-pc-windows-msvc.msi), or `winget install ChatWithWork.Desktop` |
+| Windows | [Windows installer](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/cww-vX.Y.Z-x86_64-pc-windows-msvc.msi), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/cww-vX.Y.Z-aarch64-pc-windows-msvc.msi) |
 | Debian, Ubuntu | [`.deb` package](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop_X.Y.Z_amd64.deb), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop_X.Y.Z_arm64.deb) |
 | Fedora, openSUSE | [`.rpm` package](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-1.x86_64.rpm), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-1.aarch64.rpm) |
 | Arch | `yay -S chatwithwork-desktop-bin` |
 | A server, terminal only | `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` below |
 
-Already installed? Upgrade through the package manager you used (`brew upgrade`, `winget upgrade`, `apt`, `dnf`, `pacman`). GitHub shows each file's SHA-256 beside it, and the signed `checksums.txt` lists all but the Linux packages; [PACKAGING.md](https://github.com/crmne/chatwithwork-desktop/blob/main/PACKAGING.md#release-assets) says what each one is for.
+Already installed? Upgrade through the package manager you used (`brew upgrade`, `apt`, `dnf`, `pacman`). GitHub shows each file's SHA-256 beside it, and the signed `checksums.txt` lists all but the Linux packages; [PACKAGING.md](https://github.com/crmne/chatwithwork-desktop/blob/main/PACKAGING.md#release-assets) says what each one is for.
 
 ![What the main change looks like, with synthetic demo content only](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/screenshot.png)
 

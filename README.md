@@ -2,7 +2,7 @@
 
 Chat with Work Desktop is the open-source desktop app for [Chat with Work](https://chatwithwork.com): Chat with Work in a window of its own, and a background agent (`cww` on the command line) that lets Chat with Work read, and with your approval change files and run commands, in folders you share on your Mac, Windows PC or Linux machine, and nothing else.
 
-- **Reads, and changes only with your approval:** a shared folder gets the read tools: `roots`, `search`, `list`, `read`, `grep` and `glob` for code, and `read_bytes` for copying a file into a chat. Turn on "Allow changes" for it, on your computer, and the assistant can also create, edit, move and delete files there, each change approved by you in Chat with Work. You can also allow commands in such a folder (on Windows, from Windows 11 24H2), each approved by you in Chat with Work too, or run without asking in a chat where you chose "Allow everything" ([What the assistant can do](#what-the-assistant-can-do)). Old versions and deleted files go to your system trash; nothing is deleted for good, and no programs, launchers or macro documents are ever written.
+- **Reads, and changes only with your approval:** a shared folder gets the read tools: `roots`, `search`, `list`, `read`, `grep` and `glob` for code, and `read_bytes` for copying a file into a chat. Turn on "Allow changes" for it, on your computer, and the assistant can also create, edit, move and delete files there, each change approved by you in Chat with Work. You can also allow commands in such a folder (on Windows, from Windows 11 24H2 with the August 2026 update), each approved by you in Chat with Work too, or run without asking in a chat where you chose "Allow everything" ([What the assistant can do](#what-the-assistant-can-do)). Old versions and deleted files go to your system trash; nothing is deleted for good, and no programs, launchers or macro documents are ever written.
 - **Only the folders you share,** and never the secrets inside them. SSH keys, `.env` files, keychains and browser profiles stay private even inside a shared folder.
 - **Outbound only.** The daemon opens one WebSocket to Chat with Work. No port is opened on your machine, and no third-party relay sees your data.
 - **Local index.** Full-text search (BM25) runs on your machine. Only the results of a specific tool call leave it: a few snippets, a directory listing, or a chunk of one file.
@@ -15,7 +15,7 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 | Platform | Install | Open |
 |---|---|---|
 | macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
-| Windows 10 and 11 | `winget install ChatWithWork.Desktop`, or download the `.msi` from the latest release | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
+| Windows 10 and 11 | Download the installer from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest): `cww-vX.Y.Z-x86_64-pc-windows-msvc.msi`, or `cww-vX.Y.Z-aarch64-pc-windows-msvc.msi` on Arm. Or run the PowerShell one-liner below. WinGet (`ChatWithWork.Desktop`) is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095) and isn't available yet. | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
 | Arch | `yay -S chatwithwork-desktop-bin` (or `chatwithwork-desktop` to build from source, `chatwithwork-desktop-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
 | Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-desktop_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
 | Fedora, RHEL, openSUSE | Download the `.rpm`, then `sudo dnf install ./chatwithwork-desktop-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
@@ -28,16 +28,18 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 
 | Installation | Startup |
 |---|---|
-| Windows MSI / WinGet / PowerShell | The installer registers and starts the agent for your account, now and at every login. |
+| Windows MSI / PowerShell one-liner | The installer registers and starts the agent for your account, now and at every login. |
 | macOS `.pkg` | The installer tries to register and start the agent for the logged-in console user. If nobody is logged in, finish setup after login. |
 | Linux packages, Nix, Homebrew, portable app | Open the app and choose **Start Background Agent**, or run `cww daemon install` as your own user. System-wide package installation cannot choose which user account should run the agent. |
 | macOS / Linux one-line installer | Tries `cww daemon install` for the installing user and prints recovery instructions if no user service manager is available. |
 
 `cww daemon install` starts the agent now, enables it at future logins, and restarts an existing service to use the installed version. If automatic setup failed, run that command without `sudo`. On Linux, check it with `systemctl --user status cww.service`; after a package upgrade, restart it with `systemctl --user restart cww.service`. On any platform, `cww status` reports the agent's state. Without a user service manager, keep `cww daemon run` running in a terminal. Closing the desktop app does not stop the background service.
 
+On Windows, uninstalling (Settings, Apps, or `msiexec /x`) closes the app and removes everything Chat with Work Desktop kept for you: shared folders and settings, the index, the activity log, keys and the app's sign-in, so installing again starts fresh. Elsewhere, `cww daemon uninstall --purge` removes the agent's part (shared folders and settings, the index, the activity log and keys) before you remove the app; the app's sign-in stays in its web view data (`~/.local/share/com.chatwithwork.desktop` on Linux, `~/Library/WebKit/com.chatwithwork.desktop` on macOS) until you delete it.
+
 **Updates**
 
-The Mac app from the `.dmg` and the Windows installer's app update themselves. Once a day the app reads the latest release on GitHub, downloads it in the background, checks `checksums.txt` against its Ed25519 signature with the key built into the app and the download against `checksums.txt`, and offers **Restart to Update** in the tray and in **General**. On restart it installs the update, starts the new version, restarts the background agent when it still runs the old one, and puts the previous version back if the new one doesn't start within a minute. **General, Check for updates** turns the daily check off; **Check Now** checks at once. A copy a package manager owns (Homebrew, the AUR, `.deb` and `.rpm` packages, Nix) or the Mac's `.pkg` never replaces itself: the app says how to update it. A WinGet install is the Windows installer's, so it updates itself, and `winget upgrade` works too. On Linux, run the one-line installer again or use your package manager. The check sends GitHub the app's name and version in its user agent and nothing else.
+The Mac app from the `.dmg` and the Windows installer's app update themselves. Once a day the app reads the latest release on GitHub, downloads it in the background, checks `checksums.txt` against its Ed25519 signature with the key built into the app and the download against `checksums.txt`, and offers **Restart to Update** in the tray and in **General**. On restart it installs the update, starts the new version, restarts the background agent when it still runs the old one, and puts the previous version back if the new one doesn't start within a minute. **General, Check for updates** turns the daily check off; **Check Now** checks at once. A copy a package manager owns (Homebrew, the AUR, `.deb` and `.rpm` packages, Nix) or the Mac's `.pkg` never replaces itself: the app says how to update it. On Linux, run the one-line installer again or use your package manager. The check sends GitHub the app's name and version in its user agent and nothing else.
 
 **One line, macOS or Linux, no root**
 
@@ -47,13 +49,13 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desk
 
 It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, and registers the desktop launcher and icon on Linux. On macOS the app goes in `~/Applications`. Set `CWW_INSTALL_DIR` to change the command directory. The installer uses `XDG_DATA_HOME` for Linux desktop files and `XDG_CACHE_HOME` for temporary downloads, defaulting to `~/.local/share` and `~/.cache`.
 
-**Windows without WinGet**
+**One line, Windows**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
-Windows builds are not signed yet. If SmartScreen warns, choose **More info**, then **Run anyway**. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
+Windows installers and programs are signed by PlentyLabs. While the signature builds a reputation, SmartScreen may still warn about a downloaded installer: choose **More info**, then **Run anyway**. The one-liner doesn't trigger it. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
 
 **Portable Linux desktop app**
 
@@ -286,7 +288,7 @@ In folders where you allow changes, and only while at least one folder does:
 
 Chat with Work asks before each change; "Allow for the rest of this chat" can cover writes, never a replace, a move over a file, or a delete. Programs, scripts that run when opened, shortcuts and Office files with macros are never made, no file gets an execute bit, and version control internals, shell startup files, autostart folders and editor task settings are never changed.
 
-In folders where you also allow commands (`cww roots allow-commands <root>`, or the folder's switch in the app or the terminal UI), on Linux, macOS, and Windows 11 24H2 and later:
+In folders where you also allow commands (`cww roots allow-commands <root>`, or the folder's switch in the app or the terminal UI), on Linux, macOS, and Windows 11 24H2 with the August 2026 update or later:
 
 | Tool | What it does |
 |---|---|
@@ -469,7 +471,7 @@ The rule behind the design: **every control that must hold against a compromised
 - **Anything inside a shared folder that isn't on the deny list can be read.** Share narrow folders. A secret stored in `notes.txt` is readable.
 - **In a folder that allows changes, a compromised server can change files without your approval** (see above): recoverable from the trash, within the budgets, and logged, but changed.
 - **In a folder that allows commands, a compromised server could run commands without your approval**, as it could make changes: commands are approved in Chat with Work, or run without asking in a chat set to Allow everything, and the daemon can't tell either from a forged approval. Only you turn commands on, per folder, on this computer.
-- **In a folder that allows commands, a command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)). Where Bubblewrap can't run, commands run on Landlock instead, without the network and without `chmod` by name. On Windows they run in a process container, which only Windows 11 24H2 and later have; there Node.js and cmd's `dir` need an administrator to run `cww roots prepare-commands` once.
+- **In a folder that allows commands, a command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)). Where Bubblewrap can't run, commands run on Landlock instead, without the network and without `chmod` by name. On Windows they run in a process container, which only Windows 11 24H2 with the August 2026 update and later have; there Node.js and cmd's `dir` need an administrator to run `cww roots prepare-commands` once.
 - **Text that runs later can be written.** cww writes no programs and sets no execute bit, and the never-changed list keeps out the files that run on their own (startup files, autostart, editor and hook settings). But build files and scripts are ordinary text people ask to have edited, and stay changeable: a changed `Makefile`, `package.json` script, `build.rs`, test, or shell script runs when you build, test or run the project yourself, and changed source code runs when you run the program. Settings of programs that live outside the home folder's dot files (`~/Library/Application Support` on macOS, `AppData` on Windows) are only out of reach because those folders are too broad to share without `--i-know`. Read the diff before you build or run something a change touched.
 - **Results do reach Chat with Work and the model provider.** "Private" means your files and the index stay on your computer, and only the snippets and chunks needed for an answer leave it. Once they leave, the server's retention and sharing rules apply.
 - **A malicious file could exploit a parser** (PDF, Office). Extraction runs with size caps and panic isolation, inside the kernel sandbox, which keeps it to the shared folders. The sandboxed daemon can still use the network, so an exploit could send what it can read to someone else; a separate reader process without network access is planned, and the `reader` module is structured for that split.

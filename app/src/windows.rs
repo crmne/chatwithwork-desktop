@@ -278,16 +278,52 @@ pub fn settings_event(event: &str, payload: &serde_json::Value) -> String {
 /// everything else (the server's "This computer" tab).
 pub const COMPUTER_SETTINGS: &str = "/settings?tab=computer";
 
-/// Settings, from the tray: once the computer is paired, Chat with Work's
-/// Settings on This computer, in the Chat with Work window; before that, or
-/// while the background agent isn't running, the app's own settings window,
-/// which pairs it.
+/// Settings, from the tray: once the computer is paired and the Chat with
+/// Work window is signed in, Chat with Work's Settings on This computer
+/// there; otherwise the app's own settings window, which shares folders,
+/// pairs and disconnects without signing in. Pairing approves the computer
+/// in the browser, which signs nobody in to the window, so This computer
+/// would only have asked to sign in again. Call it off the main thread:
+/// reading the window's cookies waits for it on Windows.
 pub fn show_computer_settings(app: &AppHandle) -> tauri::Result<()> {
     let desktop = app.state::<std::sync::Arc<Desktop>>().inner().clone();
     let paired = desktop.status().is_some_and(|status| status.is_paired());
-    match desktop.server().page(COMPUTER_SETTINGS) {
-        Some(url) if paired => show_main(app, Some(url)),
+    let url = desktop.server().page(COMPUTER_SETTINGS);
+    let signed_in = url.as_ref().is_some_and(|url| signed_in(app, url));
+    match (computer_settings(paired, signed_in), url) {
+        (ComputerSettings::Web, Some(url)) => show_main(app, Some(url)),
         _ => show_settings(app, None),
+    }
+}
+
+/// Where Settings in the tray goes.
+#[derive(Debug, PartialEq, Eq)]
+enum ComputerSettings {
+    /// Chat with Work's Settings, This computer, in the Chat with Work window.
+    Web,
+    /// The app's own settings window.
+    App,
+}
+
+/// Whether the Chat with Work window is signed in to the server: the
+/// server signs the desktop in with "remember me", whose cookie outlives
+/// the window. No window, or cookies it can't read, count as signed out.
+fn signed_in(app: &AppHandle, url: &tauri::Url) -> bool {
+    app.get_webview_window(MAIN)
+        .and_then(|window| window.cookies_for_url(url.clone()).ok())
+        .is_some_and(|cookies| signs_in(cookies.iter().map(|cookie| cookie.name())))
+}
+
+/// The server's sign-in cookie, as Devise names it for identities.
+fn signs_in<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.any(|name| name == "remember_identity_token")
+}
+
+fn computer_settings(paired: bool, signed_in: bool) -> ComputerSettings {
+    if paired && signed_in {
+        ComputerSettings::Web
+    } else {
+        ComputerSettings::App
     }
 }
 
@@ -433,5 +469,19 @@ mod tests {
         assert!(is_remote_label(MAIN));
         assert!(is_remote_label("page-3"));
         assert!(!is_remote_label(SETTINGS));
+    }
+
+    #[test]
+    fn the_trays_settings_open_the_web_only_where_it_signs_in() {
+        use super::{ComputerSettings, computer_settings};
+        assert_eq!(computer_settings(true, true), ComputerSettings::Web);
+        // Pairing approves the computer in the browser, which signs nobody
+        // in to the app's window: the web page would ask to sign in again.
+        assert_eq!(computer_settings(true, false), ComputerSettings::App);
+        assert_eq!(computer_settings(false, true), ComputerSettings::App);
+        assert!(super::signs_in(
+            ["_chatwithwork_session", "remember_identity_token"].into_iter()
+        ));
+        assert!(!super::signs_in(["_chatwithwork_session"].into_iter()));
     }
 }

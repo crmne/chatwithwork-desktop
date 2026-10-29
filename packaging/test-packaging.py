@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -201,6 +202,42 @@ cp "$TEST_RELEASE/$name" "$output"
                          "systemctl --user restart", "cww daemon run"):
                 self.assertIn(text, result.stdout)
 
+
+    def test_windows_install_instructions_work_before_winget_has_the_package(self):
+        # ChatWithWork.Desktop is waiting for review in microsoft/winget-pkgs;
+        # until packaging/winget/PUBLISHED exists, no install instruction
+        # may offer `winget install`, and each names a download that works.
+        if (ROOT / "packaging/winget/PUBLISHED").exists():
+            self.skipTest("the WinGet package is published")
+        for path in ("README.md", "packaging/release-notes/TEMPLATE.md"):
+            text = (ROOT / path).read_text(encoding="utf-8")
+            self.assertTrue([line for line in text.splitlines() if line.startswith("| Windows")], path)
+            self.assertNotIn("winget install", text, path)
+            self.assertNotIn("`winget upgrade`", text, path)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        row = next(line for line in readme.splitlines() if line.startswith("| Windows 10 and 11"))
+        self.assertIn("releases/latest", row)
+        self.assertIn("cww-installer.ps1", readme)
+        self.assertIn("winget-pkgs/pull/460095", readme)
+
+    def test_readme_names_the_windows_that_runs_commands(self):
+        # Commands need a BaseContainer: Windows 11 24H2 with its August 2026
+        # update or later (docs/commands.md). Every mention says so.
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        mentions = [m for m in re.finditer(r"Windows 11 24H2", readme)]
+        self.assertTrue(mentions)
+        for mention in mentions:
+            self.assertIn("August 2026 update", readme[mention.start():mention.start() + 80])
+
+    def test_installer_source_is_well_formed_and_purges_only_on_uninstall(self):
+        from xml.etree import ElementTree
+        wxs = ElementTree.parse(ROOT / "packaging/windows/cww.wxs").getroot()
+        ns = {"w": "http://wixtoolset.org/schemas/v4/wxs", "u": "http://wixtoolset.org/schemas/v4/wxs/util"}
+        actions = {c.get("Action"): c.get("Condition") for c in wxs.iterfind(".//w:Custom", ns)}
+        self.assertIn("NOT UPGRADINGPRODUCTCODE", actions["PurgeDaemon"])
+        self.assertNotIn("NOT", actions["UnregisterDaemon"])
+        close = wxs.find(".//u:CloseApplication", ns)
+        self.assertEqual(close.get("Target"), "cww-app.exe")
 
 if __name__ == "__main__":
     unittest.main()

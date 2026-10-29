@@ -7,13 +7,17 @@
     Group's TWAINDSM.dll (LGPL-2.1, its licence and notice beside it).
   - Registers the daemon's logon Scheduled Task (`cww daemon install`) and
     starts it; it stays idle until the computer is paired. Uninstalling
-    removes the task (`cww daemon uninstall`) but keeps keys and settings.
+    closes the desktop app and removes the task and everything the agent and
+    the app kept for this user (`cww daemon uninstall` with its purge: shared
+    folders, the index, the log, keys, the app's web view data). An upgrade
+    only stops the agent (`cww daemon uninstall`), keeping all of it.
   - Start menu shortcuts open the desktop app and the terminal UI.
 
   Build (see packaging/windows/build-msi.ps1):
     wix build cww.wxs -arch x64 -ext WixToolset.Util.wixext -d Version=1.2.3 -d SourceDir=... -o cww.msi
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package
     Name="Chat with Work Desktop"
     Manufacturer="Plenty"
@@ -131,8 +135,22 @@
       Before="UnregisterDaemon" Sequence="execute" />
     <CustomAction Id="UnregisterDaemon" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
       DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <SetProperty Id="PurgeDaemon" Value="&quot;[#CwwExe]&quot; daemon uninstall --purge"
+      Before="PurgeDaemon" Sequence="execute" />
+    <CustomAction Id="PurgeDaemon" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+      DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <!--
+      Uninstalling closes the desktop app (its window, tray item, and the
+      notification helper the agent started) before Windows would ask to,
+      so nothing keeps running from the removed folder. An upgrade by the
+      app's own updater has already quit it.
+    -->
+    <util:CloseApplication Id="CloseDesktopApp" Target="cww-app.exe" CloseMessage="yes"
+      EndSessionMessage="yes" TerminateProcess="0" Timeout="5" RebootPrompt="no"
+      Condition="REMOVE=&quot;ALL&quot;" />
     <InstallExecuteSequence>
-      <Custom Action="UnregisterDaemon" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="UnregisterDaemon" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND UPGRADINGPRODUCTCODE" />
+      <Custom Action="PurgeDaemon" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RegisterDaemon" Before="InstallFinalize" Condition="NOT REMOVE" />
     </InstallExecuteSequence>
   </Package>

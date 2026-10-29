@@ -13,6 +13,7 @@ use anyhow::{Context, Result, anyhow};
 use crate::config::Config;
 use crate::paths::{Paths, write_private_file};
 
+#[cfg_attr(test, allow(dead_code))]
 const KEYRING_SERVICE: &str = "com.chatwithwork.cww";
 
 pub const DEVICE_KEY: &str = "device-key";
@@ -26,6 +27,15 @@ pub enum SecretStore {
 }
 
 impl SecretStore {
+    /// The store the config recorded at pairing, whatever the environment
+    /// says now: where a purge finds what pairing wrote.
+    pub fn recorded(config: &Config, paths: &Paths) -> Self {
+        match config.secret_store.as_deref() {
+            Some("file") => Self::File(paths.secrets_file()),
+            _ => Self::Keyring,
+        }
+    }
+
     /// The store recorded in the config, unless the environment overrides it.
     pub fn for_config(config: &Config, paths: &Paths) -> Self {
         let choice = std::env::var("CWW_SECRET_STORE")
@@ -135,6 +145,15 @@ impl SecretStore {
 }
 
 fn entry(name: &str) -> Result<keyring::Entry> {
+    // The keychain's entries are the person's, one set per user, whatever
+    // the paths: a test that reached them would read or delete the real
+    // pairing of whoever runs it. Tests use the file store.
+    #[cfg(test)]
+    {
+        let _ = name;
+        anyhow::bail!("tests never touch the system's keychain; use the file store");
+    }
+    #[cfg(not(test))]
     keyring::Entry::new(KEYRING_SERVICE, name).map_err(|e| anyhow!("opening the keychain: {e}"))
 }
 
