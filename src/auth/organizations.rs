@@ -345,6 +345,21 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_list_stops_a_purge_before_its_keys_are_orphaned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        Config {
+            secret_store: Some("file".into()),
+            ..Default::default()
+        }
+        .save(&paths)
+        .unwrap();
+        std::fs::write(file(&paths), b"{ damaged").unwrap();
+        assert!(crate::auth::forget_all_secrets(&paths).is_err());
+        assert!(file(&paths).exists());
+    }
+
+    #[test]
     fn a_purge_keeps_a_sign_in_whose_keys_it_couldnt_delete() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::under(tmp.path());

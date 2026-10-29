@@ -122,9 +122,36 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
     if purge {
         crate::auth::forget_all_secrets(paths)
             .context("deleting this computer's keys from the system's keychain")?;
+        close_desktop_app();
         removed.extend(purge_files(paths, desktop_app_data().as_deref())?);
     }
     Ok(removed)
+}
+
+/// Closes the desktop app before a purge deletes its web view data
+/// (Windows: the installer's own close may come after the purge, and the
+/// app holds those files open). Only this user's copies.
+fn close_desktop_app() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let user = std::env::var("USERNAME").unwrap_or_default();
+        if user.is_empty() {
+            return;
+        }
+        let _ = Command::new("taskkill")
+            .args([
+                "/F",
+                "/IM",
+                "cww-app.exe",
+                "/FI",
+                &format!("USERNAME eq {user}"),
+            ])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+        // Its web view processes let go of their files a moment later.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 /// Deletes the agent's folders (keys, config, index, logs) and `app_data`,

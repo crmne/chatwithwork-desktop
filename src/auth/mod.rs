@@ -388,18 +388,17 @@ pub fn logout(paths: &Paths) -> Result<bool> {
 /// Deletes every key this computer holds, its own and each organization
 /// sign-in's, before a purge deletes the files that name them. Unlike
 /// [`logout`], a keychain that refuses a delete is an error, so a purge
-/// never reports success with keys left behind; a config or list that can't
-/// be read still deletes what the default store holds.
+/// never reports success with keys left behind; a config that can't be read
+/// still deletes what the default store holds, and a damaged list of
+/// organization sign-ins stops the purge before the files go.
 pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
-    // A list that can't be read names nothing to delete; its keys stay
-    // only if it was damaged, and the files go either way.
-    if organizations::list(paths).is_ok() {
-        organizations::forget_all(paths)?;
-    }
     let config = Config::load(paths).unwrap_or_default();
     let store = SecretStore::for_config(&config, paths);
     store.delete(DEVICE_KEY)?;
     store.delete(REFRESH_TOKEN)?;
+    // A damaged list fails the purge: deleting it would leave keys nothing
+    // names any more.
+    organizations::forget_all(paths)?;
     Ok(())
 }
 
