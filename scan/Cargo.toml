@@ -1,6 +1,6 @@
 [package]
 name = "cww-scan"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.90"
 description = "Chat with Work Desktop's scanning: USB scanners through the system (SANE, ImageCaptureCore, WIA), blank pages, OCR on the computer and searchable PDFs"
