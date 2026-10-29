@@ -40,7 +40,9 @@ pub fn run(app: AppHandle, dir: PathBuf) {
     let delay = std::env::var("CWW_APP_SNAPSHOT_DELAY")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(3);
+        .unwrap_or(3)
+        // Never shorter than the window takes to open.
+        .max(3);
     std::thread::sleep(Duration::from_secs(delay));
     let Some(window) = app.get_webview_window(SETTINGS) else {
         log::error!("snapshot: no settings window");
