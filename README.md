@@ -35,7 +35,7 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 
 `cww daemon install` starts the agent now, enables it at future logins, and restarts an existing service to use the installed version. If automatic setup failed, run that command without `sudo`. On Linux, check it with `systemctl --user status cww.service`; after a package upgrade, restart it with `systemctl --user restart cww.service`. On any platform, `cww status` reports the agent's state. Without a user service manager, keep `cww daemon run` running in a terminal. Closing the desktop app does not stop the background service.
 
-On Windows, uninstalling (Settings, Apps, or `msiexec /x`) closes the app and removes everything Chat with Work Desktop kept for you: shared folders and settings, the index, the activity log, keys and the app's sign-in, so installing again starts fresh. Elsewhere, `cww daemon uninstall --purge` does the same before you remove the app.
+On Windows, uninstalling (Settings, Apps, or `msiexec /x`) closes the app and removes everything Chat with Work Desktop kept for you: shared folders and settings, the index, the activity log, keys and the app's sign-in, so installing again starts fresh. Elsewhere, `cww daemon uninstall --purge` removes the agent's part (shared folders and settings, the index, the activity log and keys) before you remove the app; the app's sign-in stays in its web view data (`~/.local/share/com.chatwithwork.desktop` on Linux, `~/Library/WebKit/com.chatwithwork.desktop` on macOS) until you delete it.
 
 **Updates**
 

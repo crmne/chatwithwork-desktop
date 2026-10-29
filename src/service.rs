@@ -120,7 +120,8 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<Vec<PathBuf>> {
         removed.extend(windows_task::uninstall(paths)?);
     }
     if purge {
-        let _ = crate::auth::logout(paths);
+        crate::auth::forget_all_secrets(paths)
+            .context("deleting this computer's keys from the system's keychain")?;
         removed.extend(purge_files(paths, desktop_app_data().as_deref())?);
     }
     Ok(removed)
@@ -499,17 +500,51 @@ mod windows_task {
 
     fn stop_existing(paths: &Paths) -> Result<()> {
         use crate::control::{ControlRequest, request};
+        // Its process, to wait for after the control pipe closes: the agent
+        // goes on stopping commands and writing its last audit entry, with
+        // its files open, a moment longer.
+        let pid = request(&paths.socket_path(), ControlRequest::Status)
+            .ok()
+            .flatten()
+            .and_then(|status| status.get("pid")?.as_u64())
+            .and_then(|pid| u32::try_from(pid).ok());
         let _ = request(&paths.socket_path(), ControlRequest::Shutdown);
         for _ in 0..50 {
             if !matches!(
                 request(&paths.socket_path(), ControlRequest::Status),
                 Ok(Some(_))
             ) {
+                if let Some(pid) = pid {
+                    wait_for_exit(pid, std::time::Duration::from_secs(15));
+                }
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         bail!("The previous background agent did not stop. Try again in a moment.")
+    }
+
+    /// Waits up to `limit` for process `pid` to end (Windows; elsewhere the
+    /// service manager waits).
+    fn wait_for_exit(pid: u32, limit: std::time::Duration) {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+            };
+            // SAFETY: OpenProcess returns a handle we own or null; it's
+            // waited on and closed here, and nothing else uses it.
+            unsafe {
+                let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+                if !process.is_null() {
+                    WaitForSingleObject(process, limit.as_millis().min(u32::MAX as u128) as u32);
+                    CloseHandle(process);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = (pid, limit);
     }
 
     fn wait_for_start(paths: &Paths) -> Result<()> {

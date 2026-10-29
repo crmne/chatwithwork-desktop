@@ -210,13 +210,11 @@ cp "$TEST_RELEASE/$name" "$output"
         if (ROOT / "packaging/winget/PUBLISHED").exists():
             self.skipTest("the WinGet package is published")
         for path in ("README.md", "packaging/release-notes/TEMPLATE.md"):
-            text = (ROOT / path).read_text()
-            windows = [line for line in text.splitlines() if line.startswith("| Windows")]
-            self.assertTrue(windows, path)
-            for line in windows:
-                self.assertNotIn("winget install", line, path)
+            text = (ROOT / path).read_text(encoding="utf-8")
+            self.assertTrue([line for line in text.splitlines() if line.startswith("| Windows")], path)
+            self.assertNotIn("winget install", text, path)
             self.assertNotIn("`winget upgrade`", text, path)
-        readme = (ROOT / "README.md").read_text()
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         row = next(line for line in readme.splitlines() if line.startswith("| Windows 10 and 11"))
         self.assertIn("releases/latest", row)
         self.assertIn("cww-installer.ps1", readme)
@@ -225,7 +223,7 @@ cp "$TEST_RELEASE/$name" "$output"
     def test_readme_names_the_windows_that_runs_commands(self):
         # Commands need a BaseContainer: Windows 11 24H2 with its August 2026
         # update or later (docs/commands.md). Every mention says so.
-        readme = (ROOT / "README.md").read_text()
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         mentions = [m for m in re.finditer(r"Windows 11 24H2", readme)]
         self.assertTrue(mentions)
         for mention in mentions:

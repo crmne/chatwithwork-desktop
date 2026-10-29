@@ -289,9 +289,22 @@ mod tests {
         assert!(forget(&paths, &first.id).unwrap());
         assert!(first.credentials(&paths).is_err());
         assert!(second.credentials(&paths).is_ok());
-        assert_eq!(list(&paths).unwrap(), [second]);
+        assert_eq!(list(&paths).unwrap(), std::slice::from_ref(&second));
         assert!(!forget(&paths, "missing").unwrap());
         assert_eq!(Config::load(&paths).unwrap(), config);
+        // A purge forgets the rest, organizations and the computer's own,
+        // from the store the config names (here the file).
+        Config {
+            secret_store: Some("file".into()),
+            ..Config::load(&paths).unwrap()
+        }
+        .save(&paths)
+        .unwrap();
+        crate::auth::forget_all_secrets(&paths).unwrap();
+        assert!(second.credentials(&paths).is_err());
+        assert_eq!(primary.get(DEVICE_KEY).unwrap(), None);
+        assert_eq!(primary.get(REFRESH_TOKEN).unwrap(), None);
+        assert!(list(&paths).unwrap().is_empty());
     }
 
     #[test]
