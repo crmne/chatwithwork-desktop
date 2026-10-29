@@ -149,7 +149,9 @@ impl Recording {
         Self::start_at(chats, helper, paths, emit)
     }
 
-    fn start_at(
+    /// Record with the preferences of this installation. Embedded clients
+    /// and tests can keep them separate from the process's default paths.
+    pub fn start_at(
         chats: Chats,
         helper: PathBuf,
         paths: crate::paths::Paths,

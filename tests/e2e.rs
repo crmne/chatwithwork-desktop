@@ -4855,11 +4855,13 @@ async fn relays_dictation_and_signed_downloads() {
     );
     // Access is checked before the helper can open a microphone.
     let c = chats.clone();
+    let recording_paths = fx.paths.clone();
     let failure = blocking(move || {
         let (tx, rx) = std::sync::mpsc::channel();
-        let _recording = cww::tui::dictation::Recording::start(
+        let _recording = cww::tui::dictation::Recording::start_at(
             c,
             "no-microphone-helper".into(),
+            recording_paths,
             move |update| {
                 tx.send(update).unwrap();
             },
@@ -4889,9 +4891,10 @@ async fn relays_dictation_and_signed_downloads() {
         audio.resize(20_000, 0);
         std::fs::write(temp.path().join("audio.wav"), audio).unwrap();
         let c = chats.clone();
+        let recording_paths = fx.paths.clone();
         let text = blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            let recording = Recording::start(c, helper, move |update| {
+            let recording = Recording::start_at(c, helper, recording_paths, move |update| {
                 tx.send(update).unwrap();
             })
             .unwrap();
