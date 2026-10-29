@@ -58,9 +58,14 @@ fn fetch_with(
         .spawn(move || {
             // Never cancelled: a dictation that stops only stops waiting.
             let cancelled = AtomicBool::new(false);
-            let result = download(&paths, &cancelled, &|bytes| {
-                worker.bytes.store(bytes, Ordering::Relaxed);
-            })
+            // A panic still ends the download, so nobody waits on it forever
+            // and the next dictation starts a new one.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                download(&paths, &cancelled, &|bytes| {
+                    worker.bytes.store(bytes, Ordering::Relaxed);
+                })
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("The download stopped unexpectedly.")))
             .map_err(|e| format!("{e:#}"));
             let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
             running.retain(|d| !Arc::ptr_eq(d, &worker));
@@ -167,6 +172,14 @@ mod tests {
         assert_eq!(failure.code, "local_model");
         assert!(
             failure.message.contains("wasn't uploaded"),
+            "{}",
+            failure.message
+        );
+        let again =
+            fetch_with(Model::Small, &paths, |_, _, _| panic!("a broken download")).unwrap();
+        let failure = again.wait(&AtomicBool::new(false), &|_| {}).unwrap_err();
+        assert!(
+            failure.message.contains("stopped unexpectedly"),
             "{}",
             failure.message
         );
