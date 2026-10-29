@@ -74,6 +74,14 @@ Settings in the tray opens This computer in the Chat with Work window once the c
 
 The settings window shows `app/ui`, plain HTML, CSS and JavaScript without a framework or build step, styled with the web app's Live Wire tokens (`ui/tokens.css`, copied from the web app) and Geist. They work without a network and before pairing. Only they reach the daemon:
 
+The welcome page leads with **Open Chat with Work**, which works without
+pairing this computer or sharing folders. **Use files from this computer**
+expands the optional pairing and folder steps; nothing is shared by opening
+the app. Crash reports remain a separate choice. Welcome stays in the
+settings navigation until completed, so browsing the other pages doesn't
+lose the way back. If opening the chat or saving a preference fails, the
+welcome page keeps the choice and shows the error so it can be retried.
+
 - The capability in `capabilities/local.json` names the `settings` window and no remote URL. Each command in `local.rs` checks again that its caller is a bundled page in that window.
 - `control` sends a control request (CONTROL.md) only if it is on `local::ALLOWED`: status, pause and resume, shared folders and their changes and commands, lending them to bots (`roots_bot`), the deny list, the activity log, and notification permission. Never chats, uploads, `reload` or `shutdown`.
 - The rest are the app's own: pairing (it runs `cww login --json` and reports its code and outcome as `pairing` events), the folder picker, starting the daemon (`cww daemon install`), start at login, crash reports, dictation preferences and Whisper models for `cww tui`, opening the config file or the logs, opening the Chat with Work window on one of the server's pages, and on Windows letting commands see the top of the drives they run on (`prepare_command_drives`, which asks Windows for an administrator, over the settings window; [commands.md](commands.md#windows)).

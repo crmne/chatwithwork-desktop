@@ -192,7 +192,7 @@ function renderNav() {
   const nav = document.getElementById("nav");
   nav.replaceChildren(
     h("div", { class: "nav__brand" }, h("img", { src: "mark.svg", alt: "" }), "Chat with Work"),
-    ...NAV.map((page) =>
+    ...(app.info.onboarded ? NAV : ["welcome", ...NAV]).map((page) =>
       h("button", { type: "button", class: "nav__link", "aria-current": app.page === page ? "page" : false,
         onclick: () => app.go(page) }, icon(PAGES[page].icon), PAGES[page].title)),
     h("div", { class: "nav__foot" },

@@ -775,7 +775,7 @@ code,
   transition: inline-size var(--duration-base) var(--ease-snap);
 }
 
-/* The welcome page: a centered column of numbered steps */
+/* The welcome page: chat first, optional computer setup underneath */
 
 .welcome {
   max-inline-size: 36rem;
@@ -807,6 +807,37 @@ code,
 
 .welcome__hero p {
   color: var(--ink-muted);
+}
+
+.welcome__hero > .btn {
+  margin-block-start: 0.5rem;
+}
+
+.welcome__sharing {
+  border-block: var(--hairline);
+}
+
+.welcome__sharing summary {
+  padding-block: 1rem;
+  cursor: pointer;
+  font-weight: 550;
+}
+
+.welcome__sharing summary .micro {
+  margin-inline-start: 0.75rem;
+  font-weight: 400;
+}
+
+.welcome__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-block-end: 1rem;
+}
+
+.welcome .row__body h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
 }
 
 .step {
