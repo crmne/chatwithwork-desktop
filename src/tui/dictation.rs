@@ -16,6 +16,8 @@ pub mod protocol;
 
 pub const HELP: &str = "Dictate. Choose EU cloud transcription using credits or local Whisper in General settings. Review the words before sending.";
 
+mod model;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Phase {
     #[default]
@@ -40,7 +42,15 @@ impl Phase {
 pub enum Update {
     Mode(crate::dictation::Mode),
     Recording,
-    Level { elapsed_ms: u32, level: u16 },
+    Level {
+        elapsed_ms: u32,
+        level: u16,
+    },
+    /// The Whisper model is downloading for its first use.
+    Downloading {
+        bytes: u64,
+        total: u64,
+    },
     Transcribing,
     Finished(Result<String, Failure>),
 }
@@ -53,10 +63,23 @@ pub struct State {
     pub mode: crate::dictation::Mode,
     pub elapsed_ms: u32,
     pub levels: [u16; 24],
+    /// Bytes of the Whisper model downloaded so far, and its size, while
+    /// it downloads for its first use.
+    pub download: Option<(u64, u64)>,
     generation: u64,
 }
 
 impl State {
+    /// The model's download, as a sentence's end, while it lasts.
+    pub fn downloading(&self) -> Option<String> {
+        let (bytes, total) = self.download?;
+        let percent = (bytes.saturating_mul(100) / total.max(1)).min(100);
+        Some(format!(
+            "Getting Whisper for its first use ({} MB): {percent}%",
+            total.div_ceil(1_000_000)
+        ))
+    }
+
     pub fn elapsed(&self) -> String {
         let seconds = self.elapsed_ms / 1000;
         format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -67,6 +90,7 @@ impl State {
         self.phase = Phase::Starting;
         self.elapsed_ms = 0;
         self.levels = [0; 24];
+        self.download = None;
         self.generation
     }
 
@@ -94,9 +118,13 @@ impl State {
                 self.levels[23] = level;
             }
             Update::Level { .. } => {}
+            Update::Downloading { bytes, total } => {
+                self.download = (bytes < total).then_some((bytes, total));
+            }
             Update::Transcribing => self.phase = Phase::Transcribing,
             Update::Finished(result) => {
                 self.phase = Phase::Idle;
+                self.download = None;
                 return Some(result);
             }
         }
@@ -136,9 +164,10 @@ impl Recording {
                 let result = (|| {
                     let preferences = crate::dictation::Preferences::load(&paths)
                         .map_err(|_| Failure::new("unavailable", "Could not read dictation settings. Choose a mode in General settings."))?;
+                    let model = preferences.model();
                     // This decision is local and fixed for the whole recording.
                     // Local failures never enter the cloud availability/upload path.
-                    if preferences.mode == crate::dictation::Mode::Cloud {
+                    let fetching = if preferences.mode == crate::dictation::Mode::Cloud {
                         let access = chats.dictation()?;
                         if !access.cloud {
                             return Err(Failure::new(
@@ -148,21 +177,30 @@ impl Recording {
                                 }),
                             ));
                         }
-                    } else if !preferences.model.downloaded(&paths) {
-                        return Err(Failure::new("unavailable", "Download the selected Whisper model in General settings first."));
-                    }
+                        None
+                    } else {
+                        // The first local dictation gets its model while
+                        // the person speaks.
+                        model::fetch(model, &paths)
+                    };
                     emit(Update::Mode(preferences.mode));
                     if cancel.load(Ordering::SeqCst) {
                         return Ok(String::new());
                     }
-                    let audio = capture(helper.clone(), rx, &cancel, &emit)?;
+                    let audio = capture(helper.clone(), rx, &cancel, &emit, fetching.as_ref())?;
                     if audio.is_empty() || cancel.load(Ordering::SeqCst) {
                         return Ok(String::new());
                     }
                     emit(Update::Transcribing);
+                    if let Some(fetching) = &fetching {
+                        fetching.wait(&cancel, &emit)?;
+                        if cancel.load(Ordering::SeqCst) {
+                            return Ok(String::new());
+                        }
+                    }
                     match preferences.mode {
                         crate::dictation::Mode::Cloud => chats.dictate(&audio, "audio/wav"),
-                        crate::dictation::Mode::Local => local::transcribe(&helper, preferences.model, audio, &cancel),
+                        crate::dictation::Mode::Local => local::transcribe(&helper, model, audio, &cancel),
                     }
                 })();
                 if !cancel.load(Ordering::SeqCst) {
@@ -217,6 +255,7 @@ fn capture(
     stop: mpsc::Receiver<()>,
     cancel: &AtomicBool,
     emit: &impl Fn(Update),
+    fetching: Option<&model::Fetch>,
 ) -> Result<Vec<u8>, Failure> {
     let mut command = Command::new(helper);
     command
@@ -260,6 +299,9 @@ fn capture(
                     .map_err(|_| microphone_failure())?;
             }
             stopped = true;
+        }
+        if let Some(fetching) = fetching {
+            fetching.report(emit);
         }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(CaptureEvent::Progress(update)) => {
@@ -328,7 +370,7 @@ mod tests {
         paths.ensure().unwrap();
         Preferences {
             mode: Mode::Local,
-            model: Model::Tiny,
+            model: Some(Model::Tiny),
         }
         .save(&paths)
         .unwrap();

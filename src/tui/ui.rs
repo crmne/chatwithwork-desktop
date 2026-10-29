@@ -591,7 +591,17 @@ pub(super) fn notice_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'
                     ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'][usize::from(*level) * 7 / 1000]
                 })
                 .collect();
-            format!("Listening  {bars}  {}  Esc to stop", state.elapsed())
+            match state.downloading() {
+                Some(download) => format!(
+                    "Listening  {bars}  {}  Esc to stop · {download}",
+                    state.elapsed()
+                ),
+                None => format!("Listening  {bars}  {}  Esc to stop", state.elapsed()),
+            }
+        } else if let Some(download) = state.downloading()
+            && state.phase == super::dictation::Phase::Transcribing
+        {
+            format!("{download}. Escape to discard.")
         } else {
             state.phase.label().to_owned()
         };
