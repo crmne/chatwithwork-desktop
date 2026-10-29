@@ -74,7 +74,7 @@ jobs:
       - run: mbx test -p cww-scan --locked
         timeout-minutes: 5
       # The bridge script, in a stand-in page (Node comes with the runners).
-      - run: node --test app/tests/bridge.test.mjs
+      - run: node --test app/tests/*.test.mjs
       - run: cargo fmt -p cww-app --check
       - run: mbx clippy -p cww-app --all-targets --locked -- -D warnings
       - run: mbx clippy -p cww-app --features demo --all-targets --locked -- -D warnings

@@ -155,7 +155,9 @@ function unpairedCard(app) {
       h("h3", {}, "This computer isn't paired"),
       h("p", {}, "Pairing opens Chat with Work in your browser, where you approve this computer. It gets its own key, which never leaves it.")),
     h("div", { class: "inline" }, button(view.requesting ? "Asking Chat with Work…" : "Pair with Chat with Work…",
-      () => pair(app, server), { kind: "btn-primary", disabled: view.requesting || server === null })),
+      // The address as typed now: typing redraws the page only when the
+      // field stops or starts being blank.
+      () => pair(app, chosenServer(view)), { kind: "btn-primary", disabled: view.requesting || server === null })),
     h("label", { class: "check" },
       h("input", { type: "checkbox", checked: !!view.custom, "data-key": "custom-server", onchange: (event) => {
         view.custom = event.target.checked;
