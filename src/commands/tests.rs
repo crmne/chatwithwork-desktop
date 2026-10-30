@@ -590,20 +590,114 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
     assert_eq!(done.stdout_cut, 3);
 }
 
-/// Manual check of the host's toolchains: `cargo test commands::tests::toolchains -- --ignored --nocapture`.
+#[cfg(unix)]
 #[test]
-#[ignore]
-fn toolchains() {
+fn mise_data_is_private_and_installed_tools_remain_readonly() {
     let fx = fixture(true);
+    let host = fx._dir.path().join("host-home");
+    let data = host.join(".local/share/mise");
+    for directory in ["installs", "plugins", "shims"] {
+        std::fs::create_dir_all(data.join(directory)).unwrap();
+    }
+    std::fs::create_dir_all(host.join(".config/mise")).unwrap();
+    let plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("node -v"),
+        "mise-check",
+    )
+    .unwrap();
+    let env: std::collections::HashMap<_, _> = plan.environment(Some(&host)).into_iter().collect();
+    assert_eq!(
+        env["MISE_DATA_DIR"],
+        plan.home.join(".local/share/mise").to_string_lossy()
+    );
+    assert_eq!(
+        env["MISE_SHIMS_DIR"],
+        plan.home.join(".local/share/mise/shims").to_string_lossy()
+    );
+    assert_eq!(
+        env["MISE_INSTALLS_DIR"],
+        data.join("installs").to_string_lossy()
+    );
+    assert_eq!(
+        env["MISE_INSTALL_STORE_DIR"],
+        data.join("installs").to_string_lossy()
+    );
+    assert_eq!(
+        env["MISE_PLUGINS_DIR"],
+        data.join("plugins").to_string_lossy()
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(&plan.request_json(Some(&host), Sandbox::Bubblewrap)).unwrap();
+    assert!(
+        document["filesystem"]["readonlyPaths"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(data))
+    );
+    assert_eq!(
+        document["filesystem"]["readwritePaths"],
+        serde_json::json!([plan.folder, plan.home])
+    );
+}
+
+/// Real installed mise runtimes, with synthetic config only. Run explicitly:
+/// `cargo test commands::tests::toolchains -- --ignored`.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires installed mise Node/Ruby and a working Linux command sandbox"]
+fn toolchains() {
+    assert!(
+        sandbox_works(),
+        "this check requires a working command sandbox"
+    );
+    let fx = fixture(true);
+    let installs = crate::paths::home_dir()
+        .unwrap()
+        .join(".local/share/mise/installs");
+    let installed = |tool: &str| {
+        std::fs::read_dir(installs.join(tool))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let version = entry.file_name().into_string().ok()?;
+                (version.chars().all(|c| c.is_ascii_digit() || c == '.')
+                    && entry.path().join("bin").join(tool).is_file())
+                .then_some(version)
+            })
+            .max_by_key(|v| {
+                v.split('.')
+                    .map(|n| n.parse::<u32>().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| panic!("install a mise-managed {tool} before this check"))
+    };
+    let config = fx.folder.join("mise-probe");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        format!(
+            "[tools]\nnode = {:?}\nruby = {:?}\n[wrappers]\ncww-probe = \"echo\"\n",
+            installed("node"),
+            installed("ruby")
+        ),
+    )
+    .unwrap();
     let status = fx
         .runs
         .start(
             &fx.config,
-            &request("echo $PATH; ruby -v; node -v; python3 -V; cargo -V; git --version"),
+            &request("set -e; export MISE_CONFIG_DIR=\"$PWD/mise-probe\" MISE_SYSTEM_CONFIG_DIR=\"$HOME/empty-mise-system\"; node -p \"'cww-node-check'\"; ruby -e \"puts 'cww-ruby-check'\"; test -f \"$MISE_DATA_DIR/command-wrappers/bin.lock\"; printf 'cww-private-state-check\\n'"),
         )
         .unwrap();
     let done = wait(&fx.runs, &status.id);
-    println!("{}\n{}", done.stdout, done.stderr);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert_eq!(
+        done.stdout.trim(),
+        "cww-node-check\ncww-ruby-check\ncww-private-state-check",
+        "{done:?}"
+    );
 }
 
 /// Commands on Windows, in a process container, where this Windows has one

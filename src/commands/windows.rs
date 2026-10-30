@@ -539,11 +539,33 @@ impl Plan {
                 format!("{own}\\AppData\\Local\\mise-cache"),
             ),
             (
+                "MISE_DATA_DIR".to_string(),
+                format!("{own}\\AppData\\Local\\mise"),
+            ),
+            (
+                "MISE_SHIMS_DIR".to_string(),
+                format!("{own}\\AppData\\Local\\mise\\shims"),
+            ),
+            (
                 "MISE_STATE_DIR".to_string(),
                 format!("{own}\\AppData\\Local\\mise-state"),
             ),
         ]);
-        env.extend(found.env);
+        for (name, value) in found.env {
+            if name == "MISE_DATA_DIR" {
+                env.extend([
+                    (
+                        "MISE_INSTALLS_DIR".to_string(),
+                        format!("{value}\\installs"),
+                    ),
+                    // mise's identity install store is shortened on Windows.
+                    ("MISE_INSTALL_STORE_DIR".to_string(), format!("{value}\\i")),
+                    ("MISE_PLUGINS_DIR".to_string(), format!("{value}\\plugins")),
+                ]);
+            } else {
+                env.push((name, value));
+            }
+        }
         env
     }
 
@@ -991,6 +1013,44 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect()
+    }
+
+    #[test]
+    fn mise_runtime_data_is_private_on_windows() {
+        let base = tempfile::tempdir().unwrap();
+        let host = host(base.path());
+        let data = host.local_app_data.as_ref().unwrap().join("mise");
+        std::fs::create_dir_all(&data).unwrap();
+        let folder = base.path().join("project");
+        let home = base.path().join("run");
+        let plan = plan(&folder, &home, false);
+        let env: std::collections::HashMap<_, _> =
+            plan.windows_environment(&host).into_iter().collect();
+        assert_eq!(
+            env["MISE_DATA_DIR"],
+            format!("{}\\AppData\\Local\\mise", display(&home))
+        );
+        assert_eq!(
+            env["MISE_SHIMS_DIR"],
+            format!("{}\\AppData\\Local\\mise\\shims", display(&home))
+        );
+        assert_eq!(
+            env["MISE_INSTALLS_DIR"],
+            format!("{}\\installs", display(&data))
+        );
+        assert_eq!(
+            env["MISE_INSTALL_STORE_DIR"],
+            format!("{}\\i", display(&data))
+        );
+        assert_eq!(
+            env["MISE_PLUGINS_DIR"],
+            format!("{}\\plugins", display(&data))
+        );
+        assert!(plan.windows_readable(&host).contains(&display(&data)));
+        assert_eq!(
+            plan.windows_request(&host)["filesystem"]["readwritePaths"],
+            serde_json::json!([display(&folder), display(&home)])
+        );
     }
 
     /// The request a Windows run gets: a process container that never falls

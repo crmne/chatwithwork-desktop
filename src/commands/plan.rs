@@ -371,11 +371,35 @@ impl Plan {
             ),
             ("MISE_CACHE_DIR".to_string(), format!("{own}/.cache/mise")),
             (
+                "MISE_DATA_DIR".to_string(),
+                format!("{own}/.local/share/mise"),
+            ),
+            (
+                "MISE_SHIMS_DIR".to_string(),
+                format!("{own}/.local/share/mise/shims"),
+            ),
+            (
                 "MISE_STATE_DIR".to_string(),
                 format!("{own}/.local/state/mise"),
             ),
         ];
-        env.extend(found.env);
+        for (name, value) in found.env {
+            if name == "MISE_DATA_DIR" {
+                // mise writes command-wrapper shims and their lock in its
+                // data directory even when executing an installed tool.
+                // Only the installations/plugins belong to the host.
+                env.extend([
+                    ("MISE_INSTALLS_DIR".to_string(), format!("{value}/installs")),
+                    (
+                        "MISE_INSTALL_STORE_DIR".to_string(),
+                        format!("{value}/installs"),
+                    ),
+                    ("MISE_PLUGINS_DIR".to_string(), format!("{value}/plugins")),
+                ]);
+            } else {
+                env.push((name, value));
+            }
+        }
         env
     }
 
