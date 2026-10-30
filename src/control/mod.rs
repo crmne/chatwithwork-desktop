@@ -171,9 +171,14 @@ pub enum ControlRequest {
         root: String,
         label: String,
     },
-    /// The deny list in effect, to show. It can only be changed in
-    /// `config.toml`, never over this channel.
+    /// The deny list in effect. Local settings only.
     Deny,
+    /// Add a custom exclusion (`previous: null`), replace it atomically,
+    /// or remove it (`pattern: null`). Built-in protections are not editable.
+    DenyExtra {
+        previous: Option<String>,
+        pattern: Option<String>,
+    },
     /// Stream events on this connection until it closes. With the `chat`
     /// topic, `chat` names the chat to follow, which the daemon follows on
     /// the server for as long as the subscription is open; with `chats`,

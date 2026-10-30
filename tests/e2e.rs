@@ -5663,3 +5663,86 @@ async fn a_confined_worker_runs_commands_through_its_supervisor() {
         .unwrap();
     assert!(leftover.stdout.is_empty(), "a command outlived the daemon");
 }
+
+/// Custom exclusions apply to the live reader, not merely the stored settings.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn custom_exclusions_change_live_without_relaxing_builtin_protection() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair(&fx, &server);
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut session = connect(&mut server).await;
+    assert_eq!(
+        session.call("read", json!({"path":"docs:notes.md"})).await["isError"],
+        false
+    );
+    let edit = |previous: Option<&str>, pattern: Option<&str>| ControlRequest::DenyExtra {
+        previous: previous.map(str::to_owned),
+        pattern: pattern.map(str::to_owned),
+    };
+    control(&fx.paths, edit(None, Some("notes.md"))).await;
+    assert_eq!(
+        error_code(&session.call("read", json!({"path":"docs:notes.md"})).await),
+        "denied"
+    );
+    assert!(
+        control_error(&fx.paths, edit(Some("notes.md"), Some("[")))
+            .await
+            .contains("glob")
+    );
+    assert_eq!(Config::load(&fx.paths).unwrap().deny.extra, ["notes.md"]);
+    assert_eq!(
+        error_code(&session.call("read", json!({"path":"docs:notes.md"})).await),
+        "denied"
+    );
+    control(&fx.paths, edit(Some("notes.md"), Some("plans"))).await;
+    assert_eq!(
+        session.call("read", json!({"path":"docs:notes.md"})).await["isError"],
+        false
+    );
+    assert_eq!(
+        error_code(
+            &session
+                .call("read", json!({"path":"docs:plans/q3.txt"}))
+                .await
+        ),
+        "denied"
+    );
+    assert!(
+        control_error(&fx.paths, edit(Some(".env*"), None))
+            .await
+            .contains("custom exclusion")
+    );
+    control(&fx.paths, edit(Some("plans"), None)).await;
+    assert_eq!(
+        session
+            .call("read", json!({"path":"docs:plans/q3.txt"}))
+            .await["isError"],
+        false
+    );
+    assert_eq!(
+        error_code(&session.call("read", json!({"path":"docs:.env"})).await),
+        "denied"
+    );
+    let config = Config::load(&fx.paths).unwrap();
+    assert!(config.deny.extra.is_empty());
+    assert!(config.deny.remove.is_empty());
+    assert!(!config.deny.allow_hardlinks);
+    let events = control(&fx.paths, ControlRequest::AuditTail { lines: Some(100) }).await;
+    for name in ["exclusion_added", "exclusion_changed", "exclusion_removed"] {
+        assert!(
+            events["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["event"] == name)
+        );
+    }
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

@@ -1,73 +1,91 @@
-// The deny list, as information: what is never shared, even inside a
-// shared folder. It can only be changed in config.toml, on purpose.
-
-import { agentMissing, append, button, call, control, group, h, notice, pageHeader } from "../app.js";
+// Custom exclusions stay in the app-owned child, never the remote Settings DOM.
+import { agentMissing, append, button, control, group, h, notice, pageHeader } from "../app.js";
 
 export const title = "Excluded files and folders";
 export const icon = "lock-simple";
 
-const patterns = (list, removed = false) =>
-  h("div", { class: removed ? "patterns patterns--removed" : "patterns" }, list.map((pattern) => h("code", {}, pattern)));
+const patterns = (list) => h("div", { class: "patterns" }, list.map(pattern => h("code", {}, pattern)));
 
 async function load(app) {
   const view = app.view("privacy");
-  view.loading = true;
   try {
     view.deny = await control({ cmd: "deny" });
-    view.error = null;
+    view.loadError = null;
   } catch (error) {
-    view.error = error.message;
+    view.loadError = error.message;
   }
-  view.loading = false;
+  // Drafts belong to the local view and survive status updates/hidden panes.
   if (app.page === "privacy" || app.page === "folders") app.render();
 }
 
-// Reloaded on every visit and change: an edited config.toml can change it.
 export const enter = load;
-
 export function statusChanged(app) {
   if (app.page === "privacy" || app.page === "folders") load(app);
+}
+
+async function change(app, previous, pattern) {
+  const view = app.view("privacy");
+  view.busy = true;
+  view.error = null;
+  app.render();
+  try {
+    view.deny = await control({ cmd: "deny_extra", previous, pattern });
+    view.editing = null;
+    view.draft = "";
+  } catch (error) {
+    if (error.code !== "declined") view.error = error.message;
+  }
+  view.busy = false;
+  app.render();
+}
+
+function editor(app) {
+  const view = app.view("privacy");
+  const editing = view.editing != null;
+  const valid = !!view.draft?.trim();
+  return h("form", { class: "row row--stack", onsubmit: event => {
+    event.preventDefault();
+    if (view.busy || !view.draft?.trim()) return;
+    change(app, view.editing ?? null, view.draft.trim());
+  } },
+    h("label", { class: "row__body", for: "exclusion-pattern" },
+      h("h3", {}, editing ? "Edit custom exclusion" : "Add an exclusion"),
+      h("p", {}, "A name matches anywhere, like *.secret. Use / between folders, like Clients/Private.")),
+    h("input", { id: "exclusion-pattern", class: "input", value: view.draft || "", placeholder: "*.secret or Clients/Private", maxlength: 512,
+      "data-key": "exclusion-pattern", disabled: view.busy, oninput: event => {
+        const wasValid = !!view.draft?.trim();
+        view.draft = event.target.value;
+        if (wasValid !== !!view.draft.trim()) app.render();
+      } }),
+    h("div", { class: "inline" },
+      h("button", { type: "submit", class: "btn btn-primary", disabled: !valid || view.busy }, editing ? "Save exclusion" : "Add exclusion"),
+      editing ? button("Cancel", () => { view.editing = null; view.draft = ""; view.error = null; app.render(); }, { disabled: view.busy }) : null));
 }
 
 export function render(app, embedded = false) {
   const view = app.view("privacy");
   const page = h("div", { class: "page" },
-    embedded ? h("header", {}, h("h2", {}, "Excluded files and folders"), h("p", { class: "muted" }, "These files stay private, even inside a shared folder.")) : pageHeader("Excluded files and folders", "These files stay private, even inside a shared folder."));
-  if (!app.status) {
-    append(page, agentMissing(app));
-    return page;
-  }
-  if (view.error) {
-    append(page, notice(view.error));
-    return page;
-  }
+    embedded ? h("header", {}, h("h2", {}, title), h("p", { class: "muted" }, "These files stay private, even inside a shared folder.")) : pageHeader(title, "These files stay private, even inside a shared folder."));
+  if (!app.status) { append(page, agentMissing(app)); return page; }
+  if (view.error || view.loadError) append(page, notice(view.error || view.loadError));
   const deny = view.deny;
-  if (!deny) {
-    append(page, h("p", { class: "muted" }, "Loading…"));
-    return page;
-  }
-  append(page, 
-    group(
-      h("div", { class: "row row--stack" }, h("div", { class: "row__body" },
-        h("h3", {}, "Built in"),
-        h("p", {}, "Keys, credentials, password stores, mail, messages and browser profiles. A pattern matches a file or folder name anywhere in a path."),
-        patterns(deny.builtin || []))),
-      deny.extra?.length ? h("div", { class: "row row--stack" }, h("div", { class: "row__body" },
-        h("h3", {}, "Added by you"), patterns(deny.extra))) : null,
-      deny.removed?.length ? h("div", { class: "row row--stack" }, h("div", { class: "row__body" },
-        h("h3", {}, "Removed by you"), h("p", {}, "These built-in patterns no longer apply."), patterns(deny.removed, true))) : null,
-      h("div", { class: "row" }, h("div", { class: "row__body" },
-        h("h3", {}, "Also private"),
-        h("p", {}, deny.allow_hardlinks
-          ? "The background agent's own settings, keys, index and logs. Files with more than one hard link are allowed by your configuration."
-          : "The background agent's own settings, keys, index and logs, and files with more than one hard link, which could point outside a shared folder.")))),
-    h("div", { class: "section" },
-      h("p", { class: "muted" }, "To change this list, edit the ", h("code", {}, "[deny]"), " section of config.toml, and it applies right away."),
-      h("div", { class: "inline" }, button("Open config.toml", () => call("open_file", { which: "config" }).catch((error) => {
-        view.error = error.message;
-        app.render();
-      })))));
+  if (!deny) { append(page, h("p", { class: "muted" }, "Loading…")); return page; }
+  append(page, group(
+    ...(deny.extra || []).map(pattern => h("div", { class: "row" },
+      h("div", { class: "row__body" }, h("code", {}, pattern)),
+      h("div", { class: "row__actions" },
+        button("Edit", () => { view.editing = pattern; view.draft = pattern; view.error = null; app.render(); }, { disabled: view.busy, key: `edit-exclusion-${pattern}` }),
+        button("Remove…", () => change(app, pattern, null), { kind: "btn-subtle-negative", disabled: view.busy, key: `remove-exclusion-${pattern}` })))),
+    editor(app)),
+    h("p", { class: "muted" }, "Editing or removing an exclusion can share more files. This computer asks you to confirm."),
+    group(h("details", { class: "row row--stack", open: !!view.builtinsOpen, ontoggle: event => { view.builtinsOpen = event.target.open; } },
+      h("summary", {}, "Built-in protections"),
+      h("p", { class: "muted" }, "Keys, credentials, password stores, mail, messages and browser profiles. These protections cannot be removed here."),
+      patterns(deny.builtin || []),
+      deny.removed?.length ? h("div", {}, h("h3", {}, "Changed in configuration"), h("p", {}, "These built-in patterns were removed manually and no longer apply."), patterns(deny.removed)) : null),
+      h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, "Also private"), h("p", {}, deny.allow_hardlinks
+        ? "The background agent's own settings, keys, index and logs. Files with more than one hard link are allowed by your configuration."
+        : "The background agent's own settings, keys, index and logs, and files with more than one hard link, which could point outside a shared folder.")))));
   return page;
 }
-
 export default { title, icon, render, enter, statusChanged };

@@ -36,6 +36,7 @@ use crate::paths::Paths;
 
 struct State {
     status: Value,
+    deny: Value,
     log: Vec<Value>,
     generation: u64,
     requests: Vec<Value>,
@@ -306,6 +307,7 @@ fn fresh() -> State {
     });
     State {
         status,
+        deny: deny(),
         log: vec![json!({ "ts": ago(5), "event": "started", "detail": "cww 0.1.0" })],
         generation: 0,
         requests: Vec::new(),
@@ -422,6 +424,13 @@ fn sample() -> State {
         "server": "https://chatwithwork.com",
         // A development server's own device, to see This computer against it.
         "device_id": std::env::var("CWW_DEMO_DEVICE_ID").unwrap_or_else(|_| "42".into()),
+        // Synthetic connected-browser state for settings review, never registers
+        // a host or touches the person's actual browser profile.
+        "browser": if std::env::var_os("CWW_DEMO_BROWSER").is_some() {
+            json!({"enabled":true,"changes":false,"stopped":false,
+                "sites":["github.com","example.com"],"bots":[],
+                "extension":{"browser":"Chromium","version":"0.1.0","stopped":false}})
+        } else { Value::Null },
         "paused": false,
         "roots": [
             { "id": "documents", "label": "Documents", "available": true, "index": "ready",
@@ -436,6 +445,7 @@ fn sample() -> State {
     });
     State {
         status,
+        deny: deny(),
         log,
         generation: 0,
         requests: Vec::new(),
@@ -752,7 +762,31 @@ impl Demo {
             "dictation" => {
                 json!({ "ok": true, "cloud": false, "reason": "Dictation is off in the demo." })
             }
-            "deny" => deny(),
+            "browser" => {
+                json!({"ok":true,"browser":self.state.lock().expect("demo lock").status["browser"]})
+            }
+            "deny" => self.state.lock().expect("demo lock").deny.clone(),
+            "deny_extra" => {
+                let mut result = Value::Null;
+                self.change(|s| {
+                    let mut config = cww::config::DenyConfig {
+                        extra: serde_json::from_value(s.deny["extra"].clone()).unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    match cww::exclusions::edit(
+                        &mut config,
+                        request["previous"].as_str(),
+                        request["pattern"].as_str(),
+                    ) {
+                        Ok(()) => {
+                            s.deny["extra"] = json!(config.extra);
+                            result = s.deny.clone();
+                        }
+                        Err(error) => result = json!({"ok":false,"error":error.to_string()}),
+                    }
+                });
+                result
+            }
             "audit_tail" => {
                 let n = request["lines"].as_u64().unwrap_or(50) as usize;
                 let log = &self.state.lock().expect("demo lock").log;

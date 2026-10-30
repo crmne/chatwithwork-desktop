@@ -393,7 +393,17 @@ Changes the label Chat with Work sees. `root` is an ID; `label` is 1 to 80 chara
 }
 ```
 
-The deny list in effect, for clients to show: `builtin` is the built-in list minus the patterns under `[deny] remove`, `extra` the patterns under `[deny] extra`, and `own_dirs` cww's own directories, which are always denied. `never_changed` is the built-in list of paths that can be read but never changed, even in a folder that allows changes (version control internals, shell startup files, autostart, editor settings that run tasks), minus `[deny] remove`. The list can only be changed by editing `config.toml`; there is deliberately no request for it.
+The deny list in effect, for clients to show: `builtin` is the built-in list minus the patterns under `[deny] remove`, `extra` the patterns under `[deny] extra`, and `own_dirs` cww's own directories, which are always denied. `never_changed` is the built-in list of paths that can be read but never changed, even in a folder that allows changes (version control internals, shell startup files, autostart, editor settings that run tasks), minus `[deny] remove`. Custom entries can be changed locally with `deny_extra` below. Built-in removals and hard-link policy still require editing `config.toml`; no request changes them.
+
+### `deny_extra`
+
+```json
+{"cmd":"deny_extra","previous":null,"pattern":"Clients/Private"}
+```
+
+Adds a custom exclusion when `previous` is null, replaces the exact custom entry when both fields are present, or removes it when `pattern` is null. Validation and replacement are atomic; an invalid pattern or stale original leaves every rule unchanged. Patterns use the existing deny-list syntax, up to 512 bytes, without control characters. The response is the updated `deny` view. The daemon reloads its live reader before answering and records `exclusion_added`, `exclusion_changed` or `exclusion_removed` locally, without the pattern.
+
+Only primary local control connections can use this. The desktop exposes it solely to the app-owned settings child, never the remote page API or tunnel tools. Before replacing or removing a pattern, the app asks in its OS dialog and validates the paired account before and after that confirmation. Adding a pattern only narrows sharing. This request cannot edit built-in removals, protected application directories, hard-link policy or never-changed rules.
 
 ### `audit_tail`
 

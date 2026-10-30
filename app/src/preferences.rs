@@ -277,6 +277,17 @@ pub fn question(
         })
     };
     Ok(match request {
+        R::DenyExtra { previous, pattern } => {
+            if let Some(pattern) = pattern {
+                cww::exclusions::pattern(pattern).map_err(|e| e.to_string())?;
+            }
+            previous.as_ref().map(|previous| Question {
+                title: if pattern.is_some() { "Change exclusion" } else { "Remove exclusion" }.into(),
+                message: format!("{}? Files covered by the old pattern may become readable in shared folders, including by bots using them. Other exclusions still apply.",
+                    pattern.as_ref().map(|new| format!("Replace “{previous}” with “{}”", new.trim())).unwrap_or_else(|| format!("Stop excluding “{previous}”"))),
+                yes: if pattern.is_some() { "Change exclusion" } else { "Remove exclusion" }.into(),
+            })
+        }
         R::RootsAdd { path, .. } => ask("Share a folder", format!("Share {} with Chat with Work? It can read files here, except the files excluded by your private-file rules.", path.display())),
         R::RootsBot { root, bot, lent: true, unattended, .. } => {
             let confirmed = context["bot"]["id"].as_u64().map(|id| id.to_string()).or_else(|| context["bot"]["id"].as_str().map(str::to_owned));
@@ -318,6 +329,10 @@ pub fn grant_context(
     let widening = matches!(
         request,
         R::Resume
+            | R::DenyExtra {
+                previous: Some(_),
+                ..
+            }
             | R::RootsAdd { .. }
             | R::RootsWritable { writable: true, .. }
             | R::RootsCommands { commands: true, .. }
@@ -894,6 +909,44 @@ mod tests {
             )
             .unwrap()
             .is_some()
+        );
+    }
+
+    #[test]
+    fn custom_exclusion_widening_always_asks_but_adding_only_narrows() {
+        use cww::control::ControlRequest::DenyExtra;
+        let status = crate::model::Status::default();
+        for pattern in [None, Some("*.private".into())] {
+            let request = DenyExtra {
+                previous: Some("*.secret".into()),
+                pattern,
+            };
+            let ask = question(&request, &status, &Value::Null).unwrap().unwrap();
+            assert!(ask.message.contains("*.secret"));
+            assert!(ask.message.contains("bots"));
+        }
+        assert!(
+            question(
+                &DenyExtra {
+                    previous: None,
+                    pattern: Some("*.secret".into())
+                },
+                &status,
+                &Value::Null
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            question(
+                &DenyExtra {
+                    previous: None,
+                    pattern: Some("[".into())
+                },
+                &status,
+                &Value::Null
+            )
+            .is_err()
         );
     }
 

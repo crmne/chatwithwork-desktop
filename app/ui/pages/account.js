@@ -192,7 +192,7 @@ export function pairingSection(app, status) {
 
 export function render(app) {
   const page = h("div", { class: "page" },
-    pageHeader("Account", "This computer's connection to Chat with Work, for the folders it shares. Your organizations, people and sign-in are in the Chat with Work window."));
+    pageHeader("Account", "The account this computer shares with. Your profile, organization and people have their own pages in Settings."));
   if (!app.status) {
     append(page, agentMissing(app));
     return page;

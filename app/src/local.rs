@@ -18,7 +18,7 @@ use tauri::{AppHandle, State, Webview};
 use crate::desktop::Desktop;
 
 /// Control requests the settings pages may send (CONTROL.md).
-pub const ALLOWED: [&str; 23] = [
+pub const ALLOWED: [&str; 24] = [
     "hello",
     "status",
     "pause",
@@ -31,6 +31,7 @@ pub const ALLOWED: [&str; 23] = [
     "roots_bot",
     "suggested_roots",
     "deny",
+    "deny_extra",
     "audit_tail",
     "notification_status",
     "notification_permission",
@@ -611,6 +612,7 @@ mod tests {
     fn settings_reach_only_the_requests_they_need() {
         for ok in [
             json!({ "cmd": "status" }),
+            json!({ "cmd": "deny_extra", "previous": null, "pattern": "*.secret" }),
             json!({ "cmd": "pause" }),
             json!({ "cmd": "roots_label", "root": "docs", "label": "Docs" }),
             json!({ "cmd": "roots_bot", "root": "app", "bot": "42", "name": "Issue fixer", "lent": true, "unattended": false }),

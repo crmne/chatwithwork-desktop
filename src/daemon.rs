@@ -1249,6 +1249,26 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
+    async fn edit_exclusion(
+        &self,
+        previous: Option<String>,
+        pattern: Option<String>,
+    ) -> Result<Value> {
+        let event = match (&previous, &pattern) {
+            (None, _) => "exclusion_added",
+            (_, None) => "exclusion_removed",
+            _ => "exclusion_changed",
+        };
+        self.edit_config(move |config, _| {
+            crate::exclusions::edit(&mut config.deny, previous.as_deref(), pattern.as_deref())
+        })
+        .await?;
+        // No patterns in the event: the local settings show the resulting list.
+        self.audit.append(&AuditEntry::event(event));
+        self.reload().await?;
+        Ok(self.deny().await)
+    }
+
     async fn deny(&self) -> Value {
         let config = self.config.lock().await.clone();
         let removed = &config.deny.remove;
@@ -1354,6 +1374,7 @@ impl ControlHandler for Daemon {
                     | ControlRequest::Resume
                     | ControlRequest::SuggestedRoots
                     | ControlRequest::Deny
+                    | ControlRequest::DenyExtra { .. }
                     | ControlRequest::Browser
                     | ControlRequest::BrowserTools
                     | ControlRequest::BrowserCall { .. }
@@ -1833,6 +1854,9 @@ impl ControlHandler for Daemon {
             ControlRequest::Asset { path } => self.chat(move |client| client.asset(&path)).await,
             ControlRequest::RootsLabel { root, label } => self.label_root(root, label).await,
             ControlRequest::Deny => Ok(self.deny().await),
+            ControlRequest::DenyExtra { previous, pattern } => {
+                self.edit_exclusion(previous, pattern).await
+            }
             ControlRequest::Subscribe { .. } => {
                 anyhow::bail!("subscribe is handled by the control channel")
             }
