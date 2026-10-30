@@ -15,6 +15,7 @@ For an existing installation, replace the files in its existing folder and press
 ## Fixed
 
 - **Cookie banners and other custom buttons can be clicked.** Buttons built with web components no longer get mistaken for covered controls. Real overlays still block clicks. By @crmne; thanks @crmne for the TK example.
+- **Links use the visible part of the control.** Clicks now reuse Playwright's hit checks from Playwriter, handling clipped links, slotted labels and nested components. Previews detect blocking overlays, and clicks wait briefly for moving or disabled controls without forcing through a real obstruction. By @crmne.
 
 ## Known limitations
 

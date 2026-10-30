@@ -114,15 +114,33 @@ Tabs in the group can stay in the background while the person works elsewhere. W
 - **The person is needed** for what only the person can do in front of the browser: file pickers (the extension never uploads), permission prompts (camera, microphone, notifications, location), passkeys and security keys, the password manager and autofill, payment sheets, print dialogs and extensions' own popups. A JavaScript `alert` or `confirm` in the group is answered by the extension (dismissed) and reported in the result.
 - Popups a group tab opens join the group.
 
-Click checks follow the painted element through shadow trees and slotted
-labels, including closed roots containing the target. A custom element's
-host is not by itself an obstruction or permission to click: the point must
-reach the intended control. Both overlays inside a component and those
-outside it still refuse the click. This covers component-library consent
-buttons such as TK's without forcing clicks through a real banner.
+Click checks adapt Playwright's actionability machinery from Playwriter's
+engine. They clip content quads to the visible viewport and walk the document
+and each shadow root, including closed roots, slotted labels and
+`display: contents`. They wait up to four seconds for the control to become
+visible, enabled and stable, trying different scroll alignments for sticky
+headers. Geometry is sampled with bounded timers because background tabs can
+suspend animation frames. Previews perform these checks too; a blocked control
+returns the obstruction's tag and short ARIA label, never its markup or field
+values. Subframe clicks fail closed rather than mixing document coordinates.
+
+After hovering, the extension rechecks the hit target and installs a trusted
+pointer-event guard against a layout change at dispatch. It never force-clicks
+through an overlay, never retries after sending a press, and cleans up the
+guard even after Stop. Site access and the local action setting are checked
+again while waiting. A custom element's host alone is neither an obstruction
+nor permission to click: the painted point must reach the intended control.
 
 ## Why its own extension
 
-Ours, open source (in this repository, MIT or Apache-2.0 like the daemon), to be published on the Chrome Web Store as "Chat with Work", never relying on a third-party extension. [Playwriter](https://github.com/remorses/playwriter) (MIT; its extension started from Microsoft's Playwright MCP extension, Apache-2.0) was the reference for driving tabs through `chrome.debugger` and keeping them in a group, but its design is the opposite of what we need: it relays the whole DevTools Protocol to a local WebSocket for a Playwright client, so whatever holds the socket can run any script in any connected tab. Ours exposes a dozen fixed operations, runs no code it's sent, and enforces the rules above itself, so the extension was written from scratch.
+Ours, open source in this repository, is intended for the Chrome Web Store as
+"Chat with Work". [Playwriter](https://github.com/remorses/playwriter) is the
+reference for driving tabs through `chrome.debugger`, and its Playwright
+engine supplies the adapted click algorithms. Those portions retain their
+Microsoft/Puppeteer Apache-2.0 attribution; both extension ZIPs include the
+license and [third-party notices](../browser/static/THIRD-PARTY-NOTICES.txt).
+Playwriter itself is MIT licensed. We reuse the click mechanics without its
+general DevTools relay: Chat with Work exposes fixed operations, runs no code
+it is sent, and enforces its own tab, site, field and approval rules.
 
 It lives in this repository rather than one of its own because the extension, the native messaging host and the daemon's tools are one protocol that changes in one pull request, the end-to-end tests need the `cww` binary, and the security model is one document. It has its own build (TypeScript, no runtime dependencies) and its own Web Store release tags (`browser-v*`).

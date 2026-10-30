@@ -33,6 +33,10 @@ test("manual ZIP keeps the registered identity and excludes stale output; store 
   assert.equal(store.version, pkg.version);
   assert.ok(!("key" in store));
   assert.ok(!names("chatwithwork-browser.zip").includes("key.pem"));
+  for (const zip of [manual, "chatwithwork-browser.zip"]) {
+    assert.match(contents(zip, "THIRD-PARTY-NOTICES.txt"), /Copyright \(c\) Microsoft Corporation/);
+    assert.match(contents(zip, "LICENSE-APACHE"), /Version 2\.0, January 2004/);
+  }
   // Leave build/ usable for development and the Chromium tests.
   build();
 });

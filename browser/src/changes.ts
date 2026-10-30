@@ -17,11 +17,12 @@ import {
   type Params,
   type Policy,
 } from "./actions.js";
-import { callOn, cleanUp, send } from "./cdp.js";
+import { callOn, cleanUp, evaluate, send } from "./cdp.js";
 import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
+import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
@@ -144,8 +145,8 @@ const OUTLINE = `function (on) {
 }`;
 
 // A screenshot with the target outlined, for the approval card.
-async function preview(t: Target): Promise<object> {
-  await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId }).catch(() => {});
+async function preview(t: Target, scroll = true): Promise<object> {
+  if (scroll) await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, OUTLINE, [true]).catch(() => {});
   try {
     return await capture(t.tabId, PREVIEW_MAX_BYTES);
@@ -157,60 +158,45 @@ async function preview(t: Target): Promise<object> {
   }
 }
 
-// CDP can return a custom element's host even when its shadow button is
-// under the pointer. Descend at the same point before deciding it is covered.
-// Never accept a host alone: another element in that shadow tree may cover
-// the target too. A target's own root remains reachable even when closed.
-const CONTAINS = `function (hit, x, y) {
-  const roots = [];
-  for (let node = this; node;) {
-    const root = node.getRootNode();
-    if (!root.host) break;
-    roots.push(root);
-    node = root.host;
+// Adapt Playwright's finite actionability retry and alternating scroll
+// alignments (sticky headers), using timer samples instead of rAF, which
+// background tabs can suspend. Never retry after dispatching a press.
+async function point(t: Target, policy: Policy): Promise<Point> {
+  const deadline = Date.now() + 4_000;
+  const alignments = [null, "end", "center", "start"];
+  let reason = "that element isn't visible on the page";
+  for (let attempt = 0; Date.now() < deadline; attempt++) {
+    allowedChanges(policy);
+    await still(t.tabId, policy);
+    const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE);
+    if (state.reason) {
+      reason = state.reason;
+    } else {
+      const alignment = alignments[attempt % alignments.length];
+      if (alignment) await callOn(t.tabId, t.backendNodeId, SCROLL_TARGET, [alignment]);
+      else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId }).catch(() => {});
+      const quads = async () => (await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", {
+        backendNodeId: t.backendNodeId,
+      })).quads;
+      const before = await quads();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const after = await quads();
+      const candidate = visiblePoint(after, state.width, state.height);
+      if (!candidate) reason = "that element isn't visible in the viewport";
+      else if (JSON.stringify(before) !== JSON.stringify(after)) reason = "that element is still moving";
+      else {
+        const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [candidate]);
+        if (!obstruction) {
+          allowedChanges(policy);
+          await still(t.tabId, policy);
+          return candidate;
+        }
+        reason = obstruction;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
   }
-  const seen = new Set();
-  while (hit && !seen.has(hit)) {
-    seen.add(hit);
-    const root = hit.shadowRoot || roots.find(root => root.host === hit);
-    if (!root) break;
-    // elementFromPoint can retarget a slotted text node to the host;
-    // elementsFromPoint keeps the slot at the front of the painted stack.
-    const inner = root.elementsFromPoint(x, y)[0];
-    if (!inner || inner === hit) break;
-    hit = inner;
-  }
-  for (let node = hit; node; node = node.assignedSlot || node.parentNode || node.getRootNode().host) {
-    if (node === this) return true;
-  }
-  return false;
-}`;
-
-// The middle of the element, checked to be the element itself and not
-// something drawn over it.
-async function point(t: Target): Promise<{ x: number; y: number }> {
-  await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId });
-  const { quads } = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", {
-    backendNodeId: t.backendNodeId,
-  }).catch(() => ({ quads: [] as number[][] }));
-  const quad = quads.find((q) => q.length === 8);
-  if (!quad) throw new ToolError("page_error", "that element isn't visible on the page");
-  const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-  const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-  const hit = await send<{ backendNodeId: number }>(t.tabId, "DOM.getNodeForLocation", {
-    x: Math.round(x),
-    y: Math.round(y),
-    includeUserAgentShadowDOM: false,
-  }).catch(() => null);
-  const covered =
-    !hit || !(await callOn<boolean>(t.tabId, t.backendNodeId, CONTAINS, [Math.round(x), Math.round(y)], [hit.backendNodeId]).catch(() => false));
-  if (covered) {
-    throw new ToolError(
-      "page_error",
-      "something else is drawn over that element (a dialog or a banner?); read the page again",
-    );
-  }
-  return { x, y };
+  throw new ToolError("page_error", reason);
 }
 
 const open: Method = async (params, policy) => {
@@ -271,19 +257,48 @@ const click: Method = async (params, policy) => {
       `this click may send, buy, post or delete something (${reason}); call again with submits: true so the person sees it first`,
     );
   }
-  const what = { target: described(t.facts), submits: reason !== null || saysSubmits, ...(reason ? { reason } : {}) };
+  const location = await point(t, policy);
+  // Re-read submission classification after waiting: a disabled/navigation
+  // control may have become a submit button meanwhile.
+  const current = await target(params, policy);
+  const currentReason = submitReason(current.facts);
+  if (!saysSubmits && currentReason) {
+    throw new ToolError("would_submit", `this click may send, buy, post or delete something (${currentReason}); call again with submits: true so the person sees it first`);
+  }
+  const what = { target: described(current.facts), submits: currentReason !== null || saysSubmits, ...(currentReason ? { reason: currentReason } : {}) };
   if (dry) {
-    const shot = await preview(t);
+    const shot = await preview(current, false);
     const now = await still(t.tabId, policy);
+    allowedChanges(policy);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
-  const { x, y } = await point(t);
+  const key = `__cwwPointer_${crypto.randomUUID()}`;
+  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, INSTALL_POINTER_GUARD, [key, location]);
+  if (obstruction) throw new ToolError("page_error", obstruction);
   const started = Date.now();
   const mouse = (type: string, extra: object = {}) =>
-    send(t.tabId, "Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, ...extra });
-  await mouse("mouseMoved", { button: "none", clickCount: 0 });
-  await mouse("mousePressed", { buttons: 1 });
-  await mouse("mouseReleased", { buttons: 0 });
+    send(t.tabId, "Input.dispatchMouseEvent", { type, ...location, button: "left", clickCount: 1, ...extra });
+  try {
+    await mouse("mouseMoved", { button: "none", clickCount: 0 });
+    // Hover may reveal a menu/overlay. Recheck before pressing, and keep the
+    // capture guard for a layout change during dispatch itself.
+    allowedChanges(policy);
+    await still(t.tabId, policy);
+    const moved = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location]);
+    if (moved) throw new ToolError("page_error", moved);
+    const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE);
+    if (state.reason) throw new ToolError("page_error", state.reason);
+    await mouse("mousePressed", { buttons: 1 });
+    await mouse("mouseReleased", { buttons: 0 });
+    // Navigation destroys the old isolated context, which is normal after a
+    // successful link click. A surviving guard reports intercepted events.
+    const blocked = await evaluate<string | null>(t.tabId, guardStatus(key, false));
+    if (blocked) throw new ToolError("page_error", blocked);
+  } finally {
+    await cleanUp(t.tabId, async (options) => {
+      await evaluate(t.tabId, guardStatus(key, true), options).catch(() => {});
+    });
+  }
   return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
 };
 
