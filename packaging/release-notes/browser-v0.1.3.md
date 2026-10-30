@@ -15,6 +15,8 @@ Replace the files in the existing extension folder, press **Reload** at `chrome:
 
 ## Known limitations
 
+- **Full cross-platform validation was still running when this release was started.** Local runtime, native UI and browser regression checks passed. The remaining [CI results](https://github.com/crmne/chatwithwork-desktop/actions/runs/41076339414) are tracked separately.
+
 - The extension is not in the Chrome Web Store yet. Manual installations need file replacement and Reload; updating Desktop alone does not update them.
 - The new engine requires Desktop 0.9.2. Earlier Desktop versions and Linux Arm64 musl retain the previous browser implementation.
 - Actions stay in Chat with Work’s tab group. Real overlays, protected fields and blocked sites can still prevent an action.
