@@ -59,8 +59,10 @@ function hitTarget(target: Element, point: Point, control: Element = target): st
   }
   for (let element: Element | null | undefined = hit; element; element = element.assignedSlot ?? parent(element)) {
     if (element === target) return null;
+    // HTML interactive content plus ARIA/focusable controls: label activation
+    // must not borrow the painted surface of another independent action.
     if (target !== control && element !== control && element.matches(
-      'a[href], button, input, select, textarea, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [tabindex]',
+      'a[href], audio[controls], button, details, embed, iframe, img[usemap], img[controls], input, label, object[usemap], select, textarea, video[controls], summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [tabindex]',
     )) {
       return `a different interactive element <${element.localName}> is drawn over that control's label; read the page again`;
     }
@@ -116,6 +118,17 @@ export const LABEL_AT = `function (index) {
   if (!(this instanceof HTMLInputElement) || !["checkbox", "radio"].includes(this.type)) return null;
   const label = this.labels.item(index);
   return label && label.control === this ? label : null;
+}`;
+// A document hit test retargets closed shadow content to its host. An
+// alternate label must not treat that host as harmless painted text. The
+// caller inspects only this one hit node's CDP shadow-root metadata.
+export const LABEL_DESCENDANT_AT_POINT = `function (point) {
+  const hit = this.getRootNode().elementFromPoint(point.x, point.y);
+  if (!hit || hit === this) return null;
+  for (let element = hit; element; element = element.assignedSlot ?? element.parentElement ?? element.getRootNode().host ?? null) {
+    if (element === this) return hit;
+  }
+  return null;
 }`;
 export const SCROLL_TARGET = `function (alignment) {
   this.scrollIntoView({block: alignment, inline: alignment, behavior: "instant"});

@@ -22,7 +22,7 @@ import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
-import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
+import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
@@ -158,6 +158,22 @@ async function preview(t: Target, scroll = true): Promise<object> {
   }
 }
 
+// Check the logical target and, only for alternate labels, refuse a painted
+// descendant shadow host. Its closed root can hide a different interactive
+// control from DOM hit testing; CDP exposes root metadata without page code.
+async function surfaceObstruction(t: Target, surface: number, location: Point): Promise<string | null> {
+  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location], [surface]);
+  if (obstruction || surface === t.backendNodeId) return obstruction;
+  const hit = await relatedNode(t.tabId, surface, LABEL_DESCENDANT_AT_POINT, [location]);
+  if (!hit) return null;
+  const { node } = await send<{ node: { shadowRoots?: unknown[] } }>(t.tabId, "DOM.describeNode", {
+    backendNodeId: hit, depth: 0,
+  });
+  return node.shadowRoots?.length
+    ? "shadow content is drawn over that control's label; read the page again and target the control directly"
+    : null;
+}
+
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
@@ -195,7 +211,7 @@ async function point(t: Target, policy: Policy): Promise<Point & { surface: numb
       if (!candidate) reason = "that element isn't visible in the viewport";
       else if (JSON.stringify(before) !== JSON.stringify(after)) reason = "that element is still moving";
       else {
-        const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [candidate], [surface]);
+        const obstruction = await surfaceObstruction(t, surface, candidate);
         if (!obstruction) {
           allowedChanges(policy);
           await still(t.tabId, policy);
@@ -294,7 +310,7 @@ const click: Method = async (params, policy) => {
     // capture guard for a layout change during dispatch itself.
     allowedChanges(policy);
     await still(t.tabId, policy);
-    const moved = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location], [surface]);
+    const moved = await surfaceObstruction(t, surface, location);
     if (moved) throw new ToolError("page_error", moved);
     const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
     if (state.reason) throw new ToolError("page_error", state.reason);

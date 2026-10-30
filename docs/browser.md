@@ -134,8 +134,11 @@ nor permission to click: the painted point must reach the intended control.
 Styled native radios and checkboxes may use a visible associated label as
 their activation surface, including when CSS hides the input. The browser's
 own `label.control` association must name that exact input, both in the
-preview and throughout the trusted click. An unrelated label, a nested link
-or button, a real overlay or a disabled control still refuses the action.
+preview and throughout the trusted click. An unrelated or nested label,
+other interactive content, a real overlay or a disabled control still refuses
+the action. A shadow host painted inside an alternate label also refuses,
+including closed roots that can hide a different control; directly targeted
+shadow controls keep their normal hit checks.
 The preview outlines the visible label and describes the original control;
 it never selects the option. Other fields are not retargeted through labels.
 
