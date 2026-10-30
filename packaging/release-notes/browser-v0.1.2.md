@@ -12,6 +12,10 @@ For an existing installation, replace the files in its existing folder and press
 - **Use only selected sites, or all sites with exceptions.** Set the policy in Desktop 0.9.1. Both Desktop and the extension enforce it. A blocked host includes its subdomains; an explicit origin matches that origin. By @crmne.
 - **The extension reports when its site policy needs an update.** Older Desktop versions retain their existing allowed-site behavior. Desktop refuses advanced policy on an extension that cannot enforce it. By @crmne.
 
+## Fixed
+
+- **Cookie banners and other custom buttons can be clicked.** Buttons built with web components no longer get mistaken for covered controls. Real overlays still block clicks. By @crmne; thanks @crmne for the TK example.
+
 ## Known limitations
 
 - The extension is not in the Chrome Web Store yet. Manual installations need file replacement and Reload; updating Desktop alone does not update them.

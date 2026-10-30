@@ -157,7 +157,34 @@ async function preview(t: Target): Promise<object> {
   }
 }
 
-const CONTAINS = `function (hit) { return this === hit || this.contains(hit); }`;
+// CDP can return a custom element's host even when its shadow button is
+// under the pointer. Descend at the same point before deciding it is covered.
+// Never accept a host alone: another element in that shadow tree may cover
+// the target too. A target's own root remains reachable even when closed.
+const CONTAINS = `function (hit, x, y) {
+  const roots = [];
+  for (let node = this; node;) {
+    const root = node.getRootNode();
+    if (!root.host) break;
+    roots.push(root);
+    node = root.host;
+  }
+  const seen = new Set();
+  while (hit && !seen.has(hit)) {
+    seen.add(hit);
+    const root = hit.shadowRoot || roots.find(root => root.host === hit);
+    if (!root) break;
+    // elementFromPoint can retarget a slotted text node to the host;
+    // elementsFromPoint keeps the slot at the front of the painted stack.
+    const inner = root.elementsFromPoint(x, y)[0];
+    if (!inner || inner === hit) break;
+    hit = inner;
+  }
+  for (let node = hit; node; node = node.assignedSlot || node.parentNode || node.getRootNode().host) {
+    if (node === this) return true;
+  }
+  return false;
+}`;
 
 // The middle of the element, checked to be the element itself and not
 // something drawn over it.
@@ -176,7 +203,7 @@ async function point(t: Target): Promise<{ x: number; y: number }> {
     includeUserAgentShadowDOM: false,
   }).catch(() => null);
   const covered =
-    !hit || !(await callOn<boolean>(t.tabId, t.backendNodeId, CONTAINS, [], [hit.backendNodeId]).catch(() => false));
+    !hit || !(await callOn<boolean>(t.tabId, t.backendNodeId, CONTAINS, [Math.round(x), Math.round(y)], [hit.backendNodeId]).catch(() => false));
   if (covered) {
     throw new ToolError(
       "page_error",

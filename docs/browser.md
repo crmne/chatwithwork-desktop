@@ -114,6 +114,13 @@ Tabs in the group can stay in the background while the person works elsewhere. W
 - **The person is needed** for what only the person can do in front of the browser: file pickers (the extension never uploads), permission prompts (camera, microphone, notifications, location), passkeys and security keys, the password manager and autofill, payment sheets, print dialogs and extensions' own popups. A JavaScript `alert` or `confirm` in the group is answered by the extension (dismissed) and reported in the result.
 - Popups a group tab opens join the group.
 
+Click checks follow the painted element through shadow trees and slotted
+labels, including closed roots containing the target. A custom element's
+host is not by itself an obstruction or permission to click: the point must
+reach the intended control. Both overlays inside a component and those
+outside it still refuse the click. This covers component-library consent
+buttons such as TK's without forcing clicks through a real banner.
+
 ## Why its own extension
 
 Ours, open source (in this repository, MIT or Apache-2.0 like the daemon), to be published on the Chrome Web Store as "Chat with Work", never relying on a third-party extension. [Playwriter](https://github.com/remorses/playwriter) (MIT; its extension started from Microsoft's Playwright MCP extension, Apache-2.0) was the reference for driving tabs through `chrome.debugger` and keeping them in a group, but its design is the opposite of what we need: it relays the whole DevTools Protocol to a local WebSocket for a Playwright client, so whatever holds the socket can run any script in any connected tab. Ours exposes a dozen fixed operations, runs no code it's sent, and enforces the rules above itself, so the extension was written from scratch.
