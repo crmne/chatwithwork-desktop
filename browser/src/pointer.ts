@@ -29,7 +29,11 @@ export function visiblePoint(quads: number[][], width: number, height: number): 
 // Adapted from Playwright's expectHitTarget. Walk roots outside-in, including
 // closed roots reached from the target; CDP's hit node alone is retargeted and
 // is not evidence that a shadow/slotted/contents target is covered.
-function hitTarget(target: Element, point: Point): string | null {
+function hitTarget(target: Element, point: Point, control: Element = target): string | null {
+  if (target !== control && (!(target instanceof HTMLLabelElement) || target.control !== control ||
+      !(control instanceof HTMLInputElement) || !["checkbox", "radio"].includes(control.type))) {
+    return "that label no longer belongs to the requested control; read the page again";
+  }
   const parent = (element: Element): Element | null =>
     element.parentElement ?? (element.getRootNode() as ShadowRoot).host ?? null;
   const roots: (Document | ShadowRoot)[] = [];
@@ -55,6 +59,11 @@ function hitTarget(target: Element, point: Point): string | null {
   }
   for (let element: Element | null | undefined = hit; element; element = element.assignedSlot ?? parent(element)) {
     if (element === target) return null;
+    if (target !== control && element !== control && element.matches(
+      'a[href], button, input, select, textarea, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [tabindex]',
+    )) {
+      return `a different interactive element <${element.localName}> is drawn over that control's label; read the page again`;
+    }
   }
   // No outerHTML, textContent, URLs, field values or arbitrary attributes.
   // A short accessible label helps distinguish a consent dialog from a bug.
@@ -70,18 +79,24 @@ export interface PointerState {
   height: number;
 }
 
-function state(this: Element): PointerState {
+function state(this: Element, surface: Element = this): PointerState {
   let reason: string | null = null;
-  if (!this.isConnected) reason = "the target is detached; read the page again";
+  if (!this.isConnected || !surface.isConnected) reason = "the target is detached; read the page again";
   // CDP content quads are in the main viewport. Do not mix them with a
   // different document's hit-test coordinates or bypass a covering iframe.
   else if (this.ownerDocument !== document) reason = "clicks inside this frame are not supported; open its page in a separate allowed tab";
-  else if (getComputedStyle(this).visibility !== "visible") reason = "that element isn't visible on the page";
+  else if (surface !== this && (!(surface instanceof HTMLLabelElement) || surface.control !== this ||
+      !(this instanceof HTMLInputElement) || !["checkbox", "radio"].includes(this.type))) {
+    reason = "that label no longer belongs to the requested control; read the page again";
+  }
+  else if (getComputedStyle(surface).visibility !== "visible" || getComputedStyle(surface).display === "none") reason = "that element isn't visible on the page";
   else {
-    for (let element: Element | null = this; element; element = element.assignedSlot ?? element.parentElement ?? (element.getRootNode() as ShadowRoot).host ?? null) {
-      if (element.matches(":disabled") || element.getAttribute("aria-disabled") === "true" || element.hasAttribute("inert")) {
-        reason = "that element is disabled";
-        break;
+    for (const start of new Set([this, surface])) {
+      for (let element: Element | null = start; element; element = element.assignedSlot ?? element.parentElement ?? (element.getRootNode() as ShadowRoot).host ?? null) {
+        if (element.matches(":disabled") || element.getAttribute("aria-disabled") === "true" || element.hasAttribute("inert")) {
+          reason = "that element is disabled";
+          break;
+        }
       }
     }
   }
@@ -89,7 +104,19 @@ function state(this: Element): PointerState {
 }
 
 export const POINTER_STATE = state.toString();
-export const HIT_TARGET = `function (point) { return (${hitTarget.toString()})(this, point); }`;
+export const HIT_TARGET = `function (surface, point) { return (${hitTarget.toString()})(surface, point, this); }`;
+// Native label association, as used by Playwright's follow-label retargeting.
+// Reverse it only for radios/checkboxes: a visible label is their standard
+// activation surface when CSS hides the input. Never retarget a password,
+// payment field, file picker or arbitrary role/control through a label.
+export const LABEL_COUNT = `function () {
+  return this instanceof HTMLInputElement && ["checkbox", "radio"].includes(this.type) ? Math.min(this.labels.length, 8) : 0;
+}`;
+export const LABEL_AT = `function (index) {
+  if (!(this instanceof HTMLInputElement) || !["checkbox", "radio"].includes(this.type)) return null;
+  const label = this.labels.item(index);
+  return label && label.control === this ? label : null;
+}`;
 export const SCROLL_TARGET = `function (alignment) {
   this.scrollIntoView({block: alignment, inline: alignment, behavior: "instant"});
 }`;
@@ -99,17 +126,24 @@ export const SCROLL_TARGET = `function (alignment) {
 // the last CDP check cannot deliver the click to an unrelated element. Like
 // Playwright, check the first press, then keep its result for the release:
 // handlers are allowed to intentionally change layout after mousedown.
-function installGuard(this: Element, key: string, point: Point, hit: typeof hitTarget): string | null {
-  const initial = hit(this, point);
+function installGuard(this: Element, surface: Element, key: string, point: Point, hit: typeof hitTarget): string | null {
+  const initial = hit(surface, point, this);
   if (initial) return initial;
-  const target = this;
+  const control = this;
   let result: string | null | undefined;
   const events = ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "auxclick", "dblclick"];
   const listener = (event: Event) => {
     if (!event.isTrusted) return;
+    // A label may move after a press, but it must keep activating the same
+    // native radio/checkbox. Rebinding `for` or changing type cannot redirect
+    // the click after its first hit check has passed.
+    if (surface !== control && (!(surface instanceof HTMLLabelElement) || surface.control !== control ||
+        !(control instanceof HTMLInputElement) || !["checkbox", "radio"].includes(control.type))) {
+      result = "that label no longer belongs to the requested control; read the page again";
+    }
     if (result === undefined) {
       const mouse = event as MouseEvent;
-      result = hit(target, { x: mouse.clientX, y: mouse.clientY });
+      result = hit(surface, { x: mouse.clientX, y: mouse.clientY }, control);
     }
     if (result) {
       event.preventDefault();
@@ -130,8 +164,8 @@ function installGuard(this: Element, key: string, point: Point, hit: typeof hitT
   return null;
 }
 
-export const INSTALL_POINTER_GUARD = `function (key, point) {
-  return (${installGuard.toString()}).call(this, key, point, ${hitTarget.toString()});
+export const INSTALL_POINTER_GUARD = `function (surface, key, point) {
+  return (${installGuard.toString()}).call(this, surface, key, point, ${hitTarget.toString()});
 }`;
 
 export function guardStatus(key: string, stop: boolean): string {

@@ -131,6 +131,14 @@ guard even after Stop. Site access and the local action setting are checked
 again while waiting. A custom element's host alone is neither an obstruction
 nor permission to click: the painted point must reach the intended control.
 
+Styled native radios and checkboxes may use a visible associated label as
+their activation surface, including when CSS hides the input. The browser's
+own `label.control` association must name that exact input, both in the
+preview and throughout the trusted click. An unrelated label, a nested link
+or button, a real overlay or a disabled control still refuses the action.
+The preview outlines the visible label and describes the original control;
+it never selects the option. Other fields are not retargeted through labels.
+
 ## Why its own extension
 
 Ours, open source in this repository, is intended for the Chrome Web Store as

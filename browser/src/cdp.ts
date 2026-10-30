@@ -252,3 +252,27 @@ export async function callOn<T = unknown>(
   }
   return result.result.value as T;
 }
+
+// Resolve a related DOM element returned by an extension-owned function.
+// This is internal, not a protocol operation or a way to run supplied code.
+// A backend id lets the normal CDP geometry and hit guards use that element.
+export async function relatedNode(tabId: number, backendNodeId: number, fn: string, args: unknown[] = []): Promise<number | undefined> {
+  const contextId = await isolatedContext(tabId);
+  const { object } = await send<{ object: { objectId: string } }>(tabId, "DOM.resolveNode", { backendNodeId, executionContextId: contextId });
+  let related: string | undefined;
+  try {
+    const result = await send<{ result: { objectId?: string; subtype?: string }; exceptionDetails?: unknown }>(tabId, "Runtime.callFunctionOn", {
+      objectId: object.objectId, functionDeclaration: fn,
+      arguments: args.map((value) => ({ value })), returnByValue: false,
+    });
+    related = result.result.objectId;
+    if (result.exceptionDetails) throw new ToolError("page_error", "the page refused to resolve that control's label");
+    if (!related || result.result.subtype !== "node") return undefined;
+    const { node } = await send<{ node: { backendNodeId: number } }>(tabId, "DOM.describeNode", { objectId: related });
+    return node.backendNodeId;
+  } finally {
+    for (const objectId of [related, object.objectId]) {
+      if (objectId) await send(tabId, "Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+  }
+}

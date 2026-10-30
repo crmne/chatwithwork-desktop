@@ -17,12 +17,12 @@ import {
   type Params,
   type Policy,
 } from "./actions.js";
-import { callOn, cleanUp, evaluate, send } from "./cdp.js";
+import { callOn, cleanUp, evaluate, relatedNode, send } from "./cdp.js";
 import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
-import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
+import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
@@ -161,22 +161,32 @@ async function preview(t: Target, scroll = true): Promise<object> {
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
-async function point(t: Target, policy: Policy): Promise<Point> {
+async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
   const deadline = Date.now() + 4_000;
   const alignments = [null, "end", "center", "start"];
   let reason = "that element isn't visible on the page";
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     allowedChanges(policy);
     await still(t.tabId, policy);
-    const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE);
-    if (state.reason) {
-      reason = state.reason;
-    } else {
+    const surfaces = [t.backendNodeId];
+    const labelCount = await callOn<number>(t.tabId, t.backendNodeId, LABEL_COUNT);
+    for (let index = 0; index < labelCount; index++) {
+      const label = await relatedNode(t.tabId, t.backendNodeId, LABEL_AT, [index]);
+      if (label) surfaces.push(label);
+    }
+    for (const surface of surfaces) {
+      allowedChanges(policy);
+      await still(t.tabId, policy);
+      const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
+      if (state.reason) {
+        reason = state.reason;
+        continue;
+      }
       const alignment = alignments[attempt % alignments.length];
-      if (alignment) await callOn(t.tabId, t.backendNodeId, SCROLL_TARGET, [alignment]);
-      else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId }).catch(() => {});
+      if (alignment) await callOn(t.tabId, surface, SCROLL_TARGET, [alignment]);
+      else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: surface }).catch(() => {});
       const quads = async () => (await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", {
-        backendNodeId: t.backendNodeId,
+        backendNodeId: surface,
       })).quads;
       const before = await quads();
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -185,11 +195,11 @@ async function point(t: Target, policy: Policy): Promise<Point> {
       if (!candidate) reason = "that element isn't visible in the viewport";
       else if (JSON.stringify(before) !== JSON.stringify(after)) reason = "that element is still moving";
       else {
-        const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [candidate]);
+        const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [candidate], [surface]);
         if (!obstruction) {
           allowedChanges(policy);
           await still(t.tabId, policy);
-          return candidate;
+          return { ...candidate, surface };
         }
         reason = obstruction;
       }
@@ -257,7 +267,7 @@ const click: Method = async (params, policy) => {
       `this click may send, buy, post or delete something (${reason}); call again with submits: true so the person sees it first`,
     );
   }
-  const location = await point(t, policy);
+  const { surface, ...location } = await point(t, policy);
   // Re-read submission classification after waiting: a disabled/navigation
   // control may have become a submit button meanwhile.
   const current = await target(params, policy);
@@ -265,15 +275,15 @@ const click: Method = async (params, policy) => {
   if (!saysSubmits && currentReason) {
     throw new ToolError("would_submit", `this click may send, buy, post or delete something (${currentReason}); call again with submits: true so the person sees it first`);
   }
-  const what = { target: described(current.facts), submits: currentReason !== null || saysSubmits, ...(currentReason ? { reason: currentReason } : {}) };
+  const what = { target: described(current.facts), ...(surface !== t.backendNodeId ? { activation_surface: "associated label" } : {}), submits: currentReason !== null || saysSubmits, ...(currentReason ? { reason: currentReason } : {}) };
   if (dry) {
-    const shot = await preview(current, false);
+    const shot = await preview({ ...current, backendNodeId: surface }, false);
     const now = await still(t.tabId, policy);
     allowedChanges(policy);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
   const key = `__cwwPointer_${crypto.randomUUID()}`;
-  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, INSTALL_POINTER_GUARD, [key, location]);
+  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, INSTALL_POINTER_GUARD, [key, location], [surface]);
   if (obstruction) throw new ToolError("page_error", obstruction);
   const started = Date.now();
   const mouse = (type: string, extra: object = {}) =>
@@ -284,9 +294,9 @@ const click: Method = async (params, policy) => {
     // capture guard for a layout change during dispatch itself.
     allowedChanges(policy);
     await still(t.tabId, policy);
-    const moved = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location]);
+    const moved = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location], [surface]);
     if (moved) throw new ToolError("page_error", moved);
-    const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE);
+    const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
     if (state.reason) throw new ToolError("page_error", state.reason);
     await mouse("mousePressed", { buttons: 1 });
     await mouse("mouseReleased", { buttons: 0 });

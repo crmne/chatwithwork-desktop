@@ -1,7 +1,7 @@
 Chat with Work browser extension
 
 pointer.ts contains adapted portions of Playwright's expectHitTarget,
-setupHitTargetInterceptor and _clickablePoint implementations:
+setupHitTargetInterceptor, retarget and _clickablePoint implementations:
 
 Playwright
 Copyright (c) Microsoft Corporation
