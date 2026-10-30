@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Chat with Work",
   "short_name": "Chat with Work",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lets Chat with Work use tabs in its own tab group, on sites you allow, through Chat with Work Desktop.",
   "homepage_url": "https://chatwithwork.com",
   "minimum_chrome_version": "125",
