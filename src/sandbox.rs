@@ -569,8 +569,14 @@ mod tests {
         std::fs::create_dir(&modules).unwrap();
         let node = modules.join("node");
         let other = modules.join("other");
-        std::fs::copy("/usr/bin/true", &node).unwrap();
-        std::fs::copy("/usr/bin/true", &other).unwrap();
+        // Nix puts coreutils in its store, without /usr/bin/true. Keep the
+        // same executable fixture and confinement assertions on either host.
+        let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|dir| dir.join("true"))
+            .find(|path| path.is_file())
+            .expect("coreutils true on the test PATH");
+        std::fs::copy(&executable, &node).unwrap();
+        std::fs::copy(&executable, &other).unwrap();
         let entry = modules.join("entry.mjs");
         let outside = temp.path().join("outside.txt");
         std::fs::write(&entry, "trusted fixed entry").unwrap();
