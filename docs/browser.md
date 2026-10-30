@@ -95,6 +95,11 @@ All of it holds on the computer, whatever the server sends. The extension enforc
 
 ## Background and foreground
 
+A new tab is first grouped in its own normal browser window, then navigated
+to the requested address. A focused app or popup never becomes the group's
+destination. If grouping fails, only that new blank tab is removed and the
+requested page is not loaded.
+
 Tabs in the group can stay in the background while the person works elsewhere. What Chrome does with a background tab:
 
 - **It still loads, runs and answers.** The debugger's commands (reading the accessibility tree, clicking and typing with `Input` events, which are trusted and count as a user gesture) work in a background tab. Screenshots of a background tab work through the debugger. The extension turns on focus emulation, so pages that check `document.hasFocus()` behave as if focused.

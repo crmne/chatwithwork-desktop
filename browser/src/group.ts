@@ -55,16 +55,28 @@ export async function openInGroup(url: string): Promise<chrome.tabs.Tab> {
     const window = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
     windowId = window?.id;
   }
-  const tab = await chrome.tabs.create({ url, active: false, ...(windowId !== undefined ? { windowId } : {}) });
-  await addToGroup(tab.id!, groups[0]?.id);
-  return chrome.tabs.get(tab.id!);
+  // Group a blank tab before loading the requested page. A failed group
+  // must neither send that navigation nor leave an unowned target tab behind.
+  const tab = await chrome.tabs.create({ url: "about:blank", active: false, ...(windowId !== undefined ? { windowId } : {}) });
+  try {
+    await addToGroup(tab.id!, groups[0]?.id);
+    await chrome.tabs.update(tab.id!, { url });
+    return await chrome.tabs.get(tab.id!);
+  } catch (error) {
+    // This function created this tab. Never remove an existing tab or group.
+    await chrome.tabs.remove(tab.id!).catch(() => {});
+    throw error;
+  }
 }
 
 export async function addToGroup(tabId: number, groupId?: number): Promise<void> {
   if (groupId !== undefined) {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
   } else {
-    const created = await chrome.tabs.group({ tabIds: [tabId] });
+    const tab = await chrome.tabs.get(tabId);
+    // Without an explicit destination Chrome uses the current window,
+    // which may be an app/popup even though the tab is in a normal window.
+    const created = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId: tab.windowId } });
     await chrome.tabGroups.update(created, { title: GROUP_TITLE, color: "blue", collapsed: false });
   }
   // Memory Saver doesn't discard the agent's tabs.
