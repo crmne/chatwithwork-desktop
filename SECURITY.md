@@ -39,6 +39,17 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 
 Only the latest release gets security fixes during the beta.
 
+## Local settings confirmations
+
+The bundled settings child alone may prepare and consume an inline folder
+confirmation. Its one-use token is bound to that window, page, exact request,
+folder identity and access, and freshly authenticated account/device context.
+It expires after two minutes; leaving or hiding the pane cancels it. Placement
+is pinned while the question is open, so the remote shell cannot move an Allow
+button under the pointer. Remote pages never receive this token or the local
+command capability and retain their native confirmation dialog. Other settings
+that already have one dialog keep it.
+
 ## Bundled browser engine boundary
 
 The optional full browser engine is trusted installed code, not code supplied

@@ -467,6 +467,8 @@ pub fn run(
             crate::bridge::scan_pending,
             crate::bridge::page_dialog,
             crate::local::control,
+            crate::local::prepare_control,
+            crate::local::cancel_control,
             crate::local::activity,
             crate::local::app_info,
             crate::local::set_onboarded,

@@ -1,7 +1,7 @@
 //! The app's windows: the web app (`main`, and `page-N` for pages it opens
 //! in a new window) and the bundled settings (`settings`).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -56,6 +56,21 @@ fn bring_forward(window: &tauri::Window) {
     let _ = window.set_focus();
 }
 
+/// The same canvas as bundled tokens.css, including before HTML can paint.
+pub fn canvas_color(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(6, 7, 11, 255)
+    } else {
+        tauri::window::Color(243, 245, 249, 255)
+    }
+}
+
+fn reveal(window: &tauri::Window, revealed: &AtomicBool) {
+    if !revealed.swap(true, Ordering::SeqCst) {
+        bring_forward(window);
+    }
+}
+
 /// Shows the web app, at `url` or where it was (its start page when it
 /// opens).
 pub fn show_main(app: &AppHandle, url: Option<Url>) -> tauri::Result<()> {
@@ -74,9 +89,6 @@ pub fn show_main(app: &AppHandle, url: Option<Url>) -> tauri::Result<()> {
     let desktop = app.state::<std::sync::Arc<Desktop>>();
     let url = url.unwrap_or_else(|| desktop.server().start_url());
     navigate_main(app, url)?;
-    if let Some(window) = app.get_webview(MAIN) {
-        bring_forward(&window.window());
-    }
     Ok(())
 }
 
@@ -128,13 +140,18 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
     // report the same one (WebView2 reports a stopped load as finished).
     let handed_off: std::sync::Mutex<Option<Url>> = std::sync::Mutex::new(None);
     let new_window = desktop.clone();
+    let revealed = std::sync::Arc::new(AtomicBool::new(false));
+    let loaded = revealed.clone();
     let webview_url = if crate::offline::is_page(&url) || is_settings_shell(&url) {
         WebviewUrl::App(url.path().trim_start_matches('/').into())
     } else {
         WebviewUrl::External(url)
     };
     let window = WebviewWindowBuilder::new(app, label, webview_url)
-        .title("Chat with Work")
+        .title("Loading Chat with Work…")
+        .visible(false)
+        .theme(snapshot_theme())
+        .background_color(canvas_color(snapshot_theme() == Some(tauri::Theme::Dark)))
         .inner_size(1200.0, 820.0)
         .resizable(!snapshots())
         .min_inner_size(380.0, 480.0)
@@ -161,6 +178,13 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
             }
         })
         .on_page_load(move |window, payload| {
+            if payload.event() == PageLoadEvent::Finished
+                && (page_load.server().owns(payload.url())
+                    || crate::offline::is_page(payload.url())
+                    || is_settings_shell(payload.url()))
+            {
+                reveal(&window.as_ref().window(), &loaded);
+            }
             if payload.event() == PageLoadEvent::Started && !is_settings_shell(payload.url()) {
                 crate::preferences::close(window.app_handle(), window.label());
             }
@@ -217,6 +241,16 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
             });
         })
         .build()?;
+    let color = canvas_color(window.theme().ok() == Some(tauri::Theme::Dark));
+    let _ = window.set_background_color(Some(color));
+    // A stalled resource must not leave an otherwise working app invisible.
+    // The bounded fallback shows the themed loading window; later navigations
+    // never hide the window or steal focus when their load finishes.
+    let pending = window.as_ref().window().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        reveal(&pending, &revealed);
+    });
     #[cfg(target_os = "linux")]
     watch_failed_loads(&window, desktop);
     Ok(window)

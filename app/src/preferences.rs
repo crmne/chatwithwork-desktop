@@ -36,15 +36,54 @@ struct Entry {
     generation: u64,
     page: Option<String>,
     context: Option<(Value, Instant)>,
+    bounds: Option<Rect>,
+    preparation: Option<String>,
+    confirmation: Option<InlineConfirmation>,
+}
+
+struct InlineConfirmation {
+    token: String,
+    request: Value,
+    context: Value,
+    page: Option<String>,
+    started: Instant,
+}
+
+impl Entry {
+    fn placement(&mut self, page: &str, context: &Value, requested: Rect) -> (Rect, bool) {
+        if self.page.as_deref() != Some(page)
+            || self
+                .context
+                .as_ref()
+                .is_some_and(|(previous, _)| previous != context)
+        {
+            self.preparation = None;
+        }
+        if let Some(pending) = &self.confirmation {
+            if pending.page.as_deref() == Some(page)
+                && pending.context["grant"] == *context
+                && pending.started.elapsed() < Duration::from_secs(120)
+            {
+                return (self.bounds.unwrap_or(requested), false);
+            }
+            self.confirmation = None;
+            return (requested, true);
+        }
+        (requested, false)
+    }
+}
+
+fn random_token() -> String {
+    let mut bytes = [0; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .expect("secure randomness");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 impl Panels {
     pub fn register(&self, owner: &str) -> String {
-        let mut bytes = [0; 32];
-        SystemRandom::new()
-            .fill(&mut bytes)
-            .expect("secure randomness");
-        let proof = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let proof = random_token();
         self.0.lock().expect("settings panels").insert(
             owner.into(),
             Entry {
@@ -52,6 +91,9 @@ impl Panels {
                 generation: 0,
                 page: None,
                 context: None,
+                bounds: None,
+                preparation: None,
+                confirmation: None,
             },
         );
         proof
@@ -79,6 +121,134 @@ impl Panels {
             .get(owner)
             .is_some_and(|entry| entry.generation == generation)
     }
+
+    /// Reserve before blocking status/context work. A late response cannot
+    /// replace a newer visible question, or recreate one after navigation.
+    pub fn begin_confirmation(&self, owner: &str) -> Result<String, String> {
+        let mut entries = self.0.lock().expect("settings panels");
+        let entry = entries
+            .get_mut(owner)
+            .ok_or("Reopen this computer’s settings first.")?;
+        let preparation = random_token();
+        entry.preparation = Some(preparation.clone());
+        entry.confirmation = None;
+        Ok(preparation)
+    }
+
+    pub fn prepare(
+        &self,
+        owner: &str,
+        preparation: &str,
+        request: &cww::control::ControlRequest,
+        context: Value,
+    ) -> Result<String, String> {
+        let mut entries = self.0.lock().expect("settings panels");
+        let entry = entries
+            .get_mut(owner)
+            .ok_or("Reopen this computer’s settings first.")?;
+        if entry.preparation.as_deref() != Some(preparation) {
+            return Err("These settings changed. Review the change again.".into());
+        }
+        entry.preparation = None;
+        let token = random_token();
+        entry.confirmation = Some(InlineConfirmation {
+            token: token.clone(),
+            request: serde_json::to_value(request).map_err(|e| e.to_string())?,
+            context,
+            page: entry.page.clone(),
+            started: Instant::now(),
+        });
+        Ok(token)
+    }
+
+    #[cfg(test)]
+    fn prepare_for_test(
+        &self,
+        owner: &str,
+        request: &cww::control::ControlRequest,
+        context: Value,
+    ) -> Result<String, String> {
+        let preparation = self.begin_confirmation(owner)?;
+        self.prepare(owner, &preparation, request, context)
+    }
+
+    pub fn cancel_confirmation(&self, owner: &str, token: &str) {
+        if let Some(entry) = self.0.lock().expect("settings panels").get_mut(owner)
+            && entry
+                .confirmation
+                .as_ref()
+                .is_some_and(|pending| pending.token == token)
+        {
+            entry.confirmation = None;
+        }
+    }
+
+    pub fn consume_confirmation(
+        &self,
+        owner: &str,
+        token: Option<&str>,
+        request: &cww::control::ControlRequest,
+        context: &Value,
+    ) -> Result<(), String> {
+        let mut entries = self.0.lock().expect("settings panels");
+        let entry = entries
+            .get_mut(owner)
+            .ok_or("Reopen this computer’s settings first.")?;
+        let pending = entry
+            .confirmation
+            .take()
+            .ok_or("Review this change before allowing it.")?;
+        if token != Some(pending.token.as_str())
+            || pending.started.elapsed() > Duration::from_secs(120)
+            || pending.request != serde_json::to_value(request).map_err(|e| e.to_string())?
+            || pending.context != *context
+            || pending.page != entry.page
+        {
+            return Err("These settings changed. Review the change again.".into());
+        }
+        Ok(())
+    }
+}
+
+/// These two existing inline questions are the only flows with duplicate
+/// confirmation. Network access, browser policy, exclusions and bot grants
+/// keep their one native dialog. Remote computer_change never uses this path.
+pub fn has_inline_confirmation(request: &cww::control::ControlRequest) -> bool {
+    matches!(
+        request,
+        cww::control::ControlRequest::RootsWritable { writable: true, .. }
+            | cww::control::ControlRequest::RootsCommands {
+                commands: true,
+                network: false,
+                ..
+            }
+    )
+}
+
+pub fn confirmation_context(
+    request: &cww::control::ControlRequest,
+    status: &crate::model::Status,
+    context: &Value,
+) -> Result<Value, String> {
+    use cww::control::ControlRequest as R;
+    let root = match request {
+        R::RootsWritable { root, .. } | R::RootsCommands { root, .. } => root,
+        _ => return Err("This change uses its existing confirmation.".into()),
+    };
+    let folder = status
+        .roots
+        .iter()
+        .find(|folder| &folder.id == root)
+        .ok_or("That folder is no longer shared.")?;
+    // Index progress may change while the person reads; the folder's identity
+    // and access must not. None of this local state is sent to the parent page.
+    Ok(
+        json!({"grant":context,"server":status.server,"device_id":status.device_id,"folder":{
+            "id":folder.id,"label":folder.label,"path":folder.local_path,
+            "available":folder.available,"writable":folder.writable,
+            "commands":folder.allows_commands,"network":folder.network
+        }}),
+    )
 }
 
 #[derive(Clone, Deserialize)]
@@ -116,6 +286,10 @@ enum Theme {
 }
 
 impl Theme {
+    fn color(self) -> tauri::window::Color {
+        crate::windows::canvas_color(matches!(self, Self::Dark))
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::Light => "light",
@@ -210,8 +384,8 @@ pub fn child_label(owner: &str) -> String {
 }
 
 /// The child is app-owned, but its placement is requested by a remote page.
-/// Widening still needs an OS dialog, so moving a pane cannot clickjack a
-/// grant. The old local control protocol remains unchanged for the CLI.
+/// Widening needs a native dialog or a one-use inline confirmation whose
+/// placement is frozen. The local control protocol remains unchanged for the CLI.
 pub fn question(
     request: &cww::control::ControlRequest,
     status: &crate::model::Status,
@@ -406,8 +580,14 @@ pub fn hide(app: &AppHandle, owner: &str) {
         entry.generation += 1;
         entry.page = None;
         entry.context = None;
+        entry.preparation = None;
+        entry.confirmation = None;
     }
     if let Some(child) = app.get_webview(&child_label(owner)) {
+        let _ = child.eval(crate::windows::settings_event(
+            "confirmation_cancelled",
+            &Value::Null,
+        ));
         let _ = child.hide();
     }
 }
@@ -555,7 +735,7 @@ pub async fn settings_present(
             .inner_size()
             .map_err(|e| e.to_string())?
             .to_logical(window.scale_factor().map_err(|e| e.to_string())?);
-        let bounds = rectangle(request.bounds, request.viewport, size)?;
+        let mut bounds = rectangle(request.bounds, request.viewport, size)?;
         let label = child_label(webview.label());
         let navigation =
             json!({ "page": request.page, "theme": request.theme.name(), "context": context });
@@ -567,6 +747,14 @@ pub async fn settings_present(
             if entry.generation != generation {
                 return Ok(());
             }
+            let (placement, cancelled) = entry.placement(&request.page, &context, bounds);
+            bounds = placement;
+            if cancelled && let Some(child) = app.get_webview(&label) {
+                let _ = child.eval(crate::windows::settings_event(
+                    "confirmation_cancelled",
+                    &Value::Null,
+                ));
+            }
             entry.context = Some((
                 context.clone(),
                 if refreshed {
@@ -576,18 +764,24 @@ pub async fn settings_present(
                 },
             ));
             entry.page = Some(request.page.clone());
+            entry.bounds = Some(bounds);
         }
         let child = if let Some(child) = app.get_webview(&label) {
+            let _ = child.set_background_color(Some(request.theme.color()));
             place_child(&child, bounds)?;
             child.show().map_err(|e| e.to_string())?;
             let _ = child.eval(crate::windows::settings_event("presentation", &navigation));
             child
         } else {
             let initial = format!("window.CWW_SETTINGS_PANE = {navigation};");
-            let builder = WebviewBuilder::new(&label, WebviewUrl::App("index.html".into()))
+            // GTK reparents the newly created view into its overlay. Loading
+            // settings during that operation can interrupt the initial load;
+            // start inert, then load the actual document exactly once below.
+            let builder = WebviewBuilder::new(&label, WebviewUrl::App(SHELL.into()))
+                .background_color(request.theme.color())
                 .initialization_script(initial)
                 .disable_drag_drop_handler()
-                .on_navigation(is_document)
+                .on_navigation(|url| is_document(url) || crate::windows::is_settings_shell(url))
                 .on_new_window(|_, _| NewWindowResponse::Deny);
             let child = window
                 .add_child(builder, bounds.position, bounds.size)
@@ -718,6 +912,9 @@ fn standalone_now(app: &AppHandle, page: &str) -> tauri::Result<()> {
         if page == "privacy" { "folders" } else { page }
     );
     let builder = WebviewBuilder::new(child_label(owner), WebviewUrl::App(path.into()))
+        .background_color(crate::windows::canvas_color(
+            window.theme().ok() == Some(tauri::Theme::Dark),
+        ))
         .auto_resize()
         .on_navigation(is_document)
         .on_new_window(|_, _| NewWindowResponse::Deny);
@@ -747,6 +944,262 @@ fn standalone_now(app: &AppHandle, page: &str) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_preparation_cannot_replace_a_newer_question_or_survive_navigation() {
+        let panels = Panels::default();
+        panels.register("main");
+        let request = cww::control::ControlRequest::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        let context = json!({"grant":{"account":"1000001"}});
+        let first = panels.begin_confirmation("main").unwrap();
+        let second = panels.begin_confirmation("main").unwrap();
+        let token = panels
+            .prepare("main", &second, &request, context.clone())
+            .unwrap();
+        assert!(
+            panels
+                .prepare("main", &first, &request, context.clone())
+                .is_err()
+        );
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &request, &context)
+                .is_ok()
+        );
+
+        let pending = panels.begin_confirmation("main").unwrap();
+        {
+            let mut entries = panels.0.lock().unwrap();
+            let entry = entries.get_mut("main").unwrap();
+            entry.page = Some("folders".into());
+            entry.placement("general", &Value::Null, Rect::default());
+        }
+        assert!(
+            panels
+                .prepare("main", &pending, &request, context.clone())
+                .is_err()
+        );
+
+        // Closing/recreating the same owner label cannot reuse a reservation.
+        let pending = panels.begin_confirmation("main").unwrap();
+        panels.register("main");
+        assert!(panels.prepare("main", &pending, &request, context).is_err());
+    }
+
+    #[test]
+    fn standalone_confirmation_is_bound_to_server_and_device_without_remote_context() {
+        let request = cww::control::ControlRequest::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        let mut status = crate::model::Status {
+            server: Some("https://chatwithwork.com".into()),
+            device_id: Some("43".into()),
+            roots: vec![crate::model::RootStatus {
+                id: "work".into(),
+                local_path: Some("/work".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let panels = Panels::default();
+        panels.register("main");
+        let original = confirmation_context(&request, &status, &Value::Null).unwrap();
+        let token = panels
+            .prepare_for_test("main", &request, original.clone())
+            .unwrap();
+        status.device_id = Some("44".into());
+        assert!(
+            panels
+                .consume_confirmation(
+                    "main",
+                    Some(&token),
+                    &request,
+                    &confirmation_context(&request, &status, &Value::Null).unwrap()
+                )
+                .is_err()
+        );
+        status.device_id = Some("43".into());
+        let token = panels.prepare_for_test("main", &request, original).unwrap();
+        status.server = Some("https://another.example".into());
+        assert!(
+            panels
+                .consume_confirmation(
+                    "main",
+                    Some(&token),
+                    &request,
+                    &confirmation_context(&request, &status, &Value::Null).unwrap()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn inline_confirmation_is_one_use_and_bound_to_window_request_folder_and_account() {
+        use cww::control::ControlRequest as R;
+        let panels = Panels::default();
+        panels.register("main");
+        panels.register("page-1");
+        let request = R::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        let context =
+            json!({"grant":{"account":"1000001","device_id":"43"},"folder":{"path":"/work"}});
+        let token = panels
+            .prepare_for_test("main", &request, context.clone())
+            .unwrap();
+        assert!(
+            panels
+                .consume_confirmation("page-1", Some(&token), &request, &context)
+                .is_err()
+        );
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &request, &context)
+                .is_ok()
+        );
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &request, &context)
+                .is_err()
+        );
+        let token = panels
+            .prepare_for_test("main", &request, context.clone())
+            .unwrap();
+        let other = R::RootsCommands {
+            root: "work".into(),
+            commands: true,
+            network: false,
+        };
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &other, &context)
+                .is_err()
+        );
+        for changed in [
+            json!({"grant":{"account":"2000002"},"folder":{"path":"/work"}}),
+            json!({"grant":{"account":"1000001","device_id":"43"},"folder":{"path":"/another-folder"}}),
+        ] {
+            let token = panels
+                .prepare_for_test("main", &request, context.clone())
+                .unwrap();
+            assert!(
+                panels
+                    .consume_confirmation("main", Some(&token), &request, &changed)
+                    .is_err()
+            );
+        }
+        let token = panels
+            .prepare_for_test("main", &request, context.clone())
+            .unwrap();
+        panels.cancel_confirmation("main", &token);
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &request, &context)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn inline_question_freezes_placement_but_navigation_and_expiry_invalidate_it() {
+        use cww::control::ControlRequest as R;
+        let panels = Panels::default();
+        panels.register("main");
+        let original = Rect {
+            position: LogicalPosition::new(400.0, 80.0).into(),
+            size: LogicalSize::new(600.0, 700.0).into(),
+        };
+        let moved = Rect {
+            position: LogicalPosition::new(0.0, 0.0).into(),
+            ..original
+        };
+        {
+            let mut entries = panels.0.lock().unwrap();
+            let entry = entries.get_mut("main").unwrap();
+            entry.page = Some("folders".into());
+            entry.bounds = Some(original);
+        }
+        let request = R::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        let context = json!({"account":"1000001","device_id":"43"});
+        panels
+            .prepare_for_test("main", &request, json!({"grant":context}))
+            .unwrap();
+        let mut entries = panels.0.lock().unwrap();
+        let entry = entries.get_mut("main").unwrap();
+        let (placement, cancelled) = entry.placement("folders", &context, moved);
+        assert_eq!(placement.position, original.position);
+        assert_eq!(placement.size, original.size);
+        assert!(!cancelled);
+        let (placement, cancelled) = entry.placement("activity", &context, moved);
+        assert_eq!(placement.position, moved.position);
+        assert!(cancelled);
+        assert!(entry.confirmation.is_none());
+        drop(entries);
+        panels
+            .prepare_for_test("main", &request, json!({"grant":context}))
+            .unwrap();
+        let mut entries = panels.0.lock().unwrap();
+        let entry = entries.get_mut("main").unwrap();
+        entry.confirmation.as_mut().unwrap().started = Instant::now() - Duration::from_secs(121);
+        let (placement, cancelled) = entry.placement("folders", &context, moved);
+        assert_eq!(placement.position, moved.position);
+        assert!(cancelled);
+    }
+
+    #[test]
+    fn inline_confirmation_does_not_replace_remote_or_other_local_questions() {
+        use cww::control::ControlRequest as R;
+        let status = crate::model::Status {
+            roots: vec![crate::model::RootStatus {
+                id: "work".into(),
+                label: "Work".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let request = R::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        assert!(has_inline_confirmation(&request));
+        assert!(question(&request, &status, &Value::Null).unwrap().is_some());
+        assert!(
+            crate::computer::Change::Changes {
+                folder: "work".into(),
+                on: true
+            }
+            .plan(&status)
+            .unwrap()
+            .1
+            .is_some()
+        );
+        for request in [
+            R::RootsCommands {
+                root: "work".into(),
+                commands: true,
+                network: true,
+            },
+            R::BrowserAllSites { all_sites: true },
+            R::DenyExtra {
+                previous: Some("*.secret".into()),
+                pattern: None,
+            },
+        ] {
+            assert!(!has_inline_confirmation(&request));
+        }
+    }
 
     #[test]
     fn only_the_bundled_document_and_its_canonical_root_are_local_settings() {

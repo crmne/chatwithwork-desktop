@@ -76,18 +76,65 @@ export async function pickFolder(app) {
   app.render();
 }
 
-async function change(app, id, request) {
+async function change(app, id, request, confirmation) {
   const view = app.view("folders");
   view.busy = id;
   view.error = null;
   app.render();
   try {
-    await control(request);
+    await control(request, confirmation);
   } catch (error) {
     view.error = error.message;
   }
   view.busy = null;
   app.render();
+}
+
+function cancelConfirmation(app) {
+  const view = app.view("folders");
+  view.confirmationSequence = (view.confirmationSequence || 0) + 1;
+  if (view.confirmation?.confirmation) call("cancel_control", { confirmation: view.confirmation.confirmation }).catch(() => {});
+  view.confirmation = null;
+  view.allowing = null;
+  view.commanding = null;
+}
+
+async function confirm(app, root, kind, request) {
+  cancelConfirmation(app);
+  const view = app.view("folders");
+  const sequence = view.confirmationSequence;
+  view[kind] = root.id;
+  view.removing = null;
+  view.error = null;
+  app.render();
+  try {
+    const confirmation = await call("prepare_control", { request });
+    if (view.confirmationSequence !== sequence) {
+      call("cancel_control", { confirmation: confirmation.confirmation }).catch(() => {});
+      return;
+    }
+    view.confirmation = { ...confirmation, request };
+  } catch (error) {
+    if (view.confirmationSequence !== sequence) return;
+    cancelConfirmation(app);
+    view.error = error.message;
+  }
+  app.render();
+}
+
+function allow(app, root) {
+  const view = app.view("folders");
+  const pending = view.confirmation;
+  if (!pending) return;
+  view.confirmation = null;
+  view.allowing = null;
+  view.commanding = null;
+  change(app, root.id, pending.request, pending.confirmation);
+}
+
+export function leave(app) { cancelConfirmation(app); }
+export function listen(app, on) {
+  return on("confirmation_cancelled", () => { cancelConfirmation(app); if (app.page === "folders") app.render(); });
 }
 
 export function enter(app) {
@@ -171,28 +218,23 @@ function folderRow(app, root) {
     h("div", { class: "group group--sunken" },
       // Allow changes: on asks first, off is at once.
       setting("Allow changes", root.writable
-        ? "File changes ask for approval. Old versions stay in Trash."
-        : "Read only. Turn on to allow approved file changes.",
+        ? "Changes follow your chat’s approval setting. Old versions stay in Trash."
+        : "Read only. Turn on to allow file changes.",
       switchInput(root.writable || allowing, (on) => {
         if (on) {
-          view.allowing = root.id;
-          view.removing = null;
-          app.render();
+          confirm(app, root, "allowing", { cmd: "roots_writable", root: root.id, writable: true });
         } else {
           change(app, root.id, { cmd: "roots_writable", root: root.id, writable: false });
         }
       }, { label: `Allow changes in ${root.label}`, disabled: busy || allowing })),
       allowing ? h("div", { class: "confirm" },
-        h("p", {}, `Let Chat with Work change files in “${root.label}”? It asks you in Chat with Work before each change, and old versions and deleted files go to the trash on this computer.`),
+        h("p", {}, view.confirmation?.message || "Checking this folder’s permissions…"),
         h("div", { class: "inline" },
           button("Cancel", () => {
-            view.allowing = null;
+            cancelConfirmation(app);
             app.render();
           }),
-          button("Allow Changes", () => {
-            view.allowing = null;
-            change(app, root.id, { cmd: "roots_writable", root: root.id, writable: true });
-          }, { kind: "btn-primary" }))) : null,
+          button("Allow Changes", () => allow(app, root), { kind: "btn-primary", disabled: !view.confirmation }))) : null,
 
       // Keep the switch visible when a prerequisite is missing. An existing grant can still be stopped.
       setting("Run commands", !root.writable ? "Allow changes first."
@@ -201,24 +243,19 @@ function folderRow(app, root) {
         : "Run code, tests or builds in this folder’s sandbox.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
-          view.commanding = root.id;
-          view.removing = null;
-          app.render();
+          confirm(app, root, "commanding", { cmd: "roots_commands", root: root.id, commands: true, network: false });
         } else {
           change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
         }
       }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!root.writable || !runsCommands)) })),
       commanding ? h("div", { class: "confirm" },
-        h("p", {}, `Let Chat with Work run commands in “${root.label}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it.`),
+        h("p", {}, view.confirmation?.message || "Checking this folder’s permissions…"),
         h("div", { class: "inline" },
           button("Cancel", () => {
-            view.commanding = null;
+            cancelConfirmation(app);
             app.render();
           }),
-          button("Allow Commands", () => {
-            view.commanding = null;
-            change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: false });
-          }, { kind: "btn-primary" }))) : null,
+          button("Allow Commands", () => allow(app, root), { kind: "btn-primary", disabled: !view.confirmation }))) : null,
       root.writable && root.allows_commands ? setting("Commands use the network", root.network
         ? "Commands here can reach the internet, to install packages or fetch dependencies."
         : "Commands here run without a network.",
@@ -313,4 +350,4 @@ export function render(app) {
   return page;
 }
 
-export default { title, icon, render, enter, statusChanged };
+export default { title, icon, render, enter, statusChanged, leave, listen };

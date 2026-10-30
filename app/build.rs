@@ -22,6 +22,8 @@ const COMMANDS: &[&str] = &[
     "page_dialog",
     // The bundled settings pages (local.rs).
     "control",
+    "prepare_control",
+    "cancel_control",
     "activity",
     "app_info",
     "set_onboarded",

@@ -6,6 +6,8 @@
   "local": true,
   "permissions": [
     "allow-control",
+    "allow-prepare-control",
+    "allow-cancel-control",
     "allow-activity",
     "allow-app-info",
     "allow-set-onboarded",

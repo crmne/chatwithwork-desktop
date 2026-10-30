@@ -28,7 +28,7 @@ export async function call(command, args = {}) {
   }
 }
 
-export const control = (request) => call("control", { request });
+export const control = (request, confirmation) => call("control", { request, ...(confirmation ? { confirmation } : {}) });
 
 // Events from the app: it calls window.cwwEvent(name, payload) in this page
 // (windows.rs, tell_settings), so the pages need none of Tauri's own APIs.
@@ -163,6 +163,7 @@ const app = {
     if (page === "privacy") page = "folders";
     if (!PAGES[page]) page = "folders";
     if (this.page !== page) {
+      PAGES[this.page]?.leave?.(this);
       this.page = page;
       history.replaceState(null, "", `#${page}`);
       PAGES[page].enter?.(this);

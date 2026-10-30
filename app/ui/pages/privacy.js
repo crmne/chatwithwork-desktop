@@ -64,8 +64,8 @@ function editor(app) {
 
 export function render(app, embedded = false) {
   const view = app.view("privacy");
-  const page = h("div", { class: "page" },
-    embedded ? h("header", {}, h("h2", {}, title), h("p", { class: "muted" }, "These files stay private, even inside a shared folder.")) : pageHeader(title, "These files stay private, even inside a shared folder."));
+  const page = h(embedded ? "section" : "div", { class: embedded ? "section" : "page" },
+    embedded ? h("header", { class: "section__header" }, h("h2", {}, title), h("p", {}, "These files stay private, even inside a shared folder.")) : pageHeader(title, "These files stay private, even inside a shared folder."));
   if (!app.status) { append(page, agentMissing(app)); return page; }
   if (view.error || view.loadError) append(page, notice(view.error || view.loadError));
   const deny = view.deny;

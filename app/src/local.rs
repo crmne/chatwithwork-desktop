@@ -93,7 +93,80 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub async fn control(webview: Webview, desktop: State<'_, Arc<Desktop>>, request: Value) -> Answer {
+pub async fn prepare_control(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    request: Value,
+) -> Answer {
+    local_page(&webview)?;
+    let request = allowed(request)?;
+    if !crate::preferences::has_inline_confirmation(&request) {
+        return Err(refusal(
+            "forbidden",
+            "This change uses its existing confirmation.",
+        ));
+    }
+    let owner = webview
+        .label()
+        .strip_prefix(crate::preferences::PREFIX)
+        .expect("local child")
+        .to_owned();
+    let preparation = desktop
+        .preferences
+        .begin_confirmation(&owner)
+        .map_err(|e| refusal("forbidden", e))?;
+    let desktop = desktop.inner().clone();
+    blocking(move || {
+        let context =
+            crate::preferences::grant_context(&desktop.app(), &desktop, &webview, &request)
+                .map_err(|e| refusal("forbidden", e))?;
+        let status = desktop
+            .client
+            .status()
+            .map_err(|e| refusal("not_running", e.to_string()))?;
+        let question = crate::preferences::question(&request, &status, &context)
+            .map_err(|e| refusal("refused", e))?
+            .ok_or_else(|| {
+                refusal(
+                    "changed",
+                    "This folder’s settings changed. Review them again.",
+                )
+            })?;
+        let bound = crate::preferences::confirmation_context(&request, &status, &context)
+            .map_err(|e| refusal("forbidden", e))?;
+        let token = desktop
+            .preferences
+            .prepare(&owner, &preparation, &request, bound)
+            .map_err(|e| refusal("forbidden", e))?;
+        Ok(json!({"confirmation":token,"message":question.message}))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub fn cancel_control(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    confirmation: String,
+) -> Answer {
+    local_page(&webview)?;
+    let owner = webview
+        .label()
+        .strip_prefix(crate::preferences::PREFIX)
+        .expect("local child");
+    desktop
+        .preferences
+        .cancel_confirmation(owner, &confirmation);
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+pub async fn control(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    request: Value,
+    confirmation: Option<String>,
+) -> Answer {
     local_page(&webview)?;
     let request = allowed(request)?;
     let desktop = desktop.inner().clone();
@@ -105,9 +178,22 @@ pub async fn control(webview: Webview, desktop: State<'_, Arc<Desktop>>, request
             .client
             .status()
             .map_err(|e| refusal("not_running", e.to_string()))?;
-        if let Some(question) = crate::preferences::question(&request, &status, &context)
-            .map_err(|e| refusal("refused", e))?
+        let question = crate::preferences::question(&request, &status, &context)
+            .map_err(|e| refusal("refused", e))?;
+        if confirmation.is_some()
+            || (question.is_some() && crate::preferences::has_inline_confirmation(&request))
         {
+            let owner = webview
+                .label()
+                .strip_prefix(crate::preferences::PREFIX)
+                .expect("local child");
+            let bound = crate::preferences::confirmation_context(&request, &status, &context)
+                .map_err(|e| refusal("forbidden", e))?;
+            desktop
+                .preferences
+                .consume_confirmation(owner, confirmation.as_deref(), &request, &bound)
+                .map_err(|e| refusal("forbidden", e))?;
+        } else if let Some(question) = question {
             let Some(_asking) = desktop.asking.start() else {
                 return Err(refusal("busy", "Answer the app’s current question first."));
             };

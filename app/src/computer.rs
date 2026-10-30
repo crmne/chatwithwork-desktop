@@ -176,7 +176,7 @@ impl Change {
                     ask(
                         "Allow Changes",
                         format!(
-                            "Let Chat with Work change files in “{}”? It asks you in Chat with Work before each change, and old versions and deleted files go to the trash on this computer.",
+                            "Let Chat with Work change files in “{}”? Changes follow your approval settings in Chat with Work. Old versions and deleted files go to the trash on this computer.",
                             root.label
                         ),
                         "Allow Changes",
