@@ -106,6 +106,19 @@ impl SearchIndex {
     /// `relative path -> (mtime, size)` for every indexed file of a root.
     /// Reads fast fields only, so it stays cheap on large roots.
     pub fn indexed_files(&self, root_id: &str) -> Result<HashMap<String, (i64, u64)>> {
+        Ok(self
+            .indexed_files_until(root_id, || false)?
+            .unwrap_or_default())
+    }
+
+    pub fn indexed_files_until(
+        &self,
+        root_id: &str,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Option<HashMap<String, (i64, u64)>>> {
+        if cancelled() {
+            return Ok(None);
+        }
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
             Term::from_field_text(self.fields.root, root_id),
@@ -115,6 +128,9 @@ impl SearchIndex {
         let prefix = format!("{root_id}:");
         let mut by_segment: HashMap<u32, Vec<u32>> = HashMap::new();
         for address in &docs {
+            if cancelled() {
+                return Ok(None);
+            }
             by_segment
                 .entry(address.segment_ord)
                 .or_default()
@@ -130,6 +146,9 @@ impl SearchIndex {
             let mtimes = fast.i64("mtime")?;
             let sizes = fast.u64("size")?;
             for doc in doc_ids {
+                if cancelled() {
+                    return Ok(None);
+                }
                 let Some(ord) = paths.term_ords(doc).next() else {
                     continue;
                 };
@@ -145,7 +164,7 @@ impl SearchIndex {
                 out.insert(rel.to_string(), (mtime, size));
             }
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     pub fn upsert(
@@ -373,6 +392,26 @@ mod tests {
         index.commit().unwrap();
         assert_eq!(index.doc_count(), 1);
         assert_eq!(index.indexed_roots().unwrap(), vec!["docs".to_string()]);
+    }
+
+    #[test]
+    fn metadata_enumeration_aborts_without_returning_a_partial_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = SearchIndex::open(tmp.path()).unwrap();
+        for i in 0..10000 {
+            index.upsert("docs", &format!("{i}.txt"), "", 1, 1).unwrap();
+        }
+        index.commit().unwrap();
+        let checked = std::cell::Cell::new(0);
+        let result = index
+            .indexed_files_until("docs", || {
+                checked.set(checked.get() + 1);
+                checked.get() > 32
+            })
+            .unwrap();
+        assert!(result.is_none());
+        assert_eq!(checked.get(), 33);
+        assert_eq!(index.doc_count(), 10000);
     }
 
     #[test]

@@ -606,6 +606,7 @@ async fn run_with_notifications(
     daemon.audit.append(&entry);
 
     daemon.supervise(&shutdown).await;
+    daemon.reader.stop_indexing();
 
     let runner = daemon.runner.clone();
     let _ = tokio::task::spawn_blocking(move || runner.stop_all()).await;
@@ -778,6 +779,7 @@ impl Daemon {
             let mut entry = AuditEntry::event("restarting");
             entry.detail = Some("to confine the daemon to the new set of folders".into());
             self.audit.append(&entry);
+            self.reader.stop_indexing();
             RESTART_FOR_SANDBOX.store(true, Ordering::SeqCst);
             self.shutdown.cancel();
             return Ok(());

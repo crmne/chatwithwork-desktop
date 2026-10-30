@@ -325,6 +325,8 @@ Measured on real Documents folders, connected to a Chat with Work server:
 
 A search takes about 100 ms end to end through Chat with Work, most of it on the server. When the index has no answer, a live grep runs as well; over a folder of thousands of files that aren't text, that can take a second or more (at most 5 seconds). Indexing peaks at a few hundred megabytes while large PDFs and spreadsheets are extracted, and the memory is handed back when the pass ends.
 
+Opening a saved index runs in the background too: settings and status are available while a folder says `pending`, and searches use live grep until its index is ready. Changing shared folders cancels the previous scan; an interrupted traversal never removes files just because it had not reached them yet. A sandbox restart waits at most half a second for indexing to stop. If a synchronous parser is still finishing one file, the old worker process ends it, and the new worker resumes from the last committed index. Folder permissions still change through the same confined-worker restart.
+
 ## Configuration
 
 Everything lives in `~/.config/cww/config.toml`. The server can't change any of it.

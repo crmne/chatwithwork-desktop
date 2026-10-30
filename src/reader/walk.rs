@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ignore::WalkBuilder;
+use tokio_util::sync::CancellationToken;
 
 use super::safe_fs::{RelPath, RootHandle};
 use crate::policy::DenyList;
@@ -83,8 +84,22 @@ pub fn walk_scoped(
     root: &RootHandle,
     deny: &Arc<DenyList>,
     scope: Option<Arc<Scope>>,
+    visit: impl FnMut(WalkedFile) -> ControlFlow<()>,
+) {
+    walk_scoped_until(root, deny, scope, &CancellationToken::new(), visit);
+}
+
+pub fn walk_scoped_until(
+    root: &RootHandle,
+    deny: &Arc<DenyList>,
+    scope: Option<Arc<Scope>>,
+    cancelled: &CancellationToken,
     mut visit: impl FnMut(WalkedFile) -> ControlFlow<()>,
 ) {
+    if cancelled.is_cancelled() {
+        return;
+    }
+    let filter_cancelled = cancelled.clone();
     let filter_deny = Arc::clone(deny);
     let root_path = root.path.clone();
     let walker = WalkBuilder::new(&root.path)
@@ -98,6 +113,11 @@ pub fn walk_scoped(
         .require_git(false)
         .same_file_system(false)
         .filter_entry(move |entry| {
+            // Yield one entry to the outer loop so it can stop. Filtering
+            // everything out would still visit every sibling in a huge folder.
+            if filter_cancelled.is_cancelled() {
+                return true;
+            }
             if filter_deny.is_denied(entry.path()) {
                 return false;
             }
@@ -115,6 +135,9 @@ pub fn walk_scoped(
         })
         .build();
     for entry in walker.flatten() {
+        if cancelled.is_cancelled() {
+            break;
+        }
         let Some(file_type) = entry.file_type() else {
             continue;
         };

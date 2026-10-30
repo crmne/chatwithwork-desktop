@@ -187,7 +187,6 @@ type CacheKey = (String, (u64, u64), i64, u64);
 
 pub struct Reader {
     state: RwLock<State>,
-    index: Option<Arc<index::SearchIndex>>,
     indexer: Option<Indexer>,
     cache: Mutex<VecDeque<(CacheKey, Arc<String>)>>,
 }
@@ -195,29 +194,27 @@ pub struct Reader {
 impl Reader {
     pub fn new(config: &Config, paths: &Paths, changes: Changes) -> Result<Self> {
         let state = build_state(config, paths)?;
-        let (index, indexer) = if config.index.enabled {
-            let index = Arc::new(index::SearchIndex::open(&paths.index_dir())?);
-            let indexer = Indexer::start(
-                Arc::clone(&index),
-                indexer_settings(&state, config),
-                changes,
-            );
-            (Some(index), Some(indexer))
-        } else {
-            (None, None)
-        };
+        let indexer = config
+            .index
+            .enabled
+            .then(|| Indexer::start(paths.index_dir(), indexer_settings(&state, config), changes));
         Ok(Self {
             state: RwLock::new(state),
-            index,
             indexer,
             cache: Mutex::new(VecDeque::new()),
         })
     }
 
+    pub fn stop_indexing(&self) {
+        if let Some(indexer) = &self.indexer {
+            indexer.stop();
+        }
+    }
+
     /// Apply a changed config (roots, deny list, limits).
     pub fn reload(&self, config: &Config, paths: &Paths) -> Result<()> {
         let mut state = build_state(config, paths)?;
-        state.index_enabled = self.index.is_some();
+        state.index_enabled = self.indexer.is_some();
         if let Some(indexer) = &self.indexer {
             indexer.configure(indexer_settings(&state, config));
         }
@@ -320,7 +317,7 @@ impl Reader {
 
         let mut hits: Vec<SearchHit> = Vec::new();
         let mut engines = Vec::new();
-        if let Some(index) = &self.index {
+        if let Some(index) = self.indexer.as_ref().and_then(Indexer::index) {
             let ids: Vec<String> = roots.iter().map(|r| r.id.clone()).collect();
             let fetch = if glob.is_some() {
                 (limit * 10).min(500)
