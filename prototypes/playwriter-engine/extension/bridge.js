@@ -22,6 +22,8 @@ globalThis.bridge = {
     group = await chrome.tabs.group({tabIds:[tab]});
     await chrome.tabGroups.update(group,{title:'Chat with Work prototype'});
     await chrome.tabs.update(tab,{url});
+    const deadline=Date.now()+10000;
+    while(true){const current=await chrome.tabs.get(tab);if(current.status==='complete' && current.url===url)break;if(Date.now()>deadline)throw Error('fixture navigation timed out');await new Promise(done=>setTimeout(done,20));}
     await chrome.debugger.attach({tabId:tab},'1.3');
     ({targetInfo:info} = await chrome.debugger.sendCommand({tabId:tab},'Target.getTargetInfo'));
     session = 'cww-prototype-'+tab;
@@ -69,3 +71,16 @@ globalThis.bridge = {
   policy(next){if('stopped'in next) stopped=next.stopped; if('changes'in next) changes=next.changes; if('origin'in next) origin=next.origin},
   evidence(){return {tab,group,session,renderEvidence,methods:[...methods].sort()}},
 };
+
+// Synthetic-only native transport to prove behavior without a second CDP
+// connection. Its host exists solely in the throwaway test profile. This is
+// not a product entry point and no script/evaluate action is accepted here.
+const native = chrome.runtime.connectNative('com.chatwithwork.engine_prototype');
+native.onDisconnect.addListener(()=>void chrome.runtime.lastError);
+native.onMessage.addListener(async ({id,action,params})=>{
+  try {
+    if(!['init','send','drain','policy','render','evidence'].includes(action)) throw Error('unsupported fixture operation');
+    native.postMessage({id,result:await globalThis.bridge[action](params)});
+  } catch(error) {native.postMessage({id,error:error.message})}
+});
+native.postMessage({hello:true});

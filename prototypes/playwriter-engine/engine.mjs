@@ -9,11 +9,11 @@ const {CRBrowser}=require(join(root,'lib/server/chromium/crBrowser.js'));
 const {ProgressController}=require(join(root,'lib/server/progress.js'));
 const {RecentLogsCollector}=require(join(root,'lib/server/utils/debugLogger.js'));
 
-export async function connectEngine(worker, artifactsDir) {
+export async function connectEngine(bridge, artifactsDir) {
   let closed=false;
   const transport={
     send(command) {
-      worker.evaluate(async command=>({result:await globalThis.bridge.send(command),events:globalThis.bridge.drain()}),command)
+      bridge.send(command).then(async result=>({result,events:await bridge.drain()}))
         .then(({result,events})=>{for(const event of events) transport.onmessage?.(event);transport.onmessage?.({id:command.id,sessionId:command.sessionId,result})},
           error=>transport.onmessage?.({id:command.id,sessionId:command.sessionId,error:{message:error.message,code:-32000}}));
     },
@@ -21,7 +21,7 @@ export async function connectEngine(worker, artifactsDir) {
   };
   const pump=(async()=>{
     while(!closed) {
-      const events=await worker.evaluate(()=>globalThis.bridge.drain()).catch(()=>[]);
+      const events=await bridge.drain().catch(()=>[]);
       for(const event of events) transport.onmessage?.(event);
       await new Promise(resolve=>setTimeout(resolve,5));
     }
@@ -44,7 +44,7 @@ export async function connectEngine(worker, artifactsDir) {
   const handle=async(backendNodeId)=>page.delegate._mainFrameSession._adoptBackendNodeId(backendNodeId,await page.mainFrame()._utilityContext());
   return {
     browser,page,transport,handle,run,
-    async stop(){await worker.evaluate(()=>globalThis.bridge.policy({stopped:true})); await Promise.all([...controllers].map(c=>c.abort(Error('CWW Stop is active'))));},
+    async stop(){await bridge.policy({stopped:true}); await Promise.all([...controllers].map(c=>c.abort(Error('CWW Stop is active'))));},
     async close(){transport.close();await pump},
   };
 }

@@ -11,7 +11,12 @@ inspected Playwriter checkout. Its `CRBrowser`, frame/execution-context handling
 `ElementHandle.click`, `ElementHandle.check`, `ProgressController`, injected
 script, actionability polling, scrolling, hit-target interception and trusted
 input dispatch run unchanged. No copied replacement click routine is used.
-The dependency is Apache-2.0; its LICENSE and upstream NOTICE accompany this prototype.
+The package metadata and Playwright source are Apache-2.0. The published npm
+package incorrectly carries a Playwriter MIT LICENSE file, retained verbatim as
+`LICENSE-REGISTRY-PACKAGE`; the actual upstream Apache text is separately
+`LICENSE-PLAYWRIGHT`, with `NOTICE-PLAYWRIGHT`. The outer project's MIT text is
+also retained as `LICENSE-PLAYWRITER`. Do not mistake the registry license file
+for permission to omit Playwright's Apache requirements.
 
 Playwriter itself is MIT. Its `cdp-relay.ts` maps each attached extension tab to
 an engine session, synthesizes root Target events, and forwards page commands.
@@ -106,17 +111,24 @@ Stale refs, protected passwords, unsupported methods/force, another target
 session, global cookie deletion and Stop during auto-wait all refused.
 
 Without that stream, some stability waits stalled: the engine's captured rAF
-callback ran once in300ms despite visible/focused emulation. With the stream
-it ran18times. Frames are acknowledged and discarded without logging content.
+callback ran once in 300ms despite visible/focused emulation. With the stream
+it ran 18 times. Frames are acknowledged and discarded without logging content.
 The active Chrome tab remained unchanged. `Page.bringToFront` was separately
 rejected as a mitigation: it DID change the active tab in this Chromium155
 fixture, contrary to an upstream test's environment-specific comment.
 
 The first test uses a private Playwright launch pipe as the fixture driver in
-addition to the extension debugger. A single-debugger/native-messaging control
-is required before attributing the rAF observation to normal user browsing.
-Production liveness would run only during an action and stop on all exits,
-revocation and disconnect; this fixture currently keeps it for the test.
+addition to the extension debugger. The follow-up `native.test.mjs` launches
+Chromium with **no debugging port or pipe**, communicates through Chrome native
+messaging and a 0600 private Unix socket, and attaches only the extension's
+single debugger. In that cleaner control all five targets (plain button,
+`display:contents`, closed shadow, slot and styled label) passed **without a
+screencast**, including a cached-ref click after idle. The idle scheduler alone
+dropped to 0 callbacks/300ms, but the engine action resumed normally. Therefore
+the multi-CDP fixture's stalls are not evidence of a normal-use engine blocker.
+Do not enable screencast by default based on this experiment. If later proven
+necessary, liveness must run only during an action, stop on every exit/Stop/
+disconnect, and discard frames locally. No virtual clock was used.
 
 Reproduce the passing action matrix with `CWW_ENGINE_RENDER_MODE=screencast`.
 The default mode records its actual successes/refusals rather than claiming all

@@ -31,7 +31,7 @@ test('unchanged Playwriter engine through extension debugger transport', {timeou
   assert.match(gpu,/NVIDIA/);console.log('GPU:',gpu);
   const worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   await worker.evaluate(url=>globalThis.bridge.init(url),url);
-  engine=await connectEngine(worker,home);
+  engine=await connectEngine({send:command=>worker.evaluate(command=>bridge.send(command),command),drain:()=>worker.evaluate(()=>bridge.drain()),policy:next=>worker.evaluate(next=>bridge.policy(next),next)},home);
   const render=await worker.evaluate(mode=>bridge.render(mode),process.env.CWW_ENGINE_RENDER_MODE || 'default');
   assert.deepEqual(render.after,render.before,'engine renderer setup must not activate a Chrome tab');
   console.log('Render setup:',JSON.stringify(render));

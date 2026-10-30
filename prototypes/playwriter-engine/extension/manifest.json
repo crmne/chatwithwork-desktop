@@ -1,1 +1,1 @@
-{"manifest_version":3,"name":"CWW engine prototype (synthetic only)","version":"0.0.1","permissions":["debugger","tabs","tabGroups"],"background":{"service_worker":"bridge.js"}}
+{"manifest_version":3,"name":"CWW engine prototype (synthetic only)","version":"0.0.1","permissions":["debugger","tabs","tabGroups","nativeMessaging"],"background":{"service_worker":"bridge.js"}}
