@@ -142,12 +142,55 @@ shadow controls keep their normal hit checks.
 The preview outlines the visible label and describes the original control;
 it never selects the option. Other fields are not retargeted through labels.
 
+## Bundled full engine
+
+Supported packages also bundle the unchanged Playwriter Playwright engine
+behind click, type and select. The daemon verifies a private Node runtime and
+module tree, then uses the full upstream action pipeline through the existing
+extension. No separate runtime installation is required. The fixed tools,
+local permissions, protected fields, own tab group, Stop and approval checks
+remain the same. This does not expose Playwriter's arbitrary-code executor or
+a remote CDP service.
+
+Route selection happens before an operation. Older extension capabilities and
+platforms without a supported bundled runtime retain the released implementation
+described above; a failed or possibly dispatched full-engine action never falls
+back to another implementation. Preview input is suppressed in transport,
+including hover, while upstream actionability checks still run. Background
+operations do not activate the tab or change the page clock.
+
+See the [helper contract and test coverage](../browser/engine/README.md) for
+reference binding, cancellation, runtime support and complete license provenance.
+
+The installed private directory contains `current.json` and an immutable payload
+named by the SHA-256 of its manifest. The daemon verifies the manifest and every
+file before confinement, then keeps that exact payload path until restart.
+An upgrade cannot redirect an in-flight operation into a new module tree. A
+portable runtime inside a writable shared folder is not admitted; ordinary
+browser tools keep the legacy path. Sharing its location with write access later
+restarts the daemon so the same admission rule applies.
+
+At daemon startup, one confined helper imports its modules and reports ready,
+without an extension lease or browser input. Preparation has a 45-second bound
+for first-launch OS inspection. Until it succeeds, admission selects legacy.
+Once ready, each tool request has a shared 18-second limit, including any
+automatic preview, action and cleanup; each action is at most 14 seconds. A
+subsequent slow helper start cannot send input after that request expires.
+
+The helper uses inherited pipes, a fixed executable and entry, and a sanitized
+environment. There is no PATH lookup, runtime download, public evaluation API or
+new network endpoint. Its raw protocol, page events and upstream errors never
+become tool results. Events and commands are bound to the current native
+connection and operation lease; Stop, policy changes and disconnect cancel
+the operation. An uncertain result asks the assistant to read the page before
+deciding what to do next, never to repeat a possibly completed action blindly.
+
 ## Why its own extension
 
 Ours, open source in this repository, is intended for the Chrome Web Store as
 "Chat with Work". [Playwriter](https://github.com/remorses/playwriter) is the
 reference for driving tabs through `chrome.debugger`, and its Playwright
-engine supplies the adapted click algorithms. Those portions retain their
+engine supplies both the legacy adapted click algorithms and the bundled full action pipeline. Those portions retain their
 Microsoft/Puppeteer Apache-2.0 attribution; both extension ZIPs include the
 license and [third-party notices](../browser/static/THIRD-PARTY-NOTICES.txt).
 Playwriter itself is MIT licensed. We reuse the click mechanics without its

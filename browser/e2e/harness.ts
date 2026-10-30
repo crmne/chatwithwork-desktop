@@ -16,7 +16,7 @@ export const repo = resolve("..");
 export const EXTENSION_ID = "ehjfihpogoacjodjnanclodinjnnpmcp";
 
 export function cwwBinary(): string {
-  const exe = join(repo, "target", "debug", process.platform === "win32" ? "cww.exe" : "cww");
+  const exe = process.env.CWW_BROWSER_HOST_BINARY ?? join(repo, "target", "debug", process.platform === "win32" ? "cww.exe" : "cww");
   if (!existsSync(exe)) {
     execFileSync("cargo", ["build", "--bin", "cww"], { cwd: repo, stdio: "inherit" });
   }
@@ -91,6 +91,10 @@ export class FakeDaemon {
   attached(): Promise<void> {
     if (this.socket) return Promise.resolve();
     return new Promise((done) => this.attachedWaiters.push(done));
+  }
+
+  notify(message: Record<string, unknown>): void {
+    this.socket?.write(`${JSON.stringify(message)}\n`);
   }
 
   sendPolicy(): void {

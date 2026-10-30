@@ -30,7 +30,7 @@ const TYPE_MAX_CHARS = 10_000;
 const DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const LOAD_TIMEOUT_MS = 10_000;
 
-function allowedChanges(policy: Policy): void {
+export function allowedChanges(policy: Policy): void {
   if (!policy.changes) {
     throw new ToolError(
       "not_writable",
@@ -39,14 +39,14 @@ function allowedChanges(policy: Policy): void {
   }
 }
 
-function dryRun(params: Params): boolean {
+export function dryRun(params: Params): boolean {
   if (params.dry_run !== undefined && typeof params.dry_run !== "boolean") {
     throw new ToolError("invalid_argument", "dry_run must be true or false");
   }
   return params.dry_run === true;
 }
 
-function flag(params: Params, name: string, fallback: boolean): boolean {
+export function flag(params: Params, name: string, fallback: boolean): boolean {
   const value = params[name];
   if (value === undefined) return fallback;
   if (typeof value !== "boolean") throw new ToolError("invalid_argument", `${name} must be true or false`);
@@ -75,7 +75,7 @@ function checkUrl(value: unknown, policy: Policy): string {
 // Wait for a navigation the call may have started, then answer with where
 // the tab is: on an allowed site, its address and title; elsewhere, only
 // the site, and nothing from the page.
-async function settle(tabId: number, policy: Policy, started = Date.now()): Promise<object> {
+export async function settle(tabId: number, policy: Policy, started = Date.now()): Promise<object> {
   await new Promise((r) => setTimeout(r, 400));
   while (Date.now() - started < LOAD_TIMEOUT_MS) {
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
@@ -96,7 +96,7 @@ async function settle(tabId: number, policy: Policy, started = Date.now()): Prom
   return withDialog(tabId, { ...about(tab), loading: tab.status !== "complete" });
 }
 
-interface Target {
+export interface Target {
   tabId: number;
   backendNodeId: number;
   facts: ElementFacts;
@@ -108,7 +108,7 @@ const FORM_OF = `function () {
 }`;
 
 // The element a call names, with what the extension needs to judge it.
-async function target(params: Params, policy: Policy): Promise<Target> {
+export async function target(params: Params, policy: Policy): Promise<Target> {
   const backendNodeId = refId(params.ref);
   const tab = await tabFor(params, policy);
   const tabId = tab.id!;
@@ -123,7 +123,7 @@ async function target(params: Params, policy: Policy): Promise<Target> {
   return { tabId, backendNodeId, facts };
 }
 
-function described(facts: ElementFacts): object {
+export function described(facts: ElementFacts): object {
   return {
     role: facts.role || facts.tag,
     name: facts.name.slice(0, 200),
@@ -145,7 +145,7 @@ const OUTLINE = `function (on) {
 }`;
 
 // A screenshot with the target outlined, for the approval card.
-async function preview(t: Target, scroll = true): Promise<object> {
+export async function preview(t: Target, scroll = true): Promise<object> {
   if (scroll) await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, OUTLINE, [true]).catch(() => {});
   try {
@@ -330,7 +330,7 @@ const click: Method = async (params, policy) => {
 
 const TEXT_TYPES = new Set(["", "text", "search", "email", "url", "tel", "number", "password"]);
 
-function editable(facts: ElementFacts): boolean {
+export function editable(facts: ElementFacts): boolean {
   const type = (facts.attrs.type ?? "").toLowerCase();
   return (
     (facts.tag === "input" && TEXT_TYPES.has(type)) ||
@@ -397,7 +397,7 @@ const type: Method = async (params, policy) => {
   return { dry_run: false, target: what.target, submit, ...(await settle(t.tabId, policy, started)) };
 };
 
-const CHOOSE = `function (values, apply) {
+export const CHOOSE = `function (values, apply) {
   if (!(this instanceof HTMLSelectElement)) return { error: "not_select" };
   const options = Array.from(this.options);
   const chosen = [];

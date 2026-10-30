@@ -134,3 +134,18 @@ export const SENSITIVE_PATTERNS = {
   autocomplete: SENSITIVE_AUTOCOMPLETE.source,
   words: SENSITIVE_WORDS.source,
 };
+
+// The exact same classification also runs at the trusted input event, after
+// page hover/press handlers have had a chance to change a field or form.
+export const CLASSIFY_IN_PAGE = `(() => {
+ const SENSITIVE_AUTOCOMPLETE = new RegExp(${JSON.stringify(SENSITIVE_AUTOCOMPLETE.source)});
+ const SENSITIVE_WORDS = new RegExp(${JSON.stringify(SENSITIVE_WORDS.source)}, 'i');
+ const TEXT_INPUT_TYPES = new Set(${JSON.stringify([...TEXT_INPUT_TYPES])});
+ const ACTION_RE = new RegExp(${JSON.stringify(ACTION_RE.source)}, 'iu');
+ const LINK_RE = new RegExp(${JSON.stringify(LINK_RE.source)}, 'iu');
+ const BUTTON_ROLES = new Set(${JSON.stringify([...BUTTON_ROLES])});
+ const short = ${short.toString()};
+ const sensitive = ${isSensitiveField.toString()};
+ const submits = ${submitReason.toString()};
+ return facts => ({ sensitive: sensitive(facts), submits: submits(facts) });
+})()`;

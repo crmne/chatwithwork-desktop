@@ -5,13 +5,14 @@
 
 import { methods as readMethods, type Policy } from "./actions.js";
 import { changeMethods } from "./changes.js";
+import { cancelEngine, engineEvents, engineMethods } from "./engine.js";
 import { halt } from "./cdp.js";
 import { browserStopped, ToolError } from "./errors.js";
 import { groupTabs } from "./group.js";
 
 export const HOST = "com.chatwithwork.desktop";
 const RECONNECT_ALARM = "reconnect";
-const methods = { ...readMethods, ...changeMethods };
+const methods = { ...readMethods, ...changeMethods, ...engineMethods };
 
 type DaemonState = "connected" | "not_running" | "refused" | "unknown";
 
@@ -29,6 +30,7 @@ const state = {
 };
 
 let port: chrome.runtime.Port | null = null;
+let connectionGeneration = 0;
 
 async function loadStopped(): Promise<void> {
   const stored = await chrome.storage.local.get("stopped");
@@ -57,6 +59,8 @@ async function connect(): Promise<void> {
   next.onMessage.addListener((message) => void onMessage(message));
   next.onDisconnect.addListener(() => {
     state.error = chrome.runtime.lastError?.message ?? "";
+    connectionGeneration++;
+    void cancelEngine();
     port = null;
     state.native = "disconnected";
     state.daemon = "unknown";
@@ -72,6 +76,7 @@ function announceHello(): void {
     event: "hello",
     version: chrome.runtime.getManifest().version,
     site_policy_version: 2,
+    engine_protocol: 1,
     browser: navigator.userAgent,
     stopped: state.stopped,
   });
@@ -80,6 +85,8 @@ function announceHello(): void {
 function scheduleReconnect(): void {
   void chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 0.5 });
 }
+
+engineEvents(message => post(message));
 
 function post(message: unknown): void {
   try {
@@ -92,6 +99,8 @@ function post(message: unknown): void {
 async function onMessage(message: any): Promise<void> {
   if (!message || typeof message !== "object") return;
   if (message.event === "daemon") {
+    connectionGeneration++;
+    void cancelEngine();
     state.daemon = (["connected", "not_running", "refused"].includes(message.state) ? message.state : "unknown") as DaemonState;
     state.error = typeof message.message === "string" ? message.message.slice(0, 300) : "";
     // The native host survives a daemon restart. The new daemon needs our
@@ -102,6 +111,7 @@ async function onMessage(message: any): Promise<void> {
   }
   if (message.method === "policy" && message.id === undefined) {
     const params = message.params ?? {};
+    const cancellation = cancelEngine();
     Object.assign(state.policy, {
       sites: Array.isArray(params.sites) ? params.sites.filter((s: unknown) => typeof s === "string") : [],
       all_sites: params.all_sites === true,
@@ -109,13 +119,15 @@ async function onMessage(message: any): Promise<void> {
       stopped: params.stopped === true,
       changes: params.changes === true,
     });
-    await halt(state.stopped || state.policy.stopped);
+    await Promise.all([cancellation, halt(state.stopped || state.policy.stopped)]);
     void refreshBadge();
     return;
   }
   if (typeof message.id !== "number" || typeof message.method !== "string") return;
+  const connection = port;
+  const generation = connectionGeneration;
   const reply = await answer(message.method, message.params ?? {});
-  post({ id: message.id, ...reply });
+  if (port === connection && generation === connectionGeneration) post({ id: message.id, ...reply });
 }
 
 async function answer(method: string, params: unknown): Promise<{ result: unknown } | { error: { code: string; message: string } }> {
@@ -170,8 +182,8 @@ async function refreshBadge(): Promise<void> {
 
 async function setStopped(stopped: boolean): Promise<void> {
   state.stopped = stopped;
-  await chrome.storage.local.set({ stopped });
-  await halt(state.stopped || state.policy.stopped);
+  const cancellation = stopped ? cancelEngine() : Promise.resolve();
+  await Promise.all([cancellation, chrome.storage.local.set({ stopped }), halt(state.stopped || state.policy.stopped)]);
   post({ event: "state", stopped });
   await refreshBadge();
 }

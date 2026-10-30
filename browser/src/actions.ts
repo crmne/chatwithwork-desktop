@@ -8,6 +8,7 @@ import { ToolError } from "./errors.js";
 import { groupTabs, resolveTab } from "./group.js";
 import { afterCapture, indicate, prepareForCapture } from "./page.js";
 import { hostOfUrl, siteAllowed } from "./sites.js";
+import { documentIdentity, rememberRefs, sameDocument } from "./engine-refs.js";
 import { page, snapshotText, type AXNode } from "./snapshot.js";
 
 export interface Policy {
@@ -111,10 +112,15 @@ const read: Method = async (params, policy) => {
   const maxChars = integer(params.max_chars, "max_chars", 1, READ_MAX_CHARS, READ_MAX_CHARS);
   const tab = await tabFor(params, policy);
   const tabId = tab.id!;
+  const document = await documentIdentity(tabId);
   const { nodes, sensitive } = await sensitiveFields(tabId);
   const text = snapshotText(nodes, { sensitive });
   const now = await still(tabId, policy);
-  return withDialog(tabId, { ...about(now), ...page(text, offset, maxChars) });
+  const current = await documentIdentity(tabId);
+  if (!sameDocument(document, current)) throw new ToolError("page_error", "the page changed while reading; read it again");
+  const slice = page(text, offset, maxChars);
+  rememberRefs(tabId, document, slice.text);
+  return withDialog(tabId, { ...about(now), ...slice });
 };
 
 const screenshot: Method = async (params, policy) => {
