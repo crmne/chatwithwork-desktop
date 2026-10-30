@@ -220,6 +220,21 @@ jobs:
         working-directory: .
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: Stage the real browser engine beside an isolated daemon
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/cww-engine-proof"
+          cp target/debug/cww "$RUNNER_TEMP/cww-engine-proof/cww"
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          python3 browser/engine/scripts/package.py stage --replace \
+            --target x86_64-unknown-linux-gnu --app-version "$version" \
+            --output "$RUNNER_TEMP/cww-engine-proof/browser-engine" \
+            --cache "$RUNNER_TEMP/node-runtime-cache"
+      - name: Exercise the packaged engine through the confined daemon
+        env:
+          CWW_PACKAGED_ENGINE: '1'
+          CWW_BROWSER_HOST_BINARY: ${{ runner.temp }}/cww-engine-proof/cww
+        run: npx playwright test packaged-engine.spec.ts
 
   deny:
     runs-on: ubuntu-latest

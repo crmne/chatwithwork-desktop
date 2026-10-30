@@ -53,6 +53,9 @@ pub struct Plan {
     /// Whether the device key lives in the OS keychain (macOS needs the
     /// keychain's files and services then).
     pub keychain: bool,
+    /// Trusted installed code only: exact executable and its immutable
+    /// module directory. Never a shared folder or writable CWW state.
+    pub helper: Option<(PathBuf, PathBuf)>,
 }
 
 impl Plan {
@@ -72,7 +75,13 @@ impl Plan {
             own,
             socket: paths.socket_path(),
             keychain,
+            helper: None,
         }
+    }
+
+    pub fn with_helper(mut self, executable: PathBuf, modules: PathBuf) -> Self {
+        self.helper = Some((executable, modules));
+        self
     }
 
     /// Also allow changes in `writable`, whose files go to `trash`.
@@ -268,6 +277,17 @@ mod sys {
             })
             .and_then(|r| r.add_rules(path_beneath_rules(existing_paths(&plan.trash), trash)))
             .and_then(|r| r.add_rules(path_beneath_rules(existing_paths(&plan.own), own)))
+            .and_then(|r| {
+                let executable: Vec<_> = plan.helper.iter().map(|(path, _)| path.clone()).collect();
+                r.add_rules(path_beneath_rules(
+                    executable,
+                    AccessFs::ReadFile | AccessFs::Execute,
+                ))
+            })
+            .and_then(|r| {
+                let modules: Vec<_> = plan.helper.iter().map(|(_, path)| path.clone()).collect();
+                r.add_rules(path_beneath_rules(modules, read_data))
+            })
             .and_then(|r| r.restrict_self())
             .map_err(|e| format!("{e}"))?;
         Ok(status.ruleset)
@@ -390,6 +410,12 @@ mod seatbelt {
              (allow ipc-posix-shm-read-data (ipc-posix-name \"apple.shm.notification_center\"))\n",
         );
         rules.push_str(&format!("(allow file-read*{})\n", subpaths(&system)));
+        if let Some((executable, modules)) = &plan.helper {
+            rules.push_str(&format!(
+                "(allow process-fork)\n(allow process-exec (literal {}))\n(allow file-read* (subpath {}))\n",
+                quote(executable), quote(modules),
+            ));
+        }
         if !plan.roots.is_empty() {
             rules.push_str(&format!("(allow file-read*{})\n", subpaths(&plan.roots)));
         }
@@ -504,6 +530,68 @@ mod sys {
 mod tests {
     use super::*;
 
+    #[test]
+    fn seatbelt_helper_grant_is_one_executable_and_read_only_modules() {
+        let plan = Plan::default().with_helper(
+            "/Applications/CWW/Helpers/browser-engine/node".into(),
+            "/Applications/CWW/Helpers/browser-engine".into(),
+        );
+        let profile = seatbelt::profile(&plan);
+        assert!(profile.contains(
+            "(allow process-exec (literal \"/Applications/CWW/Helpers/browser-engine/node\"))"
+        ));
+        assert!(!profile.contains("(allow process-exec (subpath"));
+        assert!(
+            profile.contains(
+                "(allow file-read* (subpath \"/Applications/CWW/Helpers/browser-engine\"))"
+            )
+        );
+        assert!(!profile.contains("(allow file-write* (subpath \"/Applications/CWW"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn landlock_helper_executes_but_sibling_code_and_module_writes_are_denied() {
+        const CHILD: &str = "CWW_TEST_EXACT_ENGINE_SANDBOX";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "sandbox::tests::landlock_helper_executes_but_sibling_code_and_module_writes_are_denied", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let modules = temp.path().join("engine");
+        std::fs::create_dir(&modules).unwrap();
+        let node = modules.join("node");
+        let other = modules.join("other");
+        std::fs::copy("/usr/bin/true", &node).unwrap();
+        std::fs::copy("/usr/bin/true", &other).unwrap();
+        let entry = modules.join("entry.mjs");
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&entry, "trusted fixed entry").unwrap();
+        std::fs::write(&outside, "unshared").unwrap();
+        let state = confine(Plan::default().with_helper(node.clone(), modules));
+        assert!(matches!(state.state, "enforced" | "partial"), "{state:?}");
+        assert!(
+            std::process::Command::new(&node)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(std::process::Command::new(&other).status().is_err());
+        assert_eq!(
+            std::fs::read_to_string(&entry).unwrap(),
+            "trusted fixed entry"
+        );
+        assert!(std::fs::write(&entry, "overwrite").is_err());
+        assert!(std::fs::read(&outside).is_err());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn follows_resolv_conf_to_the_directory_it_lives_in() {
@@ -597,6 +685,7 @@ mod tests {
             own: vec!["/Users/u/.config/cww".into()],
             socket: "/Users/u/.local/state/cww/cww.sock".into(),
             keychain: true,
+            helper: None,
         };
         let profile = seatbelt::profile(&plan);
         assert!(profile.contains(r#"(subpath "/Users/u/My \"odd\" folder")"#));

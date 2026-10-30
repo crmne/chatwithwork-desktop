@@ -392,6 +392,8 @@ impl BrowserTools {
             caller,
             Caller::BrowserAutomatic { .. } | Caller::LocalBrowser { approved: false }
         );
+        let method = name.trim_start_matches("browser_");
+        let engine = super::engine::route(&self.bridge, method);
         if is_change && automatic && !dry_run {
             self.check_automatic(caller)?;
             // Automatic actions keep the same checked preflight. It cannot
@@ -401,9 +403,7 @@ impl BrowserTools {
             if name == "browser_download" {
                 self.download(preview, None).await?;
             } else {
-                self.bridge
-                    .call(name.trim_start_matches("browser_"), preview)
-                    .await?;
+                super::engine::call(&self.bridge, engine.as_ref(), method, preview).await?;
             }
             // The person may have restored prompts during the dry run.
             self.check_automatic(caller)?;
@@ -425,8 +425,7 @@ impl BrowserTools {
                 .unwrap_or(32_000) as usize;
             params["max_chars"] = json!(asked.min(allowance).max(1));
         }
-        let method = name.trim_start_matches("browser_");
-        let mut value = self.bridge.call(method, params).await?;
+        let mut value = super::engine::call(&self.bridge, engine.as_ref(), method, params).await?;
         // The person may have stopped the browser, or taken a site off the
         // list, while the extension worked: the answer follows the rules as
         // they are now.

@@ -20,7 +20,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{ErrorCode, ToolError};
@@ -62,6 +62,7 @@ pub struct Extension {
     pub origin: String,
     pub version: String,
     pub site_policy_version: u64,
+    pub engine_protocol: u64,
     pub browser: String,
     /// The person pressed Stop in the extension.
     pub stopped: bool,
@@ -88,6 +89,33 @@ pub struct Bridge {
     lent: Mutex<Vec<String>>,
     /// Called when the attached browser changes, for status.
     changed: Box<dyn Fn() + Send + Sync>,
+    engine_events: broadcast::Sender<EngineEvent>,
+    revision: watch::Sender<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct EngineEvent {
+    pub session: u64,
+    pub lease: String,
+    pub message: Value,
+}
+
+pub(crate) struct EngineSession {
+    pub id: u64,
+    pub events: broadcast::Receiver<EngineEvent>,
+    pub revision: watch::Receiver<u64>,
+}
+
+// Cancelling an engine RPC must not leave an orphan sender until disconnect.
+struct PendingRequest {
+    id: u64,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Reply>>>>,
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().remove(&self.id);
+    }
 }
 
 /// The published extension's ID (the Chrome Web Store keeps it from the
@@ -122,18 +150,33 @@ impl Bridge {
             origins: Mutex::new(origins),
             lent: Mutex::default(),
             changed: Box::new(changed),
+            engine_events: broadcast::channel(128).0,
+            revision: watch::Sender::new(0),
         }
     }
 
     /// New rules from `config.toml`; the extension hears them at once.
     pub fn configure(&self, policy: Policy, origins: Vec<String>, lent: Vec<String>) {
-        *self.origins.lock().unwrap() = origins;
-        *self.lent.lock().unwrap() = lent;
-        self.policy.send_if_modified(|current| {
+        let origins_changed = {
+            let mut current = self.origins.lock().unwrap();
+            let changed = *current != origins;
+            *current = origins;
+            changed
+        };
+        let lent_changed = {
+            let mut current = self.lent.lock().unwrap();
+            let changed = *current != lent;
+            *current = lent;
+            changed
+        };
+        let policy_changed = self.policy.send_if_modified(|current| {
             let changed = *current != policy;
             *current = policy;
             changed
         });
+        if origins_changed || lent_changed || policy_changed {
+            self.invalidate_engine();
+        }
     }
 
     pub fn lent_to(&self, bot: &str) -> bool {
@@ -153,10 +196,41 @@ impl Bridge {
             .map(|s| s.extension.clone())
     }
 
+    pub(crate) fn engine_session(&self) -> Option<EngineSession> {
+        let guard = self.session.lock().unwrap();
+        let session = guard.as_ref()?;
+        (session.extension.engine_protocol == 1
+            && self
+                .origins
+                .lock()
+                .unwrap()
+                .contains(&session.extension.origin)
+            && !session.extension.stopped
+            && !self.policy.borrow().stopped)
+            .then(|| EngineSession {
+                id: session.id,
+                events: self.engine_events.subscribe(),
+                revision: self.revision.subscribe(),
+            })
+    }
+
+    fn invalidate_engine(&self) {
+        self.revision
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
     /// Ask the extension to run `method`. Errors are tool errors the model
     /// can read.
     pub async fn call(&self, method: &str, params: Value) -> Reply {
-        let (id, receiver) = {
+        self.call_to(None, method, params).await
+    }
+
+    pub(crate) async fn call_in_session(&self, session: u64, method: &str, params: Value) -> Reply {
+        self.call_to(Some(session), method, params).await
+    }
+
+    async fn call_to(&self, expected: Option<u64>, method: &str, params: Value) -> Reply {
+        let (_pending, receiver) = {
             let session = self.session.lock().unwrap();
             let Some(session) = session.as_ref() else {
                 return Err(ToolError::new(
@@ -165,10 +239,24 @@ impl Bridge {
                      or the extension isn't installed",
                 ));
             };
-            if session.extension.stopped {
+            if expected.is_some_and(|id| id != session.id) {
+                return Err(gone());
+            }
+            if method != "engine_cancel"
+                && !self
+                    .origins
+                    .lock()
+                    .unwrap()
+                    .contains(&session.extension.origin)
+            {
+                return Err(gone());
+            }
+            // Cleanup is safe even after Stop. It cannot reattach or dispatch.
+            if method != "engine_cancel" && session.extension.stopped {
                 return Err(stopped());
             }
-            if self.policy.borrow().needs_site_policy_v2()
+            if method != "engine_cancel"
+                && self.policy.borrow().needs_site_policy_v2()
                 && session.extension.site_policy_version < 2
             {
                 return Err(ToolError::new(
@@ -184,20 +272,21 @@ impl Bridge {
                 session.pending.lock().unwrap().remove(&id);
                 return Err(gone());
             }
-            (id, receiver)
+            (
+                PendingRequest {
+                    id,
+                    pending: Arc::clone(&session.pending),
+                },
+                receiver,
+            )
         };
         match tokio::time::timeout(CALL_TIMEOUT, receiver).await {
             Ok(Ok(reply)) => reply,
             Ok(Err(_)) => Err(gone()),
-            Err(_) => {
-                if let Some(session) = self.session.lock().unwrap().as_ref() {
-                    session.pending.lock().unwrap().remove(&id);
-                }
-                Err(ToolError::new(
-                    ErrorCode::PageError,
-                    "the browser didn't answer in time; the page may still be loading",
-                ))
-            }
+            Err(_) => Err(ToolError::new(
+                ErrorCode::PageError,
+                "the browser didn't answer in time; the page may still be loading",
+            )),
         }
     }
 
@@ -272,6 +361,7 @@ impl Bridge {
         for (_, waiting) in pending.lock().unwrap().drain() {
             let _ = waiting.send(Err(gone()));
         }
+        self.invalidate_engine();
         (self.changed)();
         result
     }
@@ -368,15 +458,47 @@ impl Bridge {
                     .get("site_policy_version")
                     .and_then(Value::as_u64)
                     .unwrap_or(1);
+                session.extension.engine_protocol = message
+                    .get("engine_protocol")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
                 session.extension.browser = browser_name(&text("browser"));
                 session.extension.stopped = message.get("stopped") == Some(&Value::Bool(true));
             }
             "state" => {
                 session.extension.stopped = message.get("stopped") == Some(&Value::Bool(true));
             }
+            "engine" => {
+                let Some(lease) = message
+                    .get("lease")
+                    .and_then(Value::as_str)
+                    .filter(|s| s.len() <= 128)
+                else {
+                    return;
+                };
+                let Some(message) = message.get("message").filter(|v| v.is_object()) else {
+                    return;
+                };
+                if !session.extension.stopped
+                    && !self.policy.borrow().stopped
+                    && self
+                        .origins
+                        .lock()
+                        .unwrap()
+                        .contains(&session.extension.origin)
+                {
+                    let _ = self.engine_events.send(EngineEvent {
+                        session: id,
+                        lease: lease.to_string(),
+                        message: message.clone(),
+                    });
+                }
+                return;
+            }
             _ => return,
         }
         drop(guard);
+        self.invalidate_engine();
         (self.changed)();
     }
 }
@@ -501,13 +623,14 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let bridge = Bridge::new(policy, vec![], || {});
+            let bridge = Bridge::new(policy, vec![origin(EXTENSION_ID)], || {});
             let (outgoing, mut requests) = mpsc::unbounded_channel();
             *bridge.session.lock().unwrap() = Some(Session {
                 id: 1,
                 outgoing,
                 pending: Arc::default(),
                 extension: Extension {
+                    origin: origin(EXTENSION_ID),
                     site_policy_version: 1,
                     ..Default::default()
                 },

@@ -134,6 +134,7 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     crate::logging::init(options.log_file.as_deref())?;
     crate::crash_reports::install(crate::crash_reports::Component::Daemon, &paths);
     let config = Config::load(&paths)?;
+    crate::browsing::engine::initialize(&config, &paths);
     let sandboxed = options.sandbox
         && config.sandbox.enabled
         && cfg!(any(target_os = "linux", target_os = "macos"));
@@ -266,9 +267,13 @@ fn confine(config: &Config, paths: &Paths) {
         &crate::trash::Trash::new(paths.home_trash.clone()),
         &writable,
     );
-    let plan =
+    crate::browsing::engine::initialize(config, paths);
+    let mut plan =
         crate::sandbox::Plan::new(config.roots.iter().map(|r| r.path.clone()), paths, keychain)
             .with_changes(writable, trash);
+    if let Some(engine) = crate::browsing::engine::installed() {
+        plan = plan.with_helper(engine.executable.clone(), engine.root.clone());
+    }
     let status = crate::sandbox::confine(plan);
     match status.state {
         "enforced" => tracing::info!("sandbox: {} enforced", status.kind),
@@ -553,6 +558,9 @@ async fn run_with_notifications(
             .map(|loan| loan.id.clone())
             .collect(),
     );
+    if organization.is_none() && config.browser.enabled {
+        crate::browsing::engine::prewarm(shutdown.clone());
+    }
     let daemon = Arc::new(Daemon {
         organization,
         runner,
@@ -761,7 +769,9 @@ impl Daemon {
             .collect();
         let writer = Arc::clone(&self.writer);
         tokio::task::spawn_blocking(move || writer.stop_changes(&still_writable)).await?;
-        if crate::sandbox::plan().is_some_and(|plan| !plan.covers(&roots, &writable_roots(&new))) {
+        if crate::sandbox::plan().is_some_and(|plan| !plan.covers(&roots, &writable_roots(&new)))
+            || crate::browsing::engine::requires_restart(&new, &paths)
+        {
             // The kernel won't let this process read the new folder, or
             // its write rights don't match the folders that allow changes.
             // Exit and let the supervisor start a worker whose sandbox fits.
@@ -1106,6 +1116,9 @@ impl Daemon {
     }
 
     fn configure_browser(&self, config: &Config) {
+        if self.organization.is_none() && config.browser.enabled {
+            crate::browsing::engine::prewarm(self.shutdown.clone());
+        }
         self.browser.configure(
             crate::browsing::settings::policy(config),
             crate::browsing::bridge::origins(&config.browser.extension_ids),

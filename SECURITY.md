@@ -38,3 +38,28 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 ## Supported versions
 
 Only the latest release gets security fixes during the beta.
+
+## Bundled browser engine boundary
+
+The optional full browser engine is trusted installed code, not code supplied
+by the model or a page. Its fixed Node executable, entry and locked modules live
+in an immutable manifest-addressed payload outside CWW state and writable shared
+folders. The daemon verifies the locator, versions, architecture, complete file
+inventory and every SHA-256 before confinement. It refuses symlinks, unlisted
+files and group/world-writable payloads. It caches the resolved payload until
+restart, so replacing an installation cannot mix old and new modules.
+
+Landlock adds only the exact helper executable and read-only module tree to the
+existing daemon rules. Seatbelt adds that exact process-exec path, process-fork
+and read-only payload access. This does not claim a Windows daemon sandbox;
+Windows retains its existing boundary. The child inherits confinement, receives
+no loader/module environment, has no stdin script interface, and exposes no
+network listener. The remote API still offers only fixed browser tools.
+
+The private JSON-line protocol is bounded to 2 MiB per frame, 16 MiB cumulative,
+512 commands and 128 pending commands. A tool's preview and action share one
+18-second deadline; extension leases enforce the remaining action budget too.
+Policy/origin revocation, disconnect and cancellation terminate the exact child
+and release its lease. There is no legacy fallback after admission to an engine
+operation, and no raw engine error, local path or CDP payload is returned to the
+model or logged. Engine warm-up happens without an operation or browser input.

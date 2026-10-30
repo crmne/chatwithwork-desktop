@@ -4,6 +4,7 @@
 //! every call follows here as well as in the extension.
 
 pub mod bridge;
+pub mod engine;
 pub mod host;
 pub mod install;
 pub mod local;
