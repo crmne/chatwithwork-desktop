@@ -634,7 +634,7 @@ fn mise_data_is_private_and_installed_tools_remain_readonly() {
         document["filesystem"]["readonlyPaths"]
             .as_array()
             .unwrap()
-            .contains(&serde_json::json!(data))
+            .contains(&serde_json::json!(data.canonicalize().unwrap()))
     );
     assert_eq!(
         document["filesystem"]["readwritePaths"],
