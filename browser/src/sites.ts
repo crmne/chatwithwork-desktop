@@ -9,7 +9,7 @@
 // - Nothing else is ever allowed: no `file:`, `data:`, `chrome:` or
 //   extension pages.
 
-export function siteAllowed(url: string, sites: readonly string[]): boolean {
+export function siteAllowed(url: string, sites: readonly string[], allSites = false, blockedSites: readonly string[] = []): boolean {
   let page: URL;
   try {
     page = new URL(url);
@@ -18,7 +18,15 @@ export function siteAllowed(url: string, sites: readonly string[]): boolean {
   }
   if (page.protocol !== "https:" && page.protocol !== "http:") return false;
   if (page.username || page.password) return false;
-  return sites.some((site) => matches(page, site));
+  return !blockedSites.some((site) => blockedMatch(page, site)) &&
+    (allSites || sites.some((site) => matches(page, site)));
+}
+
+function blockedMatch(page: URL, site: string): boolean {
+  const entry = site.trim().toLowerCase();
+  if (entry.includes("://")) return matches(page, entry);
+  const host = hostOf(entry);
+  return !!host && (page.hostname.replace(/\.+$/, "") === host || page.hostname.replace(/\.+$/, "").endsWith(`.${host}`));
 }
 
 function matches(page: URL, site: string): boolean {
@@ -43,7 +51,7 @@ function matches(page: URL, site: string): boolean {
   return (
     page.protocol === "https:" &&
     page.port === "" &&
-    (page.hostname === host || page.hostname.endsWith(`.${host}`))
+    (page.hostname.replace(/\.+$/, "") === host || page.hostname.replace(/\.+$/, "").endsWith(`.${host}`))
   );
 }
 
@@ -52,7 +60,7 @@ function matches(page: URL, site: string): boolean {
 function hostOf(entry: string): string | null {
   if (/[/?#@:*\s\\]/.test(entry)) return null;
   try {
-    const host = new URL(`https://${entry}`).hostname;
+    const host = new URL(`https://${entry}`).hostname.replace(/\.+$/, "");
     return host.includes(".") || host === "localhost" ? host : null;
   } catch {
     return null;

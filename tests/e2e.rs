@@ -5138,6 +5138,20 @@ async fn organization_control_connections_keep_writes_bound_to_the_original_gran
             .await
             .contains("folder settings")
         );
+        for request in [
+            ControlRequest::BrowserAskBeforeActions { ask: false },
+            ControlRequest::BrowserAllSites { all_sites: true },
+            ControlRequest::BrowserBlockedSite {
+                site: "example.com".into(),
+                blocked: false,
+            },
+        ] {
+            assert!(
+                control_error(&runtime_paths, request)
+                    .await
+                    .contains("folder settings")
+            );
+        }
         if retained.is_none() {
             let socket = runtime_paths.socket_path();
             retained =

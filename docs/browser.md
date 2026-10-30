@@ -29,7 +29,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
 
   The reads are offered while the browser is on; the rest only while the person also allows actions on the computer (`cww browser allow-changes`), like a folder's "Allow changes", and `browser_download` only while a folder allows changes. Each action takes `dry_run`, which checks it and describes it without doing it.
 
-  Reads run without asking. Writes ask on the approval card and can be allowed for the rest of a chat. Destructive calls always ask, and their card shows a screenshot of the page with what will be clicked outlined (from a dry run, as for file changes).
+  Reads run without asking. **Ask before browser actions** is on by default: changes use the approval card, with a checked screenshot where relevant. Turning it off in local Browser settings requires native confirmation and lets permitted actions, including submissions, run without repeated prompts. Sites, protected fields, Stop and actions-off still apply. Every automatic action keeps a dry run and an audit entry. Restoring the switch invalidates a pending automatic action before execution. Bots keep their own approval rules; file and command approvals are unchanged.
 
 ## Local CLI clients
 
@@ -51,14 +51,16 @@ a JSON object, at most 12 KiB, read from a file or stdin rather than placing
 page text in process arguments. These commands require a running daemon;
 they never fall back to direct browser access.
 
-An action first needs a dry run with `"dry_run":true`. Inspect its result
+When Ask before browser actions is on, an action first needs a dry run with `"dry_run":true`. Inspect its result
 and screenshot, and obtain the person's authorization for that particular
 action. Then submit the same arguments with `dry_run` removed and
 `--approve`. The flag acknowledges that authorization; it is not an
 approval dialog and must never be inferred from a page's text. The daemon
 also repeats the dry run immediately before execution and stops if it
 fails. Omitting `--approve` refuses every action, even a non-submitting
-click. Existing user instructions may authorize a specific action; they do
+click, unless the person explicitly turned off Ask before browser actions
+locally (`cww browser automatic-actions`; `cww browser ask` restores it).
+Automatic actions retain a checked preflight and local audit. Existing user instructions may authorize a specific action; they do
 not authorize widening sites or bypassing protected fields.
 
 ```sh
@@ -83,8 +85,12 @@ the daemon does not resume a browser stopped from the extension.
 
 All of it holds on the computer, whatever the server sends. The extension enforces every rule below; the daemon enforces again the ones it can check from its side (the kill switch, the sites on every answer's address and in the tab list, bots, and the budgets), so a fault in one doesn't open those:
 
-- **Sites.** The person allows sites on the computer (`cww browser allow github.com`, or Settings, This computer, Browser in the desktop app, which also turns the browser on, allows actions; bot sharing is selected from the bot’s computer integration). A bare host (`github.com`) allows the host and its subdomains over HTTPS; an entry written with its scheme (`http://localhost:3000`, `https://example.com`) allows exactly that scheme, host and port, without subdomains. The extension refuses to open, read, screenshot or act on a tab whose page isn't on the list (`site_not_allowed`); a tab that navigates off the list is left alone until it comes back. The daemon checks the URL every answer carries and drops the content of one that isn't allowed.
-- **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something always asks, with the screenshot. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat.
+- **Sites.** Settings, This computer, Browser offers **Only these sites** (the default, with no access until a site is added) and **All sites except…** (an explicit local choice). The allowed list is kept when changing modes. Blocked sites win in both modes, even over an allowed entry. A bare allowed host (`github.com`) covers it and its subdomains over HTTPS on the default port. A bare blocked host covers HTTP and HTTPS, every port and subdomain, including a trailing-dot spelling. An entry with its scheme (`http://localhost:3000`, `https://example.com`) matches exactly that scheme, host and port. Neither mode permits non-web URLs or URLs containing a username or password. The extension refuses to open, read, screenshot or act on disallowed pages (`site_not_allowed`); after a click or redirect leaves the allowed sites, only the destination host is returned, never its title, path or contents. Back and Close remain available. The daemon checks every returned URL again against the current rules. Selecting All sites or removing a block in the app requires its native confirmation, with account authorization checked before and after. A bot still needs its own browser grant.
+
+  CLI equivalents: `cww browser allow HOST_OR_ORIGIN` adds to the allowed list; `disallow` removes an allowed entry. `allow-all` selects All sites except; `allow-listed` returns to Only these sites. `block HOST_OR_ORIGIN` and `unblock HOST_OR_ORIGIN` edit the blocked list. None of these enables the browser, allows actions or resumes Stop. These are local settings; no server or remote web page can change them.
+
+  Both the daemon and extension must support the new policy. The extension advertises `site_policy_version: 2`; with an older extension, configuring All sites or any blocked entry refuses every browser call until the extension is updated. Existing restricted configurations continue to work.
+- **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something remains destructive, and asks with a screenshot while Ask before browser actions is on. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat or explicitly turned off browser prompts on the computer.
 - **Passwords and payments.** The extension never types into, and never reads, password fields, card fields (`autocomplete="cc-*"`, card number, expiry, security code) or one-time codes (`sensitive_field`). `browser_read` leaves their values out, and screenshots blur them: a screenshot is refused (`page_error`) unless every such field it finds is blurred.
 - **Outside text.** What a page says is outside text for the taint rule: after a chat reads a page, every change asks again, and browser changes never count as "writes to the computer's own files", since they leave the computer.
 - **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, the change budgets). A file is fetched only from an allowed address, with no redirect followed, not even within an allowed site, so the person's sign-in never goes anywhere unchecked. A download a page starts by itself while the extension acts on its tab (until it detaches, a minute after its last call) is cancelled and removed; the person's own downloads elsewhere are untouched.

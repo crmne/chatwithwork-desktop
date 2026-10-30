@@ -18,7 +18,7 @@ use tauri::{AppHandle, State, Webview};
 use crate::desktop::Desktop;
 
 /// Control requests the settings pages may send (CONTROL.md).
-pub const ALLOWED: [&str; 24] = [
+pub const ALLOWED: [&str; 27] = [
     "hello",
     "status",
     "pause",
@@ -42,6 +42,9 @@ pub const ALLOWED: [&str; 24] = [
     // which only `cww` can do, so that goes through `browser_enable`.
     "browser",
     "browser_site",
+    "browser_all_sites",
+    "browser_ask_before_actions",
+    "browser_blocked_site",
     "browser_changes",
     "browser_stopped",
     "browser_bot",

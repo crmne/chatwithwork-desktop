@@ -265,9 +265,9 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 ```
 
 ```json
-{"ok": true, "browser": {"enabled": true, "changes": false, "stopped": false, "sites": ["github.com"], "bots": [],
+{"ok": true, "browser": {"enabled": true, "changes": false, "ask_before_actions": true, "stopped": false, "sites": ["github.com"], "all_sites": false, "blocked_sites": [], "bots": [],
   "connected": true, "extension": {"origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/",
-  "version": "0.1.0", "browser": "Chrome 141", "stopped": false, "since": "2026-10-22T08:14:03Z"}}}
+  "version": "0.1.2", "site_policy_version": 2, "browser": "Chrome 141", "stopped": false, "since": "2026-10-22T08:14:03Z"}}}
 ```
 
 `status` carries the same object as `browser`. `extension` is `null` while no browser is connected; its `stopped` is true while the person pressed Stop in the extension.
@@ -277,10 +277,13 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 | `{"cmd": "browser_enabled", "enabled": true}` | Offers the browser tools, or stops offering them, and reconnects so the server lists them again. Clients register the native messaging host first, with `cww::browsing::install::register` (as `cww browser enable` does): the confined daemon can't write the browsers' folders. Writes `browser_enabled` or `browser_disabled`. |
 | `{"cmd": "browser_changes", "changes": true}` | Also offers the tools that act on pages (open, click, type, choose, close, save files), or only the reads. Clients should say what that means, and ask, before turning it on; turning it off needs no question. Reconnects for a new tool list. Writes `browser_changes_allowed` or `browser_changes_stopped`. |
 | `{"cmd": "browser_site", "site": "github.com", "allowed": true}` | Allows a site, or stops allowing it: a host (it and its subdomains, over HTTPS) or an origin (`http://localhost:3000`, exactly). Refused for anything else. Writes `browser_site_allowed` or `browser_site_removed` with the site. |
+| `{"cmd":"browser_ask_before_actions","ask":false}` | Opts out of repeated browser-action approval locally. Missing configuration defaults to true. The app asks in its native dialog before false, explicitly including submissions, sends, purchases and deletes on permitted sites. True restores prompts immediately. Does not enable browsing or actions, change site rules, resume Stop, or change bot/file/command approvals. Writes `browser_automatic_actions_allowed` or `browser_approvals_required`, then refreshes the tool list. |
+| `{"cmd":"browser_all_sites","all_sites":true}` | Selects all HTTP(S) sites except blocked entries; false returns to the existing allowed list. Preserves both lists. The app asks in its native dialog before true. Writes `browser_all_sites_allowed` or `browser_listed_sites_only`. |
+| `{"cmd":"browser_blocked_site","site":"private.example.com","blocked":true}` | Adds a block, or removes it with false. Blocks win in both modes; bare blocked hosts cover HTTP(S), every port and subdomains, explicit origins match exactly. Removing a block needs native confirmation. Writes `browser_site_blocked` or `browser_site_unblocked`. |
 | `{"cmd": "browser_stopped", "stopped": true}` | The kill switch: every browser call is refused (`browser_stopped`) and the extension detaches from its tabs at once, until `false`. Pausing the computer does the same. Writes `browser_stopped` or `browser_resumed`. |
 | `{"cmd": "browser_bot", "bot": "42", "name": "Researcher", "lent": true}` | Shares the browser with a bot (its chats may use it on the same sites, each change still approved in Chat with Work), or stops. Writes `browser_bot_lent` or `browser_bot_withdrawn`. |
 
-Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|stop|resume|share|unshare|status` edit `config.toml` the same way and send `reload`.
+Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|allow-all|allow-listed|block|unblock|ask|automatic-actions|stop|resume|share|unshare|status` edit `config.toml` the same way and send `reload`.
 
 Local coding clients can list and call the same browser tools without
 opening a tunnel or implementing the native-host protocol:
@@ -301,7 +304,9 @@ instead return `ok:false, code:"unknown_tool"`. The ordinary 16 KiB request
 limit applies. Results include bounded image content blocks when relevant.
 
 `approved` defaults to false. Every action without it is refused with
-`needs_approval`, except a dry run. The client must show/review a separate
+`needs_approval`, except a dry run or when the person explicitly turned off
+`ask_before_actions` locally. Automatic actions still run a checked dry run
+and recheck that choice before executing. The client must show/review a separate
 dry run and obtain authorization before acknowledging approval. The daemon
 repeats the dry run before an approved action; an error stops execution.
 Approval never changes settings or overrides site, tab, sensitive-field,
@@ -320,7 +325,9 @@ The CLI equivalents are `cww browser tools` and
 {"cmd": "browser_attach", "origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/"}
 ```
 
-The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "stopped": false, "changes": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
+The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "all_sites": false, "blocked_sites": [], "stopped": false, "changes": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "site_policy_version": 2, "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
+
+Missing `all_sites` and `blocked_sites` mean false and empty. Missing hello capability means version 1. If All sites or any block is configured, the daemon requires capability 2 before forwarding any call, including dry runs. These controls are refused in chat-only organization runtimes. The remote page API exposes none of them; app-owned local settings revalidate the account before and after any widening confirmation. Daemon resume never clears the extension's independent Stop.
 
 ### `commands`, `command_output` and `command_stop`
 

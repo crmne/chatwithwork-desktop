@@ -51,16 +51,17 @@ pub struct Config {
 /// The browser: whether Chat with Work may use it, on which sites, and for
 /// which bots. Only this file and the control channel change it, never the
 /// server.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct BrowserConfig {
     /// Offer the browser tools. The person's choice, on this computer.
     pub enabled: bool,
     /// Also offer the tools that act on pages: open, click, type, choose,
-    /// close, and save files into a folder that allows changes. Each still
-    /// waits for approval in Chat with Work.
+    /// close, and save files into a folder that allows changes.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub changes: bool,
+    /// Ask before browser actions. Only an explicit local opt-out changes this.
+    pub ask_before_actions: bool,
     /// Stopped from the tray, `cww browser stop` or the extension: the
     /// tools stay listed and every call is refused until resumed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -69,6 +70,14 @@ pub struct BrowserConfig {
     /// with its subdomains, over HTTPS) or an origin
     /// (`http://localhost:3000`). See `crate::browsing::sites`.
     pub sites: Vec<String>,
+    /// Use any HTTP(S) site except blocked_sites. Only an explicit local
+    /// choice enables this; existing configurations stay allow-listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub all_sites: bool,
+    /// Always refused, in either mode. Bare hosts block every HTTP(S)
+    /// port and subdomain; origins block exactly their scheme/host/port.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked_sites: Vec<String>,
     /// Bots whose chats may use the browser, like folders lent to them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bots: Vec<BotLoan>,
@@ -76,6 +85,22 @@ pub struct BrowserConfig {
     /// a development build loaded unpacked with another key.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extension_ids: Vec<String>,
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            changes: false,
+            ask_before_actions: true,
+            stopped: false,
+            sites: Vec::new(),
+            all_sites: false,
+            blocked_sites: Vec::new(),
+            bots: Vec::new(),
+            extension_ids: Vec::new(),
+        }
+    }
 }
 
 impl BrowserConfig {

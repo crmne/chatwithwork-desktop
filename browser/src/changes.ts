@@ -62,7 +62,7 @@ function checkUrl(value: unknown, policy: Policy): string {
   } catch {
     throw new ToolError("invalid_argument", "url must be a full address, like https://github.com/");
   }
-  if (!siteAllowed(url.href, policy.sites)) {
+  if (!siteAllowed(url.href, policy.sites, policy.all_sites, policy.blocked_sites)) {
     throw new ToolError(
       "site_not_allowed",
       `${url.host || url.protocol} isn't on the sites the person allowed for Chat with Work on this computer`,
@@ -84,7 +84,7 @@ async function settle(tabId: number, policy: Policy, started = Date.now()): Prom
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
   if (!tab) return { tab: tabId, closed: true };
   const url = tab.url ?? tab.pendingUrl ?? "";
-  if (!siteAllowed(url, policy.sites)) {
+  if (!siteAllowed(url, policy.sites, policy.all_sites, policy.blocked_sites)) {
     return {
       tab: tabId,
       allowed: false,
@@ -211,7 +211,7 @@ const back: Method = async (params, policy) => {
   only(params, ["tab", "dry_run"]);
   allowedChanges(policy);
   const tab = await resolveTab(params.tab);
-  const here = siteAllowed(tab.url ?? "", policy.sites) ? about(tab) : { tab: tab.id, site: hostOfUrl(tab.url ?? "") };
+  const here = siteAllowed(tab.url ?? "", policy.sites, policy.all_sites, policy.blocked_sites) ? about(tab) : { tab: tab.id, site: hostOfUrl(tab.url ?? "") };
   if (dryRun(params)) return { dry_run: true, ...here };
   const started = Date.now();
   await chrome.tabs.goBack(tab.id!).catch(() => {
@@ -225,7 +225,7 @@ const close: Method = async (params, policy) => {
   allowedChanges(policy);
   if (params.tab === undefined) throw new ToolError("invalid_argument", "tab is required");
   const tab = await resolveTab(params.tab);
-  const facts = siteAllowed(tab.url ?? "", policy.sites) ? about(tab) : { tab: tab.id, site: hostOfUrl(tab.url ?? "") };
+  const facts = siteAllowed(tab.url ?? "", policy.sites, policy.all_sites, policy.blocked_sites) ? about(tab) : { tab: tab.id, site: hostOfUrl(tab.url ?? "") };
   if (dryRun(params)) return { dry_run: true, ...facts };
   await chrome.tabs.remove(tab.id!);
   return { dry_run: false, closed: true, ...facts };
@@ -407,7 +407,7 @@ const fetchFile: Method = async (params, policy) => {
       `couldn't fetch the file (a link that redirects elsewhere isn't followed; pass the address it leads to): ${String(error?.message ?? error)}`,
     );
   });
-  if (!siteAllowed(response.url, policy.sites)) {
+  if (!siteAllowed(response.url, policy.sites, policy.all_sites, policy.blocked_sites)) {
     throw new ToolError("site_not_allowed", `the file is on ${hostOfUrl(response.url)}, which isn't allowed`);
   }
   if (!response.ok) throw new ToolError("page_error", `the site answered ${response.status}`);

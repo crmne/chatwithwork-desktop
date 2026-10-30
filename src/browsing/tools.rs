@@ -310,6 +310,21 @@ impl BrowserTools {
         }
     }
 
+    pub fn auto_approves(&self) -> bool {
+        let policy = self.bridge.policy();
+        policy.auto_approve && policy.changes && !policy.stopped
+    }
+
+    fn check_automatic(&self, caller: &Caller) -> Result<(), ToolError> {
+        if !self.auto_approves() || matches!(caller, Caller::BrowserAutomatic { bot: Some(_) }) {
+            return Err(ToolError::new(
+                ErrorCode::NeedsApproval,
+                "Browser actions require approval on this computer. The local automatic-actions choice does not apply to bots.",
+            ));
+        }
+        Ok(())
+    }
+
     /// The definitions offered: the reads, and the actions while allowed
     /// (saving a file only while a folder allows changes).
     pub fn offered(&self) -> Vec<Definition> {
@@ -346,6 +361,12 @@ impl BrowserTools {
                 ToolError::invalid_argument(format!("{name:?} is not a browser tool"))
             })?;
         check_arguments(&definition, &args)?;
+        if matches!(caller, Caller::BrowserAutomatic { bot: Some(_) }) {
+            return Err(ToolError::new(
+                ErrorCode::NeedsApproval,
+                "Bots keep their own browser approval rules.",
+            ));
+        }
         let policy = self.bridge.policy();
         if policy.stopped {
             return Err(stopped());
@@ -366,6 +387,26 @@ impl BrowserTools {
                 "the person allowed Chat with Work only to read in the browser; they can allow \
                  actions on their computer",
             ));
+        }
+        let automatic = matches!(
+            caller,
+            Caller::BrowserAutomatic { .. } | Caller::LocalBrowser { approved: false }
+        );
+        if is_change && automatic && !dry_run {
+            self.check_automatic(caller)?;
+            // Automatic actions keep the same checked preflight. It cannot
+            // widen sites, bypass protected fields, or authorize a bot.
+            let mut preview = args.clone();
+            preview["dry_run"] = Value::Bool(true);
+            if name == "browser_download" {
+                self.download(preview).await?;
+            } else {
+                self.bridge
+                    .call(name.trim_start_matches("browser_"), preview)
+                    .await?;
+            }
+            // The person may have restored prompts during the dry run.
+            self.check_automatic(caller)?;
         }
         if name == "browser_download" {
             return self.download(args).await;
@@ -397,7 +438,7 @@ impl BrowserTools {
         // Every page the answer carries must be on an allowed site, or
         // nothing of it goes out.
         if let Some(url) = value.get("url").and_then(Value::as_str)
-            && !sites::allowed(url, &policy.sites)
+            && !policy.allows(url)
         {
             return Err(ToolError::new(
                 ErrorCode::SiteNotAllowed,
@@ -408,7 +449,7 @@ impl BrowserTools {
             ));
         }
         if name == "browser_tabs" {
-            value = tabs_answer(value, &policy.sites);
+            value = tabs_answer(value, &policy);
         }
         let image = value
             .as_object_mut()
@@ -465,7 +506,7 @@ impl BrowserTools {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if !sites::allowed(&url, &policy.sites) {
+        if !policy.allows(&url) {
             return Err(ToolError::new(
                 ErrorCode::SiteNotAllowed,
                 format!(
@@ -512,7 +553,7 @@ impl BrowserTools {
 
 /// The tab list as the server sees it: tabs on sites that aren't allowed
 /// show only their site, never their title or address.
-fn tabs_answer(value: Value, sites_allowed: &[String]) -> Value {
+fn tabs_answer(value: Value, policy: &super::bridge::Policy) -> Value {
     let tabs: Vec<Value> = value
         .get("tabs")
         .and_then(Value::as_array)
@@ -522,7 +563,7 @@ fn tabs_answer(value: Value, sites_allowed: &[String]) -> Value {
         .map(|tab| {
             let url = tab.get("url").and_then(Value::as_str).unwrap_or_default();
             let id = tab.get("tab").cloned().unwrap_or(Value::Null);
-            if sites::allowed(url, sites_allowed) {
+            if policy.allows(url) {
                 json!({
                     "tab": id,
                     "title": tab.get("title").cloned().unwrap_or(Value::Null),
@@ -531,11 +572,13 @@ fn tabs_answer(value: Value, sites_allowed: &[String]) -> Value {
                     "loading": tab.get("loading").cloned().unwrap_or(Value::Bool(false)),
                 })
             } else {
-                json!({ "tab": id, "site": sites::host(url), "allowed": false })
+                json!({ "tab": id, "site": if url.is_empty() {
+                    sites::host(&format!("https://{}", tab.get("site").and_then(Value::as_str).unwrap_or_default()))
+                } else { sites::host(url) }, "allowed": false })
             }
         })
         .collect();
-    json!({ "tabs": tabs, "sites": sites_allowed })
+    json!({ "tabs": tabs, "sites": policy.sites, "all_sites": policy.all_sites, "blocked_sites": policy.blocked_sites })
 }
 
 /// Only the arguments the tool's schema names.
@@ -565,7 +608,13 @@ mod tests {
             { "tab": 1, "title": "crmne", "url": "https://github.com/crmne", "loading": false },
             { "tab": 2, "title": "Re: salary", "url": "https://mail.google.com/mail/u/0", "loading": false }
         ]});
-        let answer = tabs_answer(value, &["github.com".to_string()]);
+        let answer = tabs_answer(
+            value,
+            &super::super::bridge::Policy {
+                sites: vec!["github.com".into()],
+                ..Default::default()
+            },
+        );
         assert_eq!(answer["tabs"][0]["title"], "crmne");
         assert_eq!(
             answer["tabs"][1],
@@ -600,13 +649,14 @@ mod bridge_tests {
     /// `answer(method, params)`.
     async fn attached(
         sites: &[&str],
-        answer: fn(&str, &Value) -> Value,
+        answer: impl Fn(&str, &Value) -> Value + Send + 'static,
     ) -> (Arc<Bridge>, tokio::task::JoinHandle<()>) {
         let bridge = Arc::new(Bridge::new(
             Policy {
                 sites: sites.iter().map(|s| s.to_string()).collect(),
                 stopped: false,
                 changes: true,
+                ..Default::default()
             },
             vec![origin(EXTENSION_ID)],
             || {},
@@ -710,6 +760,7 @@ mod bridge_tests {
                 sites: vec!["github.com".into()],
                 stopped: true,
                 changes: true,
+                ..Default::default()
             },
             vec![origin(EXTENSION_ID)],
             vec!["42".into()],
@@ -747,6 +798,7 @@ mod bridge_tests {
                 sites: vec!["github.com".into()],
                 stopped: false,
                 changes: false,
+                ..Default::default()
             },
             vec![origin(EXTENSION_ID)],
             vec![],
@@ -798,6 +850,108 @@ mod bridge_tests {
             .unwrap();
         assert_eq!(answer.image.unwrap().data, "/9j/");
         assert!(answer.value.get("image").is_none());
+    }
+
+    #[tokio::test]
+    async fn automatic_browser_calls_recheck_local_policy_and_never_escalate_bots() {
+        let (bridge, _extension) = attached(
+            &["github.com"],
+            |_, params| json!({"url":"https://github.com/", "dry_run":params["dry_run"]}),
+        )
+        .await;
+        let tools = tools_for(Arc::clone(&bridge));
+        let caller = Caller::BrowserAutomatic { bot: None };
+        let action = json!({"ref":"e1"});
+        assert_eq!(
+            tools
+                .call("browser_click", action.clone(), &caller, None)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::NeedsApproval
+        );
+        let policy = Policy {
+            sites: vec!["github.com".into()],
+            changes: true,
+            auto_approve: true,
+            ..Default::default()
+        };
+        bridge.configure(
+            policy.clone(),
+            vec![origin(EXTENSION_ID)],
+            vec!["42".into()],
+        );
+        assert!(
+            tools
+                .call("browser_click", action.clone(), &caller, None)
+                .await
+                .is_ok()
+        );
+        let bot = Caller::BrowserAutomatic {
+            bot: Some("42".into()),
+        };
+        for method in ["browser_read", "browser_click"] {
+            let args = if method == "browser_read" {
+                json!({})
+            } else {
+                action.clone()
+            };
+            assert_eq!(
+                tools
+                    .call(method, args, &bot, None)
+                    .await
+                    .err()
+                    .unwrap()
+                    .code,
+                ErrorCode::NeedsApproval
+            );
+        }
+        let mut restored = policy;
+        restored.auto_approve = false;
+        bridge.configure(restored, vec![origin(EXTENSION_ID)], vec![]);
+        assert_eq!(
+            tools
+                .call("browser_click", action, &caller, None)
+                .await
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::NeedsApproval
+        );
+    }
+
+    #[tokio::test]
+    async fn restoring_prompts_during_preflight_prevents_the_automatic_action() {
+        let current = Arc::new(std::sync::Mutex::new(None::<Arc<Bridge>>));
+        let revoke = Arc::clone(&current);
+        let (bridge, _extension) = attached(&["github.com"], move |_, params| {
+            assert_eq!(
+                params["dry_run"], true,
+                "execution must never follow revocation"
+            );
+            let bridge = revoke.lock().unwrap().as_ref().unwrap().clone();
+            let mut policy = bridge.policy();
+            policy.auto_approve = false;
+            bridge.configure(policy, vec![origin(EXTENSION_ID)], vec![]);
+            json!({"url":"https://github.com/", "dry_run":true})
+        })
+        .await;
+        *current.lock().unwrap() = Some(Arc::clone(&bridge));
+        let mut policy = bridge.policy();
+        policy.auto_approve = true;
+        bridge.configure(policy, vec![origin(EXTENSION_ID)], vec![]);
+        let error = tools_for(bridge)
+            .call(
+                "browser_click",
+                json!({"ref":"e1"}),
+                &Caller::BrowserAutomatic { bot: None },
+                None,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::NeedsApproval);
     }
 
     #[tokio::test]

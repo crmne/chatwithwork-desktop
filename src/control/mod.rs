@@ -224,6 +224,18 @@ pub enum ControlRequest {
         site: String,
         allowed: bool,
     },
+    /// Use any HTTP(S) site except the blocked list, or only listed sites.
+    BrowserAskBeforeActions {
+        ask: bool,
+    },
+    BrowserAllSites {
+        all_sites: bool,
+    },
+    /// Block a site in either mode, or remove that block.
+    BrowserBlockedSite {
+        site: String,
+        blocked: bool,
+    },
     /// The kill switch: refuse every browser call until resumed.
     BrowserStopped {
         stopped: bool,

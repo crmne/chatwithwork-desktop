@@ -68,12 +68,20 @@ pub const BOT_META: &str = "com.chatwithwork/botId";
 /// bot may run commands unattended where its loan says so.
 pub const UNATTENDED_META: &str = "com.chatwithwork/unattended";
 
+/// Trusted browser-only local consent; never a model argument.
+pub const BROWSER_AUTO_APPROVE_META: &str = "com.chatwithwork/browserAutoApprove";
+
 /// Who a call is for: a person (any shared folder, as each allows), or a
 /// bot (only the folders lent to it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Caller {
     #[default]
     Person,
+    /// The trusted server invoked the computer’s explicit browser opt-out.
+    /// Bots cannot inherit this shortcut, even with this metadata.
+    BrowserAutomatic {
+        bot: Option<String>,
+    },
     /// A same-user control client. Its reads share one fixed budget; each
     /// action needs an explicit acknowledgement of the person's approval.
     LocalBrowser {
@@ -231,7 +239,8 @@ impl LocalFiles {
         } else {
             chat_id
         };
-        let known = (!local || is_browser_tool(name))
+        let known = (!(local || matches!(caller, Caller::BrowserAutomatic { .. }))
+            || is_browser_tool(name))
             && (READ_TOOLS.contains(&name)
                 || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
                 || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
@@ -288,7 +297,15 @@ impl LocalFiles {
 
         let for_bot = match &caller {
             Caller::Bot { id, .. } => Some(format!("for bot {id}")),
+            Caller::LocalBrowser { approved: false }
+                if crate::browsing::tools::CHANGE_TOOLS.contains(&name)
+                    && args.get("dry_run") != Some(&Value::Bool(true))
+                    && self.browser().is_some_and(BrowserTools::auto_approves) =>
+            {
+                Some("local browser client; browser_local_policy".into())
+            }
             Caller::LocalBrowser { .. } => Some("local browser client".into()),
+            Caller::BrowserAutomatic { .. } => Some("browser_local_policy".into()),
             Caller::Person => None,
         };
         entry.detail = for_bot.clone();
@@ -556,6 +573,7 @@ impl LocalFiles {
         }
         self.inner.limiter.check_call()?;
         if matches!(caller, Caller::LocalBrowser { approved: false })
+            && !self.browser().is_some_and(BrowserTools::auto_approves)
             && crate::browsing::tools::CHANGE_TOOLS.contains(&name)
             && args.get("dry_run") != Some(&Value::Bool(true))
         {
@@ -861,6 +879,7 @@ pub fn browser_tools(browser: &BrowserTools) -> Vec<Tool> {
         .offered()
         .into_iter()
         .map(|definition| {
+            let is_action = definition.kind != Kind::Read;
             let mut tool = match definition.kind {
                 Kind::Read => tool(
                     definition.name,
@@ -889,6 +908,11 @@ pub fn browser_tools(browser: &BrowserTools) -> Vec<Tool> {
             };
             if let Some(annotations) = tool.annotations.as_mut() {
                 annotations.open_world_hint = Some(true);
+            }
+            if is_action && browser.auto_approves() {
+                tool.meta
+                    .get_or_insert_with(Default::default)
+                    .insert(BROWSER_AUTO_APPROVE_META.into(), Value::Bool(true));
             }
             tool
         })
@@ -1636,16 +1660,25 @@ impl ServerHandler for LocalFiles {
                 .or_else(|| context.meta.get(key))
                 .cloned()
         };
-        let caller = match meta(BOT_META) {
-            Some(Value::String(id)) => Caller::Bot {
-                id: id.chars().take(20).collect(),
-                unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
-            },
-            Some(Value::Number(id)) => Caller::Bot {
-                id: id.to_string(),
-                unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
-            },
-            _ => Caller::Person,
+        let caller = if meta(BROWSER_AUTO_APPROVE_META) == Some(Value::Bool(true)) {
+            Caller::BrowserAutomatic {
+                bot: meta(BOT_META).map(|value| match value {
+                    Value::String(id) => id.chars().take(20).collect(),
+                    other => other.to_string().chars().take(20).collect(),
+                }),
+            }
+        } else {
+            match meta(BOT_META) {
+                Some(Value::String(id)) => Caller::Bot {
+                    id: id.chars().take(20).collect(),
+                    unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
+                },
+                Some(Value::Number(id)) => Caller::Bot {
+                    id: id.to_string(),
+                    unattended: meta(UNATTENDED_META) == Some(Value::Bool(true)),
+                },
+                _ => Caller::Person,
+            }
         };
         let request_id = match serde_json::to_value(&context.id) {
             Ok(Value::String(s)) => s,

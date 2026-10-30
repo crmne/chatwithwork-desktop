@@ -786,7 +786,8 @@ impl Daemon {
             || writable_roots(&config) != writable_roots(&new)
             || command_roots(&config) != command_roots(&new)
             || config.browser.enabled != new.browser.enabled
-            || config.browser.changes != new.browser.changes;
+            || config.browser.changes != new.browser.changes
+            || config.browser.ask_before_actions != new.browser.ask_before_actions;
         self.configure_browser(&new);
         *config = new;
         drop(config);
@@ -1380,6 +1381,9 @@ impl ControlHandler for Daemon {
                     | ControlRequest::BrowserCall { .. }
                     | ControlRequest::BrowserEnabled { .. }
                     | ControlRequest::BrowserSite { .. }
+                    | ControlRequest::BrowserAskBeforeActions { .. }
+                    | ControlRequest::BrowserAllSites { .. }
+                    | ControlRequest::BrowserBlockedSite { .. }
                     | ControlRequest::BrowserChanges { .. }
                     | ControlRequest::BrowserStopped { .. }
                     | ControlRequest::BrowserBot { .. }
@@ -1529,6 +1533,54 @@ impl ControlHandler for Daemon {
                         } else {
                             crate::browsing::settings::disallow_site(config, &site).map(drop)
                         }
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserAskBeforeActions { ask } => {
+                self.edit_browser(
+                    if ask {
+                        "browser_approvals_required"
+                    } else {
+                        "browser_automatic_actions_allowed"
+                    },
+                    None,
+                    move |config| {
+                        config.browser.ask_before_actions = ask;
+                        Ok(())
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserAllSites { all_sites } => {
+                self.edit_browser(
+                    if all_sites {
+                        "browser_all_sites_allowed"
+                    } else {
+                        "browser_listed_sites_only"
+                    },
+                    None,
+                    move |config| {
+                        config.browser.all_sites = all_sites;
+                        Ok(())
+                    },
+                )
+                .await
+            }
+            ControlRequest::BrowserBlockedSite { site, blocked } => {
+                let saved = {
+                    let mut probe = self.config.lock().await.clone();
+                    crate::browsing::settings::block_site(&mut probe, &site, blocked)?
+                };
+                self.edit_browser(
+                    if blocked {
+                        "browser_site_blocked"
+                    } else {
+                        "browser_site_unblocked"
+                    },
+                    Some(saved),
+                    move |config| {
+                        crate::browsing::settings::block_site(config, &site, blocked).map(drop)
                     },
                 )
                 .await

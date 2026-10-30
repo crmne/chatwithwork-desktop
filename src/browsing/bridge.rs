@@ -36,9 +36,24 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(18);
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Policy {
     pub sites: Vec<String>,
+    pub all_sites: bool,
+    pub blocked_sites: Vec<String>,
     pub stopped: bool,
     /// Actions are allowed, not only reading.
     pub changes: bool,
+    /// The daemon alone admits automatic browser actions; not an extension switch.
+    #[serde(skip)]
+    pub auto_approve: bool,
+}
+
+impl Policy {
+    pub fn allows(&self, url: &str) -> bool {
+        super::sites::permitted(url, &self.sites, self.all_sites, &self.blocked_sites)
+    }
+
+    fn needs_site_policy_v2(&self) -> bool {
+        self.all_sites || !self.blocked_sites.is_empty()
+    }
 }
 
 /// The browser that is attached, as it said in its `hello`.
@@ -46,6 +61,7 @@ pub struct Policy {
 pub struct Extension {
     pub origin: String,
     pub version: String,
+    pub site_policy_version: u64,
     pub browser: String,
     /// The person pressed Stop in the extension.
     pub stopped: bool,
@@ -151,6 +167,14 @@ impl Bridge {
             };
             if session.extension.stopped {
                 return Err(stopped());
+            }
+            if self.policy.borrow().needs_site_policy_v2()
+                && session.extension.site_policy_version < 2
+            {
+                return Err(ToolError::new(
+                    ErrorCode::BrowserUnavailable,
+                    "Update the Chat with Work browser extension to use all sites or blocked sites. No browser action was taken.",
+                ));
             }
             let id = self.next_request.fetch_add(1, Ordering::Relaxed);
             let (sender, receiver) = oneshot::channel();
@@ -340,6 +364,10 @@ impl Bridge {
         match event {
             "hello" => {
                 session.extension.version = text("version");
+                session.extension.site_policy_version = message
+                    .get("site_policy_version")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1);
                 session.extension.browser = browser_name(&text("browser"));
                 session.extension.stopped = message.get("stopped") == Some(&Value::Bool(true));
             }
@@ -459,6 +487,40 @@ fn browser_name(agent: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn older_extensions_cannot_run_with_an_advanced_site_policy() {
+        for policy in [
+            Policy {
+                all_sites: true,
+                ..Default::default()
+            },
+            Policy {
+                sites: vec!["example.com".into()],
+                blocked_sites: vec!["private.example.com".into()],
+                ..Default::default()
+            },
+        ] {
+            let bridge = Bridge::new(policy, vec![], || {});
+            let (outgoing, mut requests) = mpsc::unbounded_channel();
+            *bridge.session.lock().unwrap() = Some(Session {
+                id: 1,
+                outgoing,
+                pending: Arc::default(),
+                extension: Extension {
+                    site_policy_version: 1,
+                    ..Default::default()
+                },
+            });
+            let error = bridge.call("click", json!({"ref":"e1"})).await.unwrap_err();
+            assert_eq!(error.code, ErrorCode::BrowserUnavailable);
+            assert!(error.message.contains("Update"));
+            assert!(
+                requests.try_recv().is_err(),
+                "no action reached the old extension"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_line_read_across_a_cancelled_read_keeps_every_byte() {

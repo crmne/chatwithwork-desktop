@@ -8,6 +8,8 @@ interface PopupState {
   stopped: boolean;
   stoppedOnComputer: boolean;
   sites: string[];
+  all_sites?: boolean;
+  blocked_sites?: string[];
   changes: boolean;
   tabs: number;
 }
@@ -45,7 +47,7 @@ function render(state: PopupState): void {
     tone = "attention";
     text = "Connecting…";
     detail = "";
-  } else if (state.sites.length === 0) {
+  } else if (!state.all_sites && state.sites.length === 0) {
     tone = "attention";
     text = "No sites allowed yet";
     detail = "Allow the sites Chat with Work may use in Chat with Work Desktop's settings.";
@@ -59,7 +61,7 @@ function render(state: PopupState): void {
       : `${state.tabs} ${state.tabs === 1 ? "tab" : "tabs"} in the “Chat with Work” group.`;
   const list = $("sites");
   list.replaceChildren(
-    ...(state.sites.length ? state.sites : ["None yet"]).map((site) => {
+    ...(state.all_sites ? ["All sites", ...(state.blocked_sites ?? []).map((site) => `Blocked: ${site}`)] : [...(state.sites.length ? state.sites : ["None yet"]), ...(state.blocked_sites ?? []).map((site) => `Blocked: ${site}`)]).map((site) => {
       const item = document.createElement("li");
       item.textContent = site;
       return item;

@@ -147,11 +147,23 @@ enum BrowserCommand {
     /// Allow a site: a host like github.com (with its subdomains, over
     /// HTTPS) or an origin like http://localhost:3000.
     Allow { site: String },
-    /// Stop allowing a site.
+    /// Remove an entry from the allowed list. Use block to refuse it in either mode.
     Disallow { site: String },
+    /// Allow every HTTP(S) site except the blocked sites, in the app's tab group.
+    AllowAll,
+    /// Use only the allowed sites again. Keeps both site lists.
+    AllowListed,
+    /// Block a site in both modes. A host covers subdomains and every HTTP(S) port.
+    Block { site: String },
+    /// Remove a site from the blocked list.
+    Unblock { site: String },
     /// Let Chat with Work also act on pages: open, click, type, choose,
     /// close tabs and save files, each approved in Chat with Work.
     AllowChanges,
+    /// Ask before each browser action again (the default).
+    Ask,
+    /// Run permitted browser actions without repeated approval, including submissions.
+    AutomaticActions,
     /// Let Chat with Work only read pages again.
     DenyChanges,
     /// Stop Chat with Work using the browser now, until `resume`.
@@ -1122,10 +1134,15 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
                 ),
                 None => println!("Connected: no browser"),
             }
-            if config.browser.sites.is_empty() {
+            if config.browser.all_sites {
+                println!("Sites: all except blocked sites");
+            } else if config.browser.sites.is_empty() {
                 println!("Sites: none yet (`cww browser allow github.com`)");
             } else {
                 println!("Sites: {}", config.browser.sites.join(", "));
+            }
+            if !config.browser.blocked_sites.is_empty() {
+                println!("Blocked sites: {}", config.browser.blocked_sites.join(", "));
             }
             for loan in &config.browser.bots {
                 println!("Lent to bot {} {}", loan.id, loan.name);
@@ -1159,15 +1176,50 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
         BrowserCommand::Disallow { site } => {
             let site = settings::disallow_site(&mut config, &site)?;
             config.save(paths)?;
-            println!("Chat with Work may no longer use {site}.");
+            println!(
+                "{site}: removed from the allowed list. Use block to refuse it in both modes."
+            );
+        }
+        BrowserCommand::Ask | BrowserCommand::AutomaticActions => {
+            config.browser.ask_before_actions = matches!(command, BrowserCommand::Ask);
+            config.save(paths)?;
+            println!(
+                "Browser actions: {}.",
+                if config.browser.ask_before_actions {
+                    "ask before acting"
+                } else {
+                    "run without repeated approval on permitted sites"
+                }
+            );
+        }
+        BrowserCommand::AllowAll | BrowserCommand::AllowListed => {
+            config.browser.all_sites = matches!(command, BrowserCommand::AllowAll);
+            config.save(paths)?;
+            println!(
+                "Browser sites: {}.",
+                if config.browser.all_sites {
+                    "all except blocked sites"
+                } else {
+                    "only listed sites"
+                }
+            );
+        }
+        BrowserCommand::Block { site } => {
+            let site = settings::block_site(&mut config, &site, true)?;
+            config.save(paths)?;
+            println!("{site}: blocked.");
+        }
+        BrowserCommand::Unblock { site } => {
+            let site = settings::block_site(&mut config, &site, false)?;
+            config.save(paths)?;
+            println!("{site}: block removed.");
         }
         BrowserCommand::AllowChanges => {
             config.browser.changes = true;
             config.save(paths)?;
             println!(
                 "Chat with Work can now also open pages, click, type and choose in its tab \
-                 group, on the sites you allow. Each action asks you first in Chat with Work, \
-                 and anything that may send, buy, post or delete shows you a screenshot."
+                 group, on the sites you allow. Your Ask before browser actions setting still applies."
             );
         }
         BrowserCommand::DenyChanges => {

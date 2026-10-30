@@ -14,8 +14,11 @@ use crate::config::{BotLoan, BrowserConfig, Config};
 pub fn policy(config: &Config) -> Policy {
     Policy {
         sites: config.browser.sites.clone(),
+        all_sites: config.browser.all_sites,
+        blocked_sites: config.browser.blocked_sites.clone(),
         stopped: !config.browser.enabled || config.browser.stopped || config.paused,
         changes: config.browser.changes,
+        auto_approve: !config.browser.ask_before_actions,
     }
 }
 
@@ -43,6 +46,26 @@ pub fn disallow_site(config: &mut Config, site: &str) -> Result<String> {
         bail!("{normalized} isn't on the allowed sites");
     }
     Ok(normalized)
+}
+
+/// Add or remove a block without changing the allowed list or mode.
+pub fn block_site(config: &mut Config, site: &str, blocked: bool) -> Result<String> {
+    let Some(site) = sites::normalize(site) else {
+        bail!("{site:?} isn't a site: write a host or an HTTP(S) origin");
+    };
+    if blocked {
+        if !config.browser.blocked_sites.contains(&site) {
+            config.browser.blocked_sites.push(site.clone());
+            config.browser.blocked_sites.sort();
+        }
+    } else {
+        let before = config.browser.blocked_sites.len();
+        config.browser.blocked_sites.retain(|saved| saved != &site);
+        if config.browser.blocked_sites.len() == before {
+            bail!("{site} isn't on the blocked sites");
+        }
+    }
+    Ok(site)
 }
 
 /// Lend the browser to a bot, or stop.
@@ -74,8 +97,11 @@ pub fn status(browser: &BrowserConfig, extension: Option<Extension>) -> Value {
     json!({
         "enabled": browser.enabled,
         "changes": browser.changes,
+        "ask_before_actions": browser.ask_before_actions,
         "stopped": browser.stopped,
         "sites": browser.sites,
+        "all_sites": browser.all_sites,
+        "blocked_sites": browser.blocked_sites,
         "bots": browser.bots,
         "connected": extension.is_some(),
         "extension": extension,
@@ -105,6 +131,34 @@ mod tests {
             "github.com"
         );
         assert!(disallow_site(&mut config, "github.com").is_err());
+    }
+
+    #[test]
+    fn old_config_stays_restricted_and_domain_saves_keep_every_character() {
+        let mut config: Config =
+            toml::from_str("[browser]\nenabled = true\nsites = [\"elster.de\"]\n").unwrap();
+        assert!(!config.browser.all_sites);
+        assert!(config.browser.ask_before_actions);
+        assert!(config.browser.blocked_sites.is_empty());
+        assert!(policy(&config).allows("https://elster.de/"));
+        assert!(!policy(&config).allows("https://unlisted.example/"));
+        allow_site(&mut config, "Elster.de").unwrap();
+        block_site(&mut config, "private.elster.de", true).unwrap();
+        block_site(&mut config, "PRIVATE.ELSTER.DE", true).unwrap();
+        config.browser.all_sites = true;
+        let saved = toml::to_string(&config).unwrap();
+        let mut loaded: Config = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded.browser.sites, ["elster.de"]);
+        assert_eq!(loaded.browser.blocked_sites, ["private.elster.de"]);
+        assert!(policy(&loaded).allows("https://unlisted.example/"));
+        assert!(!policy(&loaded).allows("https://private.elster.de/"));
+        loaded.browser.all_sites = false;
+        assert_eq!(loaded.browser.sites, ["elster.de"]);
+        assert_eq!(loaded.browser.blocked_sites, ["private.elster.de"]);
+        block_site(&mut loaded, "private.elster.de", false).unwrap();
+        assert!(policy(&loaded).allows("https://private.elster.de/"));
+        assert!(block_site(&mut loaded, "private.elster.de", false).is_err());
+        assert!(block_site(&mut loaded, "file:///secret", true).is_err());
     }
 
     #[test]

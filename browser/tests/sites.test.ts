@@ -42,3 +42,25 @@ test("a file's name is its path's last segment, decoded where it can be", () => 
   assert.equal(fileName("/files/"), "download");
   assert.equal(fileName("/"), "download");
 });
+
+
+test("all sites is explicit and blocked hosts win over either mode", () => {
+  assert.equal(siteAllowed("https://example.com/", []), false);
+  assert.equal(siteAllowed("http://unlisted.example:8080/", [], true), true);
+  for (const all of [false, true]) {
+    for (const url of ["https://example.com/", "https://sub.example.com/", "http://example.com:8080/", "https://example.com./"]) {
+      assert.equal(siteAllowed(url, ["example.com", "http://example.com:8080"], all, ["example.com"]), false, url);
+    }
+  }
+  assert.equal(siteAllowed("https://notexample.com/", [], true, ["example.com"]), true);
+  assert.equal(siteAllowed("https://example.com.evil.test/", [], true, ["example.com"]), true);
+  assert.equal(siteAllowed("http://localhost:3000/", [], true, ["http://localhost:3000"]), false);
+  assert.equal(siteAllowed("http://localhost:3001/", [], true, ["http://localhost:3000"]), true);
+  assert.equal(siteAllowed("https://localhost:3000/", [], true, ["http://localhost:3000"]), true);
+});
+
+test("all sites never grants non-web URLs or URLs containing credentials", () => {
+  for (const url of ["file:///etc/passwd", "chrome://settings", "chrome-extension://abc/", "data:text/html,secret", "javascript:alert(1)", "ftp://example.com/", "https://user:password@example.com/", "not a url"]) {
+    assert.equal(siteAllowed(url, [], true), false, url);
+  }
+});

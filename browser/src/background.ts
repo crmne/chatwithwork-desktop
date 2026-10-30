@@ -21,7 +21,7 @@ const state = {
   // The daemon behind it.
   daemon: "unknown" as DaemonState,
   error: "",
-  policy: { sites: [], stopped: false, changes: false } as Policy,
+  policy: { sites: [], all_sites: false, blocked_sites: [], stopped: false, changes: false } as Policy,
   // The person pressed Stop in this extension.
   stopped: false,
   // Calls in progress, for the badge.
@@ -71,6 +71,7 @@ function announceHello(): void {
   post({
     event: "hello",
     version: chrome.runtime.getManifest().version,
+    site_policy_version: 2,
     browser: navigator.userAgent,
     stopped: state.stopped,
   });
@@ -101,11 +102,13 @@ async function onMessage(message: any): Promise<void> {
   }
   if (message.method === "policy" && message.id === undefined) {
     const params = message.params ?? {};
-    state.policy = {
+    Object.assign(state.policy, {
       sites: Array.isArray(params.sites) ? params.sites.filter((s: unknown) => typeof s === "string") : [],
+      all_sites: params.all_sites === true,
+      blocked_sites: Array.isArray(params.blocked_sites) ? params.blocked_sites.filter((s: unknown) => typeof s === "string") : [],
       stopped: params.stopped === true,
       changes: params.changes === true,
-    };
+    });
     await halt(state.stopped || state.policy.stopped);
     void refreshBadge();
     return;
@@ -191,6 +194,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       stopped: state.stopped,
       stoppedOnComputer: state.policy.stopped,
       sites: state.policy.sites,
+      all_sites: state.policy.all_sites,
+      blocked_sites: state.policy.blocked_sites,
       changes: state.policy.changes,
       tabs: tabs.length,
       version: chrome.runtime.getManifest().version,

@@ -33,6 +33,10 @@ pub struct Status {
     pub commands: Option<CommandsHost>,
 }
 
+fn browser_asks_by_default() -> bool {
+    true
+}
+
 /// What the daemon says of commands on Windows (CONTROL.md, `status`).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
@@ -52,17 +56,38 @@ pub struct DriveRoot {
     pub prepared: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BrowserStatus {
     pub enabled: bool,
     pub stopped: bool,
     pub changes: bool,
+    #[serde(default = "browser_asks_by_default")]
+    pub ask_before_actions: bool,
     pub sites: Vec<String>,
+    pub all_sites: bool,
+    pub blocked_sites: Vec<String>,
     pub bots: Vec<serde_json::Value>,
     pub connected: bool,
     /// The attached browser: `browser`, `version`, `stopped`.
     pub extension: Option<serde_json::Value>,
+}
+
+impl Default for BrowserStatus {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stopped: false,
+            changes: false,
+            ask_before_actions: true,
+            sites: Vec::new(),
+            all_sites: false,
+            blocked_sites: Vec::new(),
+            bots: Vec::new(),
+            connected: false,
+            extension: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

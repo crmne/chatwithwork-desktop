@@ -53,7 +53,7 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     config.browser.sites = vec!["example.com".into()];
     config.limits.read_chars_per_chat_hour = 20;
     config.limits.read_chars_per_hour = 100;
-    config.limits.changes_per_day = 1;
+    config.limits.changes_per_day = 3;
     config.save(&paths).unwrap();
     let shutdown = CancellationToken::new();
     let daemon = tokio::spawn(cww::daemon::run(paths.clone(), shutdown.clone(), false));
@@ -77,6 +77,13 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
         else {
             panic!("extension attached");
         };
+        writeln!(
+            writer,
+            "{}",
+            json!({"event":"hello","version":"test","site_policy_version":2,"stopped":false})
+        )
+        .unwrap();
+        writer.flush().unwrap();
         ready.send(()).unwrap();
         let mut line = String::new();
         while reader.read_line(&mut line).unwrap_or(0) > 0 {
@@ -108,6 +115,73 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     });
     attached.await.unwrap();
 
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while control(&paths, ControlRequest::Browser).await["browser"]["extension"]["site_policy_version"] != 2 {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+
+    // All-sites is a local setting. A block wins even if an extension
+    // returns content it should have refused, and saved allow entries survive.
+    control(
+        &paths,
+        ControlRequest::BrowserSite {
+            site: "elster.de".into(),
+            allowed: true,
+        },
+    )
+    .await;
+    control(&paths, ControlRequest::BrowserAllSites { all_sites: true }).await;
+    let all = control(&paths, call("browser_tabs", json!({}), false)).await;
+    assert!(
+        all.to_string().contains("Private title"),
+        "all HTTP(S) sites are deliberately allowed"
+    );
+    for site in ["example.com", "private.invalid"] {
+        control(
+            &paths,
+            ControlRequest::BrowserBlockedSite {
+                site: site.into(),
+                blocked: true,
+            },
+        )
+        .await;
+    }
+    let blocked = control(&paths, call("browser_read", json!({}), false)).await;
+    assert_eq!(code(&blocked), "site_not_allowed");
+    assert!(!blocked.to_string().contains("abcdefghij"));
+    let tabs = control(&paths, call("browser_tabs", json!({}), false)).await;
+    assert!(!tabs.to_string().contains("Private title"));
+    assert!(!tabs.to_string().contains("/message"));
+    let status = control(&paths, ControlRequest::BrowserAllSites { all_sites: false }).await;
+    assert_eq!(
+        status["browser"]["sites"],
+        json!(["elster.de", "example.com"])
+    );
+    assert_eq!(
+        status["browser"]["blocked_sites"],
+        json!(["example.com", "private.invalid"])
+    );
+    assert_eq!(
+        code(&control(&paths, call("browser_read", json!({}), false)).await),
+        "site_not_allowed"
+    );
+    for site in ["example.com", "private.invalid"] {
+        control(
+            &paths,
+            ControlRequest::BrowserBlockedSite {
+                site: site.into(),
+                blocked: false,
+            },
+        )
+        .await;
+    }
+    let saved = Config::load(&paths).unwrap();
+    assert_eq!(saved.browser.sites, ["elster.de", "example.com"]);
+    assert!(!saved.browser.all_sites);
+    assert!(saved.browser.blocked_sites.is_empty());
+
+    seen.lock().unwrap().clear();
     let tools = control(&paths, ControlRequest::BrowserTools).await;
     let names: Vec<_> = tools["tools"]
         .as_array()
@@ -153,6 +227,57 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     assert!(!tabs.to_string().contains("/message"));
     let outside = control(&paths, call("browser_read", json!({"tab":99}), false)).await;
     assert_eq!(code(&outside), "not_in_group");
+
+    let listed = control(&paths, ControlRequest::BrowserTools).await;
+    assert!(
+        !listed
+            .to_string()
+            .contains(cww::tools::BROWSER_AUTO_APPROVE_META)
+    );
+    let changed = control(
+        &paths,
+        ControlRequest::BrowserAskBeforeActions { ask: false },
+    )
+    .await;
+    assert_eq!(changed["browser"]["ask_before_actions"], false);
+    let listed = control(&paths, ControlRequest::BrowserTools).await;
+    for tool in listed["tools"].as_array().unwrap() {
+        if cww::browsing::tools::CHANGE_TOOLS.contains(&tool["name"].as_str().unwrap()) {
+            assert_eq!(tool["_meta"][cww::tools::BROWSER_AUTO_APPROVE_META], true);
+            assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        } else {
+            assert!(
+                tool["_meta"]
+                    .get(cww::tools::BROWSER_AUTO_APPROVE_META)
+                    .is_none()
+            );
+        }
+    }
+    for _ in 0..2 {
+        let before = seen.lock().unwrap().len();
+        let automatic = control(&paths, call("browser_click", json!({"ref":"e1"}), false)).await;
+        assert_ne!(automatic["result"]["isError"], true, "{automatic}");
+        let requests = seen.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            before + 2,
+            "automatic actions retain preflight"
+        );
+        assert_eq!(requests[before]["params"]["dry_run"], true);
+        assert!(requests[before + 1]["params"]["dry_run"].is_null());
+    }
+    control(
+        &paths,
+        ControlRequest::BrowserAskBeforeActions { ask: true },
+    )
+    .await;
+    assert!(Config::load(&paths).unwrap().browser.ask_before_actions);
+    assert!(
+        !control(&paths, ControlRequest::BrowserTools)
+            .await
+            .to_string()
+            .contains(cww::tools::BROWSER_AUTO_APPROVE_META)
+    );
 
     let denied = control(&paths, call("browser_click", json!({"ref":"e1"}), false)).await;
     assert_eq!(code(&denied), "needs_approval");
@@ -244,6 +369,9 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     let audit = std::fs::read_to_string(paths.audit_file()).unwrap();
     assert!(audit.contains("local browser client"));
     assert!(audit.contains("local-browser"));
+    assert!(audit.contains("browser_local_policy"));
+    assert!(audit.contains("browser_automatic_actions_allowed"));
+    assert!(audit.contains("browser_approvals_required"));
     for private in [
         "private-input",
         "abcdefghij",

@@ -306,6 +306,9 @@ pub fn question(
             if confirmed.as_deref() != Some(bot) { return Err("Choose browser access from this bot’s settings.".into()); }
             ask("Share browser with bot", format!("Let {} (bot {bot}) use your browser’s Chat with Work tab group on the allowed sites, with your sign-ins? Changes still ask for approval.", context["bot"]["name"].as_str().unwrap_or("this bot")))
         }
+        R::BrowserAskBeforeActions { ask: false } if status.browser.ask_before_actions => ask("Run browser actions without asking", "Let Chat with Work click, type and submit on permitted sites without asking again, including sending, buying or deleting? Your site rules, protected fields and Stop still apply. Bots keep their own approval rules. This does not change file or command approvals.".into()),
+        R::BrowserAllSites { all_sites: true } if !status.browser.all_sites => ask("Allow all sites", "Let Chat with Work use any website in its own tab group, except your blocked sites, with your sign-ins? Protected fields and change approvals still apply.".into()),
+        R::BrowserBlockedSite { site, blocked: false } => ask("Unblock a site", format!("Remove the block on {site}? Chat with Work can use it when your browser mode and allowed sites permit it.")),
         R::BrowserSite { site, allowed: true } => ask("Allow a site", format!("Let Chat with Work use {site} in its browser tab group, with your sign-in there?")),
         R::BrowserChanges { changes: true } if !status.browser.changes => ask("Allow browser changes", "Let Chat with Work type, click and submit on the allowed sites? Each change asks for approval in Chat with Work.".into()),
         R::BrowserStopped { stopped: false } if status.browser.stopped => ask("Resume browser sharing", "Let Chat with Work use the browser again, with the sites and actions you already allowed?".into()),
@@ -338,6 +341,9 @@ pub fn grant_context(
             | R::RootsCommands { commands: true, .. }
             | R::RootsCommands { network: true, .. }
             | R::BrowserSite { allowed: true, .. }
+            | R::BrowserAllSites { all_sites: true }
+            | R::BrowserAskBeforeActions { ask: false }
+            | R::BrowserBlockedSite { blocked: false, .. }
             | R::BrowserChanges { changes: true }
             | R::BrowserStopped { stopped: false }
             | R::BrowserEnabled { enabled: true }
@@ -910,6 +916,32 @@ mod tests {
             .unwrap()
             .is_some()
         );
+    }
+
+    #[test]
+    fn allowing_all_sites_and_unblocking_require_native_confirmation() {
+        use cww::control::ControlRequest as R;
+        let status = crate::model::Status::default();
+        for request in [
+            R::BrowserAllSites { all_sites: true },
+            R::BrowserAskBeforeActions { ask: false },
+            R::BrowserBlockedSite {
+                site: "example.com".into(),
+                blocked: false,
+            },
+        ] {
+            assert!(question(&request, &status, &Value::Null).unwrap().is_some());
+        }
+        for request in [
+            R::BrowserAllSites { all_sites: false },
+            R::BrowserAskBeforeActions { ask: true },
+            R::BrowserBlockedSite {
+                site: "example.com".into(),
+                blocked: true,
+            },
+        ] {
+            assert!(question(&request, &status, &Value::Null).unwrap().is_none());
+        }
     }
 
     #[test]

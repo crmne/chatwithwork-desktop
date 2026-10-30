@@ -12,6 +12,8 @@ import { page, snapshotText, type AXNode } from "./snapshot.js";
 
 export interface Policy {
   sites: string[];
+  all_sites: boolean;
+  blocked_sites: string[];
   // Stopped from the tray or `cww browser stop`.
   stopped: boolean;
   // The person allowed actions (clicking, typing, opening pages), not
@@ -45,7 +47,7 @@ export function integer(value: unknown, name: string, min: number, max: number, 
 
 export function allowedTab(tab: chrome.tabs.Tab, policy: Policy): void {
   const url = tab.url ?? tab.pendingUrl ?? "";
-  if (!siteAllowed(url, policy.sites)) {
+  if (!siteAllowed(url, policy.sites, policy.all_sites, policy.blocked_sites)) {
     const host = hostOfUrl(url);
     throw new ToolError(
       "site_not_allowed",
@@ -97,12 +99,9 @@ const tabs: Method = async (params, policy) => {
   only(params, []);
   const list = await groupTabs();
   return {
-    tabs: list.map((t) => ({
-      ...about(t),
-      allowed: siteAllowed(t.url ?? "", policy.sites),
-      active: t.active,
-      loading: t.status === "loading",
-    })),
+    tabs: list.map((t) => siteAllowed(t.url ?? "", policy.sites, policy.all_sites, policy.blocked_sites)
+      ? { ...about(t), allowed: true, active: t.active, loading: t.status === "loading" }
+      : { tab: t.id, site: hostOfUrl(t.url ?? ""), allowed: false }),
   };
 };
 

@@ -11,6 +11,13 @@
 use url::Url;
 
 pub fn allowed(page: &str, sites: &[String]) -> bool {
+    permitted(page, sites, false, &[])
+}
+
+/// Blocked entries take precedence, including over an explicit allow.
+/// A blocked bare host covers HTTP as well as HTTPS and every port, so
+/// switching to all sites cannot bypass a block with another origin.
+pub fn permitted(page: &str, sites: &[String], all_sites: bool, blocked: &[String]) -> bool {
     let Ok(page) = Url::parse(page) else {
         return false;
     };
@@ -20,7 +27,24 @@ pub fn allowed(page: &str, sites: &[String]) -> bool {
     if !page.username().is_empty() || page.password().is_some() {
         return false;
     }
-    sites.iter().any(|site| matches(&page, site))
+    !blocked.iter().any(|site| blocked_match(&page, site))
+        && (all_sites || sites.iter().any(|site| matches(&page, site)))
+}
+
+fn blocked_match(page: &Url, site: &str) -> bool {
+    let entry = site.trim().to_lowercase();
+    if entry.contains("://") {
+        return matches(page, &entry);
+    }
+    let Some(host) = host_of(&entry) else {
+        return false;
+    };
+    page.host_str().is_some_and(|page_host| {
+        page_host.trim_end_matches('.') == host
+            || page_host
+                .trim_end_matches('.')
+                .ends_with(&format!(".{host}"))
+    })
 }
 
 fn matches(page: &Url, site: &str) -> bool {
@@ -45,7 +69,10 @@ fn matches(page: &Url, site: &str) -> bool {
     };
     page.scheme() == "https"
         && page.port().is_none()
-        && (page_host == host || page_host.ends_with(&format!(".{host}")))
+        && (page_host.trim_end_matches('.') == host
+            || page_host
+                .trim_end_matches('.')
+                .ends_with(&format!(".{host}")))
 }
 
 /// The host an entry names, as a URL gives it (punycode, lowercase), or
@@ -60,6 +87,7 @@ pub fn host_of(entry: &str) -> Option<String> {
     let host = Url::parse(&format!("https://{entry}"))
         .ok()?
         .host_str()?
+        .trim_end_matches('.')
         .to_string();
     (host.contains('.') || host == "localhost").then_some(host)
 }
@@ -145,6 +173,73 @@ mod tests {
             "https://xn--mnchen-3ya.de/",
             &sites(&["münchen.de"])
         ));
+    }
+
+    #[test]
+    fn all_sites_is_explicit_and_blocks_win_in_both_modes() {
+        assert!(!permitted("https://example.com/", &[], false, &[]));
+        assert!(permitted("http://unlisted.example:8080/", &[], true, &[]));
+        for all in [false, true] {
+            for url in [
+                "https://example.com/",
+                "https://sub.example.com/",
+                "http://example.com:8080/",
+                "https://example.com./",
+            ] {
+                assert!(!permitted(
+                    url,
+                    &sites(&["example.com", "http://example.com:8080"]),
+                    all,
+                    &sites(&["example.com"])
+                ));
+            }
+        }
+        assert!(permitted(
+            "https://notexample.com/",
+            &[],
+            true,
+            &sites(&["example.com"])
+        ));
+        assert!(permitted(
+            "https://example.com.evil.test/",
+            &[],
+            true,
+            &sites(&["example.com"])
+        ));
+        assert!(!permitted(
+            "http://localhost:3000/",
+            &[],
+            true,
+            &sites(&["http://localhost:3000"])
+        ));
+        assert!(permitted(
+            "http://localhost:3001/",
+            &[],
+            true,
+            &sites(&["http://localhost:3000"])
+        ));
+        assert!(permitted(
+            "https://localhost:3000/",
+            &[],
+            true,
+            &sites(&["http://localhost:3000"])
+        ));
+    }
+
+    #[test]
+    fn all_sites_never_grants_non_web_or_credential_urls() {
+        for url in [
+            "file:///etc/passwd",
+            "chrome://settings",
+            "chrome-extension://abc/",
+            "data:text/html,secret",
+            "javascript:alert(1)",
+            "ftp://example.com/",
+            "https://user:password@example.com/",
+            "not a url",
+        ] {
+            assert!(!permitted(url, &[], true, &[]), "{url}");
+        }
     }
 
     #[test]

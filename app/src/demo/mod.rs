@@ -428,8 +428,8 @@ fn sample() -> State {
         // a host or touches the person's actual browser profile.
         "browser": if std::env::var_os("CWW_DEMO_BROWSER").is_some() {
             json!({"enabled":true,"changes":false,"stopped":false,
-                "sites":["github.com","example.com"],"bots":[],
-                "extension":{"browser":"Chromium","version":"0.1.0","stopped":false}})
+                "ask_before_actions":true,"sites":["github.com","example.com"],"all_sites":false,"blocked_sites":[],"bots":[],
+                "extension":{"browser":"Chromium","version":"0.1.2","site_policy_version":2,"stopped":false}})
         } else { Value::Null },
         "paused": false,
         "roots": [
@@ -764,6 +764,62 @@ impl Demo {
             }
             "browser" => {
                 json!({"ok":true,"browser":self.state.lock().expect("demo lock").status["browser"]})
+            }
+            "browser_ask_before_actions"
+            | "browser_all_sites"
+            | "browser_blocked_site"
+            | "browser_site"
+            | "browser_stopped"
+            | "browser_changes" => {
+                let mut result = Value::Null;
+                self.change(|s| {
+                    let browser = &mut s.status["browser"];
+                    let mut config = cww::config::Config::default();
+                    config.browser.sites =
+                        serde_json::from_value(browser["sites"].clone()).unwrap_or_default();
+                    config.browser.blocked_sites =
+                        serde_json::from_value(browser["blocked_sites"].clone())
+                            .unwrap_or_default();
+                    let edited = match cmd {
+                        "browser_site" if request["allowed"] == true => {
+                            cww::browsing::settings::allow_site(
+                                &mut config,
+                                request["site"].as_str().unwrap_or_default(),
+                            )
+                        }
+                        "browser_site" => cww::browsing::settings::disallow_site(
+                            &mut config,
+                            request["site"].as_str().unwrap_or_default(),
+                        ),
+                        "browser_blocked_site" => cww::browsing::settings::block_site(
+                            &mut config,
+                            request["site"].as_str().unwrap_or_default(),
+                            request["blocked"] == true,
+                        ),
+                        _ => Ok(String::new()),
+                    };
+                    match edited {
+                        Ok(_) => {
+                            if cmd == "browser_ask_before_actions" {
+                                browser["ask_before_actions"] = json!(request["ask"] != false);
+                            }
+                            browser["sites"] = json!(config.browser.sites);
+                            browser["blocked_sites"] = json!(config.browser.blocked_sites);
+                            for (command, key) in [
+                                ("browser_all_sites", "all_sites"),
+                                ("browser_stopped", "stopped"),
+                                ("browser_changes", "changes"),
+                            ] {
+                                if cmd == command {
+                                    browser[key] = json!(request[key] == true);
+                                }
+                            }
+                            result = json!({"ok":true,"browser":browser});
+                        }
+                        Err(error) => result = json!({"ok":false,"error":error.to_string()}),
+                    }
+                });
+                result
             }
             "deny" => self.state.lock().expect("demo lock").deny.clone(),
             "deny_extra" => {
