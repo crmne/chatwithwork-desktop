@@ -15,6 +15,7 @@ For an existing installation, replace the files in its existing folder and press
 ## Fixed
 
 - **Cookie banners and other custom buttons can be clicked.** Buttons built with web components no longer get mistaken for covered controls. Real overlays still block clicks. By @crmne; thanks @crmne for the TK example.
+- **Styled options work through their own labels.** Radio buttons and checkboxes can use a visible label when the input itself is hidden. Previews leave the option unchanged; actual clicks check that the label still belongs to the requested control and refuse other controls or overlays inside it. By @crmne; thanks @crmne for reporting the blocked radio option.
 - **Links use the visible part of the control.** Clicks now reuse Playwright's hit checks from Playwriter, handling clipped links, slotted labels and nested components. Previews detect blocking overlays, and clicks wait briefly for moving or disabled controls without forcing through a real obstruction. By @crmne.
 
 ## Known limitations
