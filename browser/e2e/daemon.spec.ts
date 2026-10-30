@@ -3,7 +3,7 @@
 // reaches the extension.
 import { expect, test } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTENSION_ID, cwwBinary, launchBrowser, serve } from "./harness.js";
@@ -24,11 +24,7 @@ async function until<T>(check: () => T | undefined, what: string): Promise<T> {
   throw new Error(`never: ${what}`);
 }
 
-test.beforeEach(async () => {
-  home = mkdtempSync(join(tmpdir(), "cww-e2e-"));
-  mkdirSync(join(home, "config"), { recursive: true });
-  // Only this throwaway daemon. Never register a host in the user's profile.
-  writeFileSync(join(home, "config", "config.toml"), "[browser]\nenabled = true\n");
+async function startDaemon(): Promise<void> {
   daemon = spawn(cwwBinary(), ["daemon", "run"], {
     env: { ...process.env, CWW_HOME: home, RUST_LOG: "warn" },
     stdio: "ignore",
@@ -41,6 +37,21 @@ test.beforeEach(async () => {
       return undefined;
     }
   }, "the daemon answers");
+}
+
+async function stopDaemon(): Promise<void> {
+  if (daemon.exitCode !== null || daemon.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
+  cww("daemon", "stop");
+  await exited;
+}
+
+test.beforeEach(async () => {
+  home = mkdtempSync(join(tmpdir(), "cww-e2e-"));
+  mkdirSync(join(home, "config"), { recursive: true });
+  // Only this throwaway daemon. Never register a host in the user's profile.
+  writeFileSync(join(home, "config", "config.toml"), "[browser]\nenabled = true\n");
+  await startDaemon();
 });
 
 // Async so a browser call can load the HTTP fixture while the CLI waits.
@@ -120,8 +131,40 @@ test("local CLI reads and approved actions use the real confined daemon and exte
 });
 
 test.afterEach(async () => {
-  daemon?.kill();
+  await stopDaemon();
   rmSync(home, { recursive: true, force: true });
+});
+
+test("daemon-only restart keeps browser identity and the extension's Stop state", async () => {
+  const context = await launchBrowser(home);
+  try {
+    const first = await until(() => {
+      const status = JSON.parse(cww("browser", "status", "--json"));
+      return status.extension?.version ? status : undefined;
+    }, "initial browser identity");
+    const nativeHost = readFileSync(join(home, "native-host-starts"), "utf8");
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
+    await popup.click("#stop");
+    await until(() => JSON.parse(cww("browser", "status", "--json")).extension?.stopped || undefined, "extension is stopped");
+
+    await stopDaemon();
+    await startDaemon();
+    const restored = await until(() => {
+      const status = JSON.parse(cww("browser", "status", "--json"));
+      return status.extension?.version ? status : undefined;
+    }, "browser identity after daemon restart");
+    expect(restored.extension.browser).toBe(first.extension.browser);
+    expect(restored.extension.version).toBe(first.extension.version);
+    expect(restored.extension.stopped).toBe(true);
+    expect(readFileSync(join(home, "native-host-starts"), "utf8")).toBe(nativeHost);
+    expect((await browserCall("browser_tabs")).structuredContent.error.code).toBe("browser_stopped");
+    await popup.click("#resume");
+    await until(() => JSON.parse(cww("browser", "status", "--json")).extension?.stopped === false || undefined, "extension resumes");
+    expect((await browserCall("browser_tabs")).exitCode).toBe(0);
+  } finally {
+    await context.close();
+  }
 });
 
 test("the daemon serves the extension, and its kill switch reaches it", async () => {

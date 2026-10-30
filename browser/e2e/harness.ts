@@ -184,7 +184,7 @@ export async function launchBrowser(home: string): Promise<BrowserContext> {
   const hosts = join(profile, "NativeMessagingHosts");
   mkdirSync(hosts, { recursive: true });
   const wrapper = join(home, "host.sh");
-  writeFileSync(wrapper, `#!/bin/sh\nCWW_HOME='${home}' exec '${cwwBinary()}' "$@"\n`);
+  writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$$" >> '${join(home, "native-host-starts")}'\nCWW_HOME='${home}' exec '${cwwBinary()}' "$@"\n`);
   chmodSync(wrapper, 0o755);
   writeFileSync(
     join(hosts, "com.chatwithwork.desktop.json"),

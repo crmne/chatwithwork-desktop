@@ -63,13 +63,17 @@ async function connect(): Promise<void> {
     void refreshBadge();
     scheduleReconnect();
   });
+  announceHello();
+  void refreshBadge();
+}
+
+function announceHello(): void {
   post({
     event: "hello",
     version: chrome.runtime.getManifest().version,
     browser: navigator.userAgent,
     stopped: state.stopped,
   });
-  void refreshBadge();
 }
 
 function scheduleReconnect(): void {
@@ -89,6 +93,9 @@ async function onMessage(message: any): Promise<void> {
   if (message.event === "daemon") {
     state.daemon = (["connected", "not_running", "refused"].includes(message.state) ? message.state : "unknown") as DaemonState;
     state.error = typeof message.message === "string" ? message.message.slice(0, 300) : "";
+    // The native host survives a daemon restart. The new daemon needs our
+    // identity and current Stop state even though this native port stayed open.
+    if (state.daemon === "connected") announceHello();
     void refreshBadge();
     return;
   }

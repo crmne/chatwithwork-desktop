@@ -75,6 +75,10 @@ organization runtime refuses these requests. Pages remain untrusted data,
 and the coding agent must apply its own user-approval and data-sharing rules.
 No local stdio MCP server is installed by these commands.
 
+When Desktop restarts, the extension reconnects through the same native host
+and sends its browser/version details and current Stop state again. Restarting
+the daemon does not resume a browser stopped from the extension.
+
 ## Safety
 
 All of it holds on the computer, whatever the server sends. The extension enforces every rule below; the daemon enforces again the ones it can check from its side (the kill switch, the sites on every answer's address and in the tab list, bots, and the budgets), so a fault in one doesn't open those:
