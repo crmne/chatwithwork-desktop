@@ -52,6 +52,14 @@ pub fn view(status: Option<&Status>) -> Value {
     })
 }
 
+/// The legacy remote folder picker gets only the chosen label. Validation
+/// errors can include absolute paths and private rules; those belong to the
+/// app-owned Shared folders page, not the website's JavaScript.
+pub fn added_folder<E>(answer: Result<Value, E>) -> Result<Value, String> {
+    answer.map(|answer| json!({ "folder": answer["root"]["label"] }))
+        .map_err(|_| "This folder could not be shared. Try adding it from Settings, This computer, Shared folders to see why.".into())
+}
+
 fn folder(root: &RootStatus) -> Value {
     json!({
         "id": root.id,
@@ -316,6 +324,43 @@ mod tests {
 
     fn change(json: Value) -> Change {
         serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn folder_picker_failures_do_not_reveal_the_chosen_path_or_private_rule() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = cww::paths::Paths::under(&temp.path().join("private-app-state"));
+        let chosen = temp.path().join("private-client-folder");
+        std::fs::create_dir(&chosen).unwrap();
+        let mut config = cww::config::Config::default();
+        config.deny.extra.push("private-client-*".into());
+        let failure = cww::roots::add_root(
+            &mut config,
+            &paths,
+            cww::roots::NewRoot {
+                path: &chosen,
+                label: None,
+                i_know: false,
+                follow_symlinks: false,
+                writable: false,
+            },
+        )
+        .unwrap_err();
+        let detail = failure.to_string();
+        assert!(detail.contains("private-client-*"));
+        assert!(detail.contains("private-app-state"));
+        let remote = added_folder(Err::<Value, _>(failure)).unwrap_err();
+        for private in [
+            chosen.to_string_lossy().as_ref(),
+            "private-client-*",
+            "private-app-state",
+        ] {
+            assert!(!remote.contains(private), "{remote}");
+        }
+        assert_eq!(
+            added_folder::<()>(Ok(json!({"root":{"label":"Work","path":chosen}}))).unwrap(),
+            json!({"folder":"Work"})
+        );
     }
 
     #[test]

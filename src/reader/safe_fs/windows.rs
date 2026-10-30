@@ -287,10 +287,10 @@ impl RootHandle {
         follow: bool,
     ) -> Result<(File, BY_HANDLE_FILE_INFORMATION), ToolError> {
         let logical = self.abs_path(rel);
-        if let Some(pattern) = policy.deny.denied_by(&logical) {
-            return Err(ToolError::denied(format!(
-                "this path is on the deny list ({pattern})"
-            )));
+        if policy.deny.denied_by(&logical).is_some() {
+            return Err(ToolError::denied(
+                "This path is excluded by this computer’s sharing rules.",
+            ));
         }
 
         let parts = rel.components();
@@ -397,10 +397,10 @@ impl RootHandle {
                 "this path resolves outside the root",
             ));
         }
-        if let Some(pattern) = policy.deny.denied_by(&real) {
-            return Err(ToolError::denied(format!(
-                "this path is on the deny list ({pattern})"
-            )));
+        if policy.deny.denied_by(&real).is_some() {
+            return Err(ToolError::denied(
+                "This path is excluded by this computer’s sharing rules.",
+            ));
         }
         Ok((file, info))
     }

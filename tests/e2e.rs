@@ -5746,3 +5746,83 @@ async fn custom_exclusions_change_live_without_relaxing_builtin_protection() {
         .unwrap()
         .unwrap();
 }
+
+/// Refusals must not turn the local exclusion list or protected app paths
+/// into remote tool output, even through symlink or recursive-change checks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remote_file_refusals_keep_local_patterns_and_app_paths_private() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.index.enabled = false;
+    config.deny.extra = vec!["no*.md".into()];
+    config.roots[0].follow_symlinks = true;
+    let mut parent = config.roots[0].clone();
+    parent.id = "workspace".into();
+    parent.path = fx.base.clone();
+    config.roots.push(parent);
+    config.save(&fx.paths).unwrap();
+    std::fs::write(
+        fx.base.join("work/docs/plans/notes-private.md"),
+        "private fixture",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("notes.md", fx.base.join("work/docs/alias.txt")).unwrap();
+    let deny = cww::policy::DenyList::from_config(&config.deny, &fx.paths).unwrap();
+    let own_rule = deny.denied_by(&fx.paths.config_file()).unwrap().to_owned();
+    assert!(
+        own_rule.starts_with('/'),
+        "the protected rule names an absolute app directory"
+    );
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut session = connect(&mut server).await;
+    let calls = [
+        ("read", json!({"path":"docs:notes.md"})),
+        (
+            "create",
+            json!({"path":"docs:notes-copy.md","content":"new","dry_run":true}),
+        ),
+        ("delete", json!({"path":"docs:plans","dry_run":true})),
+        ("read", json!({"path":"workspace:cww/config/config.toml"})),
+        (
+            "create",
+            json!({"path":"workspace:cww/config/new.md","content":"new","dry_run":true}),
+        ),
+    ];
+    for (tool, arguments) in calls {
+        let result = session.call(tool, arguments).await;
+        assert_eq!(error_code(&result), "denied", "{tool}: {result}");
+        let wire = result.to_string();
+        for private in [
+            "no*.md".to_owned(),
+            own_rule.clone(),
+            fx.base.to_string_lossy().into_owned(),
+        ] {
+            let encoded = serde_json::to_string(&private).unwrap();
+            assert!(
+                !wire.contains(&encoded[1..encoded.len() - 1]),
+                "{tool} leaked a local rule/path: {result}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    {
+        let result = session.call("read", json!({"path":"docs:alias.txt"})).await;
+        assert_eq!(error_code(&result), "denied");
+        assert!(
+            !result.to_string().contains("no*.md"),
+            "real-path check leaked its rule: {result}"
+        );
+    }
+    assert!(fx.base.join("work/docs/plans/notes-private.md").exists());
+    assert!(!fx.paths.config_dir.join("new.md").exists());
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

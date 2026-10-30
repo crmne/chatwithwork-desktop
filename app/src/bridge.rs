@@ -150,11 +150,7 @@ pub async fn computer_add_folder(
         let Some(path) = pick_folder(&app, parent.as_ref()) else {
             return Ok(json!({ "folder": null }));
         };
-        let answer = desktop
-            .client
-            .add_root(&path, None)
-            .map_err(|e| e.to_string())?;
-        Ok(json!({ "folder": answer["root"]["label"] }))
+        crate::computer::added_folder(desktop.client.add_root(&path, None))
     })
     .await
     .map_err(|e| e.to_string())?

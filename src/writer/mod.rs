@@ -482,16 +482,15 @@ impl Writer {
 
     /// Both deny lists, for a path a change touches.
     fn check_denied(view: &ChangeView, abs: &Path) -> Result<(), ToolError> {
-        if let Some(pattern) = view.deny.denied_by(abs) {
-            return Err(ToolError::denied(format!(
-                "This path is on the deny list ({pattern}), so it can't be read or changed."
-            )));
+        if view.deny.denied_by(abs).is_some() {
+            return Err(ToolError::denied(
+                "This path is excluded by this computer’s sharing rules, so it cannot be read or changed.",
+            ));
         }
-        if let Some(pattern) = view.write_deny.denied_by(abs) {
-            return Err(ToolError::denied(format!(
-                "cww never changes this path ({pattern}): a change there could make programs \
-                 run on the computer."
-            )));
+        if view.write_deny.denied_by(abs).is_some() {
+            return Err(ToolError::denied(
+                "This path is protected against changes that could make programs run on the computer.",
+            ));
         }
         Ok(())
     }
@@ -1137,17 +1136,15 @@ impl Writer {
 
     /// Both deny lists, for something inside a folder moved or deleted.
     fn check_contents(view: &ChangeView, path: &Path) -> Result<(), ToolError> {
-        if let Some(pattern) = view.deny.denied_by(path) {
-            return Err(ToolError::denied(format!(
-                "The folder holds something on the deny list ({pattern}), so it can't be moved \
-                 or deleted."
-            )));
+        if view.deny.denied_by(path).is_some() {
+            return Err(ToolError::denied(
+                "The folder contains an excluded path, so it cannot be moved or deleted.",
+            ));
         }
-        if let Some(pattern) = view.write_deny.denied_by(path) {
-            return Err(ToolError::denied(format!(
-                "The folder holds something cww never changes ({pattern}), or would put \
-                 something there, so it can't be moved or deleted."
-            )));
+        if view.write_deny.denied_by(path).is_some() {
+            return Err(ToolError::denied(
+                "The folder contains a protected path, or would put something there, so it cannot be moved or deleted.",
+            ));
         }
         Ok(())
     }
