@@ -52,6 +52,11 @@ its full 64-character identity stays within legacy MSI path limits for ordinary
 and long user profiles. The daemon uses the Windows Known Folder API, not an
 environment variable or a search; the app's custom `INSTALLFOLDER` is independent.
 Portable ZIPs keep the sibling layout and should be extracted to a short path.
+The MSI build also flattens its temporary cabinet inputs into short file IDs:
+WiX 5's native cabinet builder cannot read long source paths, even when the
+installed paths fit. Only build-time copies use those IDs. The generated WiX
+directories and file names retain every runtime file, its full manifest identity
+and its original bytes; both source and destination path limits are checked.
 
 The macOS CLI links to the bundle's `cww`; an external duplicate would resolve
 the wrong helper. `bundle.sh` replaces upstream Node's entitlements with only

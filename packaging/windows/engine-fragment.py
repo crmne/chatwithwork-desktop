@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 from pathlib import Path
+import shutil
 import sys
 import uuid
 from xml.etree import ElementTree as ET
@@ -23,7 +24,7 @@ def identifier(prefix, path):
     return prefix + hashlib.sha256(path.encode()).hexdigest()[:24]
 
 
-def fragment(source, output):
+def fragment(source, output, cabinet_source):
     package.validate(source)
     # MSI still needs legacy path lengths even if Node supports long paths.
     # Keep the complete dependency tree and full digest; fail before release
@@ -31,6 +32,14 @@ def fragment(source, output):
     prefix = "C:/Users/Firstname Lastname Long Employee Name/AppData/Local/Programs/CwwBE/"
     if any(len(prefix + path.relative_to(source).as_posix()) > 259 for path in source.rglob("*") if path.is_file()):
         raise ValueError("Browser engine exceeds MSI path limits for a long user profile")
+    # WiX 5's native cabinet builder also has MAX_PATH limits on *sources*.
+    # A temp directory plus the manifest digest and npm paths can exceed those
+    # even when every installed path fits. Flatten only the cabinet's inputs;
+    # Directory/File Name below retain the complete immutable installation.
+    cabinet_source = cabinet_source.resolve()
+    if len(str(cabinet_source / ("BE_F" + "0" * 24))) > 259:
+        raise ValueError("MSI cabinet source directory is too long")
+    cabinet_source.mkdir()
     root = ET.Element(f"{{{NS}}}Wix")
     body = element(root, "Fragment")
     # A short sibling avoids MAX_PATH with unchanged npm paths + full SHA256.
@@ -43,11 +52,14 @@ def fragment(source, output):
         if path.is_dir():
             directories[relative] = element(parent, "Directory", Id=identifier("BE_D", relative), Name=path.name)
         elif path.is_file():
+            file_id = identifier("BE_F", relative)
+            cabinet_file = cabinet_source / file_id
+            shutil.copyfile(path, cabinet_file)
             component_id = identifier("BE_C", relative)
             component = element(parent, "Component", Id=component_id,
                                 Guid=str(uuid.uuid5(uuid.NAMESPACE_URL, "https://chatwithwork.com/desktop/browser-engine/" + relative)))
-            element(component, "File", Id=identifier("BE_F", relative), Name=path.name,
-                    Source=str(path.resolve()), KeyPath="no")
+            element(component, "File", Id=file_id, Name=path.name,
+                    Source=str(cabinet_file), KeyPath="no")
             element(component, "RegistryValue", Root="HKCU", Key="Software\\Chat with Work\\Desktop\\BrowserEngine",
                     Name=component_id, Type="integer", Value="1", KeyPath="yes")
             element(component, "RemoveFolder", Id=identifier("BE_R", relative), On="uninstall")
@@ -57,4 +69,4 @@ def fragment(source, output):
 
 
 if __name__ == "__main__":
-    fragment(Path(sys.argv[1]), Path(sys.argv[2]))
+    fragment(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))

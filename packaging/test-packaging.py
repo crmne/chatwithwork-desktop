@@ -279,10 +279,15 @@ cp "$TEST_RELEASE/$name" "$output"
         from xml.etree import ElementTree
         first, second = self.work / "first.wxs", self.work / "second.wxs"
         for output in (first, second):
-            result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(output))
+            result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(output), str(output.with_suffix(".files")))
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(first.read_bytes(), second.read_bytes())
         document = ElementTree.parse(first)
+        again = ElementTree.parse(second)
+        # Staging paths differ; component identities and installed names do not.
+        for tree in (document, again):
+            for item in tree.iter("{http://wixtoolset.org/schemas/v4/wxs}File"):
+                item.set("Source", str(first.with_suffix(".files") / Path(item.get("Source")).name))
+        self.assertEqual(ElementTree.tostring(document.getroot()), ElementTree.tostring(again.getroot()))
         ns = {"w": "http://wixtoolset.org/schemas/v4/wxs"}
         directory = document.find(".//w:DirectoryRef", ns)
         self.assertEqual(directory.get("Id"), "ProgramsFolder")
@@ -291,8 +296,23 @@ cp "$TEST_RELEASE/$name" "$output"
         self.assertNotIn("INSTALLFOLDER", first.read_text())
         components = document.findall(".//w:Component", ns)
         expected = set(engine_package.inventory(self.engine))
-        actual = {Path(component.find("w:File", ns).get("Source")).relative_to(self.engine).as_posix() for component in components}
-        self.assertEqual(actual, expected)
+        reconstructed = self.work / "reconstructed"
+        def install_files(node, destination):
+            if node.tag == f"{{{ns['w']}}}Directory":
+                destination /= node.get("Name")
+            elif node.tag == f"{{{ns['w']}}}File":
+                destination.mkdir(parents=True, exist_ok=True)
+                source = Path(node.get("Source"))
+                self.assertEqual(source.parent, first.with_suffix(".files"))
+                self.assertLessEqual(len(str(source)), 259)
+                shutil.copyfile(source, destination / node.get("Name"))
+            for child in node:
+                install_files(child, destination)
+        install_files(directory, reconstructed)
+        installed = reconstructed / "CwwBE"
+        self.assertEqual(set(engine_package.inventory(installed)), expected)
+        self.assertEqual(engine_package.inventory(installed), engine_package.inventory(self.engine))
+        engine_package.validate(installed)
         for component in components:
             key = component.find("w:RegistryValue", ns)
             self.assertEqual((key.get("Root"), key.get("KeyPath")), ("HKCU", "yes"))
@@ -301,9 +321,35 @@ cp "$TEST_RELEASE/$name" "$output"
         payload = engine_package.resolve(self.engine)
         (payload / ("x" * 140)).write_text("a future long dependency")
         engine_package.refresh(self.engine)
-        result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(self.work / "engine.wxs"))
+        result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(self.work / "engine.wxs"), str(self.work / "engine.files"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MSI path limits", result.stderr)
+
+    def test_windows_cabinet_staging_flattens_long_build_paths_without_changing_sources(self):
+        from xml.etree import ElementTree
+        source = self.work / ("a" * 80) / ("b" * 80) / "browser-engine"
+        shutil.copytree(self.engine, source)
+        before = engine_package.inventory(source)
+        self.assertTrue(any(len(str(path)) > 259 for path in source.rglob("*") if path.is_file()))
+        output, cabinet = self.work / "engine.wxs", self.work / "flat"
+        result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(source), str(output), str(cabinet))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(engine_package.inventory(source), before)
+        files = ElementTree.parse(output).findall(".//{http://wixtoolset.org/schemas/v4/wxs}File")
+        self.assertEqual(len(files), len(before))
+        for item in files:
+            staged = Path(item.get("Source"))
+            self.assertEqual(staged.parent, cabinet)
+            self.assertLessEqual(len(str(staged)), 259)
+            self.assertEqual(staged.name, item.get("Id"))
+        self.assertCountEqual((hashlib.sha256(path.read_bytes()).hexdigest() for path in cabinet.iterdir()), before.values())
+
+    def test_windows_cabinet_staging_refuses_overlong_temporary_directory(self):
+        cabinet = self.work / ("x" * 200)
+        result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(self.work / "engine.wxs"), str(cabinet))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cabinet source directory is too long", result.stderr)
+        self.assertFalse(cabinet.exists())
 
     def test_root_installer_does_not_register_a_root_daemon(self):
         result, _, _ = self.installer(uid="0")

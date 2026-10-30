@@ -29,9 +29,9 @@ try {
   foreach ($name in "cww-app.exe", "cww-scan-helper.exe", "TWAINDSM.dll") {
     Copy-Item (Join-Path (Split-Path -Parent $Binary) $name) (Join-Path $source $name)
   }
-  Copy-Item -Recurse (Join-Path (Split-Path -Parent $Binary) "browser-engine") (Join-Path $source "browser-engine")
+  $engine = Join-Path (Split-Path -Parent $Binary) "browser-engine"
   $engineFragment = Join-Path $source "browser-engine.wxs"
-  & python (Join-Path $PSScriptRoot "engine-fragment.py") (Join-Path $source "browser-engine") $engineFragment
+  & python (Join-Path $PSScriptRoot "engine-fragment.py") $engine $engineFragment (Join-Path $source "engine-files")
   if ($LASTEXITCODE -ne 0) { throw "Invalid browser engine package" }
   foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt", "cww-installer.txt") {
     Copy-Item (Join-Path $PSScriptRoot $notice) $source
