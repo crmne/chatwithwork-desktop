@@ -399,7 +399,7 @@ impl BrowserTools {
             let mut preview = args.clone();
             preview["dry_run"] = Value::Bool(true);
             if name == "browser_download" {
-                self.download(preview).await?;
+                self.download(preview, None).await?;
             } else {
                 self.bridge
                     .call(name.trim_start_matches("browser_"), preview)
@@ -409,7 +409,7 @@ impl BrowserTools {
             self.check_automatic(caller)?;
         }
         if name == "browser_download" {
-            return self.download(args).await;
+            return self.download(args, automatic.then_some(caller)).await;
         }
         if is_change && !dry_run {
             // Actions count against this computer's change budgets.
@@ -473,7 +473,11 @@ impl BrowserTools {
 
     /// Fetch a file in the browser and save it through the writer, with
     /// every rule a new file follows.
-    async fn download(&self, mut args: Value) -> Result<Answer, ToolError> {
+    async fn download(
+        &self,
+        mut args: Value,
+        automatic: Option<&Caller>,
+    ) -> Result<Answer, ToolError> {
         let path = args
             .as_object_mut()
             .and_then(|object| object.remove("path"))
@@ -493,7 +497,13 @@ impl BrowserTools {
             tokio::task::spawn_blocking(move || checker.save_file(&check_path, &[], true))
                 .await
                 .map_err(|_| ToolError::internal("the writer crashed on this request"))??;
+        if let Some(caller) = automatic {
+            self.check_automatic(caller)?;
+        }
         let fetched = self.bridge.call("fetch", args).await?;
+        if let Some(caller) = automatic {
+            self.check_automatic(caller)?;
+        }
         // The person may have stopped the browser, or taken the site off
         // the list, while the file was fetched: it's saved only under the
         // rules as they are now.
@@ -952,6 +962,73 @@ mod bridge_tests {
             .err()
             .unwrap();
         assert_eq!(error.code, ErrorCode::NeedsApproval);
+    }
+
+    #[tokio::test]
+    async fn restoring_prompts_during_download_does_not_save_the_file() {
+        use crate::{
+            config::{Config, Root},
+            paths::Paths,
+            reader::Reader,
+            status::Changes,
+            trash::Trash,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("downloads");
+        std::fs::create_dir(&folder).unwrap();
+        let paths = Paths::under(&temp.path().join("cww"));
+        let mut config = Config {
+            roots: vec![Root {
+                id: "downloads".into(),
+                label: "Downloads".into(),
+                path: folder.clone(),
+                writable: true,
+                commands: false,
+                network: false,
+                follow_symlinks: false,
+                bots: vec![],
+                read_budget: None,
+            }],
+            ..Default::default()
+        };
+        config.index.enabled = false;
+        let reader = Arc::new(Reader::new(&config, &paths, Changes::default()).unwrap());
+        let limiter = Arc::new(Limiter::new(config.limits.clone()));
+        let writer = Arc::new(Writer::new(
+            reader,
+            Arc::clone(&limiter),
+            Trash::new(paths.home_trash.clone()),
+        ));
+        let current = Arc::new(std::sync::Mutex::new(None::<Arc<Bridge>>));
+        let revoke = Arc::clone(&current);
+        let (bridge, _extension) = attached(&["github.com"], move |method, params| {
+            assert_eq!(method, "fetch");
+            if params["dry_run"] != true {
+                let bridge = revoke.lock().unwrap().as_ref().unwrap().clone();
+                let mut policy = bridge.policy();
+                policy.auto_approve = false;
+                bridge.configure(policy, vec![origin(EXTENSION_ID)], vec![]);
+            }
+            json!({"url":"https://github.com/report.txt", "data":"b2s=", "mime_type":"text/plain"})
+        })
+        .await;
+        *current.lock().unwrap() = Some(Arc::clone(&bridge));
+        let mut policy = bridge.policy();
+        policy.auto_approve = true;
+        bridge.configure(policy, vec![origin(EXTENSION_ID)], vec![]);
+        let tools = BrowserTools::new(bridge, Some(writer), limiter, true);
+        let error = tools
+            .call(
+                "browser_download",
+                json!({"url":"https://github.com/report.txt", "path":"downloads:report.txt"}),
+                &Caller::BrowserAutomatic { bot: None },
+                None,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::NeedsApproval);
+        assert!(!folder.join("report.txt").exists());
     }
 
     #[tokio::test]
