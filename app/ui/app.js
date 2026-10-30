@@ -14,7 +14,7 @@ import general from "./pages/general.js";
 import botSharing from "./pages/bot_sharing.js";
 
 const PAGES = { welcome, folders, browser, privacy, activity, account, notifications, general, "bot-sharing": botSharing };
-const NAV = ["folders", "browser", "general", "notifications", "account", "activity"];
+const NAV = ["general", "folders", "browser", "notifications", "account", "activity"];
 
 // The app's commands. A refusal comes back as { code, message }.
 const internals = window.__TAURI_INTERNALS__;
@@ -246,7 +246,7 @@ async function start() {
     return;
   }
   const wanted = location.hash.slice(1);
-  app.go(PAGES[wanted] ? wanted : app.info.onboarded ? "folders" : "welcome");
+  app.go(PAGES[wanted] ? wanted : app.info.onboarded ? "general" : "welcome");
 }
 
 start().catch((error) => {

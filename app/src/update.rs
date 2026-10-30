@@ -20,7 +20,6 @@
 //! restarts, so the new version restarts it (`cww daemon install`) when its
 //! version differs. The Windows installer does that itself.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -274,7 +273,6 @@ pub struct Updates {
     checked_at: Mutex<Option<jiff::Timestamp>>,
     /// The message of an update that was rolled back, until it's seen.
     problem: Mutex<Option<String>>,
-    automatic: AtomicBool,
     /// This launch is the previous version, put back after an update
     /// didn't start.
     rolled_back: bool,
@@ -282,13 +280,12 @@ pub struct Updates {
 }
 
 impl Updates {
-    pub fn new(automatic: bool, problem: Option<String>) -> Self {
+    pub fn new(problem: Option<String>) -> Self {
         Self {
             phase: Mutex::new(Phase::Idle),
             checked_at: Mutex::new(None),
             rolled_back: problem.is_some(),
             problem: Mutex::new(problem),
-            automatic: AtomicBool::new(automatic),
             wake: Mutex::new(None),
         }
     }
@@ -297,7 +294,7 @@ impl Updates {
     pub fn view(&self) -> Value {
         let mut view = self.phase.lock().expect("update lock").view();
         view["version"] = json!(VERSION);
-        view["automatic"] = json!(self.automatic.load(Ordering::SeqCst));
+        view["automatic"] = json!(true);
         view["checked_at"] = json!(
             self.checked_at
                 .lock()
@@ -314,13 +311,6 @@ impl Updates {
         match &*self.phase.lock().expect("update lock") {
             Phase::Ready { release, .. } => Some(release.version.clone()),
             _ => None,
-        }
-    }
-
-    pub fn set_automatic(&self, on: bool) {
-        self.automatic.store(on, Ordering::SeqCst);
-        if on {
-            self.check_now();
         }
     }
 
@@ -426,7 +416,7 @@ impl Updates {
         }
     }
 
-    /// Checks at start and once a day while checks are on, and whenever
+    /// Checks at start and once a day, and whenever
     /// asked. `tell` runs on every change.
     pub fn spawn(self: &Arc<Self>, tell: impl Fn() + Send + 'static) {
         let (wake, woken): (Sender<()>, Receiver<()>) = channel();
@@ -442,7 +432,7 @@ impl Updates {
                 // would download again at once; it waits a day, unless asked.
                 let mut rolled_back = updates.rolled_back;
                 loop {
-                    if asked || (updates.automatic.load(Ordering::SeqCst) && !rolled_back) {
+                    if asked || !rolled_back {
                         updates.run_once(&updater, &tell);
                     }
                     rolled_back = false;
@@ -570,7 +560,7 @@ mod tests {
 
     #[test]
     fn the_view_says_where_updating_stands() {
-        let updates = Updates::new(true, Some("restored".into()));
+        let updates = Updates::new(Some("restored".into()));
         let view = updates.view();
         assert_eq!(view["phase"], "idle");
         assert_eq!(view["version"], VERSION);

@@ -1,175 +1,111 @@
-// Your browser (docs/browser.md): turn it on, see the browser the extension
-// connected from, allow actions, stop it, and the sites and bots it's for.
-// Turning it on goes through `browser_enable`, since only `cww` registers
-// itself with the browsers; the rest are control requests.
-
+// Browser controls stay local. Native code confirms wider access and applies
+// the same site policy in the daemon and extension.
 import { agentMissing, append, button, call, control, group, h, notice, pageHeader, section, switchInput } from "../app.js";
 
 export const title = "Browser";
 export const icon = "browser";
-
 const EXTENSION_URL = "https://github.com/crmne/chatwithwork-desktop/tree/main/browser#readme";
 const SITE = /^(https?:\/\/[^\s/?#]+\/?|[^\s/?#@:*\\]+\.[^\s/?#@:*\\]+|localhost)$/i;
 
-async function change(app, request) {
+async function perform(app, action) {
   const view = app.view("browser");
   view.busy = true;
   view.error = null;
   app.render();
-  try {
-    await control(request);
-  } catch (error) {
-    view.error = error.message;
-  }
+  try { await action(); }
+  catch (error) { if (error.code !== "declined") view.error = error.message; }
   view.busy = false;
   app.render();
 }
+const change = (app, request) => perform(app, () => control(request));
 
-async function enable(app, enabled) {
-  const view = app.view("browser");
-  view.busy = true;
-  view.error = null;
-  view.note = null;
-  app.render();
-  try {
-    await call("browser_enable", { enabled });
-    view.note = enabled ? "Chat with Work Desktop is registered with your browsers. Install the extension if you haven't." : null;
-  } catch (error) {
-    view.error = error.message;
-  }
-  view.busy = false;
-  app.render();
+function useBrowser(app, browser, on) {
+  if (on && browser.extension?.stopped) return;
+  if (on && !browser.enabled) return perform(app, () => call("browser_enable", { enabled: true }));
+  return change(app, { cmd: "browser_stopped", stopped: !on });
 }
 
 const setting = (titleText, text, control) =>
-  h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
+  h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), text ? h("p", {}, text) : null), h("div", { class: "row__actions" }, control));
 
 function connection(browser) {
   const ext = browser.extension;
-  if (!ext) {
-    return h("div", { class: "row" },
-      h("div", { class: "row__body" },
-        h("h3", {}, "No browser connected", h("span", { class: "state state--attention" }, "Waiting")),
-        h("p", {}, "Install the Chat with Work extension in Chrome, Edge, Brave or Chromium. It connects here when the browser is open.")),
-      h("div", { class: "row__actions" }, button("Get the Extension", () => call("open_url", { url: EXTENSION_URL }))));
-  }
-  const name = ext.browser || "A browser";
-  return h("div", { class: "row" },
-    h("div", { class: "row__body" },
-      h("h3", {}, `${name} is connected`,
-        ext.stopped
-          ? h("span", { class: "state state--attention" }, "Stopped in the extension")
-          : h("span", { class: "state state--positive" }, "Ready")),
-      h("span", { class: "micro" }, `Extension ${ext.version || ""}`.trim())));
+  if (!ext) return h("div", { class: "row" },
+    h("div", { class: "row__body" }, h("h3", {}, "No browser connected"), h("p", {}, "Install the extension in Chrome, Edge, Brave or Chromium.")),
+    h("div", { class: "row__actions" }, button("Get extension", () => call("open_url", { url: EXTENSION_URL }))));
+  const updateNeeded = (browser.all_sites || browser.blocked_sites.length > 0) && (ext.site_policy_version || 0) < 2;
+  return h("div", { class: "row" }, h("div", { class: "row__body" },
+    h("h3", {}, `${ext.browser || "Browser"} connected`,
+      h("span", { class: `state state--${ext.stopped || browser.stopped || updateNeeded ? "attention" : "positive"}` }, updateNeeded ? "Update needed" : ext.stopped || browser.stopped ? "Stopped" : "Ready")),
+    updateNeeded ? h("p", {}, "Update the browser extension to use this site policy. Browser access is paused until then.") : null),
+    updateNeeded ? h("div", { class: "row__actions" }, button("Get extension", () => call("open_url", { url: EXTENSION_URL }))) : null);
+}
+
+function siteList(app, browser, blocked) {
+  const view = app.view("browser");
+  const key = blocked ? "blockedSite" : "allowedSite";
+  const label = blocked ? "Blocked sites" : "Allowed sites";
+  const entries = blocked ? browser.blocked_sites : browser.sites;
+  const request = (site, present) => blocked
+    ? { cmd: "browser_blocked_site", site, blocked: present }
+    : { cmd: "browser_site", site, allowed: present };
+  const valid = SITE.test((view[key] || "").trim());
+  return [
+    h("div", { class: "row row--stack" }, h("div", { class: "row__body" }, h("h3", {}, label)),
+      !entries.length ? h("p", { class: "muted" }, blocked ? "No blocked sites." : "Add the sites Chat with Work may use.") : null),
+    ...entries.map(site => h("div", { class: "row" },
+      h("div", { class: "row__body" }, h("code", {}, site)),
+      h("div", { class: "row__actions" }, button("Remove", () => change(app, request(site, false)), { disabled: view.busy, key: `${key}-remove-${site}` })))),
+    h("form", { class: "row", "data-key": `${key}-form`, onsubmit: event => {
+      event.preventDefault();
+      const site = (view[key] || "").trim();
+      if (view.busy || !SITE.test(site)) return;
+      perform(app, async () => { await control(request(site, true)); view[key] = ""; });
+    } },
+      h("div", { class: "row__body" }, h("input", { class: "input", placeholder: "example.com", "aria-label": blocked ? "Site to block" : "Site to allow",
+        value: view[key] || "", "data-key": key, disabled: view.busy, oninput: event => {
+          const was = SITE.test((view[key] || "").trim());
+          view[key] = event.target.value;
+          if (was !== SITE.test(view[key].trim())) app.render();
+        } })),
+      h("div", { class: "row__actions" }, h("button", { type: "submit", class: "btn", disabled: !valid || view.busy }, blocked ? "Block" : "Allow")))
+  ];
 }
 
 function sites(app, browser) {
   const view = app.view("browser");
-  const entry = (view.site ||= "");
-  const valid = SITE.test(entry.trim());
-  const rows = browser.sites.map((site) =>
-    h("div", { class: "row" },
-      h("div", { class: "row__body" }, h("h3", {}, site),
-        h("span", { class: "micro" }, site.includes("://") ? "Exactly this address" : "With its subdomains, over HTTPS")),
-      h("div", { class: "row__actions" },
-        button("Remove", () => change(app, { cmd: "browser_site", site, allowed: false }), { kind: "btn-subtle-negative", disabled: view.busy }))));
-  return section("Allowed sites", "Chat with Work opens, reads and acts only on these sites. Every other page is refused, in the extension and here.",
-    group(
-      ...(rows.length ? rows : [h("div", { class: "empty" }, h("strong", {}, "No sites yet"), h("p", {}, "Allow the sites Chat with Work may use, like github.com."))]),
-      h("form", { class: "row", onsubmit: (event) => {
-        event.preventDefault();
-        if (!valid) return;
-        view.site = "";
-        change(app, { cmd: "browser_site", site: entry.trim(), allowed: true });
-      } },
-        h("div", { class: "row__body" },
-          h("input", { class: "input", placeholder: "github.com, or http://localhost:3000", "aria-label": "Site to allow",
-            value: entry, "data-key": "browser-site", oninput: (event) => {
-              const was = SITE.test(view.site.trim());
-              view.site = event.target.value;
-              if (was !== SITE.test(view.site.trim())) app.render();
-            } })),
-        h("div", { class: "row__actions" },
-          h("button", { type: "submit", class: "btn btn-primary", disabled: !valid || view.busy }, "Allow Site")))));
-}
-
-function bots(app, browser) {
-  return section("Shared with bots", null, group(h("div", { class: "row" },
-    h("div", { class: "row__body" },
-      h("p", {}, browser.bots.length ? browser.bots.map(bot => bot.name || `Bot ${bot.id}`).join(", ") : "No bots use this browser."),
-      h("p", { class: "note" }, "Choose browser access in each bot’s settings. Site restrictions and approval requirements still apply.")))));
+  const mode = (all, label) => h("button", { type: "button", "data-key": `browser-mode-${all}`, "aria-pressed": String(browser.all_sites === all), disabled: view.busy,
+    onclick: () => { if (browser.all_sites !== all) change(app, { cmd: "browser_all_sites", all_sites: all }); } }, label);
+  return section("Sites", null, group(
+    h("div", { class: "row row--stack" },
+      h("div", { class: "tabs", role: "group", "aria-label": "Browser site access" }, mode(false, "Only these sites"), mode(true, "All sites except…")),
+      h("p", { class: "note" }, "Blocked sites always take priority.")),
+    ...(!browser.all_sites ? siteList(app, browser, false) : []),
+    ...siteList(app, browser, true)));
 }
 
 export function render(app) {
   const view = app.view("browser");
-  const page = h("div", { class: "page" },
-    pageHeader("Browser", "With the Chat with Work extension, Chat with Work can use your own Chrome, Edge, Brave or Chromium, with your sign-ins, only in its own “Chat with Work” tab group and only on the sites you allow here."));
-  const status = app.status;
-  if (!status) {
-    append(page, agentMissing(app));
-    return page;
-  }
-  const browser = { sites: [], bots: [], ...status.browser };
-  const busy = view.busy;
-
+  const page = h("div", { class: "page" }, pageHeader("Browser", "Use your browser through the extension, in its Chat with Work tab group."));
+  if (!app.status) { append(page, agentMissing(app)); return page; }
+  const browser = { sites: [], blocked_sites: [], all_sites: false, ask_before_actions: true, bots: [], ...app.status.browser };
+  const stoppedByExtension = !!browser.extension?.stopped;
+  const on = browser.enabled && !browser.stopped && !stoppedByExtension;
   append(page, group(
-    setting("Use your browser", browser.enabled
-      ? "Chat with Work can read pages in its tab group, on the sites below."
-      : "Off. Turn on to let Chat with Work use your browser, with the extension.",
-    switchInput(browser.enabled || view.enabling, (on) => {
-      if (on) {
-        view.enabling = true;
-        app.render();
-      } else {
-        enable(app, false);
-      }
-    }, { label: "Use your browser", disabled: busy || view.enabling })),
-    view.enabling ? h("div", { class: "confirm" },
-      h("p", {}, "Let Chat with Work use your browser? This registers Chat with Work Desktop with the browsers on this computer so the extension can reach it. Chat with Work then reads pages only in its own tab group, on the sites you allow, and never password, card or one-time code fields."),
-      h("div", { class: "inline" },
-        button("Cancel", () => {
-          view.enabling = false;
-          app.render();
-        }),
-        button("Turn On", () => {
-          view.enabling = false;
-          enable(app, true);
-        }, { kind: "btn-primary" }))) : null,
+    setting("Use your browser", stoppedByExtension ? "Resume in the browser extension." : null,
+      switchInput(on, enabled => useBrowser(app, browser, enabled), { label: "Use your browser", key: "use-browser", disabled: view.busy || stoppedByExtension })),
     browser.enabled ? connection(browser) : null,
-    browser.enabled ? setting("Allow actions", browser.changes
-      ? "Chat with Work can also open pages, click, type, choose and save files, with your approval in Chat with Work, which you can give for the rest of a chat. Anything that may send, buy, post or delete always asks, with a screenshot."
-      : "Reading only. Turn on to let Chat with Work also open pages, click, type, choose and save files, with your approval in Chat with Work.",
-    switchInput(browser.changes || view.allowing, (on) => {
-      if (on) {
-        view.allowing = true;
-        app.render();
-      } else {
-        change(app, { cmd: "browser_changes", changes: false });
-      }
-    }, { label: "Allow actions in the browser", disabled: busy || view.allowing })) : null,
-    view.allowing ? h("div", { class: "confirm" },
-      h("p", {}, "Let Chat with Work act in your browser? It can open pages, click, type, choose and save files into a folder that allows changes, on your allowed sites, with your sign-ins there. Each action asks you in Chat with Work first, unless you allow actions for the rest of a chat; anything that may send, buy, post or delete always asks, with a screenshot."),
-      h("div", { class: "inline" },
-        button("Cancel", () => {
-          view.allowing = false;
-          app.render();
-        }),
-        button("Allow Actions", () => {
-          view.allowing = false;
-          change(app, { cmd: "browser_changes", changes: true });
-        }, { kind: "btn-primary" }))) : null,
-    browser.enabled ? setting(browser.stopped ? "Stopped" : "Stop using the browser", browser.stopped
-      ? "Chat with Work can't use your browser until you resume it."
-      : "Stops Chat with Work using your browser at once, until you resume it. The tray menu has the same switch.",
-    browser.stopped
-      ? button("Resume", () => change(app, { cmd: "browser_stopped", stopped: false }), { kind: "btn-primary", disabled: busy })
-      : button("Stop", () => change(app, { cmd: "browser_stopped", stopped: true }), { kind: "btn-subtle-negative", disabled: busy })) : null));
-
-  if (browser.enabled) append(page, sites(app, browser), bots(app, browser));
-  append(page,
-    view.error ? notice(view.error) : null,
-    view.note ? notice(view.note, "positive") : null);
+    browser.enabled ? setting("Allow actions", "Click, type and navigate on permitted sites.",
+      switchInput(browser.changes, changes => change(app, { cmd: "browser_changes", changes }), { label: "Allow actions in the browser", key: "browser-actions", disabled: view.busy })) : null,
+    browser.enabled ? setting("Ask before browser actions", browser.ask_before_actions
+      ? "Approve actions in Chat with Work."
+      : "Actions run without asking, including sending, buying and deleting.",
+      switchInput(browser.ask_before_actions, ask => change(app, { cmd: "browser_ask_before_actions", ask }),
+        { label: "Ask before browser actions", key: "browser-approvals", disabled: view.busy || !browser.changes })) : null));
+  if (browser.enabled) append(page, sites(app, browser),
+    browser.bots.length ? section("Shared with bots", "Choose access in each bot’s settings.",
+      h("p", {}, browser.bots.map(bot => bot.name || `Bot ${bot.id}`).join(", "))) : null);
+  if (view.error) append(page, notice(view.error));
   return page;
 }
-
 export default { title, icon, render };

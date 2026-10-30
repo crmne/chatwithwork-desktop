@@ -11,8 +11,6 @@ pub struct AppState {
     pub onboarded: bool,
     /// The first launch asked for notification permission (first_launch.rs).
     pub notifications_asked: bool,
-    /// The person turned off checking for updates (update.rs).
-    pub update_checks_off: bool,
 }
 
 impl AppState {
@@ -51,9 +49,15 @@ mod tests {
         // The egui app also kept its title bar and chat choices here.
         std::fs::write(
             paths.app_state_file(),
-            r#"{"onboarded":true,"custom_titlebar":false,"organization":null}"#,
+            r#"{"onboarded":true,"custom_titlebar":false,"organization":null,"update_checks_off":true}"#,
         )
         .unwrap();
-        assert!(AppState::load(&paths).onboarded);
+        assert_eq!(
+            AppState::load(&paths),
+            AppState {
+                onboarded: true,
+                ..Default::default()
+            }
+        );
     }
 }

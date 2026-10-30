@@ -55,6 +55,22 @@ pub fn run(app: AppHandle, dir: PathBuf) {
     } else {
         tauri::Theme::Light
     }));
+    // Snapshot windows normally stay fixed at their default size. Exercise
+    // actual narrow layouts without changing the shipping window behavior.
+    if let Some(width) = std::env::var("CWW_APP_SNAPSHOT_WIDTH")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        let height = std::env::var("CWW_APP_SNAPSHOT_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(820);
+        let _ = window.window().set_resizable(true);
+        let _ = window.window().set_size(tauri::LogicalSize::new(
+            width.clamp(380, 2560),
+            height.clamp(480, 2160),
+        ));
+    }
     // WebKitGTK's preferred scheme follows GTK, not set_theme on this
     // window. Make both review themes explicit in the bundled page too.
     let _ = window.eval(format!(

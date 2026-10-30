@@ -76,16 +76,15 @@ export function render(app, embedded = false) {
       h("div", { class: "row__actions" },
         button("Edit", () => { view.editing = pattern; view.draft = pattern; view.error = null; app.render(); }, { disabled: view.busy, key: `edit-exclusion-${pattern}` }),
         button("Remove…", () => change(app, pattern, null), { kind: "btn-subtle-negative", disabled: view.busy, key: `remove-exclusion-${pattern}` })))),
-    editor(app)),
-    h("p", { class: "muted" }, "Editing or removing an exclusion can share more files. This computer asks you to confirm."),
-    group(h("details", { class: "row row--stack", open: !!view.builtinsOpen, ontoggle: event => { view.builtinsOpen = event.target.open; } },
+    editor(app),
+    h("details", { class: "row row--stack", open: !!view.builtinsOpen, ontoggle: event => { view.builtinsOpen = event.target.open; } },
       h("summary", {}, "Built-in protections"),
-      h("p", { class: "muted" }, "Keys, credentials, password stores, mail, messages and browser profiles. These protections cannot be removed here."),
+      h("p", {}, "Keys, passwords, mail and browser profiles stay private. These protections cannot be removed here."),
       patterns(deny.builtin || []),
-      deny.removed?.length ? h("div", {}, h("h3", {}, "Changed in configuration"), h("p", {}, "These built-in patterns were removed manually and no longer apply."), patterns(deny.removed)) : null),
-      h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, "Also private"), h("p", {}, deny.allow_hardlinks
-        ? "The background agent's own settings, keys, index and logs. Files with more than one hard link are allowed by your configuration."
-        : "The background agent's own settings, keys, index and logs, and files with more than one hard link, which could point outside a shared folder.")))));
+      deny.removed?.length ? h("div", {}, h("h3", {}, "Changed in configuration"), h("p", {}, "These built-in patterns were removed manually and no longer apply."), patterns(deny.removed)) : null,
+      h("p", { class: "note" }, deny.allow_hardlinks
+        ? "Desktop's settings, keys, index and logs are protected. Hard links are allowed by your configuration."
+        : "Desktop's settings, keys, index and logs, and files with multiple hard links, are also protected."))));
   return page;
 }
 export default { title, icon, render, enter, statusChanged };

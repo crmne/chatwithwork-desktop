@@ -350,7 +350,7 @@ fn computer_settings(paired: bool, signed_in: bool) -> ComputerSettings {
 
 /// Shows the local settings pane, on `page` or where it was.
 pub fn show_settings(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
-    crate::preferences::standalone(app, page.unwrap_or("folders"))
+    crate::preferences::standalone(app, page.unwrap_or("general"))
 }
 
 /// Shows the scan window. Closing it deletes the pages not sent and stops

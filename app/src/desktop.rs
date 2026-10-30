@@ -384,7 +384,6 @@ pub fn run(
         }
         other => other.clone(),
     };
-    let update_checks = !crate::state::AppState::load(&paths).update_checks_off;
     let desktop = Arc::new(Desktop {
         app: OnceLock::new(),
         client: Client::new(paths.socket_path()),
@@ -403,7 +402,7 @@ pub fn run(
         asking: Default::default(),
         preferences: Default::default(),
         computer_view: Mutex::new(None),
-        updates: Arc::new(crate::update::Updates::new(update_checks, update_error)),
+        updates: Arc::new(crate::update::Updates::new(update_error)),
     });
 
     let mut builder = tauri::Builder::default();
@@ -492,7 +491,6 @@ pub fn run(
             crate::local::update_status,
             crate::local::update_check,
             crate::local::update_restart,
-            crate::local::set_update_checks,
             crate::scan::scan_info,
             crate::scan::scan_devices,
             crate::scan::scan_capabilities,

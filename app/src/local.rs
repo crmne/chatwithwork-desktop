@@ -688,16 +688,3 @@ pub fn update_restart(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Ans
         .map(|()| json!({}))
         .map_err(|e| refusal("failed", e))
 }
-
-/// Turns the daily check on or off; the setting is the app's own.
-#[tauri::command]
-pub fn set_update_checks(webview: Webview, desktop: State<'_, Arc<Desktop>>, on: bool) -> Answer {
-    local_page(&webview)?;
-    let mut state = crate::state::AppState::load(&desktop.paths);
-    state.update_checks_off = !on;
-    state
-        .save(&desktop.paths)
-        .map_err(|e| refusal("failed", e.to_string()))?;
-    desktop.updates.set_automatic(on);
-    Ok(desktop.updates.view())
-}

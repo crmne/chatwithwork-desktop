@@ -184,7 +184,7 @@ function updateText(u) {
     case "installing": return `Installing version ${release}…`;
     case "unsupported": return `Version ${release} is out. ${u.advice}`;
     case "failed": return u.error;
-    default: return u.automatic ? "Checked once a day. Updates download in the background, signed and verified, and install when you restart." : "Automatic checks are off.";
+    default: return "Checked once a day. Updates download in the background, signed and verified, and install when you restart.";
   }
 }
 
@@ -218,19 +218,7 @@ function updatesSection(app) {
       row({ title: "Version", text: updateText(u), actions: action }),
       u.phase === "downloading" && u.total ? h("div", { class: "row row--stack" },
         h("div", { class: "meter", role: "progressbar", "aria-label": "Update download", "aria-valuemin": "0", "aria-valuemax": String(u.total), "aria-valuenow": String(u.received) },
-          h("span", { style: `inline-size: ${Math.min(100, (100 * u.received) / u.total).toFixed(1)}%` }))) : null,
-      row({
-        title: "Check for updates",
-        text: "Once a day, from Chat with Work Desktop's releases on GitHub. A copy a package manager installed updates through it instead.",
-        actions: switchInput(u.automatic, async (on) => {
-          try {
-            view.update = await call("set_update_checks", { on });
-          } catch (error) {
-            view.updateError = error.message;
-          }
-          app.render();
-        }, { label: "Check for updates" }),
-      })),
+          h("span", { style: `inline-size: ${Math.min(100, (100 * u.received) / u.total).toFixed(1)}%` }))) : null),
     u.problem ? notice(u.problem) : null,
     view.updateError ? notice(view.updateError) : null);
 }
@@ -260,6 +248,7 @@ export function render(app) {
     view.error ? notice(view.error) : null,
     view.crashError ? notice(view.crashError) : null,
     dictationSection(app),
+    updatesSection(app),
     section("Background agent", null,
       status
         ? group(
@@ -269,7 +258,6 @@ export function render(app) {
           status.audit_file ? row({ title: "Activity log", micro: displayPath(status.audit_file, app.info.home),
             actions: button("Open", () => call("open_file", { which: "audit" })) }) : null)
         : agentMissing(app)),
-    updatesSection(app),
     section("About", null,
       group(
         row({

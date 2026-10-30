@@ -194,13 +194,10 @@ function folderRow(app, root) {
             change(app, root.id, { cmd: "roots_writable", root: root.id, writable: true });
           }, { kind: "btn-primary" }))) : null,
 
-      // Run commands: only where changes are allowed, and on Windows only
-      // where the daemon says this Windows can. A folder that allows them
-      // keeps its switch even then, so they can be turned off.
-      !root.writable ? setting("Run commands", "Allow changes first to run code, tests or builds here.", null) : null,
-      root.writable && !runsCommands && !root.allows_commands ? setting("Run commands", commandsUnavailable(app), null) : null,
-      root.writable && (runsCommands || root.allows_commands) ? setting("Run commands", root.allows_commands
-        ? "Runs approved commands in this folder’s sandbox."
+      // Keep the switch visible when a prerequisite is missing. An existing grant can still be stopped.
+      setting("Run commands", !root.writable ? "Allow changes first."
+        : !runsCommands && !root.allows_commands ? commandsUnavailable(app)
+        : root.allows_commands ? "Runs approved commands in this folder’s sandbox."
         : "Run code, tests or builds in this folder’s sandbox.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
@@ -210,7 +207,7 @@ function folderRow(app, root) {
         } else {
           change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
         }
-      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding })) : null,
+      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!root.writable || !runsCommands)) })),
       commanding ? h("div", { class: "confirm" },
         h("p", {}, `Let Chat with Work run commands in “${root.label}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it.`),
         h("div", { class: "inline" },
@@ -279,9 +276,10 @@ function drivesRow(app, drives) {
 // where a native pane confirms each increase in access on this computer.
 function bots(app, root) {
   const grants = root.bots || [];
+  if (!grants.length) return null;
   return h("div", { class: "row" }, h("div", { class: "row__body" },
     h("h3", {}, "Shared with bots"),
-    h("p", {}, grants.length ? grants.map(bot => `${bot.name || `Bot ${bot.id}`}${bot.unattended ? " (unattended commands)" : ""}`).join(", ") : "No bots use this folder."),
+    h("p", {}, grants.map(bot => `${bot.name || `Bot ${bot.id}`}${bot.unattended ? " (unattended commands)" : ""}`).join(", ")),
     ));
 }
 

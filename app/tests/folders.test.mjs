@@ -24,9 +24,11 @@ test("Windows that can sandbox commands gets the Run commands switch", () => {
   assert.ok(switches(tree).includes("Run commands in work"), switches(tree).join(", "));
 });
 
-test("Windows that can't says why where the switch would be", () => {
+test("Windows that cannot sandbox commands keeps a disabled switch and explains why", () => {
   const tree = page("windows", { available: false, detail: "commands need Windows 11 24H2 with the August 2026 update or later" });
-  assert.ok(!switches(tree).includes("Run commands in work"));
+  const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
+  assert.ok(command);
+  assert.equal(command.disabled, true);
   assert.ok(byText(tree, "p", "Commands need Windows 11 24H2 with the August 2026 update"));
 });
 
@@ -41,6 +43,8 @@ test("read-only folders still explain how to enable commands, and private exclus
   const tree = page("linux", null, [{...root, writable:false, bots:[{id:"42",name:"Issue fixer"}]}]);
   assert.ok(byText(tree, "h3", "Run commands"));
   assert.ok(byText(tree, "p", "Allow changes"));
+  const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
+  assert.equal(command.disabled, true);
   assert.ok(byText(tree, "h2", "Excluded files and folders"));
   assert.ok(tree.textContent.includes("Issue fixer"));
   assert.ok(!tree.textContent.includes("Lend"));
@@ -56,4 +60,11 @@ test("only an authorized organization administrator gets the policy link", () =>
   assert.equal(byText(member,"button","Organization policy"), null);
   const admin = page("linux", null, [root], {account:"1000001", commands_allowed:false, can_manage_policy:true});
   assert.ok(byText(admin,"button","Organization policy"));
+});
+
+test("an existing command grant remains switchable off when the platform loses support", () => {
+  const tree = page("windows", {available:false}, [{...root,allows_commands:true}]);
+  const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
+  assert.equal(command.checked, true);
+  assert.equal(command.disabled, false);
 });
