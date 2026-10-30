@@ -2,5 +2,6 @@ node_modules/
 build/
 build-tests/
 chatwithwork-browser.zip
+chatwithwork-browser-*-unpacked.zip
 test-results/
 playwright-report/

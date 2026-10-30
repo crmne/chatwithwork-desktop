@@ -34,7 +34,12 @@ A release carries only what people download or something reads; anything else st
 | `checksums.txt` | SHA-256 of every file above but the `.deb` and `.rpm` files (GitHub shows theirs on the release). Both installers and native-packages check downloads against it. |
 | `checksums.txt.sig` | Ed25519 signature of `checksums.txt` with the key in `app/assets/update-public-key.hex`. The desktop app's updater (`app/src/update.rs`, fastframe-update) refuses a release without a valid one, then checks its download against `checksums.txt`: the `.dmg` on macOS, the `.msi` on Windows. |
 
-Release-note screenshots (`settings-light.png`, `settings-dark.png` and `settings-bot-sharing.png` in 0.8.0) are synthetic app captures, uploaded immediately after publication and verified before announcing the release. They are documentation media, not updater inputs or entries in `checksums.txt`.
+Release-note screenshots (`settings-light.png`, `settings-dark.png` and `settings-exclusions.png` in 0.9.0) are synthetic app captures, uploaded immediately after publication and verified before announcing the release. They are documentation media, not updater inputs or entries in `checksums.txt`.
+
+The browser extension is versioned separately. Its `browser-v*` releases carry
+the public-key-preserving manual installation ZIP and must use
+`--latest=false`, so Desktop's updater still sees a Desktop release. See
+[`browser/README.md`](browser/README.md#releasing-the-extension).
 
 native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-packaging.tar.xz`, `packaging-checksums.txt`); `packaging.yml`'s `tidy-release` job removes them, since the AUR and Homebrew are published from the run's own copy and `winget-submit.sh` renders WinGet's manifests itself. Releases up to 0.5.0 also carried a `.zip` of the macOS app and portable Windows zips; nothing read them, so they're no longer built. Scoop's recipe went with the zips: no bucket was ever published.
 

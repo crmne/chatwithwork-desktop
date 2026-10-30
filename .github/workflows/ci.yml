@@ -208,6 +208,7 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit -p .
       - run: npm test
+      - run: npm run test:package
       - run: mbx build --locked --bin cww
         working-directory: .
       - run: npx playwright install --with-deps chromium
