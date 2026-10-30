@@ -1438,6 +1438,7 @@ async fn confined_worker_uses_inherited_notification_pipes_and_exits_cleanly() {
         .args(["daemon", "run", "--worker"])
         .env("CWW_HOME", fx.base.join("cww"))
         .env("CWW_SECRET_STORE", "file")
+        .env("CWW_SUPERVISOR_VERSION", env!("CARGO_PKG_VERSION"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

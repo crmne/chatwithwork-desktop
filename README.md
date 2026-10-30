@@ -327,6 +327,8 @@ A search takes about 100 ms end to end through Chat with Work, most of it on the
 
 Opening a saved index runs in the background too: settings and status are available while a folder says `pending`, and searches use live grep until its index is ready. Changing shared folders cancels the previous scan; an interrupted traversal never removes files just because it had not reached them yet. A sandbox restart waits at most half a second for indexing to stop. If a synchronous parser is still finishing one file, the old worker process ends it, and the new worker resumes from the last committed index. Folder permissions still change through the same confined-worker restart.
 
+After an upgrade, the app checks that a running background agent uses the installed version, including when a package manager installed it. Its supervisor and confined worker must be the same version: a new worker refuses an old supervisor, allowing the service manager to restart the complete agent before it handles settings or commands. The app leaves a stopped agent stopped; for a foreground terminal session, restart `cww daemon run` after upgrading.
+
 ## Configuration
 
 Everything lives in `~/.config/cww/config.toml`. The server can't change any of it.

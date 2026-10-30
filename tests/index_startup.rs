@@ -128,3 +128,38 @@ fn status_and_sandbox_restart_work_during_a_large_index_scan() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn an_outdated_supervisor_cannot_run_a_new_worker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::under(tmp.path());
+    Config {
+        secret_store: Some("file".into()),
+        ..Config::default()
+    }
+    .save(&paths)
+    .unwrap();
+    for previous in [None, Some("0.9.0"), Some("future-version")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cww"));
+        command
+            .env("CWW_HOME", tmp.path())
+            .args(["daemon", "run", "--worker"]);
+        match previous {
+            Some(version) => {
+                command.env("CWW_SUPERVISOR_VERSION", version);
+            }
+            None => {
+                command.env_remove("CWW_SUPERVISOR_VERSION");
+            }
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("restart the full background agent")
+        );
+        assert!(
+            !paths.socket_path().exists(),
+            "mixed versions must never serve local settings or tools"
+        );
+    }
+}

@@ -118,6 +118,19 @@ fn upload_filename(name: &str) -> String {
 /// with `sandbox::RESTART_CODE` and its supervisor starts it again.
 static RESTART_FOR_SANDBOX: AtomicBool = AtomicBool::new(false);
 
+/// A package upgrade can replace the executable while its supervisor remains
+/// alive. Its command broker still parses settings using the old schema.
+const SUPERVISOR_VERSION: &str = "CWW_SUPERVISOR_VERSION";
+
+fn check_supervisor_version(version: Option<&str>) -> Result<()> {
+    if version != Some(env!("CARGO_PKG_VERSION")) {
+        bail!(
+            "the background agent was upgraded; restart the full background agent before starting its worker"
+        );
+    }
+    Ok(())
+}
+
 /// How `cww daemon run` (or `cww-agent` on Windows) was started.
 pub struct Foreground {
     pub log_file: Option<std::path::PathBuf>,
@@ -133,6 +146,12 @@ pub struct Foreground {
 pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     crate::logging::init(options.log_file.as_deref())?;
     crate::crash_reports::install(crate::crash_reports::Component::Daemon, &paths);
+    if options.worker {
+        // Fail before loading possibly newer settings, taking private pipes,
+        // or binding control. An older supervisor exits on this failure; its
+        // existing service manager restarts the complete installed version.
+        check_supervisor_version(std::env::var(SUPERVISOR_VERSION).ok().as_deref())?;
+    }
     let config = Config::load(&paths)?;
     crate::browsing::engine::initialize(&config, &paths);
     let sandboxed = options.sandbox
@@ -377,6 +396,7 @@ fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
             let runs = crate::commands::Runs::new(paths.clone());
             let mut command = tokio::process::Command::new(&exe);
             command.args(["daemon", "run", "--worker"]);
+            command.env(SUPERVISOR_VERSION, env!("CARGO_PKG_VERSION"));
             // Commands the worker runs start here, outside its sandbox,
             // each in one of their own (`commands::channel`).
             #[cfg(unix)]

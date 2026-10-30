@@ -297,23 +297,25 @@ fn start_updates(desktop: &Arc<Desktop>, receipt: Option<fastframe_update::Recei
             .kind(MessageDialogKind::Warning)
             .show(|_| {});
     }
-    if let Some(receipt) = receipt {
-        let waiting = desktop.clone();
-        let _ = std::thread::Builder::new()
-            .name("cww-updated".into())
-            .spawn(move || {
-                crate::update::finish(receipt, || {
-                    // The agent's status, once the watcher has heard.
-                    for _ in 0..50 {
-                        if waiting.status_known.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(200));
+    let waiting = desktop.clone();
+    let _ = std::thread::Builder::new()
+        .name("cww-updated".into())
+        .spawn(move || {
+            let agent_version = || {
+                // The agent's status, once the watcher has heard.
+                for _ in 0..50 {
+                    if waiting.status_known.load(Ordering::SeqCst) {
+                        break;
                     }
-                    waiting.status().map(|status| status.version)
-                })
-            });
-    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                waiting.status().map(|status| status.version)
+            };
+            match receipt {
+                Some(receipt) => crate::update::finish(receipt, agent_version),
+                None => crate::update::reconcile_agent(agent_version()),
+            }
+        });
 }
 
 /// Opens what a launch asked for.

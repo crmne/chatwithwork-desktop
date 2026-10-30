@@ -17,8 +17,9 @@
 //! one-line installer is told to run it again instead.
 //!
 //! After an update the background agent runs the old `cww` until it
-//! restarts, so the new version restarts it (`cww daemon install`) when its
-//! version differs. The Windows installer does that itself.
+//! restarts, so every app launch checks the running agent against the app
+//! and its installed `cww`, including package-manager upgrades. A stopped
+//! agent remains stopped. The Windows installer restarts its agent itself.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -495,22 +496,95 @@ pub fn finish(receipt: Receipt, agent_version: impl FnOnce() -> Option<String>) 
         return;
     }
     log::info!("updated to {VERSION}");
-    if cfg!(windows) {
-        // The installer stopped the agent and started the new one.
-        return;
-    }
-    match agent_version() {
-        Some(version) if version != VERSION => match crate::agent::start() {
-            Ok(_) => log::info!("restarted the background agent ({version} to {VERSION})"),
+    reconcile_agent(agent_version());
+}
+
+/// Package-manager upgrades have no updater receipt. Reconcile those too,
+/// without starting an agent the person stopped or restarting the same old
+/// executable repeatedly when only one member of the app/CLI pair changed.
+pub fn reconcile_agent(running: Option<String>) {
+    let _ = reconcile_agent_with(
+        running.as_deref(),
+        || {
+            let cww = crate::agent::cww_binary()?;
+            let output = std::process::Command::new(cww)
+                .arg("--version")
+                .output()
+                .ok()?;
+            output.status.success().then(|| {
+                String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .strip_prefix("cww ")
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+        },
+        || match crate::agent::start() {
+            Ok(_) => {
+                log::info!("restarted the background agent on the installed version {VERSION}")
+            }
             Err(e) => log::warn!("couldn't restart the background agent: {e:#}"),
         },
-        _ => {}
+    );
+}
+
+fn reconcile_agent_with(
+    running: Option<&str>,
+    installed: impl FnOnce() -> Option<String>,
+    restart: impl FnOnce(),
+) -> bool {
+    // Windows' installer owns its service/task lifecycle.
+    if cfg!(windows) || running.is_none() || running == Some(VERSION) {
+        return false;
     }
+    if installed().as_deref() != Some(VERSION) {
+        log::warn!(
+            "the installed app and background agent versions differ; finish updating both before restarting the agent"
+        );
+        return false;
+    }
+    restart();
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn package_updates_restart_only_a_running_outdated_agent_with_a_matching_installed_binary() {
+        use std::cell::Cell;
+        let restarts = Cell::new(0);
+        let restart = || restarts.set(restarts.get() + 1);
+        assert!(!reconcile_agent_with(
+            None,
+            || panic!("stopped agents stay stopped"),
+            restart
+        ));
+        assert!(!reconcile_agent_with(
+            Some(VERSION),
+            || panic!("current agents need no process"),
+            restart
+        ));
+        assert!(!reconcile_agent_with(Some("0.9.0"), || None, restart));
+        assert!(!reconcile_agent_with(
+            Some("0.9.0"),
+            || Some("0.9.0".into()),
+            restart
+        ));
+        assert!(!reconcile_agent_with(
+            Some("0.9.0"),
+            || Some("future-version".into()),
+            restart
+        ));
+        assert!(reconcile_agent_with(
+            Some("0.9.0"),
+            || Some(VERSION.into()),
+            restart
+        ));
+        assert_eq!(restarts.get(), 1);
+    }
 
     #[test]
     fn the_configuration_is_valid_and_names_this_platforms_assets() {
