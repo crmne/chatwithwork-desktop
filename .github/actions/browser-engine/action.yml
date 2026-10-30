@@ -15,7 +15,7 @@ runs:
         node-version: 22.23.4
     - uses: actions/setup-python@v6
       with:
-        python-version: '3.13'
+        python-version: '3.15'
     - name: Stage verified runtime and locked dependencies
       shell: bash
       env:
