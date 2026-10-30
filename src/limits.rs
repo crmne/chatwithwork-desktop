@@ -1,7 +1,7 @@
 //! Daemon-side rate and volume limits.
 //!
-//! These hold even if the server is compromised: a flood of calls or a bulk
-//! read is refused locally, whatever the server's own limits say.
+//! Read budgets and any locally configured call/change quotas hold regardless
+//! of the server. Calls and changes have no timed quotas by default.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -81,6 +81,9 @@ impl Limiter {
 
     fn check_call_at(&self, now: Instant) -> Result<(), ToolError> {
         let max = self.limits.lock().expect("limits").calls_per_minute as usize;
+        if max == 0 {
+            return Ok(());
+        }
         let mut w = self.windows.lock().expect("windows");
         prune(&mut w.calls, now, MINUTE, |t| *t);
         if w.calls.len() >= max {
@@ -293,9 +296,17 @@ impl Limiter {
     }
 
     fn check_changes_at(&self, bytes: &[u64], now: Instant) -> Result<(), ToolError> {
-        let count = bytes.len();
-        let total: u64 = bytes.iter().sum();
         let limits = self.limits.lock().expect("limits").clone();
+        if limits.changes_per_minute == 0
+            && limits.changes_per_day == 0
+            && limits.change_bytes_per_hour == 0
+        {
+            return Ok(());
+        }
+        let count = bytes.len();
+        let total = bytes
+            .iter()
+            .fold(0_u64, |sum, bytes| sum.saturating_add(*bytes));
         let mut w = self.windows.lock().expect("windows");
         prune(&mut w.changes, now, DAY, |(t, _)| *t);
         let within = |window: Duration| {
@@ -306,7 +317,8 @@ impl Limiter {
         let last_minute = within(MINUTE).count();
         let last_day = w.changes.len();
         let last_hour_bytes: u64 = within(HOUR).map(|(_, b)| b).sum();
-        if last_minute + count > limits.changes_per_minute as usize {
+        if limits.changes_per_minute > 0 && last_minute + count > limits.changes_per_minute as usize
+        {
             return Err(ToolError::new(
                 ErrorCode::RateLimited,
                 format!(
@@ -315,7 +327,7 @@ impl Limiter {
                 ),
             ));
         }
-        if last_day + count > limits.changes_per_day as usize {
+        if limits.changes_per_day > 0 && last_day + count > limits.changes_per_day as usize {
             return Err(ToolError::new(
                 ErrorCode::RateLimited,
                 format!(
@@ -325,7 +337,9 @@ impl Limiter {
                 ),
             ));
         }
-        if last_hour_bytes.saturating_add(total) > limits.change_bytes_per_hour {
+        if limits.change_bytes_per_hour > 0
+            && last_hour_bytes.saturating_add(total) > limits.change_bytes_per_hour
+        {
             return Err(ToolError::new(
                 ErrorCode::RateLimited,
                 format!(
@@ -377,6 +391,49 @@ mod tests {
             ErrorCode::RateLimited
         );
         l.check_call_at(t0 + MINUTE).unwrap();
+    }
+
+    #[test]
+    fn default_calls_and_changes_do_not_stop_a_coding_session() {
+        let l = Limiter::new(Limits::default());
+        let now = Instant::now();
+        // More calls, changes and bytes than any former default budget,
+        // without advancing time to let a window expire.
+        for _ in 0..1000 {
+            l.check_call_at(now).unwrap();
+            l.check_changes_at(&[128 * 1024, 128 * 1024], now).unwrap();
+        }
+        let windows = l.windows.lock().unwrap();
+        assert!(windows.calls.is_empty());
+        assert!(windows.changes.is_empty());
+    }
+
+    #[test]
+    fn change_limits_can_be_enabled_independently() {
+        // Opting into one limit must not make the other zero values
+        // refuse everything.
+        let now = Instant::now();
+        for limits in [
+            Limits {
+                changes_per_minute: 2,
+                ..Limits::default()
+            },
+            Limits {
+                changes_per_day: 2,
+                ..Limits::default()
+            },
+            Limits {
+                change_bytes_per_hour: 2,
+                ..Limits::default()
+            },
+        ] {
+            let l = Limiter::new(limits);
+            l.check_changes_at(&[1, 1], now).unwrap();
+            assert_eq!(
+                l.check_change_at(1, now).unwrap_err().code,
+                ErrorCode::RateLimited
+            );
+        }
     }
 
     #[test]

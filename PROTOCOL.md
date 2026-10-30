@@ -806,7 +806,7 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 
 | Limit | Default |
 |---|---|
-| Tool calls per rolling minute (all chats) | 240 |
+| Tool calls per rolling minute (all chats) | Unlimited (`calls_per_minute = 0`) |
 | Characters per `read` call | 32 000 |
 | Characters read per chat per rolling hour, from folders without a budget of their own | 5 000 000 |
 | Characters read per rolling hour, all chats, from those folders | 10 000 000 |
@@ -822,12 +822,14 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 | `grep` line length | 500 characters |
 | Largest file `grep` searches | 32 MiB (as indexed) |
 | Largest file `read_bytes` copies | 25 MiB |
-| Changes per rolling minute / day (all chats) | 30 / 500 |
-| Bytes changes may write per rolling hour | 50 MiB |
+| Changes per rolling minute / day (all chats) | Unlimited (`changes_per_minute = 0`, `changes_per_day = 0`) |
+| Bytes changes may write per rolling hour | Unlimited (`change_bytes_per_hour = 0`) |
 | Largest file a change creates, edits or copies | 10 MiB |
 | Files and folders one move or delete of a folder may carry | 1000 |
 | Changes in one `patch` / files they touch | 50 / 20 |
 | A `patch` dry run's diffs, together | 64 KiB |
+
+Call and change quotas are optional local settings. Zero disables each quota independently. Existing saved defaults (120 or 240 calls/minute, 30 changes/minute, 500 changes/day and 50 MiB written/hour) migrate to unlimited when loaded; other locally configured values stay in place. Per-file and per-operation size limits still apply.
 
 **Read budgets.** "Characters read" are what `read`, `grep` and `glob` return (paths and line texts), what `browser_read` returns, and the diffs of dry runs of `write`, `edit` and `patch`. They count against the budgets of the folder they come from: the shared ones (`read_chars_per_chat_hour`, `read_chars_per_hour`), or, for a folder the person gave a budget of its own on the computer (`read_budget` on the root in `config.toml`, `cww roots read-budget`, or the control API's `roots_read_budget`, CONTROL.md), a per-chat budget of that size and an all-chats budget of twice it for that folder alone, instead of the shared ones. The server can't set or raise either. `read` stops at the budget left; `grep` and `glob` stop their answer at the first result that doesn't fit (with `truncated`, `next_offset` and a `note`), and answer `rate_limited` when not even the first does; a dry run's diff is cut where the budget ends, and a dry run touching a folder whose budget is spent is `rate_limited`. `read_bytes` has its own budget, in bytes, for all chats (`copy_bytes_per_hour`), and doesn't count against the read budgets.
 

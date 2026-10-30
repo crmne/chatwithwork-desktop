@@ -349,14 +349,14 @@ remove = ["*.key"]                             # built-in patterns to drop (Keyn
 allow_hardlinks = false                        # reads only: changes never touch hard links
 
 [limits]
-calls_per_minute = 240
+calls_per_minute = 0            # unlimited; optional local quota
 read_chars_per_call = 32000
 read_chars_per_chat_hour = 5000000
 read_chars_per_hour = 10000000
 copy_bytes_per_hour = 104857600  # 100 MiB of files read_bytes copies into chats
-changes_per_minute = 30          # changes: create, write, edit, mkdir, move, delete
-changes_per_day = 500
-change_bytes_per_hour = 52428800 # 50 MiB written by changes
+changes_per_minute = 0          # unlimited changes
+changes_per_day = 0             # unlimited changes
+change_bytes_per_hour = 0       # unlimited total bytes written by changes
 max_change_file_bytes = 10485760 # largest file a change writes or copies
 max_change_entries = 1000        # most files a folder move or delete may carry
 

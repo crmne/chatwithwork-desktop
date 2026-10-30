@@ -270,7 +270,7 @@ pub struct DenyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
-    /// Tool calls accepted per rolling minute, across all chats.
+    /// Optional tool calls per rolling minute, across all chats. Zero is unlimited.
     pub calls_per_minute: u32,
     /// Maximum characters one `read` call returns.
     pub read_chars_per_call: usize,
@@ -295,11 +295,11 @@ pub struct Limits {
     /// Time budget for the live grep fallback, in milliseconds.
     pub grep_timeout_ms: u64,
     /// Changes (create, write, edit, mkdir, move, delete) accepted per
-    /// rolling minute, across all chats.
+    /// rolling minute, across all chats. Zero is unlimited.
     pub changes_per_minute: u32,
-    /// Changes accepted per rolling day.
+    /// Optional changes accepted per rolling day. Zero is unlimited.
     pub changes_per_day: u32,
-    /// Bytes changes may write per rolling hour (new contents and copies).
+    /// Optional bytes changes may write per rolling hour. Zero is unlimited.
     pub change_bytes_per_hour: u64,
     /// Largest file a change creates, edits or copies, in bytes.
     pub max_change_file_bytes: u64,
@@ -325,13 +325,22 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// A file saved before the defaults were sized for code keeps their old
-    /// values, written out whole by `Config::save`: those exact values move
-    /// up to the new defaults, and anything set by hand stays as it is.
+    /// Older files contain every old default because `Config::save` writes
+    /// them out whole. Move those exact values to the current defaults,
+    /// including unlimited calls/changes; preserve other local values.
     pub fn raise_old_defaults(&mut self) {
         let new = Self::default();
-        if self.calls_per_minute == 120 {
+        if matches!(self.calls_per_minute, 120 | 240) {
             self.calls_per_minute = new.calls_per_minute;
+        }
+        if self.changes_per_minute == 30 {
+            self.changes_per_minute = new.changes_per_minute;
+        }
+        if self.changes_per_day == 500 {
+            self.changes_per_day = new.changes_per_day;
+        }
+        if self.change_bytes_per_hour == 50 * 1024 * 1024 {
+            self.change_bytes_per_hour = new.change_bytes_per_hour;
         }
         if self.read_chars_per_chat_hour == 1_000_000 {
             self.read_chars_per_chat_hour = new.read_chars_per_chat_hour;
@@ -345,7 +354,7 @@ impl Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            calls_per_minute: 240,
+            calls_per_minute: 0,
             read_chars_per_call: 32_000,
             read_chars_per_chat_hour: 5_000_000,
             read_chars_per_hour: 10_000_000,
@@ -356,9 +365,9 @@ impl Default for Limits {
             max_index_file_bytes: 32 * 1024 * 1024,
             max_message_bytes: 256 * 1024,
             grep_timeout_ms: 5_000,
-            changes_per_minute: 30,
-            changes_per_day: 500,
-            change_bytes_per_hour: 50 * 1024 * 1024,
+            changes_per_minute: 0,
+            changes_per_day: 0,
+            change_bytes_per_hour: 0,
             max_change_file_bytes: 10 * 1024 * 1024,
             max_change_entries: 1_000,
             command_cpu_seconds: 600,
@@ -471,8 +480,43 @@ mod tests {
             ..Limits::default()
         };
         limits.raise_old_defaults();
-        assert_eq!(limits.calls_per_minute, 240);
+        assert_eq!(limits.calls_per_minute, 0);
         assert_eq!(limits.read_chars_per_chat_hour, 5_000_000);
         assert_eq!(limits.read_chars_per_hour, 3_000_000);
+    }
+
+    #[test]
+    fn existing_installs_drop_the_former_default_change_quotas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        for calls in [120, 240] {
+            let config = Config {
+                limits: Limits {
+                    calls_per_minute: calls,
+                    changes_per_minute: 30,
+                    changes_per_day: 500,
+                    change_bytes_per_hour: 50 * 1024 * 1024,
+                    ..Limits::default()
+                },
+                ..Config::default()
+            };
+            config.save(&paths).unwrap();
+            let loaded = Config::load(&paths).unwrap();
+            assert_eq!(loaded.limits, Limits::default());
+            loaded.save(&paths).unwrap();
+            assert_eq!(Config::load(&paths).unwrap(), loaded);
+        }
+        let custom = Config {
+            limits: Limits {
+                calls_per_minute: 7,
+                changes_per_minute: 3,
+                changes_per_day: 20,
+                change_bytes_per_hour: 100,
+                ..Limits::default()
+            },
+            ..Config::default()
+        };
+        custom.save(&paths).unwrap();
+        assert_eq!(Config::load(&paths).unwrap(), custom);
     }
 }

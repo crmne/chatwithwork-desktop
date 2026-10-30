@@ -4383,7 +4383,7 @@ async fn changes_files_over_the_wire() {
         .unwrap();
 }
 
-/// Changes have their own budget, apart from reads.
+/// Explicit local change quotas remain available.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn changes_are_rate_limited() {
@@ -4414,6 +4414,51 @@ async fn changes_are_rate_limited() {
     // Reads go on.
     let read = s.call("read", json!({ "path": "docs:0.md" })).await;
     assert_eq!(read["isError"], false, "{read}");
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
+/// Upgrading a saved config must remove the old defaults too, not just
+/// improve new installations. More than a day's former quota can run now.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn old_default_limits_do_not_interrupt_project_creation() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(
+        &fx,
+        &server,
+        true,
+        Some(Limits {
+            calls_per_minute: 240,
+            changes_per_minute: 30,
+            changes_per_day: 500,
+            change_bytes_per_hour: 50 * 1024 * 1024,
+            ..Limits::default()
+        }),
+    );
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+    for n in 0..510 {
+        let made = s
+            .call(
+                "create",
+                json!({
+                    "path": format!("docs:source-{n}.txt"), "content": "project file"
+                }),
+            )
+            .await;
+        assert_eq!(made["isError"], false, "change {n}: {made}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(fx.base.join("work/docs/source-509.txt")).unwrap(),
+        "project file"
+    );
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(10), daemon)
         .await
