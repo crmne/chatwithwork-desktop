@@ -2,7 +2,7 @@
 // never model tools. All browser authority still originates on this computer.
 import { about, integer, only, still, type Method, type Params, type Policy } from "./actions.js";
 import { allowedChanges, CHOOSE, described, dryRun, editable, flag, preview, settle, target, type Target } from "./changes.js";
-import { callOn, cleanUp, evaluate, isHalted, relatedNode, send } from "./cdp.js";
+import { callOn, evaluate, isAttached, isHalted, relatedNode, send } from "./cdp.js";
 import { isSensitiveField, submitReason } from "./classify.js";
 import { documentIdentity, requireRef, sameDocument, type DocumentIdentity } from "./engine-refs.js";
 import { INSTALL_ENGINE_GUARD } from "./engine-guard.js";
@@ -14,7 +14,7 @@ interface Operation {
   lease: string; tab: number; session: string; action: string; params: Params; policy: Policy;
   target: Target; document: DocumentIdentity; targetInfo: any; labels: number[];
   timer: ReturnType<typeof setTimeout>; started: number; surface: number; phase: boolean; trial: boolean;
-  dispatched: boolean; pressed: boolean; navigated: boolean; cancelled: boolean; guard: string;
+  dispatched: boolean; pressed: boolean; written: boolean; submitSent: boolean; navigated: boolean; cancelled: boolean; guard: string;
   inputQueue: Promise<unknown>; deadline: number; interceptors: Set<string>; commands: number; bytes: number;
 }
 let active: Operation | undefined;
@@ -34,7 +34,7 @@ const SESSION_METHODS = new Set([
 const NOOP = new Set(["Page.bringToFront", "Page.setFontFamilies", "Emulation.setEmulatedMedia", "Target.setAutoAttach"]);
 
 async function semantic(op: Operation): Promise<Target> {
-  const current = await target(op.params, op.policy);
+  const current = await target({ ...op.params, tab: op.tab }, op.policy);
   if (current.tabId !== op.tab || current.backendNodeId !== op.target.backendNodeId) fail("not_found");
   if (op.action === "click" && !flag(op.params, "submits", true) && submitReason(current.facts)) fail("would_submit");
   if (op.action === "type" && (isSensitiveField(current.facts) || !editable(current.facts))) fail("sensitive_field");
@@ -63,18 +63,19 @@ async function current(op: Operation): Promise<void> {
 function navigation(op: Operation): void {
   if (active !== op || op.navigated) return;
   op.navigated = true;
-  emit({ event: "engine", lease: op.lease, message: { method: op.dispatched ? "Cww.navigationStarted" : "Cww.operationCancelled", params: {} } });
+  emit({ event: "engine", lease: op.lease, message: { method: op.dispatched ? "Cww.navigationStarted" : "Cww.operationCancelled", params: { completed: op.action === "click" || op.submitSent } } });
 }
 async function cleanup(op: Operation): Promise<void> {
   clearTimeout(op.timer);
-  await cleanUp(op.tab, async options => {
-    // Stop the upstream event interceptors through their own stop method.
-    // Never allow arbitrary queued engine commands after revocation.
-    for (const objectId of op.interceptors) {
-      await send(op.tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(){ return this.stop(); }", returnByValue: true }, options).catch(() => {});
-    }
-    await evaluate(op.tab, guardStatus(op.guard, true), options).catch(() => {});
-  });
+  if (!isAttached(op.tab)) return;
+  const options = { cleanup: true, existingOnly: true };
+  const work = Promise.all([
+    ...Array.from(op.interceptors, objectId => send(op.tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(){ return this.stop(); }", returnByValue: true }, options).catch(() => {})),
+    evaluate(op.tab, guardStatus(op.guard, true), options).catch(() => {}),
+  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([work, new Promise(resolve => { timer = setTimeout(resolve, 250); })]); }
+  finally { clearTimeout(timer); }
 }
 export async function cancelEngine(): Promise<void> {
   generation++;
@@ -95,6 +96,7 @@ const begin: Method = async (params, policy) => {
   const admitted = generation;
   try {
     const timeout = integer(params.timeout_ms, "timeout_ms", 1, 14_000, 14_000);
+    const started = Date.now(), deadline = started + timeout;
     const action = params.action;
     if (typeof action !== "string" || !["click", "type", "select"].includes(action)) fail("invalid_argument");
     const args = params.params;
@@ -115,13 +117,14 @@ const begin: Method = async (params, policy) => {
       for (let i = 0; i < count; i++) { const id = await relatedNode(t.tabId, t.backendNodeId, LABEL_AT, [i]); if (id) labels.push(id); }
     }
     const { targetInfo } = await send(t.tabId, "Target.getTargetInfo");
+    if (Date.now() >= deadline) fail("timeout");
     const lease = crypto.randomUUID();
     const op: Operation = { lease, tab: t.tabId, session: `cww-engine-${lease}`, action: action as string, params: input, policy, target: t, document, targetInfo, labels,
-      timer: setTimeout(() => { if (active?.lease === lease) void cancelEngine(); }, timeout), inputQueue: Promise.resolve(), deadline: Date.now() + timeout, started: Date.now(), surface: t.backendNodeId, phase: false, trial: false,
-      dispatched: false, pressed: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
+      timer: setTimeout(() => { if (active?.lease === lease) void cancelEngine(); }, Math.max(1, deadline - Date.now())), inputQueue: Promise.resolve(), deadline, started, surface: t.backendNodeId, phase: false, trial: false,
+      dispatched: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
     if (generation !== admitted || isHalted() || policy.stopped) { clearTimeout(op.timer); fail("browser_stopped"); }
     active = op;
-    try { await current(op); await semantic(op); }
+    try { await current(op); await semantic(op); await current(op); }
     catch (error) { await cancelEngine(); throw error; }
     return { lease, timeout_ms: Math.max(1, op.deadline - Date.now()), tab: op.tab, session: op.session, action, params: input, document, targetInfo, backendNodeId: t.backendNodeId, labelBackendNodeIds: labels, facts: t.facts };
   } finally { acquiring = false; }
@@ -166,6 +169,10 @@ async function commandResult(op: Operation, command: Command): Promise<unknown> 
     }
   }
   if (sessionId !== op.session) fail("not_found");
+  if (method === "Cww.typeWritten") {
+    if (op.action !== "type" || !op.phase || op.trial || dryRun(op.params)) fail("invalid_argument");
+    op.written = true; return {};
+  }
   if (method === "Cww.actionPhase" || method === "Cww.trialPhase") {
     const surface = params.surfaceBackendNodeId;
     if (!Number.isSafeInteger(surface) || (surface !== op.target.backendNodeId && !op.labels.includes(surface))) fail("not_found");
@@ -216,10 +223,17 @@ async function commandResult(op: Operation, command: Command): Promise<unknown> 
     op.pressed = true;
   }
   if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && !op.pressed) fail("invalid_argument");
+  if (op.action === "type" && op.written && op.params.submit === true && method === "Input.dispatchKeyEvent" && params.type === "keyDown" && params.key === "Enter") op.submitSent = true;
   if (dispatch && !op.trial) op.dispatched = true;
   const result = await send(op.tab, method, params);
   if (method === "Runtime.releaseObject") op.interceptors.delete(params.objectId);
-  if (interceptor && typeof result?.result?.objectId === "string") op.interceptors.add(result.result.objectId);
+  if (interceptor && typeof result?.result?.objectId === "string") {
+    const objectId = result.result.objectId;
+    op.interceptors.add(objectId);
+    // A lost transport must not leave an upstream capture listener forever.
+    // Install this bounded lifetime before handing its handle to the engine.
+    await send(op.tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(ms){ setTimeout(() => this.stop(), ms); }", arguments: [{ value: Math.max(1, op.deadline - Date.now()) }], returnByValue: true }, { cleanup: true, existingOnly: true });
+  }
   if (op.cancelled) { await cleanup(op); fail("browser_stopped"); }
   if (op.navigated) fail(op.dispatched ? "navigation_started" : "not_found");
   if (method === "Page.getFrameTree") return { frameTree: { frame: result.frameTree.frame } };
@@ -252,7 +266,7 @@ const finish: Method = async (params) => {
   try {
     if (params.surfaceBackendNodeId !== op.surface || !op.phase) fail("invalid_argument");
     if (!op.navigated) { await current(op); await semantic(op); await surfaceSafe(op); }
-    else if (!op.dispatched) fail("not_found");
+    else if (!op.dispatched || (op.action !== "click" && !op.submitSent)) fail("action_incomplete");
     const blocked = op.navigated ? null : await evaluate<string | null>(op.tab, guardStatus(op.guard, false));
     if (blocked) fail("page_error", blocked);
     const t = op.target;

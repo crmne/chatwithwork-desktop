@@ -18,6 +18,8 @@ interface Session {
 // blur) still run after Stop; nothing else does.
 export interface SendOptions {
   cleanup?: boolean;
+  // Engine cleanup must never recreate an attachment after Stop.
+  existingOnly?: boolean;
 }
 
 const sessions = new Map<number, Session>();
@@ -34,9 +36,11 @@ export function isHalted(): boolean {
 
 // Stop or resume. Halting is set before detaching, so nothing reattaches
 // in between.
-export async function halt(on: boolean): Promise<void> {
+export async function halt(on: boolean, beforeDetach?: () => Promise<void>): Promise<void> {
   halted = on;
-  if (on) await detachAll();
+  if (on) {
+    try { await beforeDetach?.(); } finally { await detachAll(); }
+  }
 }
 
 // Run `work` with cleanup calls allowed, and, if Stop was pressed
@@ -54,6 +58,7 @@ export function isAttached(tabId: number): boolean {
 }
 
 async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
+  if (options.existingOnly && !sessions.has(tabId)) throw new ToolError("unavailable", "the browser attachment ended");
   if (halted && !options.cleanup) throw browserStopped();
   if (sessions.has(tabId)) return;
   const pending = attaching.get(tabId);

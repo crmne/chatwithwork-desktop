@@ -29,6 +29,7 @@ export async function execute(operation, wire, signal) {
   validate(operation);
   let closed = false;
   let navigated = false;
+  let navigationCompleted = false;
   let surface = operation.backendNodeId;
   const controllers = new Set();
   const transport = {
@@ -46,7 +47,7 @@ export async function execute(operation, wire, signal) {
     close() { if (!closed) { closed = true; transport.onclose?.(); } },
   };
   wire.events(message => {
-    if (message.method === 'Cww.navigationStarted') { navigated = true; transport.close(); }
+    if (message.method === 'Cww.navigationStarted') { navigated = true; navigationCompleted = message.params?.completed === true; transport.close(); }
     else if (message.method === 'Cww.operationCancelled') { for (const controller of controllers) void controller.abort(Error('operation_cancelled')); transport.close(); }
     else if (!closed) transport.onmessage?.(message);
   });
@@ -103,19 +104,21 @@ export async function execute(operation, wire, signal) {
               await run(progress => handle.press(progress, process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End', {}));
               await run(progress => page.keyboard.insertText(progress, params.text));
             }
+            const written = await wire.command({id: 0, method: 'Cww.typeWritten', params: {}, sessionId: operation.session});
+            if (written.error) throw Error(written.error.code);
             if (params.submit === true) await run(progress => handle.press(progress, 'Enter', {}));
           }
         } else {
-          // Resolve CWW's value-or-label inputs to exact option indices using
+          // Resolve CWW's value-or-label inputs to stable value/label pairs using
           // read-only DOM data; the upstream selectOption API owns mutation.
-          const indices = await handle.evaluateExpression(`(node, values) => {
+          const choices = await handle.evaluateExpression(`(node, values) => {
             if (!(node instanceof HTMLSelectElement)) throw Error('not_select');
             if (!node.multiple && values.length > 1) throw Error('single_select');
-            return values.map(value => { const index = Array.from(node.options).findIndex(option => option.value === value || option.label.trim() === value || option.text.trim() === value); if (index < 0 || node.options[index].disabled) throw Error('unavailable_option'); return { index }; });
+            return values.map(value => { const index = Array.from(node.options).findIndex(option => option.value === value || option.label.trim() === value || option.text.trim() === value); if (index < 0 || node.options[index].disabled) throw Error('unavailable_option'); return { value: node.options[index].value, label: node.options[index].label }; });
           }`, { isFunction: true }, params.values);
           await run(progress => handle.waitForElementState(progress, 'visible'));
           await run(progress => handle.waitForElementState(progress, 'enabled'));
-          if (!trial) await run(progress => handle.selectOption(progress, [], indices, {}));
+          if (!trial) await run(progress => handle.selectOption(progress, [], choices, {}));
         }
       }
     } finally { handle?.dispose(); }
@@ -123,7 +126,7 @@ export async function execute(operation, wire, signal) {
   } catch (error) {
     // Navigation after dispatch is settled by the extension without retrying
     // the requested action or exposing a destination outside local policy.
-    if (navigated && !signal.aborted) return { surfaceBackendNodeId: surface };
+    if (navigated && (operation.action === 'click' || navigationCompleted) && !signal.aborted) return { surfaceBackendNodeId: surface };
     throw error;
   } finally { signal.removeEventListener('abort', cancel); transport.close(); }
 }

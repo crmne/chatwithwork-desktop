@@ -58,13 +58,20 @@ after interception; an earlier page listener may already have observed it.
 No forced focus, screencast or virtual page clock is enabled.
 
 Stop, policy changes, disconnection and timeouts invalidate the operation.
-Cleanup calls only the known upstream interceptor's `stop()` and removes
-CWW's semantic guard. Future-document script registration is synthesized,
+The action deadline includes reference admission. Cleanup uses only an existing
+debugger attachment: it never reattaches after Stop. It calls the known
+upstream interceptor's `stop()` and removes CWW's semantic guard. Each interceptor
+also receives the operation's bounded lifetime when it is installed. The helper
+acknowledges already-sent disposal commands before reporting terminal success. Future-document script registration is synthesized,
 because navigation always ends this operation; no engine script is installed
 to run automatically in a later document. It does
 not authorize queued engine calls after revocation. Navigation before input
-invalidates the ref. Navigation or closure after input settles the action
-without another attempt; a disallowed destination's content stays withheld.
+invalidates the ref. Navigation or closure after a click settles that action without another
+attempt; a disallowed destination's content stays withheld. Typing that navigates
+during focus or cursor preparation is incomplete, not a claim that text was
+entered. A requested Enter submission settles only after the text was written
+and Enter was dispatched. Select options bind both value and label, so a
+reordered list cannot silently change the choice.
 Raw engine errors, markup, text and protocol payloads are never logged.
 
 ## Tests and provenance

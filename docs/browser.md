@@ -176,6 +176,8 @@ for first-launch OS inspection. Until it succeeds, admission selects legacy.
 Once ready, each tool request has a shared 18-second limit, including any
 automatic preview, action and cleanup; each action is at most 14 seconds. A
 subsequent slow helper start cannot send input after that request expires.
+Reference admission consumes the same deadline. Cleanup never reattaches after
+Stop, and terminal success waits for already-sent engine cleanup acknowledgements.
 
 The helper uses inherited pipes, a fixed executable and entry, and a sanitized
 environment. There is no PATH lookup, runtime download, public evaluation API or

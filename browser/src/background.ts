@@ -111,7 +111,6 @@ async function onMessage(message: any): Promise<void> {
   }
   if (message.method === "policy" && message.id === undefined) {
     const params = message.params ?? {};
-    const cancellation = cancelEngine();
     Object.assign(state.policy, {
       sites: Array.isArray(params.sites) ? params.sites.filter((s: unknown) => typeof s === "string") : [],
       all_sites: params.all_sites === true,
@@ -119,7 +118,8 @@ async function onMessage(message: any): Promise<void> {
       stopped: params.stopped === true,
       changes: params.changes === true,
     });
-    await Promise.all([cancellation, halt(state.stopped || state.policy.stopped)]);
+    if (state.stopped || state.policy.stopped) await halt(true, cancelEngine);
+    else { const cancellation = cancelEngine(); await halt(false); await cancellation; }
     void refreshBadge();
     return;
   }
@@ -133,7 +133,7 @@ async function onMessage(message: any): Promise<void> {
 async function answer(method: string, params: unknown): Promise<{ result: unknown } | { error: { code: string; message: string } }> {
   await loaded;
   try {
-    if (state.stopped || state.policy.stopped) throw browserStopped();
+    if ((state.stopped || state.policy.stopped) && method !== "engine_cancel") throw browserStopped();
     const run = Object.hasOwn(methods, method) ? methods[method] : undefined;
     if (!run) throw new ToolError("invalid_argument", `unknown method ${method.slice(0, 40)}`);
     if (!params || typeof params !== "object" || Array.isArray(params)) {
@@ -144,7 +144,7 @@ async function answer(method: string, params: unknown): Promise<{ result: unknow
     try {
       const result = await run(params as Record<string, unknown>, state.policy);
       // Stop pressed while the call ran: what it found doesn't go out.
-      if (state.stopped || state.policy.stopped) throw browserStopped();
+      if ((state.stopped || state.policy.stopped) && method !== "engine_cancel") throw browserStopped();
       return { result };
     } finally {
       state.busy--;
@@ -182,8 +182,7 @@ async function refreshBadge(): Promise<void> {
 
 async function setStopped(stopped: boolean): Promise<void> {
   state.stopped = stopped;
-  const cancellation = stopped ? cancelEngine() : Promise.resolve();
-  await Promise.all([cancellation, chrome.storage.local.set({ stopped }), halt(state.stopped || state.policy.stopped)]);
+  await Promise.all([chrome.storage.local.set({ stopped }), halt(state.stopped || state.policy.stopped, cancelEngine)]);
   post({ event: "state", stopped });
   await refreshBadge();
 }

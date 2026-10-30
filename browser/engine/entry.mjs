@@ -5,6 +5,7 @@ const MAX = 2 * 1024 * 1024;
 const TOTAL = 16 * 1024 * 1024;
 let received = 0, written = 0;
 const pending = new Map();
+const draining = new Set();
 const controller = new AbortController();
 let next = 0, started = false, finished = false, buffer = Buffer.alloc(0), receiveEvent;
 const queue = [];
@@ -21,13 +22,20 @@ const fail = (code = 'page_error') => {
   send({ type: 'error', error: { code, message: code === 'invalid_argument' ? 'The browser operation is invalid.' : 'The browser operation did not complete. Read the page again before trying another action.' } });
   finished = true;
   for (const wait of pending.values()) wait.reject(Error('operation_cancelled'));
-  pending.clear(); process.stdin.destroy();
+  pending.clear();
+  for (const wait of draining) wait.reject(Error('operation_cancelled'));
+  draining.clear(); process.stdin.destroy();
 };
 const wire = {
   command(command) {
     if (controller.signal.aborted || pending.size >= 128 || next >= 512) return Promise.reject(Error('operation_cancelled'));
     const id = ++next;
     return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); send({ type: 'command', id, command }); });
+  },
+  drain() {
+    if (controller.signal.aborted) return Promise.reject(Error('operation_cancelled'));
+    if (!pending.size) return Promise.resolve();
+    return new Promise((resolve, reject) => draining.add({ resolve, reject }));
   },
   events(callback) { receiveEvent = callback; for (const event of queue.splice(0)) callback(event); },
 };
@@ -36,7 +44,9 @@ async function message(value) {
   if (value.type === 'cancel') return fail('browser_stopped');
   if (value.type === 'reply') {
     const wait = pending.get(value.id); if (!wait) return fail('invalid_argument');
-    pending.delete(value.id); wait.resolve(value); return;
+    pending.delete(value.id); wait.resolve(value);
+    if (!pending.size) { for (const waiter of draining) waiter.resolve(); draining.clear(); }
+    return;
   }
   if (value.type === 'event') {
     if (receiveEvent) receiveEvent(value.message);
@@ -50,6 +60,10 @@ async function message(value) {
   setTimeout(() => fail('page_error'), Math.min(14_000, value.operation.timeout_ms ?? 14_000)).unref();
   try {
     const result = await execute(value.operation, wire, controller.signal);
+    // Upstream JSHandle.dispose intentionally does not await its CDP reply.
+    // execute has closed admission; acknowledge every already-sent cleanup
+    // command before emitting a terminal result to the native wrapper.
+    await wire.drain();
     if (!finished) { send({ type: 'result', result }); finished = true; process.stdin.destroy(); }
   } catch { fail('page_error'); }
 }

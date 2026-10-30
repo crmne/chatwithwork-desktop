@@ -34,6 +34,7 @@ async function action(action: string, params: Record<string,unknown>, beforeComm
   let buffer = '', eventIndex = setup.daemon.events.length;
   child.stdin.on('error',()=>{});
   const methods: string[] = [];
+  const inFlight = new Set<number>();
   const drain = () => {
     for (const event of setup.daemon.events.slice(eventIndex)) if (event.event === 'engine' && event.lease === operation.lease) child.stdin.write(JSON.stringify({type:'event',message:event.message})+'\n');
     eventIndex = setup.daemon.events.length;
@@ -43,11 +44,14 @@ async function action(action: string, params: Record<string,unknown>, beforeComm
     child.stdout.on('data',chunk=>{ buffer+=chunk; let newline; while((newline=buffer.indexOf('\n'))>=0) {
       const message=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1);
       if(message.type==='command') {
-        methods.push(message.command.method);
+        methods.push(message.command.method);inFlight.add(message.id);
         void Promise.resolve(beforeCommand?.(message.command)).then(()=>setup.daemon.call('engine_command',{lease:operation.lease,command:message.command})).then(reply=>{
-          drain(); child.stdin.write(JSON.stringify({type:'reply',id:message.id,...(reply.error?{error:reply.error}:reply.result)})+'\n');
+          drain(); inFlight.delete(message.id); child.stdin.write(JSON.stringify({type:'reply',id:message.id,...(reply.error?{error:reply.error}:reply.result)})+'\n');
         }).catch(reject);
-      } else if(message.type==='result' || message.type==='error') done(message);
+      } else if(message.type==='result' || message.type==='error') {
+        if(message.type==='result' && inFlight.size) reject(Error('helper completed before command acknowledgements'));
+        else done(message);
+      }
     }});
     child.once('error',reject); child.once('exit',code=>{if(code)reject(Error(`helper exited ${code}`))});
     child.stdin.write(JSON.stringify({type:'call',operation})+'\n');
@@ -226,4 +230,58 @@ test('an intercepted actual press is dispatched only once even if upstream retri
     await inWorker(setup.context, () => { chrome.debugger.sendCommand = (globalThis as any).enginePressSpy.original; delete (globalThis as any).enginePressSpy; });
     await page.close();
   }
+});
+
+test('terminal success waits for delayed upstream handle-disposal acknowledgements',async()=>{
+ const {tab,page,ref}=await fixture();let releases=0;
+ const result=await action('type',{tab,ref:ref('Message'),text:'Acknowledged'},async command=>{
+  if(command.method==='Runtime.releaseObject') {releases++;await new Promise(done=>setTimeout(done,100))}
+ });expect(releases).toBeGreaterThan(0);expect(result.error).toBeUndefined();await expect(page.locator('#text')).toHaveValue('Acknowledged');await page.close();
+});
+test('select binds value and label so reordered options cannot change the requested choice',async()=>{
+ const {tab,page,ref}=await fixture();let reordered=false;
+ const result=await action('select',{tab,ref:ref('Colour'),values:['Blue']},async command=>{
+  if(!reordered && command.method==='Runtime.callFunctionOn' && String(command.params.arguments?.[3]?.value).includes('.selectOptions(')) {
+   reordered=true;await page.locator('#colour').evaluate(el=>el.prepend(el.lastElementChild!));
+  }
+ });expect(reordered).toBe(true);expect(result.error).toBeUndefined();await expect(page.locator('#colour')).toHaveValue('blue');await page.close();
+});
+test('navigation during focus never reports that text was entered',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#text').evaluate(el=>el.addEventListener('focus',()=>location.href='/next'));
+ const result=await action('type',{tab,ref:ref('Message'),text:'Never entered'});expect(result.error).toBeTruthy();await expect(page).toHaveURL(origin+'/next');await page.close();
+});
+test('navigation after completed typing and its requested Enter submission settles normally',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#text').evaluate(el=>{const form=document.createElement('form');form.action='/next';el.replaceWith(form);form.append(el)});
+ const result=await action('type',{tab,ref:ref('Message'),text:'Written before submit',submit:true});expect(result.error).toBeUndefined();expect(result.result.url).toContain(origin+'/next');await page.close();
+});
+test('engine cancellation after Stop never reattaches the debugger',async()=>{
+ const {tab,page,ref}=await fixture();let actual=false,stopped=false;
+ await inWorker(setup.context,async()=>{const original=chrome.debugger.attach.bind(chrome.debugger);(globalThis as any).engineAttachSpy={original,stopped:false,afterStop:0};chrome.debugger.attach=((...args:any[])=>{if((globalThis as any).engineAttachSpy.stopped)(globalThis as any).engineAttachSpy.afterStop++;return (original as any)(...args)}) as any});
+ try {
+ const result=await action('click',{tab,ref:ref('Continue'),submits:false},async command=>{
+  if(command.method==='Cww.actionPhase') actual=true;
+  if(actual && !stopped && command.method==='Input.dispatchMouseEvent') {stopped=true;await inWorker(setup.context,()=>{(globalThis as any).engineAttachSpy.stopped=true});setup.daemon.setPolicy({stopped:true})}
+ });expect(stopped).toBe(true);expect(result.error).toBeTruthy();
+ expect(await inWorker(setup.context,()=>(globalThis as any).engineAttachSpy.afterStop)).toBe(0);
+ const cancelled=await setup.daemon.call('engine_cancel',{lease:'already-ended'});expect(cancelled.error).toBeUndefined();
+ await page.locator('#button').click();await expect(page.locator('#result')).toHaveText('Count 1');
+ }finally{await inWorker(setup.context,()=>{chrome.debugger.attach=(globalThis as any).engineAttachSpy.original;delete(globalThis as any).engineAttachSpy});await page.close()}
+});
+
+test('admission work consumes the native operation deadline before a lease can dispatch',async()=>{
+ const {tab,page,ref}=await fixture();
+ await inWorker(setup.context,async()=>{
+  const original=chrome.debugger.sendCommand.bind(chrome.debugger);(globalThis as any).admissionSpy={original,delayed:false,input:0};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   if(method==='Target.getTargetInfo'){(globalThis as any).admissionSpy.delayed=true;await new Promise(done=>setTimeout(done,1100))}
+   if(method.startsWith('Input.'))(globalThis as any).admissionSpy.input++;
+   return original(target,method,params);
+  }) as typeof chrome.debugger.sendCommand;
+ });
+ try {
+  const result=await setup.daemon.call('engine_begin',{action:'click',params:{tab,ref:ref('Continue'),submits:false},timeout_ms:1000});
+  expect(result.error?.code).toBe('timeout');
+  expect(await inWorker(setup.context,()=>({delayed:(globalThis as any).admissionSpy.delayed,input:(globalThis as any).admissionSpy.input}))).toEqual({delayed:true,input:0});
+  await expect(page.locator('#result')).toHaveText('Count 0');
+ }finally{await inWorker(setup.context,()=>{chrome.debugger.sendCommand=(globalThis as any).admissionSpy.original;delete(globalThis as any).admissionSpy});await page.close()}
 });
