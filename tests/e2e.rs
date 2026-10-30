@@ -1205,6 +1205,154 @@ async fn control(paths: &Paths, request: ControlRequest) -> Value {
         .expect("daemon running")
 }
 
+/// The same metadata emitted by Rails reaches the real MCP handler, not
+/// just a BrowserTools test double. Its extension is a content-free fixture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn browser_automatic_metadata_is_scoped_and_revocable_over_the_mcp_tunnel() {
+    use cww::browsing::bridge::{EXTENSION_ID, origin};
+    use cww::tools::BROWSER_AUTO_APPROVE_META;
+    use std::io::{BufRead, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn automatic(
+        session: &mut Session,
+        name: &str,
+        arguments: Value,
+        bot: Option<&str>,
+    ) -> Value {
+        session.next_id += 1;
+        let id = session.next_id;
+        let mut meta = json!({
+            "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+            "io.modelcontextprotocol/clientInfo":{"name":"ruby_llm","version":"test"},
+            "io.modelcontextprotocol/clientCapabilities":{},
+            "com.chatwithwork/chatId":"chat-7",
+            BROWSER_AUTO_APPROVE_META:true,
+        });
+        if let Some(bot) = bot {
+            meta["com.chatwithwork/botId"] = json!(bot);
+        }
+        session
+            .send_raw(
+                json!({"jsonrpc":"2.0", "id":id, "method":"tools/call", "params":{
+                    "name":name, "arguments":arguments, "_meta":meta
+                }}),
+            )
+            .await;
+        session.response(id).await
+    }
+
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair(&fx, &server);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.browser.enabled = true;
+    config.browser.changes = true;
+    config.browser.sites = vec![server.origin.clone()];
+    config.browser.ask_before_actions = false;
+    config.save(&fx.paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut session = Session {
+        ws,
+        next_id: 0,
+        legacy: false,
+    };
+    let socket = fx.paths.socket_path();
+    let url = format!("{}/fixture", server.origin);
+    let extension_url = url.clone();
+    let seen = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::clone(&seen);
+    let extension = std::thread::spawn(move || {
+        let control::BrowserAttach::Attached {
+            mut reader,
+            mut writer,
+        } = control::attach_browser(&socket, &origin(EXTENSION_ID)).unwrap()
+        else {
+            panic!("extension attaches")
+        };
+        writeln!(
+            writer,
+            "{}",
+            json!({"event":"hello","site_policy_version":2,"stopped":false})
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            line.clear();
+            if request.get("id").is_none() {
+                continue;
+            }
+            requests.fetch_add(1, Ordering::SeqCst);
+            let reply = json!({"id":request["id"],"result":{"url":extension_url,"dry_run":request["params"]["dry_run"],"acted":request["params"]["dry_run"] != true}});
+            writeln!(writer, "{reply}").unwrap();
+            writer.flush().unwrap();
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while control(&fx.paths, ControlRequest::Browser).await["browser"]["extension"]["site_policy_version"] != 2 { tokio::task::yield_now().await; }
+    }).await.unwrap();
+    let listed = session.request("tools/list", json!({})).await;
+    let open = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "browser_open")
+        .unwrap();
+    assert_eq!(open["_meta"][BROWSER_AUTO_APPROVE_META], true);
+    let response = automatic(&mut session, "browser_open", json!({"url":url}), None).await;
+    assert_eq!(
+        response["result"]["structuredContent"]["acted"], true,
+        "{response}"
+    );
+    assert_eq!(seen.load(Ordering::SeqCst), 2, "preflight and action");
+    let bot = automatic(&mut session, "browser_open", json!({"url":url}), Some("42")).await;
+    assert_eq!(error_code(&bot["result"]), "needs_approval");
+    let file = automatic(&mut session, "read", json!({"path":"docs:notes.md"}), None).await;
+    assert!(
+        file.get("error").is_some(),
+        "browser consent never authorizes a file tool: {file}"
+    );
+    assert_eq!(seen.load(Ordering::SeqCst), 2);
+    control(
+        &fx.paths,
+        ControlRequest::BrowserAskBeforeActions { ask: true },
+    )
+    .await;
+    let ws = tokio::time::timeout(Duration::from_secs(20), server.sockets.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut session = Session {
+        ws,
+        next_id: 0,
+        legacy: false,
+    };
+    let listed = session.request("tools/list", json!({})).await;
+    assert!(!listed.to_string().contains(BROWSER_AUTO_APPROVE_META));
+    let revoked = automatic(&mut session, "browser_open", json!({"url":url}), None).await;
+    assert_eq!(error_code(&revoked["result"]), "needs_approval");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        2,
+        "revoked request never reaches extension"
+    );
+    assert!(
+        std::fs::read_to_string(fx.paths.audit_file())
+            .unwrap()
+            .contains("browser_local_policy")
+    );
+    shutdown.cancel();
+    daemon.await.unwrap().unwrap();
+    extension.join().unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn notification_delivery_stays_online_without_a_ui_and_reports_unavailability_honestly() {
     let fx = fixture();
