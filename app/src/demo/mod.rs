@@ -294,7 +294,7 @@ fn fresh() -> State {
     let home = crate::paths::home_dir().unwrap_or_else(|| PathBuf::from("/home/me"));
     let status = json!({
         "ok": true,
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "pid": 4242,
         "connection": { "connection": "not_paired", "since": ago(5) },
         "server": null,
@@ -418,7 +418,7 @@ fn sample() -> State {
     ];
     let status = json!({
         "ok": true,
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "pid": 4242,
         "connection": { "connection": "connected", "since": ago(26 * 3600 - 2) },
         "server": "https://chatwithwork.com",
