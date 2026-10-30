@@ -81,7 +81,7 @@ test.afterAll(async () => {
 test("the native host attaches with the extension's origin and it says hello", async () => {
   expect(setup.daemon.attachedOrigin).toBe(`chrome-extension://${EXTENSION_ID}/`);
   const hello = await setup.daemon.waitForEvent((e) => e.event === "hello");
-  expect(hello.version).toBe("0.1.2");
+  expect(hello.version).toBe("0.1.3");
   expect(hello.stopped).toBe(false);
 });
 

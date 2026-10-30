@@ -1,6 +1,6 @@
 [package]
 name = "cww"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 rust-version = "1.90"
 description = "Chat with Work Desktop: lets Chat with Work read, and with your approval change files and run commands, in folders you share"

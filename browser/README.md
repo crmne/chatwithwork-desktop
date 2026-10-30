@@ -17,13 +17,13 @@ npm run package:unpacked  # versioned ZIP for manual installation
 
 ## Trying it
 
-1. Download the [0.1.2 manual installation ZIP](https://github.com/crmne/chatwithwork-desktop/releases/download/browser-v0.1.2/chatwithwork-browser-0.1.2-unpacked.zip), extract it into a folder you will keep, then select that folder at `chrome://extensions` with "Load unpacked" (Developer mode on). To build from source instead, run `npm run build` and select `browser/build`.
+1. Download the [0.1.3 manual installation ZIP](https://github.com/crmne/chatwithwork-desktop/releases/download/browser-v0.1.3/chatwithwork-browser-0.1.3-unpacked.zip), extract it into a folder you will keep, then select that folder at `chrome://extensions` with "Load unpacked" (Developer mode on). To build from source instead, run `npm run build` and select `browser/build`.
 2. `cww browser enable` registers `cww` with the browsers it finds and turns on the browser tools; `cww browser allow github.com` allows a site.
 3. The extension's menu says whether it reached Chat with Work Desktop. Drag a tab into a group named "Chat with Work", or let Chat with Work open one.
 
 To update a manual installation, replace the files in its existing folder with
 the newly extracted files, then press **Reload** on its card at
-`chrome://extensions`. Confirm the card shows **0.1.2**. Updating Desktop alone
+`chrome://extensions`. Confirm the card shows **0.1.3**. Updating Desktop alone
 does not update an unpacked extension. Keep using the `-unpacked.zip` download:
 the store upload ZIP intentionally omits the public key that keeps a manual
 installation's identity stable.
