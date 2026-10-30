@@ -119,6 +119,19 @@ enum Command {
 
 #[derive(Subcommand)]
 enum BrowserCommand {
+    /// List the running daemon's browser tools and their JSON schemas.
+    Tools,
+    /// Call a browser tool through the running daemon, returning MCP JSON.
+    Call {
+        tool: String,
+        /// JSON object from a file, or - for stdin. Defaults to {}.
+        #[arg(long)]
+        input: Option<PathBuf>,
+        /// Acknowledge the person's approval for this specific action,
+        /// after reviewing its dry run. Never enables sites or actions.
+        #[arg(long)]
+        approve: bool,
+    },
     /// Show whether the browser is on, its sites and the connected browser.
     Status {
         #[arg(long)]
@@ -1052,6 +1065,23 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
         Ok(())
     };
     match command {
+        BrowserCommand::Tools => {
+            println!("{}", cww::browsing::local::tools(&paths.socket_path())?);
+            return Ok(());
+        }
+        BrowserCommand::Call {
+            tool,
+            input,
+            approve,
+        } => {
+            let args = cww::browsing::local::arguments(input.as_deref())?;
+            let result = cww::browsing::local::call(&paths.socket_path(), tool, args, approve)?;
+            println!("{result}");
+            if result["isError"] == true {
+                anyhow::bail!("browser tool refused or failed; see the JSON result");
+            }
+            return Ok(());
+        }
         BrowserCommand::Status { json } => {
             let live = control::request(&paths.socket_path(), ControlRequest::Browser)
                 .ok()
@@ -1275,6 +1305,34 @@ fn offer_documents(paths: &Paths) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_calls_read_json_from_stdin_and_require_explicit_approval() {
+        let cli = Cli::try_parse_from(["cww", "browser", "call", "browser_read", "--input", "-"])
+            .unwrap();
+        let Some(Command::Browser {
+            command:
+                BrowserCommand::Call {
+                    tool,
+                    input,
+                    approve,
+                },
+        }) = cli.command
+        else {
+            panic!("browser call");
+        };
+        assert_eq!(tool, "browser_read");
+        assert_eq!(input, Some(PathBuf::from("-")));
+        assert!(!approve);
+        let cli =
+            Cli::try_parse_from(["cww", "browser", "call", "browser_click", "--approve"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Browser {
+                command: BrowserCommand::Call { approve: true, .. }
+            })
+        ));
+    }
 
     #[test]
     fn saved_organization_ids_can_start_with_a_hyphen() {

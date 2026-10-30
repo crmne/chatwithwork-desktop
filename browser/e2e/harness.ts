@@ -196,12 +196,28 @@ export async function launchBrowser(home: string): Promise<BrowserContext> {
       allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
     }),
   );
-  return chromium.launchPersistentContext(profile, {
+  const hardwareCheck = process.env.CWW_BROWSER_GPU_CHECK === "1";
+  const context = await chromium.launchPersistentContext(profile, {
     channel: "chromium",
     headless: process.env.HEADED !== "1",
-    args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`],
+    args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`,
+      ...(hardwareCheck ? ["--use-angle=gl-egl", "--use-gl=angle"] : [])],
     env: { ...process.env, CWW_HOME: home } as Record<string, string>,
   });
+  if (hardwareCheck) {
+    const page = context.pages()[0] ?? await context.newPage();
+    const renderer = await page.evaluate(() => {
+      const gl = document.createElement("canvas").getContext("webgl");
+      const ext = gl?.getExtension("WEBGL_debug_renderer_info");
+      return ext ? String(gl!.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "unavailable";
+    });
+    if (!renderer.includes("NVIDIA") || /SwiftShader|llvmpipe/i.test(renderer)) {
+      await context.close();
+      throw new Error(`Hardware GPU required, got ${renderer}`);
+    }
+    console.log(`Browser GPU: ${renderer}`);
+  }
+  return context;
 }
 
 // Run `fn` in the extension's service worker.

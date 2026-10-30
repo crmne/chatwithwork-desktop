@@ -9,11 +9,12 @@ use super::sites;
 use crate::config::{BotLoan, BrowserConfig, Config};
 
 /// What the extension enforces: the allowed sites, and stopped while the
-/// browser is stopped or the whole computer is paused.
+/// browser is disabled/stopped or the whole computer is paused. Disabling
+/// also revokes calls already admitted by a tunnel or local client.
 pub fn policy(config: &Config) -> Policy {
     Policy {
         sites: config.browser.sites.clone(),
-        stopped: config.browser.stopped || config.paused,
+        stopped: !config.browser.enabled || config.browser.stopped || config.paused,
         changes: config.browser.changes,
     }
 }
@@ -109,8 +110,19 @@ mod tests {
     #[test]
     fn pausing_the_computer_stops_the_browser() {
         let mut config = Config::default();
+        config.browser.enabled = true;
         assert!(!policy(&config).stopped);
         config.paused = true;
+        assert!(policy(&config).stopped);
+    }
+
+    #[test]
+    fn disabling_the_browser_revokes_existing_tool_instances() {
+        let mut config = Config::default();
+        config.browser.enabled = true;
+        config.browser.changes = true;
+        assert!(!policy(&config).stopped);
+        config.browser.enabled = false;
         assert!(policy(&config).stopped);
     }
 

@@ -74,6 +74,11 @@ pub const UNATTENDED_META: &str = "com.chatwithwork/unattended";
 pub enum Caller {
     #[default]
     Person,
+    /// A same-user control client. Its reads share one fixed budget; each
+    /// action needs an explicit acknowledgement of the person's approval.
+    LocalBrowser {
+        approved: bool,
+    },
     Bot {
         id: String,
         unattended: bool,
@@ -218,10 +223,19 @@ impl LocalFiles {
         progress: Option<Progress>,
         caller: Caller,
     ) -> Option<CallToolResult> {
-        let known = READ_TOOLS.contains(&name)
-            || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
-            || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
-            || self.browser().is_some_and(|browser| browser.offers(name));
+        // The local control adapter cannot select another budget or use
+        // file/command tools, even if a caller supplies their valid names.
+        let local = matches!(caller, Caller::LocalBrowser { .. });
+        let chat_id = if local {
+            Some("local-browser".to_string())
+        } else {
+            chat_id
+        };
+        let known = (!local || is_browser_tool(name))
+            && (READ_TOOLS.contains(&name)
+                || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
+                || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
+                || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
             entry.tool = Some(
@@ -274,6 +288,7 @@ impl LocalFiles {
 
         let for_bot = match &caller {
             Caller::Bot { id, .. } => Some(format!("for bot {id}")),
+            Caller::LocalBrowser { .. } => Some("local browser client".into()),
             Caller::Person => None,
         };
         entry.detail = for_bot.clone();
@@ -363,6 +378,41 @@ impl LocalFiles {
             self.inner.audit.append(&entry);
         }
         Some(result)
+    }
+
+    /// The supported local browser path. An approved action still passes
+    /// the browser's dry run immediately before execution. A refusal or
+    /// failed preflight never falls through to the real action.
+    pub async fn call_local_browser(
+        &self,
+        name: &str,
+        args: JsonObject,
+        approved: bool,
+        request_id: String,
+    ) -> Option<CallToolResult> {
+        let caller = Caller::LocalBrowser { approved };
+        if approved
+            && crate::browsing::tools::CHANGE_TOOLS.contains(&name)
+            && args.get("dry_run") != Some(&Value::Bool(true))
+        {
+            let mut preview = args.clone();
+            preview.insert("dry_run".into(), Value::Bool(true));
+            let checked = self
+                .call_as(
+                    name,
+                    Some(preview),
+                    None,
+                    format!("{request_id}-check"),
+                    None,
+                    caller.clone(),
+                )
+                .await?;
+            if checked.is_error == Some(true) {
+                return Some(checked);
+            }
+        }
+        self.call_as(name, Some(args), None, request_id, None, caller)
+            .await
     }
 
     /// A person's call goes as it is. A bot's reaches only the folders lent
@@ -505,6 +555,15 @@ impl LocalFiles {
             ));
         }
         self.inner.limiter.check_call()?;
+        if matches!(caller, Caller::LocalBrowser { approved: false })
+            && crate::browsing::tools::CHANGE_TOOLS.contains(&name)
+            && args.get("dry_run") != Some(&Value::Bool(true))
+        {
+            return Err(ToolError::new(
+                ErrorCode::NeedsApproval,
+                "Review this action with dry_run: true, obtain the person's approval, then use --approve for this action only",
+            ));
+        }
         let reader = Arc::clone(&self.inner.reader);
         match name {
             "roots" => {
@@ -785,6 +844,12 @@ impl LocalFiles {
             all.extend(browser_tools(browser));
         }
         all
+    }
+
+    /// Only the fixed browser tools, for local clients. No generic MCP
+    /// dispatch, filesystem tools or command tools are exposed here.
+    pub fn local_browser_tools(&self) -> Vec<Tool> {
+        self.browser().map(browser_tools).unwrap_or_default()
     }
 }
 

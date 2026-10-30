@@ -606,6 +606,31 @@ async fn run_with_notifications(
 }
 
 impl Daemon {
+    /// Every entry point uses the same reader, writer, limiter, audit log,
+    /// pause switch and browser bridge owned by this confined daemon.
+    async fn tool_server(&self) -> LocalFiles {
+        let config = self.config.lock().await;
+        LocalFiles::new(
+            Arc::clone(&self.reader),
+            Arc::clone(&self.writer),
+            Arc::clone(&self.limiter),
+            Arc::clone(&self.audit),
+            Arc::clone(&self.paused),
+            config.limits.max_message_bytes,
+        )
+        .with_commands(command_tools(&config, &self.runner))
+        .with_browser(
+            (self.organization.is_none() && config.browser.enabled).then(|| {
+                crate::browsing::tools::BrowserTools::new(
+                    Arc::clone(&self.browser),
+                    Some(Arc::clone(&self.writer)),
+                    Arc::clone(&self.limiter),
+                    config.browser.changes,
+                )
+            }),
+        )
+    }
+
     /// Push a fresh status to subscribers whenever something changes. Sleeps
     /// until then; bursts of changes are coalesced.
     async fn publish_status(self: Arc<Self>, shutdown: CancellationToken) {
@@ -661,27 +686,7 @@ impl Daemon {
             let token = shutdown.child_token();
             *self.tunnel_token.lock().await = token.clone();
             let max_message_bytes = self.config.lock().await.limits.max_message_bytes;
-            let commands = command_tools(&*self.config.lock().await, &self.runner);
-            let browser_config = self.config.lock().await.browser.clone();
-            let files = LocalFiles::new(
-                Arc::clone(&self.reader),
-                Arc::clone(&self.writer),
-                Arc::clone(&self.limiter),
-                Arc::clone(&self.audit),
-                Arc::clone(&self.paused),
-                max_message_bytes,
-            )
-            .with_commands(commands)
-            .with_browser(
-                (self.organization.is_none() && browser_config.enabled).then(|| {
-                    crate::browsing::tools::BrowserTools::new(
-                        Arc::clone(&self.browser),
-                        Some(Arc::clone(&self.writer)),
-                        Arc::clone(&self.limiter),
-                        browser_config.changes,
-                    )
-                }),
-            );
+            let files = self.tool_server().await;
             let proxy_setting = self.config.lock().await.proxy.clone();
             let tunnel = crate::proxy::for_server(proxy_setting.as_deref(), &credentials.server)
                 .and_then(|proxy| {
@@ -1350,6 +1355,8 @@ impl ControlHandler for Daemon {
                     | ControlRequest::SuggestedRoots
                     | ControlRequest::Deny
                     | ControlRequest::Browser
+                    | ControlRequest::BrowserTools
+                    | ControlRequest::BrowserCall { .. }
                     | ControlRequest::BrowserEnabled { .. }
                     | ControlRequest::BrowserSite { .. }
                     | ControlRequest::BrowserChanges { .. }
@@ -1434,6 +1441,21 @@ impl ControlHandler for Daemon {
                 self.set_read_budget(root, read_budget).await
             }
             ControlRequest::Browser => Ok(self.browser_json().await),
+            ControlRequest::BrowserTools => Ok(json!({
+                "tools": self.tool_server().await.local_browser_tools()
+            })),
+            ControlRequest::BrowserCall {
+                tool,
+                arguments,
+                approved,
+            } => {
+                let result = self.tool_server().await.call_local_browser(
+                    &tool, arguments, approved, crate::auth::key::random_token(16)
+                ).await.ok_or_else(|| Refusal::new(
+                    "unknown_tool", "This daemon does not offer that browser tool. Use cww browser tools to list available tools."
+                ))?;
+                Ok(json!({ "result": result }))
+            }
             ControlRequest::BrowserEnabled { enabled } => {
                 self.edit_browser(
                     if enabled {

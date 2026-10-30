@@ -43,8 +43,8 @@ pub enum ErrorCode {
     Conflict,
     /// A bot's call reached a folder that isn't lent to that bot.
     NotLent,
-    /// A bot's command was to start without anyone approving it where its
-    /// loan doesn't let it.
+    /// A bot's command or a local browser action lacks the required
+    /// per-action approval.
     NeedsApproval,
     /// The browser with the extension isn't connected to the daemon.
     BrowserUnavailable,

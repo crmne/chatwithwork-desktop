@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod host;
 pub mod install;
+pub mod local;
 pub mod settings;
 pub mod sites;
 pub mod tools;

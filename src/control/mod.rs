@@ -193,6 +193,17 @@ pub enum ControlRequest {
     },
     /// The browser settings and the attached browser, if any.
     Browser,
+    /// Browser tools currently offered by this daemon, with their MCP schemas.
+    BrowserTools,
+    /// A local caller using only the normal browser tools. Approval is per
+    /// action, never permission to change browser settings or shared files.
+    BrowserCall {
+        tool: String,
+        #[serde(default)]
+        arguments: serde_json::Map<String, Value>,
+        #[serde(default)]
+        approved: bool,
+    },
     /// Offer the browser tools, or stop offering them. Clients register the
     /// native messaging host first (`cww::browsing::install`).
     BrowserEnabled {

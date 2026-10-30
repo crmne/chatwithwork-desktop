@@ -282,6 +282,38 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 
 Each answers like `browser`. `cww browser enable|disable|allow-changes|deny-changes|allow|disallow|stop|resume|share|unshare|status` edit `config.toml` the same way and send `reload`.
 
+Local coding clients can list and call the same browser tools without
+opening a tunnel or implementing the native-host protocol:
+
+```json
+{"cmd":"browser_tools"}
+{"cmd":"browser_call","tool":"browser_read","arguments":{"tab":123}}
+{"cmd":"browser_call","tool":"browser_click","arguments":{"tab":123,"ref":"e1","dry_run":true}}
+{"cmd":"browser_call","tool":"browser_click","arguments":{"tab":123,"ref":"e1"},"approved":true}
+```
+
+`browser_tools` answers `{"ok":true,"tools":[...]}` with MCP tool schemas;
+the list is empty while browsing is disabled. `browser_call` answers
+`{"ok":true,"result":{...}}` with the MCP `CallToolResult`. Tool refusals
+have `result.isError:true` and an error code in
+`result.structuredContent.error`; unavailable or non-browser tool names
+instead return `ok:false, code:"unknown_tool"`. The ordinary 16 KiB request
+limit applies. Results include bounded image content blocks when relevant.
+
+`approved` defaults to false. Every action without it is refused with
+`needs_approval`, except a dry run. The client must show/review a separate
+dry run and obtain authorization before acknowledging approval. The daemon
+repeats the dry run before an approved action; an error stops execution.
+Approval never changes settings or overrides site, tab, sensitive-field,
+pause or stop restrictions. All calls share the daemon's existing limiter
+and audit log, with fixed chat ID `local-browser` and generated request IDs.
+Clients cannot set a budget ID, impersonate a bot or dispatch other MCP
+tools. Chat-only organization runtimes refuse both requests. The socket's
+same-user trust boundary is unchanged: local callers are responsible for
+truthful per-action approval, not granted a new user authentication flow.
+The CLI equivalents are `cww browser tools` and
+`cww browser call TOOL --input FILE|- [--approve]`.
+
 **`browser_attach`** is for the native messaging host only (`cww` started by the browser with the extension's origin as its argument):
 
 ```json

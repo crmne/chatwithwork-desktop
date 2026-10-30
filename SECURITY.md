@@ -20,6 +20,10 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 - Turning on changes for a folder from the server, or keeping them after the user turned them off.
 - Getting the browser extension or the daemon to act on a tab outside the "Chat with Work" tab group or on a site the user didn't allow, to type into or read a password, payment or one-time code field, to act while stopped, to run code a server sends in a page, or to let another extension or a web page drive it.
 - Bypassing the daemon's rate and volume limits, pause, or audit log.
+- Dispatching non-browser tools through the local browser-call adapter,
+  changing its fixed read-budget scope, or bypassing its per-action approval
+  acknowledgement and mandatory dry run. Local clients still run as the
+  user and are responsible for obtaining that user's actual authorization.
 - Stealing or replaying device credentials or access tokens, or pairing a device without the user's approval.
 - Driving the daemon through its control socket as another local user.
 - Memory-safety or denial-of-service bugs triggered by a malicious server or a malicious local file.
