@@ -1,0 +1,7 @@
+{
+  "name": "cww-playwriter-engine-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test --test-concurrency=1 *.test.mjs" },
+  "dependencies": { "@xmorse/playwright-core": "1.59.13" }
+}
