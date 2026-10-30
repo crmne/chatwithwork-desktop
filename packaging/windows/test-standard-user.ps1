@@ -20,6 +20,8 @@ try {
   New-ItemProperty -Path $installerPolicy -Name DisableMSI -PropertyType DWord -Value 0 -Force | Out-Null
   Copy-Item -LiteralPath (Resolve-Path $Msi).Path -Destination (Join-Path $directory 'cww-test.msi')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'test-install.ps1') -Destination $directory
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../../browser/engine/scripts/runtime_smoke.py') -Destination $directory
+  $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
   $password = ConvertTo-SecureString ('Cww!' + [Guid]::NewGuid().ToString('N')) -AsPlainText -Force
   New-LocalUser -Name $name -Password $password -AccountNeverExpires | Out-Null
   $createdUser = $true
@@ -46,13 +48,14 @@ try {
   $start.WorkingDirectory = $directory
   $start.RedirectStandardOutput = $true
   $start.RedirectStandardError = $true
-  foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', "$directory\test-install.ps1", '-Msi', "$directory\cww-test.msi", '-StandardUser')) {
+  foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', "$directory\test-install.ps1", '-Msi', "$directory\cww-test.msi", '-StandardUser', '-PythonExecutable', $python, '-RuntimeSmoke', "$directory\runtime_smoke.py")) {
     $start.ArgumentList.Add($argument)
   }
   $process = [Diagnostics.Process]::Start($start)
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit(180000)) {
+  # Includes the bounded 60-second confined-runtime readiness probe.
+  if (-not $process.WaitForExit(240000)) {
     Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('cww.exe', 'cww-agent.exe', 'powershell.exe', 'schtasks.exe', 'msiexec.exe') } |
       Select-Object Name, ProcessId, ParentProcessId, CommandLine | Format-List | Out-String | Write-Host
     $process.Kill($true)

@@ -83,6 +83,14 @@ Chromium pages. It covers ordinary and styled controls, closed shadows/slots,
 preview side effects, real overlays, disabled/inert states, stale navigation,
 protected/focused-field mutations, label rebinding, Stop, revocation, cleanup
 and transport isolation. Hardware capture runs must report the actual GPU.
+The macOS and Windows installer tests also run `scripts/runtime_smoke.py`
+through the installed CLI, including Windows custom install directories and
+the standard-user installer. It enables the browser only in temporary,
+unpaired state with no allowed sites or shared folders, requires the bundled
+engine's readiness within 60 seconds, and checks daemon status. macOS and
+Linux must report an enforced sandbox; Windows reports its current lack of
+daemon confinement. No browser or user profile is opened. Only fixed result
+codes are printed, and the test stops its own daemon and removes its state.
 The earlier prototype's clean, single-debugger native-pipe test additionally
 proves background operation without a second CDP client or screencast.
 

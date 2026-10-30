@@ -12,6 +12,7 @@ python3 browser/engine/scripts/package.py validate "/Applications/Chat with Work
 /usr/local/bin/cww --version
 /usr/local/bin/cww-app --version
 codesign --verify --strict --deep "/Applications/Chat with Work.app"
+python3 browser/engine/scripts/runtime_smoke.py --cww /usr/local/bin/cww
 # Hosted runners may not have a console user, so exercise the documented
 # fallback in the runner's own login session too.
 for _restart in 1 2 3; do

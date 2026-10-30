@@ -1,5 +1,7 @@
 # Run only on an isolated Windows CI runner, after building the MSI.
-param([Parameter(Mandatory)] [string] $Msi, [switch] $StandardUser, [string] $InstallFolder)
+param([Parameter(Mandatory)] [string] $Msi, [switch] $StandardUser, [string] $InstallFolder,
+  [string] $PythonExecutable = "python",
+  [string] $RuntimeSmoke = (Join-Path $PSScriptRoot "../../browser/engine/scripts/runtime_smoke.py"))
 $ErrorActionPreference = "Stop"
 if ($StandardUser) {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -69,6 +71,10 @@ try {
   if ($installedFiles -ne @($manifest.files.PSObject.Properties).Count + 1) { throw "Unexpected engine files" }
   & (Join-Path $engine "node.exe") --no-addons --no-global-search-paths --version
   if ($LASTEXITCODE -ne 0) { throw "Installed browser runtime did not start" }
+  # Exercise native Known Folder discovery through this exact installed CLI,
+  # including custom INSTALLFOLDER, without using the installed user's state.
+  & $PythonExecutable $RuntimeSmoke --cww (Join-Path $dir "cww.exe")
+  if ($LASTEXITCODE -ne 0) { throw "Installed browser engine did not become ready" }
   & (Join-Path $dir "cww-app.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "cww-app failed" }
   # The 32-bit scanner helper starts and loads TWAINDSM.dll beside it: a
