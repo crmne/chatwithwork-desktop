@@ -21,7 +21,7 @@ function render(state: PopupState): void {
   let tone = "positive";
   let text = "Ready";
   let detail = state.changes
-    ? "Chat with Work can read and act in its tab group, on the sites below. Each action asks you first."
+    ? "Chat with Work can read and act in its tab group, on permitted sites."
     : "Chat with Work can read the tabs in its tab group, on the sites below.";
   if (state.stopped) {
     tone = "negative";
@@ -57,7 +57,7 @@ function render(state: PopupState): void {
   $("state-detail").textContent = detail;
   $("tabs").textContent =
     state.tabs === 0
-      ? "No tabs yet. Chat with Work opens its tabs in a group of its own; drag a tab in to lend it."
+      ? "No tabs yet. Chat with Work opens its tabs in its own group. Drag a tab in to share it."
       : `${state.tabs} ${state.tabs === 1 ? "tab" : "tabs"} in the “Chat with Work” group.`;
   const list = $("sites");
   list.replaceChildren(
