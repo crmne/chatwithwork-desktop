@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Package layout and installer regressions, without touching the user's setup."""
 import hashlib
+import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +14,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = ROOT / ".cache" / "packaging-tests"
+spec = importlib.util.spec_from_file_location("engine_package", ROOT / "browser/engine/scripts/package.py")
+engine_package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(engine_package)
 
 
 def run(*args, **kwargs):
@@ -40,11 +45,22 @@ exit "${TEST_DAEMON_EXIT:-0}"
 ''')
         executable(self.bin / "cww-app", "#!/bin/sh\necho 'Chat with Work 9.8.7'\n")
         self.env = dict(os.environ, TEST_CALLS=str(self.work / "calls"))
+        self.engine = self.work / "browser-engine"
+        self.engine.mkdir()
+        for name in ("entry.mjs", "engine.mjs", "package-lock.json"):
+            (self.engine / name).write_text("{}")
+        (self.engine / "package.json").write_text(json.dumps({"dependencies": {"@xmorse/playwright-core": "1.59.13"}}))
+        (self.engine / "node_modules/@xmorse/playwright-core").mkdir(parents=True)
+        (self.engine / "node_modules/@xmorse/playwright-core/package.json").write_text('{"version":"1.59.13"}')
+        (self.engine / "notices").mkdir()
+        (self.engine / "notices/Node-LICENSE").write_text("Aggregate runtime license")
+        executable(self.engine / "node", "#!/bin/sh\necho v22.23.4\n")
+        engine_package.seal(self.engine, "9.8.7", "x86_64-unknown-linux-gnu", json.loads(engine_package.PLATFORMS.read_text()))
 
     def archive(self, target="x86_64-unknown-linux-gnu"):
         result = run("bash", str(ROOT / "packaging/linux/archive.sh"),
                      str(self.cww), str(self.bin / "cww-app"), "9.8.7", target,
-                     str(self.work / "release"))
+                     str(self.work / "release"), str(self.engine))
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.work / "release" / f"cww-app-v9.8.7-{target}.tar.gz"
 
@@ -54,7 +70,10 @@ exit "${TEST_DAEMON_EXIT:-0}"
                 base = f"cww-app-v9.8.7-{target}/"
                 for name in ("cww", "cww-app", "cww-app.desktop", "cww-app.svg",
                              "packaging/systemd/cww.service", "README.md",
-                             "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE"):
+                             "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE",
+                             f"browser-engine/{engine_package.resolve(self.engine).name}/node",
+                             f"browser-engine/{engine_package.resolve(self.engine).name}/entry.mjs",
+                             "browser-engine/current.json"):
                     self.assertTrue(archive.getmember(base + name).isfile(), name)
                 for name in ("cww", "cww-app"):
                     self.assertEqual(archive.getmember(base + name).mode, 0o755)
@@ -66,7 +85,8 @@ exit "${TEST_DAEMON_EXIT:-0}"
             with self.subTest(target=target):
                 result = run("ruby", str(ROOT / "packaging/linux/cli-archive.rb"),
                              str(self.cww), str(helper), "9.8.7", target,
-                             str(self.work / "release"))
+                             str(self.work / "release"),
+                             *([str(self.engine)] if target.startswith("x86_64") else []))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 name = f"cww-v9.8.7-{target}"
                 with tarfile.open(self.work / "release" / f"{name}.tar.gz") as archive:
@@ -77,6 +97,8 @@ exit "${TEST_DAEMON_EXIT:-0}"
                     self.assertIn("Icon=cww-app\n", desktop)
                     self.assertIn("NoDisplay=true\n", desktop)
                     self.assertIn("Exec=cww\n", desktop)
+                    names = archive.getnames()
+                    self.assertEqual(f"{name}/browser-engine/current.json" in names, target.startswith("x86_64"))
 
     def test_cli_archive_requires_the_helper(self):
         result = run("ruby", str(ROOT / "packaging/linux/cli-archive.rb"),
@@ -112,6 +134,7 @@ exit "${TEST_DAEMON_EXIT:-0}"
                 self.assertEqual(result.returncode, 0, result.stderr)
                 for name in ("usr/bin/cww", "usr/bin/cww-app",
                              "usr/lib/systemd/user/cww.service",
+                             "usr/lib/chatwithwork/browser-engine/current.json",
                              "usr/share/applications/cww-app.desktop",
                              "usr/share/icons/hicolor/scalable/apps/cww-app.svg"):
                     self.assertTrue((package / name).is_file(), name)
@@ -171,6 +194,7 @@ cp "$TEST_RELEASE/$name" "$output"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(os.access(install / "cww-app", os.X_OK))
         self.assertTrue(os.access(install / "cww", os.X_OK))
+        engine_package.validate(install / "browser-engine")
         self.assertEqual((self.work / "calls").read_text(), "daemon install\n")
         self.assertIn("will start at every login", result.stdout)
         entry = (data / "applications/cww-app.desktop").read_text()
@@ -184,6 +208,102 @@ cp "$TEST_RELEASE/$name" "$output"
         self.assertIn("could not be started", result.stdout)
         self.assertIn("daemon install", result.stdout)
         self.assertIn("daemon run", result.stdout)
+
+    def test_upgrade_replaces_engine_tree_without_retaining_removed_modules(self):
+        (engine_package.resolve(self.engine) / "node_modules/obsolete.js").write_text("old code")
+        engine_package.refresh(self.engine)
+        result, install, _ = self.installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = engine_package.resolve(install / "browser-engine")
+        (engine_package.resolve(self.engine) / "node_modules/obsolete.js").unlink()
+        engine_package.refresh(self.engine)
+        result, _, _ = self.installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((engine_package.resolve(install / "browser-engine") / "node_modules/obsolete.js").exists())
+        self.assertFalse(previous.exists())
+        engine_package.validate(install / "browser-engine")
+
+    def test_failed_restart_retains_previous_immutable_payload_without_mixing_files(self):
+        result, install, _ = self.installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = engine_package.resolve(install / "browser-engine")
+        original = (previous / "entry.mjs").read_bytes()
+        (engine_package.resolve(self.engine) / "entry.mjs").write_text("new code")
+        engine_package.refresh(self.engine)
+        result, _, _ = self.installer(daemon_exit=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(previous, engine_package.resolve(install / "browser-engine"))
+        self.assertEqual((previous / "entry.mjs").read_bytes(), original)
+        engine_package.validate_payload(previous)
+        engine_package.validate(install / "browser-engine")
+
+    def test_mac_installer_links_both_commands_into_the_same_bundle(self):
+        name = "cww-v9.8.7-macos-universal"
+        tree = self.work / name
+        contents = tree / "Chat with Work.app/Contents"
+        (contents / "MacOS").mkdir(parents=True)
+        shutil.copy(self.cww, contents / "MacOS/cww")
+        shutil.copy(self.bin / "cww-app", contents / "MacOS/cww-app")
+        shutil.copytree(self.engine, contents / "Resources/browser-engine")
+        (tree / "cww").symlink_to("Chat with Work.app/Contents/MacOS/cww")
+        release = self.work / "release"
+        release.mkdir()
+        archive = release / f"{name}.tar.gz"
+        with tarfile.open(archive, "w:gz") as out:
+            out.add(tree, arcname=name)
+        (release / "checksums.txt").write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
+        mocks = self.work / "mocks"
+        executable(mocks / "curl", '''#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in https://*) name=${1##*/};; -o) shift; output=$1;; esac
+  shift
+done
+cp "$TEST_RELEASE/$name" "$output"
+''')
+        executable(mocks / "uname", '#!/bin/sh\necho Darwin\n')
+        executable(mocks / "id", '#!/bin/sh\necho 1000\n')
+        executable(mocks / "ditto", '#!/bin/sh\nmkdir -p "$2"\ncp -R "$1/." "$2/"\n')
+        home = self.work / "home"
+        install = home / "bin"
+        result = run("sh", str(ROOT / "packaging/install.sh"), env=dict(self.env,
+            PATH=f"{mocks}:{os.environ['PATH']}", HOME=str(home), CWW_INSTALL_DIR=str(install),
+            XDG_CACHE_HOME=str(self.work / "cache"), TEST_RELEASE=str(release),
+            CWW_DOWNLOAD_BASE="https://example.invalid/release"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for binary in ("cww", "cww-app"):
+            self.assertTrue((install / binary).is_symlink())
+            self.assertEqual((install / binary).resolve(), home / "Applications/Chat with Work.app/Contents/MacOS" / binary)
+        engine_package.validate(home / "Applications/Chat with Work.app/Contents/Resources/browser-engine")
+
+    def test_windows_fragment_includes_every_file_and_stable_user_components(self):
+        from xml.etree import ElementTree
+        first, second = self.work / "first.wxs", self.work / "second.wxs"
+        for output in (first, second):
+            result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(output))
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        document = ElementTree.parse(first)
+        ns = {"w": "http://wixtoolset.org/schemas/v4/wxs"}
+        directory = document.find(".//w:DirectoryRef", ns)
+        self.assertEqual(directory.get("Id"), "ProgramsFolder")
+        self.assertEqual(directory.find("w:Directory", ns).get("Name"), "CwwBE")
+        # The helper stays in the Known Folder even with INSTALLFOLDER=D:\Custom.
+        self.assertNotIn("INSTALLFOLDER", first.read_text())
+        components = document.findall(".//w:Component", ns)
+        expected = set(engine_package.inventory(self.engine))
+        actual = {Path(component.find("w:File", ns).get("Source")).relative_to(self.engine).as_posix() for component in components}
+        self.assertEqual(actual, expected)
+        for component in components:
+            key = component.find("w:RegistryValue", ns)
+            self.assertEqual((key.get("Root"), key.get("KeyPath")), ("HKCU", "yes"))
+
+    def test_windows_packaging_refuses_paths_that_would_fail_in_long_profiles(self):
+        payload = engine_package.resolve(self.engine)
+        (payload / ("x" * 140)).write_text("a future long dependency")
+        engine_package.refresh(self.engine)
+        result = run("python3", str(ROOT / "packaging/windows/engine-fragment.py"), str(self.engine), str(self.work / "engine.wxs"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MSI path limits", result.stderr)
 
     def test_root_installer_does_not_register_a_root_daemon(self):
         result, _, _ = self.installer(uid="0")

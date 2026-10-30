@@ -29,6 +29,8 @@ package() {
     aarch64) target="aarch64-unknown-linux-gnu" ;;
   esac
   local dir="${srcdir}/cww-app-v${pkgver}-${target}"
+  install -dm755 "${pkgdir}/usr/lib/chatwithwork"
+  cp -R "${dir}/browser-engine" "${pkgdir}/usr/lib/chatwithwork/"
   install -Dm755 "${dir}/cww" "${pkgdir}/usr/bin/cww"
   install -Dm755 "${dir}/cww-app" "${pkgdir}/usr/bin/cww-app"
   install -Dm644 "${dir}/cww-app.desktop" "${pkgdir}/usr/share/applications/cww-app.desktop"

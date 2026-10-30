@@ -40,6 +40,7 @@ class Cww < Formula
       bin.install_symlink prefix/"Chat with Work.app/Contents/MacOS/cww-app"
     else
       bin.install "cww"
+      (libexec/"chatwithwork").install "browser-engine"
       libexec.install "cww-app"
       # cww-app finds cww beside itself.
       libexec.install_symlink bin/"cww"

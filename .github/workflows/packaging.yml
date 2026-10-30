@@ -11,9 +11,9 @@ name: Packaging
 on:
   push:
     branches: [main]
-    paths: [native-packages.yaml, packaging/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
+    paths: [browser/engine/**, .github/actions/browser-engine/**, native-packages.yaml, packaging/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
   pull_request:
-    paths: [native-packages.yaml, packaging/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
+    paths: [browser/engine/**, .github/actions/browser-engine/**, native-packages.yaml, packaging/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
   workflow_dispatch:
     inputs:
       version:
@@ -51,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - run: python3 browser/engine/scripts/test_package.py
       - run: python3 packaging/test-packaging.py
 
   # Inputs for packaging this commit: the complete Linux builds as a release
@@ -89,6 +90,15 @@ jobs:
       - run: mbx build --locked --release --target ${{ matrix.target }} --bin cww
       - run: mbx build --locked --release --target ${{ matrix.target }} -p cww-notification-broker --bin cww-notify
       - run: mbx build --locked --release --target ${{ matrix.app-target }} -p cww-app --bin cww-app
+      - uses: ./.github/actions/browser-engine
+        with:
+          target: ${{ matrix.app-target }}
+          output: target/${{ matrix.app-target }}/release/browser-engine
+      - uses: ./.github/actions/browser-engine
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        with:
+          target: ${{ matrix.target }}
+          output: target/${{ matrix.target }}/release/browser-engine
       - name: Release-shaped archives
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -103,12 +113,17 @@ jobs:
               exit 1
             fi
           done
+          engine=()
+          if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
+            engine=("target/${{ matrix.target }}/release/browser-engine")
+          fi
           ruby packaging/linux/cli-archive.rb \
             "target/${{ matrix.target }}/release/cww" \
             "target/${{ matrix.target }}/release/cww-notify" \
-            "$VERSION" "${{ matrix.target }}" dist
+            "$VERSION" "${{ matrix.target }}" dist "${engine[@]}"
           bash packaging/linux/archive.sh "target/${{ matrix.target }}/release/cww" \
-            "target/${{ matrix.app-target }}/release/cww-app" "$VERSION" "${{ matrix.app-target }}" dist
+            "target/${{ matrix.app-target }}/release/cww-app" "$VERSION" "${{ matrix.app-target }}" dist \
+            "target/${{ matrix.app-target }}/release/browser-engine"
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             git archive --format=tar.gz --prefix="chatwithwork-desktop-${VERSION}/" \
               -o "dist/chatwithwork-desktop-${VERSION}.tar.gz" HEAD

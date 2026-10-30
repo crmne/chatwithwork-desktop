@@ -81,20 +81,35 @@ dir="$tmp/${asset%.tar.gz}"
 [ -f "$dir/cww" ] || fail "$asset has no cww binary"
 if [ "$platform" = Linux ]; then
   [ -f "$dir/cww-app.desktop" ] && [ -f "$dir/cww-app.svg" ] || fail "$asset has no desktop launcher or icon"
+  [ -f "$dir/browser-engine/current.json" ] || fail "$asset has no bundled browser engine"
   "$dir/cww-app" --version >/dev/null || fail "the desktop app cannot run; Linux needs glibc 2.39 or newer"
 else
   [ -f "$dir/Chat with Work.app/Contents/MacOS/cww-app" ] || fail "$asset has no desktop app"
+  [ -f "$dir/Chat with Work.app/Contents/Resources/browser-engine/current.json" ] || fail "$asset has no bundled browser engine"
 fi
 mkdir -p "$install_dir"
 # Use absolute paths in launchers, even with a relative CWW_INSTALL_DIR.
 install_dir=$(cd "$install_dir" && pwd)
-# Replace atomically, so a running daemon keeps its old binary until restart.
-cp "$dir/cww" "$install_dir/.cww.new"
-chmod 755 "$install_dir/.cww.new"
-mv -f "$install_dir/.cww.new" "$install_dir/cww"
-say "Installed $("$install_dir/cww" --version) to $install_dir/cww"
-
 if [ "$platform" = Linux ]; then
+  # Install immutable payloads first, then switch the tiny locator. A running
+  # daemon keeps its previous verified directory until daemon install restarts it.
+  engine_dir="$install_dir/browser-engine"
+  mkdir -p "$engine_dir"
+  engine_id=$(sed -n 's/.*"directory": "\([a-f0-9]\{64\}\)".*/\1/p' "$dir/browser-engine/current.json")
+  [ "${#engine_id}" -eq 64 ] || fail "invalid browser engine locator"
+  [ -f "$dir/browser-engine/$engine_id/manifest.json" ] || fail "missing browser engine payload"
+  staged_engine=$(mktemp -d "$engine_dir/.install.XXXXXX")
+  if [ ! -e "$engine_dir/$engine_id" ]; then
+    cp -R "$dir/browser-engine/$engine_id" "$staged_engine/$engine_id"
+    mv "$staged_engine/$engine_id" "$engine_dir/$engine_id"
+  fi
+  cp "$dir/browser-engine/current.json" "$staged_engine/current.json"
+  mv -f "$staged_engine/current.json" "$engine_dir/current.json"
+  rmdir "$staged_engine"
+  # A running daemon keeps its old binary until the service restart below.
+  cp "$dir/cww" "$install_dir/.cww.new"
+  chmod 755 "$install_dir/.cww.new"
+  mv -f "$install_dir/.cww.new" "$install_dir/cww"
   cp "$dir/cww-app" "$install_dir/.cww-app.new"
   chmod 755 "$install_dir/.cww-app.new"
   mv -f "$install_dir/.cww-app.new" "$install_dir/cww-app"
@@ -129,8 +144,10 @@ else
   rm -rf "$app_dir/Chat with Work.app"
   mv "$staged_app/Chat with Work.app" "$app_dir/Chat with Work.app"
   rmdir "$staged_app"
+  ln -sf "$app_dir/Chat with Work.app/Contents/MacOS/cww" "$install_dir/cww"
   ln -sf "$app_dir/Chat with Work.app/Contents/MacOS/cww-app" "$install_dir/cww-app"
 fi
+say "Installed $("$install_dir/cww" --version) to $install_dir/cww"
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -142,6 +159,17 @@ esac
 say ""
 if [ "$(id -u)" -ne 0 ] && "$install_dir/cww" daemon install; then
   say "The background agent is running and will start at every login."
+  if [ "$platform" = Linux ]; then
+    # The old process is stopped now. Remove only our obsolete immutable payloads.
+    for previous in "$engine_dir"/*; do
+      name=${previous##*/}
+      [ "${#name}" -eq 64 ] || continue
+      case "$name" in *[!a-f0-9]*) continue;; esac
+      if [ "$name" != "$engine_id" ] && [ -d "$previous" ] && [ ! -L "$previous" ]; then
+        rm -rf "$previous"
+      fi
+    done
+  fi
 else
   say "The background agent could not be started for your account."
   say "Choose Start Background Agent in Chat with Work, or run as your own user (without sudo):"

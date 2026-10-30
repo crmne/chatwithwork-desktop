@@ -49,6 +49,8 @@ jobs:
         if: inputs.rebuild-agent
         with:
           backend: local
+      - uses: ./.github/actions/browser-engine
+        if: inputs.rebuild-agent
       - name: Rebuild the agent and installer
         if: inputs.rebuild-agent
         shell: pwsh
@@ -75,4 +77,5 @@ jobs:
         shell: pwsh
         run: |
           ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi
+          ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi -InstallFolder (Join-Path $env:RUNNER_TEMP "Cww custom app")
           ./packaging/windows/test-standard-user.ps1 -Msi dist/cww-test.msi

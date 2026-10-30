@@ -18,6 +18,9 @@ nfpm:
   license: MIT OR Apache-2.0
   provides: [cww]
   contents:
+  - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/browser-engine/"
+    dst: /usr/lib/chatwithwork/browser-engine
+    type: tree
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/cww"
     dst: /usr/bin/cww
     file_info:
@@ -70,7 +73,7 @@ nfpm:
       # libasound2.
       # Dictation records through PipeWire's client library, renamed with
       # the t64 transition as ALSA's was.
-      depends: ["libasound2t64 | libasound2", "libpipewire-0.3-0t64 | libpipewire-0.3-0", "libayatana-appindicator3-1 | libappindicator3-1"]
+      depends: ["libasound2t64 | libasound2", "libpipewire-0.3-0t64 | libpipewire-0.3-0", "libayatana-appindicator3-1 | libappindicator3-1", libstdc++6, libgcc-s1]
       recommends:
       - xdg-desktop-portal
       - gnome-keyring | kwalletmanager | keepassxc
@@ -79,7 +82,7 @@ nfpm:
       - libsane1
       - tesseract-ocr
     rpm:
-      depends: [alsa-lib, pipewire-libs]
+      depends: [alsa-lib, pipewire-libs, libstdc++, libgcc]
       # The tray item. EPEL carries it on Rocky and RHEL; without it the app
       # runs without a tray item.
       recommends:
@@ -125,6 +128,8 @@ targets:
 # The packages that provide the libraries the app links (WebKitGTK and GTK
 # for its windows, D-Bus for single instance); ELF inspection adds them.
 libraries:
+  libatomic.so.1: { deb: libatomic1, rpm: libatomic }
+  libstdc++.so.6: { deb: libstdc++6, rpm: libstdc++ }
   libwebkit2gtk-4.1.so.0: { deb: libwebkit2gtk-4.1-0, rpm: webkit2gtk4.1 }
   libjavascriptcoregtk-4.1.so.0: { deb: libjavascriptcoregtk-4.1-0, rpm: javascriptcoregtk4.1 }
   libsoup-3.0.so.0: { deb: libsoup-3.0-0, rpm: libsoup3 }

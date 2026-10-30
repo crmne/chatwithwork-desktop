@@ -52,7 +52,22 @@ docker run --rm --platform "linux/${target#linux-}" \
     else pacman -S --noconfirm python; fi
     python3 - <<"PY"
 import ctypes
+import hashlib
+import json
 import os
+from pathlib import Path
+import subprocess
+engine = Path("/usr/lib/chatwithwork/browser-engine")
+locator = json.loads((engine / "current.json").read_text())
+payload = engine / locator["directory"]
+assert locator["protocol"] == 1
+assert hashlib.sha256((payload / "manifest.json").read_bytes()).hexdigest() == locator["directory"]
+manifest = json.loads((payload / "manifest.json").read_text())
+actual = {p.relative_to(payload).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+          for p in payload.rglob("*") if p.is_file() and p != payload / "manifest.json"}
+assert actual == manifest["files"]
+env = {k: v for k, v in os.environ.items() if k not in ("NODE_OPTIONS", "NODE_PATH")}
+assert subprocess.check_output([str(payload / "node"), "--no-addons", "--no-global-search-paths", "--version"], env=env, text=True).strip() == "v" + manifest["node_version"]
 for name in ("libwebkit2gtk-4.1.so.0", "libgtk-3.so.0", "libsoup-3.0.so.0", "libdbus-1.so.3"):
     ctypes.CDLL(name)
 # A weak dependency on RPM distributions, where only EPEL may carry it.
@@ -90,6 +105,7 @@ PY
     else pacman -R --noconfirm chatwithwork-desktop-bin; fi
     test ! -e /usr/bin/cww
     test ! -e /usr/bin/cww-app
+    test ! -e /usr/lib/chatwithwork/browser-engine
     test ! -e /usr/share/applications/cww-app.desktop
     test ! -e /usr/share/icons/hicolor/scalable/apps/cww-app.svg
     test ! -e /usr/lib/systemd/user/cww.service

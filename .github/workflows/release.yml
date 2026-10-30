@@ -203,14 +203,24 @@ jobs:
             "target\${{ matrix.target }}\release\cww-app.exe" `
             "target\${{ matrix.target }}\release\cww-scan-helper.exe"
 
+      - uses: ./.github/actions/browser-engine
+        if: matrix.target != 'aarch64-unknown-linux-musl'
+        with:
+          target: ${{ matrix.target }}
+          output: target/${{ matrix.target }}/release/browser-engine
+
       # Windows ships only the MSIs (below); nothing read a portable zip.
       - name: Terminal-only archive
         if: runner.os == 'Linux'
         run: |
+          engine=()
+          if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
+            engine=("target/${{ matrix.target }}/release/browser-engine")
+          fi
           ruby packaging/linux/cli-archive.rb \
             "target/${{ matrix.target }}/release/cww" \
             "target/${{ matrix.target }}/release/cww-notify" \
-            "$VERSION" "${{ matrix.target }}" dist
+            "$VERSION" "${{ matrix.target }}" dist "${engine[@]}"
 
       # WiX 5 is a .NET tool; the runner has the SDK.
       - name: Installer
@@ -315,7 +325,8 @@ jobs:
               "target/aarch64-apple-darwin/release/$bin" \
               "target/x86_64-apple-darwin/release/$bin" \
               -output "universal/$bin"
-            lipo "universal/$bin" -verify_arch x86_64 arm64
+            lipo "universal/$bin" -verify_arch x86_64
+            lipo "universal/$bin" -verify_arch arm64
           done
 
       - uses: ruby/setup-ruby@v1
@@ -361,12 +372,17 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           security find-identity -v -p codesigning "$keychain"
 
+      - uses: ./.github/actions/browser-engine
+        with:
+          target: macos-universal
+          output: universal/browser-engine
+
       - name: Bundle and sign the desktop app
         run: |
           app="$RUNNER_TEMP/app/Chat with Work.app"
           mkdir -p "$RUNNER_TEMP/app"
           CODESIGN_IDENTITY="$APPLE_SIGNING_IDENTITY" packaging/macos/bundle.sh \
-            universal/cww-app universal/cww "$app" "$VERSION"
+            universal/cww-app universal/cww "$app" "$VERSION" universal/browser-engine
           if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
             codesign --display --verbose=2 "$app" 2>&1 | grep -q "flags=0x10000(runtime)"
             codesign --display --verbose=2 "$app/Contents/MacOS/cww" 2>&1 | grep -q "flags=0x10000(runtime)"
@@ -403,6 +419,8 @@ jobs:
         run: |
           name="cww-v${VERSION}-macos-universal"
           ditto "$RUNNER_TEMP/app/Chat with Work.app" "$RUNNER_TEMP/signed-portable/$name/Chat with Work.app"
+          rm "$RUNNER_TEMP/signed-portable/$name/cww"
+          ln -s "Chat with Work.app/Contents/MacOS/cww" "$RUNNER_TEMP/signed-portable/$name/cww"
           tar -C "$RUNNER_TEMP/signed-portable" -czf "dist/$name.tar.gz" "$name"
 
       # The disk image is the app's only download of its own: the .pkg and
@@ -510,12 +528,17 @@ jobs:
           name: ${{ matrix.cww-target }}
           path: cww-archive
 
+      - uses: ./.github/actions/browser-engine
+        with:
+          target: ${{ matrix.target }}
+          output: target/${{ matrix.target }}/release/browser-engine
       - name: Package
         run: |
           cww_name="cww-v${VERSION}-${{ matrix.cww-target }}"
           tar -xzf "cww-archive/$cww_name.tar.gz" -C "$RUNNER_TEMP"
           bash packaging/linux/archive.sh "$RUNNER_TEMP/$cww_name/cww" \
-            "target/${{ matrix.target }}/release/cww-app" "$VERSION" "${{ matrix.target }}" dist
+            "target/${{ matrix.target }}/release/cww-app" "$VERSION" "${{ matrix.target }}" dist \
+            "target/${{ matrix.target }}/release/browser-engine"
           tar -tzvf "dist/cww-app-v${VERSION}-${{ matrix.target }}.tar.gz"
 
       - name: Attest the desktop app archive

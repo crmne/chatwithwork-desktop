@@ -5,6 +5,10 @@ package=${1:?installer package}
 sudo installer -pkg "$package" -target /
 test -x "/Applications/Chat with Work.app/Contents/MacOS/cww-app"
 test -x "/Applications/Chat with Work.app/Contents/MacOS/cww"
+test -L /usr/local/bin/cww
+runtime=$(python3 browser/engine/scripts/package.py path "/Applications/Chat with Work.app/Contents/Resources/browser-engine")
+test -x "$runtime/node"
+python3 browser/engine/scripts/package.py validate "/Applications/Chat with Work.app/Contents/Resources/browser-engine"
 /usr/local/bin/cww --version
 /usr/local/bin/cww-app --version
 codesign --verify --strict --deep "/Applications/Chat with Work.app"

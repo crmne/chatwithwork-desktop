@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build "Chat with Work.app" on macOS from release binaries.
 #
-#   packaging/macos/bundle.sh <cww-app> <cww> <output.app> <version>
+#   packaging/macos/bundle.sh <cww-app> <cww> <output.app> <version> <browser-engine>
 #
 # The app and the cww command sit side by side in Contents/MacOS, so the app
 # finds cww there to start the agent, and `cww daemon install` registers
@@ -15,14 +15,18 @@ app_binary="$1"
 cww_binary="$2"
 app="$3"
 version="$4"
+engine="${5:?staged browser engine}"
 numeric_version="${version%%-*}"
 here="$(cd "$(dirname "$0")" && pwd)"
 assets="$here/../../app/assets"
+python3 "$here/../../browser/engine/scripts/package.py" validate "$engine"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install -m 755 "$app_binary" "$app/Contents/MacOS/cww-app"
 install -m 755 "$cww_binary" "$app/Contents/MacOS/cww"
+mkdir -p "$app/Contents/Resources"
+cp -R "$engine" "$app/Contents/Resources/browser-engine"
 sed "s/__VERSION__/$numeric_version/g" "$here/Info.plist" > "$app/Contents/Info.plist"
 # Start at login runs this agent, which opens the app with --background (a
 # login item cannot pass arguments). Named after CFBundleIdentifier.
@@ -39,6 +43,16 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/cww-app.icns"
 rm -rf "$(dirname "$iconset")"
+
+# Replace upstream Node's entitlements: no debugger attachment, DYLD override
+# or unsigned-library exception. V8 needs only JIT. Rehash before sealing.
+runtime="$(python3 "$here/../../browser/engine/scripts/package.py" path "$app/Contents/Resources/browser-engine")/node"
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+    codesign --force --timestamp --options runtime --entitlements "$here/browser-engine.entitlements.plist" --sign "$CODESIGN_IDENTITY" "$runtime"
+else
+    codesign --force --options runtime --entitlements "$here/browser-engine.entitlements.plist" --sign - "$runtime"
+fi
+python3 "$here/../../browser/engine/scripts/package.py" refresh "$app/Contents/Resources/browser-engine"
 
 # Sign the inner command first, then the bundle.
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then

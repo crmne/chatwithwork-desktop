@@ -20,6 +20,10 @@
       packages = forAllSystems (
         pkgs:
         let
+          browserEngine = import ./packaging/nix/browser-engine.nix {
+            inherit pkgs;
+            appVersion = (pkgs.lib.importTOML ./Cargo.toml).package.version;
+          };
           cww = pkgs.rustPlatform.buildRustPackage {
             pname = "cww";
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
@@ -77,10 +81,20 @@
               rm -f "$out/bin/cww-notify"
             '';
 
-            # Strip/fixup would invalidate an earlier signature.
-            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-              rcodesign sign --entitlements-xml-file packaging/macos/entitlements.plist \
+            # Copy the already sealed engine after every outer fixup: stripping,
+            # shebang or RPATH rewriting would invalidate its manifest/signature.
+            postFixup = if pkgs.stdenv.hostPlatform.isLinux then ''
+              mkdir -p $out/libexec/chatwithwork
+              cp -R ${browserEngine} $out/libexec/chatwithwork/browser-engine
+              ${pkgs.python3}/bin/python browser/engine/scripts/package.py validate $out/libexec/chatwithwork/browser-engine
+            '' else ''
+              app="$out/Applications/Chat with Work.app"
+              mkdir -p "$app/Contents/Resources"
+              cp -R ${browserEngine} "$app/Contents/Resources/browser-engine"
+              # Preserve the separately signed/hashed Node in Resources.
+              rcodesign sign --shallow --entitlements-xml-file packaging/macos/entitlements.plist \
                 "$out/Applications/Chat with Work.app"
+              ${pkgs.python3}/bin/python browser/engine/scripts/package.py validate "$app/Contents/Resources/browser-engine"
             '';
 
             meta = {

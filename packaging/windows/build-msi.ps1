@@ -29,6 +29,10 @@ try {
   foreach ($name in "cww-app.exe", "cww-scan-helper.exe", "TWAINDSM.dll") {
     Copy-Item (Join-Path (Split-Path -Parent $Binary) $name) (Join-Path $source $name)
   }
+  Copy-Item -Recurse (Join-Path (Split-Path -Parent $Binary) "browser-engine") (Join-Path $source "browser-engine")
+  $engineFragment = Join-Path $source "browser-engine.wxs"
+  & python (Join-Path $PSScriptRoot "engine-fragment.py") (Join-Path $source "browser-engine") $engineFragment
+  if ($LASTEXITCODE -ne 0) { throw "Invalid browser engine package" }
   foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt", "cww-installer.txt") {
     Copy-Item (Join-Path $PSScriptRoot $notice) $source
   }
@@ -41,7 +45,7 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   }
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Null
-  & wix build (Join-Path $PSScriptRoot "cww.wxs") -arch $Arch `
+  & wix build (Join-Path $PSScriptRoot "cww.wxs") $engineFragment -arch $Arch `
     -ext WixToolset.Util.wixext `
     -d "Version=$numeric" -d "SourceDir=$source" `
     -o $Output

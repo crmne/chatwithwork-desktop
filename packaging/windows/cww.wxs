@@ -118,6 +118,7 @@
 
     <Feature Id="Main" Title="Chat with Work Desktop" AllowAbsent="no">
       <ComponentGroupRef Id="Program" />
+      <ComponentGroupRef Id="BrowserEngine" />
       <ComponentGroupRef Id="Shortcuts" />
     </Feature>
 

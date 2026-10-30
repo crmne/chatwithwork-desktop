@@ -27,14 +27,14 @@ work=$(mktemp -d "$(dirname "$output")/.pkg.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$work/payload/usr/local/bin" "$work/payload/Applications" "$work/resources"
-cp "$binary" "$work/payload/usr/local/bin/cww"
-chmod 755 "$work/payload/usr/local/bin/cww"
+test -f "$binary"
 # Drop quarantine and other removable attributes; the code signature lives
 # inside the binary. (com.apple.provenance can't be removed and shows up as
 # ._ entries in the payload; Installer restores it as an attribute.)
 xattr -cr "$work/payload"
 # Preserve the bundle's signature and stapled notarization ticket.
 ditto "$app" "$work/payload/Applications/Chat with Work.app"
+ln -s "/Applications/Chat with Work.app/Contents/MacOS/cww" "$work/payload/usr/local/bin/cww"
 ln -s "/Applications/Chat with Work.app/Contents/MacOS/cww-app" "$work/payload/usr/local/bin/cww-app"
 cp "$here"/resources/*.html "$root/LICENSE-MIT" "$work/resources/"
 

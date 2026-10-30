@@ -1,5 +1,5 @@
 # Run only on an isolated Windows CI runner, after building the MSI.
-param([Parameter(Mandatory)] [string] $Msi, [switch] $StandardUser)
+param([Parameter(Mandatory)] [string] $Msi, [switch] $StandardUser, [string] $InstallFolder)
 $ErrorActionPreference = "Stop"
 if ($StandardUser) {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -12,14 +12,16 @@ if ($StandardUser) {
   }
 }
 $Msi = (Resolve-Path $Msi).Path
-$dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop"
+$dir = if ($InstallFolder) { [System.IO.Path]::GetFullPath($InstallFolder) } else { Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop" }
 $programs = [Environment]::GetFolderPath("Programs", "DoNotVerify")
 $startup = Join-Path ([Environment]::GetFolderPath('Startup', 'DoNotVerify')) 'Chat with Work Desktop.lnk'
 function Run-Msi([string] $action) {
   Write-Host "Running msiexec $action for $env:USERNAME"
   New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
   $log = Join-Path $env:TEMP ('cww-msi-' + [Guid]::NewGuid().ToString('N') + '.log')
-  $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $action, "`"$Msi`"", "/qn", "/norestart", '/L*V', "`"$log`""
+  $arguments = @($action, "`"$Msi`"", "/qn", "/norestart", '/L*V', "`"$log`"")
+  if ($action -eq '/i' -and $InstallFolder) { $arguments += "INSTALLFOLDER=`"$dir`"" }
+  $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $arguments
   if ($process.ExitCode -notin @(0, 3010)) {
     if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
     throw "msiexec $action failed: $($process.ExitCode)"
@@ -52,6 +54,21 @@ try {
   }
   & (Join-Path $dir "cww.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "cww failed" }
+  $engineRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Programs\CwwBE"
+  $locator = Get-Content (Join-Path $engineRoot "current.json") -Raw | ConvertFrom-Json
+  if ($locator.protocol -ne 1 -or $locator.directory -notmatch '^[a-f0-9]{64}$') { throw "Invalid engine locator" }
+  $engine = Join-Path $engineRoot $locator.directory
+  if (-not (Test-Path (Join-Path $engine "manifest.json"))) { throw "Missing browser engine" }
+  $manifest = Get-Content (Join-Path $engine "manifest.json") -Raw | ConvertFrom-Json
+  if ((Get-FileHash (Join-Path $engine "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant() -ne $locator.directory) { throw "Engine identity differs" }
+  foreach ($file in $manifest.files.PSObject.Properties) {
+    $hash = (Get-FileHash (Join-Path $engine $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -ne $file.Value) { throw "Installed engine differs: $($file.Name)" }
+  }
+  $installedFiles = @(Get-ChildItem $engine -Recurse -File -Force).Count
+  if ($installedFiles -ne @($manifest.files.PSObject.Properties).Count + 1) { throw "Unexpected engine files" }
+  & (Join-Path $engine "node.exe") --no-addons --no-global-search-paths --version
+  if ($LASTEXITCODE -ne 0) { throw "Installed browser runtime did not start" }
   & (Join-Path $dir "cww-app.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "cww-app failed" }
   # The 32-bit scanner helper starts and loads TWAINDSM.dll beside it: a
@@ -128,6 +145,7 @@ try {
 foreach ($binary in "cww.exe", "cww-app.exe", "cww-agent.exe") {
   if (Test-Path (Join-Path $dir $binary)) { throw "Uninstall left $binary" }
 }
+if (Test-Path (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Programs\CwwBE")) { throw "Uninstall left the browser engine" }
 foreach ($shortcut in "Chat with Work.lnk", "Chat with Work (Terminal).lnk") {
   if (Test-Path (Join-Path $programs $shortcut)) { throw "Uninstall left $shortcut" }
 }

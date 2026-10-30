@@ -1,0 +1,30 @@
+name: Bundle browser engine
+description: Stage the locked browser engine and verified private Node runtime at build time
+inputs:
+  target:
+    description: Rust target triple, macos-universal, or empty for the Rust host
+    default: ''
+  output:
+    description: Fresh output directory
+    default: target/release/browser-engine
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22.23.4
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+    - name: Stage verified runtime and locked dependencies
+      shell: bash
+      env:
+        ENGINE_TARGET: ${{ inputs.target }}
+        ENGINE_OUTPUT: ${{ inputs.output }}
+      run: |
+        target="$ENGINE_TARGET"
+        if [ -z "$target" ]; then target=$(rustc -vV | sed -n 's/host: //p'); fi
+        version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+        python browser/engine/scripts/package.py stage --replace --target "$target" \
+          --output "$ENGINE_OUTPUT" --app-version "$version" --cache "$RUNNER_TEMP/node-runtime-cache"
+        python browser/engine/scripts/package.py validate "$ENGINE_OUTPUT"

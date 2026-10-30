@@ -3,4 +3,6 @@
 /.cache/
 /packaging/arch/build/
 /result
+/browser-engine/
+__pycache__/
 /app/tests/snapshots/*.old.png

@@ -87,11 +87,13 @@ jobs:
       - run: mbx build -p cww-app -p cww --release --locked
         if: github.event_name != 'pull_request'
 
+      - uses: ./.github/actions/browser-engine
+        if: github.event_name != 'pull_request'
       - name: Bundle the macOS app
         if: github.event_name != 'pull_request' && runner.os == 'macOS'
         run: |
           packaging/macos/bundle.sh target/release/cww-app target/release/cww \
-            "dist/Chat with Work.app" "$(cargo pkgid -p cww-app | sed 's/.*[#@]//')"
+            "dist/Chat with Work.app" "$(cargo pkgid -p cww-app | sed 's/.*[#@]//')" target/release/browser-engine
           ditto -c -k --keepParent "dist/Chat with Work.app" dist/cww-app-macos.zip
       - name: Build and test the macOS installer
         if: github.event_name != 'pull_request' && runner.os == 'macOS'
@@ -136,6 +138,7 @@ jobs:
         shell: pwsh
         run: |
           ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi
+          ./packaging/windows/test-install.ps1 -Msi dist/cww-test.msi -InstallFolder (Join-Path $env:RUNNER_TEMP "Cww custom app")
           ./packaging/windows/test-standard-user.ps1 -Msi dist/cww-test.msi
           Remove-Item dist/cww-test.msi, dist/cww-test.wixpdb
 
@@ -202,10 +205,14 @@ jobs:
           cache-generation: browser-v1
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: 22.23.4
           cache: npm
-          cache-dependency-path: browser/package-lock.json
+          cache-dependency-path: |
+            browser/package-lock.json
+            browser/engine/package-lock.json
       - run: npm ci
+      - run: npm ci --prefix engine --ignore-scripts --bin-links=false
+      - run: npm test --prefix engine
       - run: npx tsc --noEmit -p .
       - run: npm test
       - run: npm run test:package

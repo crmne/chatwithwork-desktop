@@ -14,6 +14,70 @@ The Linux archive `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` is the single
 
 Each app download carries `cww` beside the GUI (inside the bundle on macOS), so the app starts the matching daemon. Every file `release.yml` publishes is covered by `checksums.txt` and its signature; GitHub shows each file's SHA-256 on the release too, the `.deb` and `.rpm` files' included. The macOS app is signed and stapled before it is copied into the `.pkg` and the formula/shell-installer archive.
 
+## Private browser engine
+
+The browser action engine is bundled with the app, never installed or downloaded
+at startup. `browser/engine/scripts/package.py stage` verifies an official Node
+archive against the pinned SHA-256 in `runtime-platforms.json`, extracts only its
+executable and aggregate `LICENSE`, and runs `npm ci --omit=dev --ignore-scripts
+--bin-links=false`. The dependency is the unchanged registry
+`@xmorse/playwright-core` 1.59.13; its original notices remain in `node_modules`,
+with provenance and runtime notices under `notices/`.
+
+Node 22.23.4 preserves the macOS 11 minimum. **Node 22 support ends on
+30 April 2027**: update the pinned runtime and platform/support decision before
+then, following the [official schedule](https://github.com/nodejs/Release/blob/main/schedule.json).
+The runtime manifest names the exact protocol, app, engine and Node versions,
+and hashes every regular file in the private tree. Each payload lives under the full
+SHA-256 of that manifest, with a bounded `current.json` locator alongside it.
+The daemon retains the resolved immutable path: upgrades never replace modules
+at a path it already verified. The shell installer keeps the old payload until
+its daemon restart succeeds; package removal may make an old payload unavailable
+but can never turn it into a different version. Symlinks and unlisted files
+are refused. Stage into a fresh directory, or use `--replace` to replace a prior
+staged tree only after the new assembly succeeds; `validate` checks the final payload.
+The npm executable and build-time packager are not copied into the payload;
+the fixed entry never exposes upstream installation or download commands.
+
+| Installation | Engine directory relative to the canonical `cww` executable |
+|---|---|
+| Portable Linux/Windows and Linux shell installer | `browser-engine/` beside `cww` |
+| Windows MSI (including custom app paths) | OS Known Folder `LocalAppData/Programs/CwwBE/`, only with the MSI marker |
+| DEB, RPM and all AUR variants | `../lib/chatwithwork/browser-engine/` |
+| Linux Homebrew and Nix | `../libexec/chatwithwork/browser-engine/` |
+| macOS bundle, including Homebrew, Nix, PKG and shell installer | `../Resources/browser-engine/` from `Contents/MacOS` |
+
+The Windows MSI uses a short engine directory so the unchanged npm tree plus
+its full 64-character identity stays within legacy MSI path limits for ordinary
+and long user profiles. The daemon uses the Windows Known Folder API, not an
+environment variable or a search; the app's custom `INSTALLFOLDER` is independent.
+Portable ZIPs keep the sibling layout and should be extracted to a short path.
+
+The macOS CLI links to the bundle's `cww`; an external duplicate would resolve
+the wrong helper. `bundle.sh` replaces upstream Node's entitlements with only
+`allow-jit` (no `get-task-allow`), signs the runtime, refreshes its manifest, then
+seals the app. The scripts and their package tree live in `Resources`, following
+[Apple's signing guidance](https://developer.apple.com/library/archive/technotes/tn2206/);
+putting them under `Helpers` incorrectly treats data files as nested code.
+Windows preserves the official runtime's Authenticode signature;
+our MSI contains and signs the complete tree. Any future runtime re-signing must
+refresh the manifest before building/signing the MSI. Nix fixes the runtime's
+loader/RPATH before hashing, then copies the sealed tree after outer fixups.
+AUR disables stripping, which would otherwise change the sealed runtime.
+
+GNU Linux, macOS universal, Windows x64/ARM64 and x64 musl have pinned official
+runtimes. ARM64 musl keeps the existing browser implementation until a supported
+runtime exists. The static CLI remains usable without the x64 musl runtime's
+dynamic loader or C++ libraries: a bounded confined runtime preflight selects
+the existing path before admitting an operation. There is never a fallback
+after an engine action starts. No package adds browser or site permissions.
+
+Packaging regressions run with `python3 browser/engine/scripts/test_package.py`
+and `python3 packaging/test-packaging.py`. Build machines need Python 3.9+ and
+npm; users need neither. Platform CI verifies installed manifests and helper
+startup. Full action, cancellation and policy tests remain separate requirements
+before releasing this integration.
+
 ## Release assets
 
 A release carries only what people download or something reads; anything else stays in the workflow's artifacts. Before adding a file, add it here with what reads it. People-facing files come first (GitHub lists assets by name, so the release notes' Download section, from [`packaging/release-notes/TEMPLATE.md`](packaging/release-notes/TEMPLATE.md), says which one to pick):
