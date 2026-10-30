@@ -102,7 +102,14 @@ fn locator_pins_an_immutable_manifest_and_cannot_redirect_an_existing_installati
         )
         .unwrap();
         assert!(Installation::load(&container, &Config::default(), &paths).is_err());
-        assert_eq!(pinned.entry, container.join(&version).join("entry.mjs"));
+        assert_eq!(
+            pinned.entry,
+            container
+                .join(&version)
+                .join("entry.mjs")
+                .canonicalize()
+                .unwrap()
+        );
     }
     std::fs::write(
         &locator,

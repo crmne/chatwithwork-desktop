@@ -3,6 +3,7 @@
 // runs Chromium without it, driven only through the extension.
 import { chromium, expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,9 +68,13 @@ test("a download the page starts by itself doesn't happen", async () => {
     await new Promise((r) => setTimeout(r, 2000));
     expect(readdirSync(downloads)).toEqual([]);
   } finally {
-    browser?.kill();
+    if (browser && browser.exitCode === null && browser.signalCode === null) {
+      const closed = once(browser, "close");
+      browser.kill();
+      await closed;
+    }
     await daemon.close();
     site.server.close();
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
