@@ -14,6 +14,10 @@ The daemon itself can't run anything in a shared folder: its sandbox never gives
 
 Commands stop when the computer is paused (and none start until it's resumed), and when Chat with Work revokes it.
 
+### Linux command dependencies
+
+Arch, DEB and RPM packages install Bubblewrap, slirp4netns, util-linux (`unshare` and `nsenter`) and iptables. The iptables and ip6tables commands must use the nftables backend; a manually selected legacy backend remains unsupported and is refused. Archive, Homebrew and Nix installs need these tools installed separately and available on the background service's `PATH`. This does not turn on commands or their network setting.
+
 ### Landlock
 
 Bubblewrap needs unprivileged user namespaces. Some Linux computers block them: Ubuntu 23.10 and later restrict them with AppArmor, `user.max_user_namespaces` can be 0, and containers filter them. There a command runs on Landlock instead, the kernel's own sandbox, which needs no namespaces, from Linux 6.2. Every run asks MXC for its own choice (`process`), which is Bubblewrap where it can create a sandbox and Landlock otherwise, and the supervisor checks first which one this computer gets. Where neither can run, the command fails at once and says why each can't (Bubblewrap blocked, Landlock missing or older than its ABI 3).
@@ -47,6 +51,10 @@ The worker names the folder by its ID and the working folder by a path relative 
 
 They talk over a socket pair the worker inherits as a file descriptor (`CWW_RUN_CHANNEL`), one JSON line each way per call (`commands::channel`). A daemon that runs unconfined (the sandbox off, the tests, and Windows) starts commands itself, with the same checks.
 
+On Linux the systemd unit preserves read-only system directories (`ProtectSystem=full`), no new privileges, a private temporary directory, and a syscall allowlist. It permits Bubblewrap's four mount operations and `AF_NETLINK` for its isolated loopback setup. A whole-filesystem read-only mount would also make explicitly shared writable folders read-only inside a command, so the confined worker and each command's separate MXC policy enforce the exact folder grants. The unit does not inherit `MemoryDenyWriteExecute` into JIT runtimes or the bundled browser engine, and does not set `RestrictSUIDSGID`, whose separate filter blocks the `openat2` path-resolution call Bubblewrap needs. `NoNewPrivileges` remains enabled. These choices do not enable commands, network access, new roots, or writes in a read-only root.
+
+`cargo test -p cww --test systemd_commands -- --ignored --nocapture` checks the actual packaged unit in a temporary user service: Node, an allowed-folder write, adjacent private-file refusals, clean environment, command network setup, and the daemon's Landlock boundary. The Node fixture disables the separate per-command virtual-memory cap so it tests JIT policy independently; normal command memory limits are unchanged. It needs an active systemd user session, Bubblewrap, slirp4netns and Node. It never changes or restarts the installed daemon.
+
 ## What Chat with Work sees
 
 `roots` says which folders allow commands (`allows_commands`) and whether they may use the network. While one does, four more tools are offered:
@@ -77,7 +85,7 @@ The desktop app's chat page and `cww tui` list the commands running here (and th
 - **The process limit is a count, not a wall.** On Linux it's checked four times a second, so a fork bomb can make many processes in between before it's stopped (the user's own `ulimit -u` still applies). On macOS there's none yet, and no memory limit either: CPU time is limited per process, and the wall clock ends the rest. On Windows the container holds it.
 - **The network, when allowed, is the whole network.** Allowing it per host isn't built. On Bubblewrap it needs `slirp4netns` and the other tools MXC lists; without them, a command in a folder that allows the network fails to start and says why. On [Landlock](#landlock) there's no network at all. On Windows it's the internet and the local network, but never this computer's own servers.
 - **On Windows, a command can show windows of its own** on your desktop, though it can't read or drive other programs' windows, the clipboard or your input. And the daemon that starts it isn't sandboxed there yet: the command is, and the daemon checks the folder and the working folder itself, as everywhere.
-- **The systemd unit's own limits apply to commands.** The supervisor runs under `cww daemon install`'s unit, whose `MemoryDenyWriteExecute`, system call filter and `ProtectSystem=strict` carry over to everything it starts: JIT runtimes (Node, the JVM) may fail there until the unit is relaxed for them.
+- **Custom systemd restrictions also apply to commands.** A local override that denies JIT memory, mount syscalls, `openat2` or writes to the chosen root can prevent commands from starting. The shipped unit supports those operations; the worker and each command still have their own sandbox.
 
 ## Not built yet
 

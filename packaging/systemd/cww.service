@@ -3,7 +3,8 @@
 #
 #   systemctl --user enable --now cww.service
 #
-# The daemon only needs its own directories; everything else is read-only.
+# The worker confines file access with Landlock. Its supervisor creates
+# separate MXC sandboxes for commands in the folders the user permits.
 #
 # Behind an HTTP proxy, set `proxy = "http://proxy.example:3128"` in
 # ~/.config/cww/config.toml: services don't see a shell's HTTPS_PROXY.
@@ -24,17 +25,18 @@ RuntimeDirectory=cww
 RuntimeDirectoryMode=0700
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
+ProtectSystem=full
 ReadWritePaths=%h/.config/cww %h/.local/share/cww %h/.local/state/cww
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# @sandbox: the daemon confines itself with Landlock.
-SystemCallFilter=@system-service @sandbox
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# @sandbox is Landlock/seccomp; Bubblewrap also needs its mount namespace.
+SystemCallFilter=@system-service @sandbox mount umount2 pivot_root mount_setattr
 SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
-MemoryDenyWriteExecute=yes
+# JIT runtimes inherit this unit, including the fixed bundled browser engine.
+# RestrictSUIDSGID blocks openat2, which Bubblewrap uses to resolve mount paths.
+# NoNewPrivileges still prevents acquiring privilege through executable bits.
 LockPersonality=yes
 RestrictRealtime=yes
-RestrictSUIDSGID=yes
 
 [Install]
 WantedBy=default.target

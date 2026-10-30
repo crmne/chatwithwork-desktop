@@ -69,7 +69,9 @@ class Cww < Formula
       Without a user service manager, run cww daemon run in a terminal.
       On Linux, the app's window needs your distribution's WebKitGTK 4.1, GTK 3
       and AppIndicator libraries (libwebkit2gtk-4.1-0 and
-      libayatana-appindicator3-1 on Debian and Ubuntu).
+      libayatana-appindicator3-1 on Debian and Ubuntu). Commands also need
+      bubblewrap, slirp4netns, util-linux and nft-backed iptables from your
+      distribution, available on the background service's PATH.
     EOS
   end
 

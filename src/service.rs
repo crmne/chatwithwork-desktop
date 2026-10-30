@@ -331,16 +331,17 @@ pub fn systemd_unit(exe: &Path, paths: &Paths, options: &InstallOptions) -> Stri
             unit.push_str("PrivateTmp=yes\n");
         }
         unit.push_str(&format!(
-            "ProtectSystem=strict\n\
+            // The supervisor must create per-command mount namespaces and
+            // pass writable user folders to them. The worker's Landlock and
+            // each command's MXC policy remain the file-access boundaries.
+            "ProtectSystem=full\n\
              ReadWritePaths={}\n\
-             RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n\
-             SystemCallFilter=@system-service @sandbox\n\
+             RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n\
+             SystemCallFilter=@system-service @sandbox mount umount2 pivot_root mount_setattr\n\
              SystemCallErrorNumber=EPERM\n\
              SystemCallArchitectures=native\n\
-             MemoryDenyWriteExecute=yes\n\
              LockPersonality=yes\n\
-             RestrictRealtime=yes\n\
-             RestrictSUIDSGID=yes\n",
+             RestrictRealtime=yes\n",
             writable.join(" ")
         ));
     }
@@ -768,9 +769,15 @@ mod tests {
             },
         );
         assert!(unit.contains("ExecStart=\"/usr/bin/cww\" daemon run"));
-        assert!(unit.contains("ProtectSystem=strict"));
+        assert!(unit.contains("ProtectSystem=full"));
         assert!(unit.contains("ReadWritePaths=\"-/home/u/.cww/config\""));
-        assert!(unit.contains("SystemCallFilter=@system-service @sandbox"));
+        assert!(unit.contains(
+            "SystemCallFilter=@system-service @sandbox mount umount2 pivot_root mount_setattr"
+        ));
+        assert!(unit.contains("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"));
+        assert!(unit.contains("NoNewPrivileges=yes"));
+        assert!(!unit.contains("MemoryDenyWriteExecute"));
+        assert!(!unit.contains("RestrictSUIDSGID"));
         assert!(unit.contains("PrivateTmp=yes"));
         let in_tmp = systemd_unit(
             Path::new("/usr/bin/cww"),

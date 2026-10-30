@@ -7,7 +7,7 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/crmne/chatwithwork-desktop"
 license=('MIT OR Apache-2.0')
 install="${pkgname}.install"
-depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'dbus')
+depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'dbus' 'bubblewrap' 'slirp4netns' 'util-linux' 'iptables-nft')
 makedepends=('git' 'cargo' 'pkgconf' 'cmake' 'clang' 'python' 'npm')
 optdepends=('org.freedesktop.secrets: store the device key in your keyring'
             'xdg-desktop-portal: native folder picker'
