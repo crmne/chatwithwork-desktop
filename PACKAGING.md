@@ -40,6 +40,8 @@ The browser extension is versioned separately. Its `browser-v*` releases carry
 the public-key-preserving manual installation ZIP and must use
 `--latest=false`, so Desktop's updater still sees a Desktop release. See
 [`browser/README.md`](browser/README.md#releasing-the-extension).
+The AUR development recipe matches only `v[0-9]*` when deriving its version;
+an independent `browser-v*` tag must not become the Desktop package version.
 
 native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-packaging.tar.xz`, `packaging-checksums.txt`); `packaging.yml`'s `tidy-release` job removes them, since the AUR and Homebrew are published from the run's own copy and `winget-submit.sh` renders WinGet's manifests itself. Releases up to 0.5.0 also carried a `.zip` of the macOS app and portable Windows zips; nothing read them, so they're no longer built. Scoop's recipe went with the zips: no bucket was ever published.
 

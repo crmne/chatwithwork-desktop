@@ -145,6 +145,27 @@ cp "$TEST_RELEASE/$name" "$output"
         result = run("sh", str(ROOT / "packaging/install.sh"), env=env)
         return result, install, data
 
+    def test_arch_git_version_ignores_newer_browser_release_tags(self):
+        tree = self.work / "chatwithwork-desktop-git"
+        tree.mkdir()
+
+        def git(*args):
+            result = run("git", "-c", "user.name=Packaging Test",
+                         "-c", "user.email=packaging@example.invalid",
+                         "-c", "commit.gpgsign=false", "-C", str(tree), *args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        git("init", "-q")
+        git("commit", "--allow-empty", "-qm", "Desktop release")
+        git("tag", "v1.2.3")
+        git("commit", "--allow-empty", "-qm", "Browser release")
+        git("tag", "browser-v0.99.0")
+        recipe = ROOT / "packaging/arch/chatwithwork-desktop-git/PKGBUILD.in"
+        result = run("bash", "-ec", 'source "$1"; pkgver', "test", str(recipe),
+                     env=dict(self.env, srcdir=str(self.work)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^1\.2\.3\.r1\.[0-9a-f]{7}$")
+
     def test_installer_starts_daemon_and_installs_desktop_entry(self):
         result, install, data = self.installer()
         self.assertEqual(result.returncode, 0, result.stderr)
