@@ -974,7 +974,7 @@ mod bridge_tests {
             trash::Trash,
         };
         let temp = tempfile::tempdir().unwrap();
-        let folder = temp.path().join("downloads");
+        let folder = temp.path().canonicalize().unwrap().join("downloads");
         std::fs::create_dir(&folder).unwrap();
         let paths = Paths::under(&temp.path().join("cww"));
         let mut config = Config {
