@@ -4,14 +4,22 @@
 import { chromium, expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTENSION_ID, FakeDaemon, cwwBinary, extensionDir, serve } from "./harness.js";
 
 test("a download the page starts by itself doesn't happen", async () => {
+  const hardwareCheck = process.env.CWW_BROWSER_GPU_CHECK === "1";
   const site = await serve({
-    "/": `<title>Files</title><a href="/report.csv" download="report.csv">Download it</a>`,
+    "/": `<title>Files</title><a href="/report.csv" download="report.csv">Download it</a>
+      ${hardwareCheck ? `<p id="gpu"></p><script>
+        const gl = document.createElement("canvas").getContext("webgl");
+        const ext = gl?.getExtension("WEBGL_debug_renderer_info");
+        document.querySelector("#gpu").textContent = "Browser GPU: " +
+          (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "unavailable");
+      </script>` : ""}`,
     "/report.csv": "quarter,revenue\n",
   });
   const home = mkdtempSync(join(tmpdir(), "cww-e2e-"));
@@ -51,6 +59,7 @@ test("a download the page starts by itself doesn't happen", async () => {
         `--user-data-dir=${profile}`,
         "--no-first-run",
         "--no-default-browser-check",
+        ...(hardwareCheck ? ["--use-angle=gl-egl", "--use-gl=angle"] : []),
         `--disable-extensions-except=${extensionDir}`,
         `--load-extension=${extensionDir}`,
         "about:blank",
@@ -62,6 +71,12 @@ test("a download the page starts by itself doesn't happen", async () => {
     const opened = await daemon.call("open", { url: `${site.origin}/` });
     expect(opened.error).toBeUndefined();
     const text = (await daemon.call("read", { tab: opened.result.tab })).result.text as string;
+    if (hardwareCheck) {
+      const renderer = text.split("\n").find((line) => line.includes("Browser GPU:"));
+      expect(renderer).toContain("NVIDIA");
+      expect(renderer).not.toMatch(/SwiftShader|llvmpipe/i);
+      console.log(renderer);
+    }
     const ref = /link "Download it" \[ref=(e\d+)\]/.exec(text)![1];
     const clicked = await daemon.call("click", { tab: opened.result.tab, ref, submits: false });
     expect(clicked.error).toBeUndefined();
@@ -75,6 +90,8 @@ test("a download the page starts by itself doesn't happen", async () => {
     }
     await daemon.close();
     site.server.close();
-    rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    // Chromium's children can finish profile writes after its parent exits.
+    // Yield between retries for at most 5.5 seconds; permanent errors still fail.
+    await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
