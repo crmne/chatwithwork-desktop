@@ -50,6 +50,21 @@ struct InlineConfirmation {
 }
 
 impl Entry {
+    fn cancel_clipped_confirmation(&mut self, client: LogicalSize<f64>) -> bool {
+        let Some(bounds) = self.bounds.filter(|_| self.confirmation.is_some()) else {
+            return false;
+        };
+        let position = bounds.position.to_logical::<f64>(1.0);
+        let size = bounds.size.to_logical::<f64>(1.0);
+        if position.x + size.width <= client.width && position.y + size.height <= client.height {
+            return false;
+        }
+        // Never move a still-valid Allow target to fit a resized window.
+        self.preparation = None;
+        self.confirmation = None;
+        true
+    }
+
     fn placement(&mut self, page: &str, context: &Value, requested: Rect) -> (Rect, bool) {
         if self.page.as_deref() != Some(page)
             || self
@@ -366,6 +381,36 @@ fn rectangle(bounds: Bounds, viewport: Viewport, size: LogicalSize<f64>) -> Resu
         )
         .into(),
     })
+}
+
+/// Map CSS coordinates into the page's actual client area. On GTK, Tao's
+/// cached window size includes client-side decorations and shadows; scaling
+/// by that size makes every child both too large and too far right/down.
+fn client_size(parent: &Webview) -> Result<LogicalSize<f64>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        parent
+            .with_webview(move |handle| {
+                use gtk::prelude::*;
+                let allocation = handle.inner().allocation();
+                let _ = tx.send(LogicalSize::new(
+                    f64::from(allocation.width()),
+                    f64::from(allocation.height()),
+                ));
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "The native client size did not answer.".to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let window = parent.window();
+        Ok(window
+            .inner_size()
+            .map_err(|e| e.to_string())?
+            .to_logical(window.scale_factor().map_err(|e| e.to_string())?))
+    }
 }
 
 /// Tauri canonicalizes App("index.html") to the local root on some platforms.
@@ -731,10 +776,7 @@ pub async fn settings_present(
             return Ok(());
         }
         let window = webview.window();
-        let size = window
-            .inner_size()
-            .map_err(|e| e.to_string())?
-            .to_logical(window.scale_factor().map_err(|e| e.to_string())?);
+        let size = client_size(&webview)?;
         let mut bounds = rectangle(request.bounds, request.viewport, size)?;
         let label = child_label(webview.label());
         let navigation =
@@ -747,9 +789,12 @@ pub async fn settings_present(
             if entry.generation != generation {
                 return Ok(());
             }
+            let clipped = entry.cancel_clipped_confirmation(size);
             let (placement, cancelled) = entry.placement(&request.page, &context, bounds);
             bounds = placement;
-            if cancelled && let Some(child) = app.get_webview(&label) {
+            if (clipped || cancelled)
+                && let Some(child) = app.get_webview(&label)
+            {
                 let _ = child.eval(crate::windows::settings_event(
                     "confirmation_cancelled",
                     &Value::Null,
@@ -1155,6 +1200,41 @@ mod tests {
         let (placement, cancelled) = entry.placement("folders", &context, moved);
         assert_eq!(placement.position, moved.position);
         assert!(cancelled);
+    }
+
+    #[test]
+    fn shrinking_the_client_cancels_an_inline_token_before_repositioning() {
+        use cww::control::ControlRequest as R;
+        let panels = Panels::default();
+        panels.register("main");
+        let request = R::RootsWritable {
+            root: "work".into(),
+            writable: true,
+            i_know: false,
+        };
+        let context = json!({"grant":{"account":"1000001"}});
+        let original = Rect {
+            position: LogicalPosition::new(544.0, 88.0).into(),
+            size: LogicalSize::new(624.0, 708.0).into(),
+        };
+        panels.0.lock().unwrap().get_mut("main").unwrap().bounds = Some(original);
+        let token = panels
+            .prepare_for_test("main", &request, context.clone())
+            .unwrap();
+        {
+            let mut entries = panels.0.lock().unwrap();
+            let entry = entries.get_mut("main").unwrap();
+            assert!(!entry.cancel_clipped_confirmation(LogicalSize::new(1200.0, 820.0)));
+            assert!(entry.cancel_clipped_confirmation(LogicalSize::new(900.0, 700.0)));
+            // Cancelling does not itself move the target. A subsequent normal
+            // placement may fit the new client only after the token is dead.
+            assert_eq!(entry.bounds.unwrap().position, original.position);
+        }
+        assert!(
+            panels
+                .consume_confirmation("main", Some(&token), &request, &context)
+                .is_err()
+        );
     }
 
     #[test]

@@ -119,6 +119,32 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             {
                 let path = dir.join(format!("pane-{name}-{theme}.png"));
                 println!("pane bounds: {:?}, URL: {:?}", pane.bounds(), pane.url());
+                println!(
+                    "pane owner: size={:?}, scale={:?}",
+                    pane.window().inner_size(),
+                    pane.window().scale_factor()
+                );
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = pane.with_webview(|handle| {
+                        use gtk::prelude::*;
+                        let view = handle.inner();
+                        println!(
+                            "pane GTK: allocation={:?}, request={:?}, margins=({}, {}), parent={:?}",
+                            view.allocation(),
+                            view.size_request(),
+                            view.margin_start(),
+                            view.margin_top(),
+                            view.parent().map(|parent| parent.allocation())
+                        );
+                    });
+                    if let Some(parent) = app.get_webview(crate::windows::MAIN) {
+                        let _ = parent.with_webview(|handle| {
+                            use gtk::prelude::*;
+                            println!("parent GTK: allocation={:?}", handle.inner().allocation());
+                        });
+                    }
+                }
                 match capture(&pane, &path) {
                     Ok(()) => println!("{}", path.display()),
                     Err(error) => log::error!("pane: {error}"),
