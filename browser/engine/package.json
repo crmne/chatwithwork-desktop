@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "scripts": { "test": "node --test --test-concurrency=1 test/*.test.mjs" },
-  "dependencies": { "@xmorse/playwright-core": "1.59.13" }
+  "dependencies": { "@xmorse/playwright-core": "1.59.14" }
 }
