@@ -4,7 +4,6 @@ import { inWorker, launch, serve, type Setup } from "./harness.js";
 let setup: Setup;
 let allowed: string;
 let blocked: string;
-let tab: number;
 const servers: { close: () => void }[] = [];
 
 function refOf(text: string, label: RegExp): string {
@@ -47,13 +46,17 @@ test.afterAll(async () => {
   for (const server of servers) server.close();
 });
 
+test.beforeEach(async () => {
+  await policy({ sites: [], all_sites: false, blocked_sites: [], changes: true, stopped: false });
+});
+
 test("empty listed mode denies access; explicit all-sites permits unlisted web pages only", async () => {
   await policy({ changes: true });
   expect((await setup.daemon.call("open", { url: `${allowed}/` })).error?.code).toBe("site_not_allowed");
   await policy({ all_sites: true });
   const opened = await setup.daemon.call("open", { url: `${allowed}/` });
   expect(opened.error).toBeUndefined();
-  tab = opened.result.tab;
+  const tab = opened.result.tab;
   expect((await setup.daemon.call("read", { tab })).result.text).toContain("Public body");
   for (const url of ["file:///etc/passwd", "chrome://settings", "data:text/html,private", "https://user:password@example.com/"]) {
     expect((await setup.daemon.call("open", { url })).error?.code).toBe("site_not_allowed");
@@ -63,6 +66,7 @@ test("empty listed mode denies access; explicit all-sites permits unlisted web p
 });
 
 test("blocks win over listed and all-sites modes, including pages already open", async () => {
+  await policy({ all_sites: true });
   const privateTab = (await setup.daemon.call("open", { url: `${blocked}/private` })).result.tab;
   for (const all_sites of [true, false]) {
     await policy({ all_sites, sites: [allowed, blocked], blocked_sites: [blocked] });
@@ -83,8 +87,11 @@ test("blocks win over listed and all-sites modes, including pages already open",
 });
 
 test("clicks and redirects to blocked pages reveal no destination content", async () => {
+  await policy({ all_sites: true, blocked_sites: [blocked] });
   for (const label of [/link "Elsewhere"/, /link "Redirect"/]) {
-    await setup.daemon.call("open", { tab, url: `${allowed}/` });
+    const opened = await setup.daemon.call("open", { url: `${allowed}/` });
+    expect(opened.error).toBeUndefined();
+    const tab = opened.result.tab;
     const text = (await setup.daemon.call("read", { tab })).result.text;
     const result = await setup.daemon.call("click", { tab, ref: refOf(text, label), submits: false });
     expect(result.error).toBeUndefined();
@@ -97,7 +104,10 @@ test("clicks and redirects to blocked pages reveal no destination content", asyn
 });
 
 test("all-sites keeps protected fields, write checks and both Stop controls", async () => {
-  await setup.daemon.call("open", { tab, url: `${allowed}/` });
+  await policy({ all_sites: true });
+  const opened = await setup.daemon.call("open", { url: `${allowed}/` });
+  expect(opened.error).toBeUndefined();
+  const tab = opened.result.tab;
   const text = (await setup.daemon.call("read", { tab })).result.text;
   expect(text).not.toContain("secret-password");
   expect((await setup.daemon.call("type", { tab, ref: refOf(text, /textbox "Password"/), text: "never" })).error?.code).toBe("sensitive_field");

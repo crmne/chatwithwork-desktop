@@ -130,6 +130,10 @@ through an overlay, never retries after sending a press, and cleans up the
 guard even after Stop. Site access and the local action setting are checked
 again while waiting. A custom element's host alone is neither an obstruction
 nor permission to click: the painted point must reach the intended control.
+The guard remains bound to the document that received the click. If a completed
+click replaces that document, losing its isolated context is expected; the
+result describes the navigation without repeating input or inspecting a blocked
+destination. Other debugger failures and surviving guard refusals remain errors.
 
 Styled native radios and checkboxes may use a visible associated label as
 their activation surface, including when CSS hides the input. The browser's

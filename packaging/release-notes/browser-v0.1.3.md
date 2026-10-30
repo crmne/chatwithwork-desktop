@@ -7,6 +7,8 @@ Replace the files in the existing extension folder, press **Reload** at `chrome:
 
 ## Fixed
 
+- **Fast navigation no longer reports a stale-page error after a click.** The compatibility implementation keeps its checks in the original page, recognizes when navigation replaced it, and withholds blocked destinations. It never repeats the click. By @crmne.
+
 - **Clicks, typing and selections use the complete upstream engine.** Desktop supplies Playwright and its Node runtime; the extension connects it to the requested control in your browser. No separate runtime installation is needed. By @crmne; thanks @crmne for the TK examples and requesting the upstream implementation.
 - **The requested control stays the target.** An action is tied to its tab, document and control. Navigating, disconnecting or pressing Stop invalidates it. Protected fields, site rules and existing approval choices still apply. By @crmne.
 - **A failed action is not silently repeated by a different engine.** Once the new engine begins, failures return directly, avoiding a duplicate click or submission. By @crmne.

@@ -17,7 +17,7 @@ import {
   type Params,
   type Policy,
 } from "./actions.js";
-import { callOn, cleanUp, evaluate, relatedNode, send } from "./cdp.js";
+import { callOn, cleanUp, evaluateInContext, isolatedContext, relatedNode, send } from "./cdp.js";
 import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
@@ -299,6 +299,8 @@ const click: Method = async (params, policy) => {
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
   const key = `__cwwPointer_${crypto.randomUUID()}`;
+  const document = await mainDocument(t.tabId);
+  const contextId = await isolatedContext(t.tabId);
   const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, INSTALL_POINTER_GUARD, [key, location], [surface]);
   if (obstruction) throw new ToolError("page_error", obstruction);
   const started = Date.now();
@@ -318,15 +320,50 @@ const click: Method = async (params, policy) => {
     await mouse("mouseReleased", { buttons: 0 });
     // Navigation destroys the old isolated context, which is normal after a
     // successful link click. A surviving guard reports intercepted events.
-    const blocked = await evaluate<string | null>(t.tabId, guardStatus(key, false));
+    const blocked = await pointerResult(t.tabId, contextId, document, key);
     if (blocked) throw new ToolError("page_error", blocked);
   } finally {
     await cleanUp(t.tabId, async (options) => {
-      await evaluate(t.tabId, guardStatus(key, true), options).catch(() => {});
+      await evaluateInContext(t.tabId, contextId, guardStatus(key, true), { ...options, existingOnly: true }).catch(() => {});
     });
   }
   return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
 };
+
+interface MainDocument { id: string; loaderId: string }
+
+async function mainDocument(tabId: number): Promise<MainDocument> {
+  const { frameTree } = await send<{ frameTree: { frame: MainDocument } }>(tabId, "Page.getFrameTree");
+  return frameTree.frame;
+}
+
+// Only called after the single press/release completed. A missing old world
+// is expected if that click replaced its document. Other debugger failures,
+// and a guard's real refusal in the surviving document, must remain errors.
+async function pointerResult(tabId: number, contextId: number, before: MainDocument, key: string): Promise<string | null> {
+  try {
+    return await evaluateInContext<string | null>(tabId, contextId, guardStatus(key, false));
+  } catch (error) {
+    if (!missingEvaluationContext(error)) throw error;
+    const after = await mainDocument(tabId);
+    if (!before.loaderId || !after.loaderId ||
+        (before.id === after.id && before.loaderId === after.loaderId)) throw error;
+    return null;
+  }
+}
+
+function missingEvaluationContext(error: unknown): boolean {
+  const prefix = "Runtime.evaluate: ";
+  if (!(error instanceof ToolError) || error.code !== "page_error" || !error.message.startsWith(prefix)) return false;
+  try {
+    const detail = JSON.parse(error.message.slice(prefix.length));
+    return detail?.code === -32000 && [
+      "Cannot find context with specified id", "Execution context was destroyed", "Execution context was destroyed.",
+    ].includes(detail.message);
+  } catch {
+    return false;
+  }
+}
 
 const TEXT_TYPES = new Set(["", "text", "search", "email", "url", "tel", "number", "password"]);
 

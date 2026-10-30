@@ -203,6 +203,12 @@ export async function isolatedContext(tabId: number, options: SendOptions = {}):
 // Run `expression` in the extension's world.
 export async function evaluate<T = unknown>(tabId: number, expression: string, options: SendOptions = {}): Promise<T> {
   const contextId = await isolatedContext(tabId, options);
+  return evaluateInContext(tabId, contextId, expression, options);
+}
+
+// A check installed before input must stay in that document's world, even
+// when the input navigates. Never create a new world to read its old guard.
+export async function evaluateInContext<T = unknown>(tabId: number, contextId: number, expression: string, options: SendOptions = {}): Promise<T> {
   const result = await send<{ result: { value?: T }; exceptionDetails?: { text?: string } }>(
     tabId,
     "Runtime.evaluate",
