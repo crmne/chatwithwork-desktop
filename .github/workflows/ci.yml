@@ -257,6 +257,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
+      # launchd can return before Nix's socket is ready. The automatic store
+      # selection then falls back to the root-owned database and fails with
+      # big-lock permission denied. Wait for the installed daemon, never run
+      # the package build as root or make its database writable by the runner.
+      - name: Wait for the macOS Nix daemon
+        if: runner.os == 'macOS'
+        run: |
+          for attempt in {1..15}; do
+            if nix store ping --store daemon; then
+              echo 'NIX_REMOTE=daemon' >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 2
+          done
+          sudo launchctl print system/org.nixos.nix-daemon
+          exit 1
       - name: Build package
         run: nix build .#default -L
       - run: ./result/bin/cww --version
