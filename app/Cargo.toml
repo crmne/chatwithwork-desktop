@@ -63,7 +63,7 @@ fastframe-autostart = { version = "0.15.2", git = "https://github.com/crmne/fast
 # Updating the app by itself (update.rs): the daily check, refusing copies a
 # package manager owns, the signed download, and the helper that installs,
 # relaunches and rolls back. Same release as the other fastframe crates.
-fastframe-update = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-update = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.3" }
 # fastframe-update's transport, through the TLS roots and proxy cww uses.
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 # Native delivery for the supervisor's pipe-only notification broker.
