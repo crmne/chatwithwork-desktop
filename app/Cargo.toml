@@ -59,7 +59,7 @@ jiff = "0.2"
 # Start at login in the tray: the XDG autostart entry on Linux, a login
 # item with the bundle's launch agent on macOS, the Run key on Windows. Same
 # release as fastframe-audio.
-fastframe-autostart = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-autostart = { version = "0.15.2", git = "https://github.com/crmne/fastframe", tag = "v0.15.3" }
 # Updating the app by itself (update.rs): the daily check, refusing copies a
 # package manager owns, the signed download, and the helper that installs,
 # relaunches and rolls back. Same release as the other fastframe crates.
