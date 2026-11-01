@@ -47,9 +47,15 @@ jobs:
           components: rustfmt, clippy
       # After the toolchain, so the cache key follows the pinned rustc. The
       # key carries no job name, so each job sets its own generation.
+      # Saved when the dependencies change, not on every push: a key per
+      # commit let each Linux save (about 8 GiB) push the other platforms'
+      # caches past the repository's 10 GB. Native links, the largest part,
+      # stay out of it for the same reason.
       - uses: jdx/mr-boxington-action@v1
         with:
-          cache-generation: test-app-v1
+          cache-key: test-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: test-app-v2-${{ runner.os }}-${{ runner.arch }}-
+          cache-links: ${{ runner.os == 'Linux' && 'false' || 'auto' }}
       - uses: ./.github/actions/speech-build
       # Printing and scanning, before the tests that need them: on Linux
       # against a private CUPS, SANE's own test device (a fake feeder of
