@@ -4,7 +4,7 @@ Chat with Work can print a PDF from a chat's files on a printer attached to this
 
 **Nothing prints here unless you say so on this computer.** You choose which printers Chat with Work may use, and for whom. The server can't add a printer, lend one, or let a job print unattended.
 
-Status: built on Linux and macOS (CUPS) and Windows (the print spooler). IPP Everywhere, for a network printer the system doesn't have, isn't built ([Not built yet](#not-built-yet)). Tested for real on 2026-11-01: on Linux, jobs through a private `cupsd` and its real `lp`, `lpstat` and `lpoptions` into a backend that keeps the job (`tests/printing_cups.rs`); on Windows 11, jobs through the spooler to "Microsoft Print to PDF", every page and a page list. No paper was used.
+Status: built on Linux and macOS (CUPS) and Windows (the print spooler). IPP Everywhere, for a network printer the system doesn't have, isn't built ([Not built yet](#not-built-yet)). Tested for real on 2026-11-01: on Linux, jobs through a private `cupsd` and its real `lp`, `lpstat` and `lpoptions` into a backend that keeps the job (`tests/printing_cups.rs`); on macOS 27, a job through its CUPS to a queue on `/dev/null`, which CUPS reported completed; on Windows 11, jobs through the spooler to "Microsoft Print to PDF", every page and a page list. No paper was used.
 
 ## Allowing a printer
 
