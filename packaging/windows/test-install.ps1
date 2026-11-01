@@ -21,6 +21,7 @@ function Run-Msi([string] $action) {
   Write-Host "Running msiexec $action for $env:USERNAME"
   New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
   $log = Join-Path $env:TEMP ('cww-msi-' + [Guid]::NewGuid().ToString('N') + '.log')
+  $script:msiLog = $log
   $arguments = @($action, "`"$Msi`"", "/qn", "/norestart", '/L*V', "`"$log`"")
   if ($action -eq '/i' -and $InstallFolder) { $arguments += "INSTALLFOLDER=`"$dir`"" }
   $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $arguments
@@ -149,7 +150,16 @@ try {
   if ($installed) { Run-Msi "/x" }
 }
 foreach ($binary in "cww.exe", "cww-app.exe", "cww-agent.exe") {
-  if (Test-Path (Join-Path $dir $binary)) { throw "Uninstall left $binary" }
+  if (Test-Path (Join-Path $dir $binary)) {
+    Write-Host "Still running from $dir"
+    Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$dir*" } |
+      ForEach-Object { Write-Host "$($_.ProcessId) $($_.ExecutablePath) $($_.CommandLine)" }
+    if ($script:msiLog -and (Test-Path -LiteralPath $script:msiLog)) {
+      Select-String -LiteralPath $script:msiLog -Pattern 'cww\.exe|PurgeDaemon|WixQuietExec|REBOOT|in use|Return value 3|schedul' |
+        Select-Object -Last 60 | ForEach-Object { Write-Host $_.Line }
+    }
+    throw "Uninstall left $binary"
+  }
 }
 if (Test-Path (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Programs\CwwBE")) { throw "Uninstall left the browser engine" }
 foreach ($shortcut in "Chat with Work.lnk", "Chat with Work (Terminal).lnk") {
