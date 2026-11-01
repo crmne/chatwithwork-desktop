@@ -59,6 +59,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu cups cups-client
+          # Ubuntu's AppArmor profile would stop the test's private cupsd
+          # running its backend from a temporary folder (EACCES, status 113).
+          if [ -e /etc/apparmor.d/usr.sbin.cupsd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.cupsd
+          fi
           echo "CWW_PRINT_REQUIRE_CUPS=1" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/sane.d"
           echo test > "$RUNNER_TEMP/sane.d/dll.conf"
