@@ -36,6 +36,7 @@ test("manual ZIP keeps the registered identity and excludes stale output; store 
   for (const zip of [manual, "chatwithwork-browser.zip"]) {
     assert.match(contents(zip, "THIRD-PARTY-NOTICES.txt"), /Copyright \(c\) Microsoft Corporation/);
     assert.match(contents(zip, "LICENSE-APACHE"), /Version 2\.0, January 2004/);
+    assert.match(contents(zip, "LICENSE"), /GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007/);
   }
   // Leave build/ usable for development and the Chromium tests.
   build();

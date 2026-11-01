@@ -16,6 +16,6 @@
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Dictate a message. Audio is sent through your Chat with Work server for transcription in the EU using credits.</string>
-    <key>NSHumanReadableCopyright</key><string>© 2026 Carmine Paolino. MIT or Apache 2.0. Chat with Work is a trademark of PlentyLabs UG (haftungsbeschränkt) &amp; Co. KG.</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Carmine Paolino. GPL-3.0-only. Chat with Work is a trademark of PlentyLabs UG (haftungsbeschränkt) &amp; Co. KG.</string>
 </dict>
 </plist>

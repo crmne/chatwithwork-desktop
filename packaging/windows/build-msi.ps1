@@ -36,7 +36,7 @@ try {
   foreach ($notice in "TWAINDSM-LICENSE.txt", "TWAINDSM-NOTICE.txt", "cww-installer.txt") {
     Copy-Item (Join-Path $PSScriptRoot $notice) $source
   }
-  foreach ($doc in "README.md", "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE") {
+  foreach ($doc in "README.md", "PROTOCOL.md", "SECURITY.md", "LICENSE") {
     Copy-Item (Join-Path $root $doc) $source
   }
   $extensions = & wix extension list -g 2>$null

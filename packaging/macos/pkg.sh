@@ -36,7 +36,7 @@ xattr -cr "$work/payload"
 ditto "$app" "$work/payload/Applications/Chat with Work.app"
 ln -s "/Applications/Chat with Work.app/Contents/MacOS/cww" "$work/payload/usr/local/bin/cww"
 ln -s "/Applications/Chat with Work.app/Contents/MacOS/cww-app" "$work/payload/usr/local/bin/cww-app"
-cp "$here"/resources/*.html "$root/LICENSE-MIT" "$work/resources/"
+cp "$here"/resources/*.html "$root/LICENSE" "$work/resources/"
 
 pkgbuild --analyze --root "$work/payload" "$work/components.plist"
 # Always install in /Applications, even if another copy exists elsewhere.

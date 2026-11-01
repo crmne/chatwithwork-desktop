@@ -188,7 +188,7 @@ jobs:
           mkdir -p "dist/$name"
           cp "$release/cww-app.exe" "$release/cww.exe" "$release/cww-agent.exe" "dist/$name/"
           cp "$release/cww-scan-helper.exe" "$release/TWAINDSM.dll" packaging/windows/TWAINDSM-LICENSE.txt packaging/windows/TWAINDSM-NOTICE.txt "dist/$name/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
           cp -R "$release/browser-engine" "dist/$name/"
           (cd dist && 7z a "$name.zip" "$name")
           rm -rf "dist/$name"

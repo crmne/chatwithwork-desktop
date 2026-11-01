@@ -16,7 +16,7 @@
   "bundle": {
     "active": false,
     "publisher": "PlentyLabs UG (haftungsbeschränkt) & Co. KG",
-    "copyright": "© 2026 Carmine Paolino. MIT or Apache 2.0",
+    "copyright": "© 2026 Carmine Paolino. GPL-3.0-only",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

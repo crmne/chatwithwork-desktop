@@ -70,7 +70,7 @@ exit "${TEST_DAEMON_EXIT:-0}"
                 base = f"cww-app-v9.8.7-{target}/"
                 for name in ("cww", "cww-app", "cww-app.desktop", "cww-app.svg",
                              "packaging/systemd/cww.service", "README.md",
-                             "PROTOCOL.md", "SECURITY.md", "LICENSE-MIT", "LICENSE-APACHE",
+                             "PROTOCOL.md", "SECURITY.md", "LICENSE",
                              f"browser-engine/{engine_package.resolve(self.engine).name}/node",
                              f"browser-engine/{engine_package.resolve(self.engine).name}/entry.mjs",
                              "browser-engine/current.json"):

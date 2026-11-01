@@ -15,7 +15,7 @@ nfpm:
     background agent.
     Chat with your assistant and share only the folders you choose.
     Includes the applications-menu entry, icon and systemd user service.
-  license: MIT OR Apache-2.0
+  license: GPL-3.0-only
   provides: [cww]
   contents:
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/browser-engine/"
@@ -41,12 +41,8 @@ nfpm:
     dst: /usr/share/doc/chatwithwork-desktop/SECURITY.md
     file_info:
       mode: 420
-  - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/LICENSE-MIT"
-    dst: /usr/share/licenses/chatwithwork-desktop/LICENSE-MIT
-    file_info:
-      mode: 420
-  - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/LICENSE-APACHE"
-    dst: /usr/share/licenses/chatwithwork-desktop/LICENSE-APACHE
+  - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/LICENSE"
+    dst: /usr/share/licenses/chatwithwork-desktop/LICENSE
     file_info:
       mode: 420
   - src: "@PAYLOAD@/cww-app-v@VERSION@-@TARGET@/cww-app"

@@ -26,7 +26,7 @@ Dir.mktmpdir('.cli-archive.', output) do |scratch|
   { cli => 'cww', helper => 'cww-notify' }.each do |source, destination|
     FileUtils.install(source, File.join(package, destination), mode: 0o755)
   end
-  %w[README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE].each do |doc|
+  %w[README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE].each do |doc|
     FileUtils.install(File.join(root, doc), File.join(package, doc), mode: 0o644)
   end
   FileUtils.install(File.join(root, 'packaging/systemd/cww.service'), File.join(package, 'packaging/systemd/cww.service'), mode: 0o644)

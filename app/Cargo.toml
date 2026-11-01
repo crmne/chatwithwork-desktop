@@ -5,7 +5,7 @@ edition = "2024"
 # fastframe needs 1.98; the daemon itself builds with 1.90.
 rust-version = "1.98"
 description = "Chat with Work Desktop: the web app in a native window, the tray item and the background agent's settings"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 authors = ["Carmine Paolino <carmine@paolino.me>"]
 repository = "https://github.com/crmne/chatwithwork-desktop"
 homepage = "https://chatwithwork.com"

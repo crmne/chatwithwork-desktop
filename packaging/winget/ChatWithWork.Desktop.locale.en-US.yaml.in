@@ -9,7 +9,7 @@ PrivacyUrl: https://chatwithwork.com/privacy-policy
 Author: Carmine Paolino
 PackageName: Chat with Work Desktop
 PackageUrl: https://github.com/crmne/chatwithwork-desktop
-License: MIT OR Apache-2.0
+License: GPL-3.0-only
 LicenseUrl: https://github.com/crmne/chatwithwork-desktop#license
 Copyright: Copyright (c) 2026 Carmine Paolino
 ShortDescription: Chat with Work desktop app, terminal interface and local background agent.

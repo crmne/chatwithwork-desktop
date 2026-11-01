@@ -100,10 +100,7 @@
             meta = {
               description = "Chat with Work Desktop app, terminal interface and background agent";
               homepage = "https://github.com/crmne/chatwithwork-desktop";
-              license = with pkgs.lib.licenses; [
-                mit
-                asl20
-              ];
+              license = pkgs.lib.licenses.gpl3Only;
               mainProgram = "cww";
               platforms = systems;
             };

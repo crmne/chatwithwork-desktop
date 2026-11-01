@@ -5,7 +5,7 @@ pkgrel=@PKGREL@
 pkgdesc="Chat with Work Desktop: the desktop app, terminal interface and background agent"
 arch=('x86_64' 'aarch64')
 url="https://github.com/crmne/chatwithwork-desktop"
-license=('MIT OR Apache-2.0')
+license=('GPL-3.0-only')
 install="${pkgname}.install"
 depends=('alsa-lib' 'libpipewire' 'glibc' 'gcc-libs' 'webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'dbus' 'bubblewrap' 'slirp4netns' 'util-linux' 'iptables-nft')
 optdepends=('org.freedesktop.secrets: store the device key in your keyring'
@@ -38,5 +38,5 @@ package() {
   install -Dm644 "${dir}/cww-app.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/cww-app.svg"
   install -Dm644 "${dir}/packaging/systemd/cww.service" "${pkgdir}/usr/lib/systemd/user/cww.service"
   install -Dm644 "${dir}/README.md" "${dir}/PROTOCOL.md" "${dir}/SECURITY.md" -t "${pkgdir}/usr/share/doc/${pkgname}/"
-  install -Dm644 "${dir}/LICENSE-MIT" "${dir}/LICENSE-APACHE" -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+  install -Dm644 "${dir}/LICENSE" -t "${pkgdir}/usr/share/licenses/${pkgname}/"
 }
