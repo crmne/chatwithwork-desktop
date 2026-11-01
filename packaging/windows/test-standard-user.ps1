@@ -21,7 +21,8 @@ try {
   Copy-Item -LiteralPath (Resolve-Path $Msi).Path -Destination (Join-Path $directory 'cww-test.msi')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'test-install.ps1') -Destination $directory
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../../browser/engine/scripts/runtime_smoke.py') -Destination $directory
-  $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+  # The first one: a runner can have several, and this must be one path.
+  $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
   $password = ConvertTo-SecureString ('Cww!' + [Guid]::NewGuid().ToString('N')) -AsPlainText -Force
   New-LocalUser -Name $name -Password $password -AccountNeverExpires | Out-Null
   $createdUser = $true
