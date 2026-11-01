@@ -51,6 +51,24 @@ jobs:
         with:
           cache-generation: test-app-v1
       - uses: ./.github/actions/speech-build
+      # Printing and scanning, before the tests that need them: on Linux
+      # against a private CUPS, SANE's own test device (a fake feeder of
+      # ten pages, enabled in a dll.conf of its own) and the system Tesseract.
+      - name: Install CUPS, SANE and Tesseract
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu cups cups-client
+          # Ubuntu's AppArmor profile would stop the test's private cupsd
+          # running its backend from a temporary folder (EACCES, status 113).
+          if [ -e /etc/apparmor.d/usr.sbin.cupsd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.cupsd
+          fi
+          echo "CWW_PRINT_REQUIRE_CUPS=1" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/sane.d"
+          echo test > "$RUNNER_TEMP/sane.d/dll.conf"
+          echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"
+          echo "CWW_SCAN_REQUIRE_SANE=1" >> "$GITHUB_ENV"
       - run: cargo fmt --check
       - run: mbx clippy --all-targets --locked -- -D warnings
       - run: cargo fmt -p cww-notification-broker --check
@@ -59,17 +77,6 @@ jobs:
       - run: mbx test --locked --no-run
       - run: mbx test --locked
         timeout-minutes: 5
-      # Scanning: on Linux against SANE's own test device (a fake feeder of
-      # ten pages, enabled in a dll.conf of its own) and the system Tesseract.
-      - name: Install SANE and Tesseract
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu
-          mkdir -p "$RUNNER_TEMP/sane.d"
-          echo test > "$RUNNER_TEMP/sane.d/dll.conf"
-          echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"
-          echo "CWW_SCAN_REQUIRE_SANE=1" >> "$GITHUB_ENV"
       - run: cargo fmt -p cww-scan --check
       - run: mbx clippy -p cww-scan --all-targets --locked -- -D warnings
       - run: mbx test -p cww-scan --locked

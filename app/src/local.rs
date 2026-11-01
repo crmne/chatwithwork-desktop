@@ -18,7 +18,7 @@ use tauri::{AppHandle, State, Webview};
 use crate::desktop::Desktop;
 
 /// Control requests the settings pages may send (CONTROL.md).
-pub const ALLOWED: [&str; 27] = [
+pub const ALLOWED: [&str; 31] = [
     "hello",
     "status",
     "pause",
@@ -29,6 +29,10 @@ pub const ALLOWED: [&str; 27] = [
     "roots_commands",
     "roots_label",
     "roots_bot",
+    "printers",
+    "printers_add",
+    "printers_remove",
+    "printers_bot",
     "suggested_roots",
     "deny",
     "deny_extra",

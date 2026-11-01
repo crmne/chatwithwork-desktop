@@ -63,6 +63,11 @@ enum Command {
         #[command(subcommand)]
         command: RootsCommand,
     },
+    /// Manage the printers Chat with Work may use.
+    Printers {
+        #[command(subcommand)]
+        command: Option<PrintersCommand>,
+    },
     /// Show the daemon's connection and index state.
     Status {
         /// Print JSON.
@@ -181,6 +186,39 @@ enum BrowserCommand {
     /// Stop sharing the browser with a bot.
     #[command(name = "unshare", alias = "stop-lending")]
     StopLending { bot: String },
+}
+
+#[derive(Subcommand)]
+enum PrintersCommand {
+    /// List this computer's printers, and which Chat with Work may use.
+    List,
+    /// Let your chats print on a printer, each job approved in Chat with
+    /// Work. `--bots-only` keeps it for the bots you lend it to.
+    Add {
+        /// The system's name for it, as `cww printers` lists it.
+        queue: String,
+        /// What to call it in Chat with Work.
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        bots_only: bool,
+    },
+    /// Stop Chat with Work using a printer, for chats and bots alike.
+    Remove { printer: String },
+    /// Lend a printer to a Chat with Work bot, by the number in its address
+    /// in Chat with Work. Each job asks you first, unless `--unattended`
+    /// lets the bot print here without anyone approving it.
+    Share {
+        printer: String,
+        bot: String,
+        /// The bot's name, to recognize it here.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        unattended: bool,
+    },
+    /// Stop lending a printer to a bot.
+    Unshare { printer: String, bot: String },
 }
 
 #[derive(Subcommand)]
@@ -447,6 +485,9 @@ fn run(cli: Cli) -> Result<()> {
             notify_daemon(&paths, "");
         }
         Command::Roots { command } => roots(&paths, command)?,
+        Command::Printers { command } => {
+            printers(&paths, command.unwrap_or(PrintersCommand::List))?
+        }
         Command::Status { json } => status(&paths, json)?,
         Command::Pause => pause(&paths, true)?,
         Command::Resume => pause(&paths, false)?,
@@ -547,6 +588,95 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         },
+    }
+    Ok(())
+}
+
+fn printers(paths: &Paths, command: PrintersCommand) -> Result<()> {
+    use cww::printing::{settings, system_printers};
+    let mut config = Config::load(paths)?;
+    let system = || system_printers().map_err(|e| anyhow::anyhow!(e.message));
+    match command {
+        PrintersCommand::List => {
+            for printer in system()? {
+                let allowed = config.printers.iter().find(|p| p.queue == printer.queue);
+                let uses = allowed.map_or_else(
+                    || "not used by Chat with Work".to_string(),
+                    |p| {
+                        let mut uses = Vec::new();
+                        if p.chats {
+                            uses.push("your chats".to_string());
+                        }
+                        uses.extend(p.bots.iter().map(|loan| {
+                            format!(
+                                "bot {}{}",
+                                loan.id,
+                                if loan.unattended { " (unattended)" } else { "" }
+                            )
+                        }));
+                        format!("{}: {}", p.id, uses.join(", "))
+                    },
+                );
+                println!("{} ({}), {uses}", printer.queue, printer.state);
+            }
+        }
+        PrintersCommand::Add {
+            queue,
+            label,
+            bots_only,
+        } => {
+            let printer = settings::add(
+                &mut config,
+                &system()?,
+                &queue,
+                label.as_deref(),
+                !bots_only,
+            )?;
+            config.save(paths)?;
+            println!(
+                "Chat with Work can use {} as {}.",
+                printer.label, printer.id
+            );
+            notify_daemon(paths, "");
+        }
+        PrintersCommand::Remove { printer } => {
+            let printer = settings::remove(&mut config, &printer)?;
+            config.save(paths)?;
+            println!("Chat with Work can't use {} any more.", printer.label);
+            notify_daemon(paths, "");
+        }
+        PrintersCommand::Share {
+            printer,
+            bot,
+            name,
+            unattended,
+        } => {
+            let printer = settings::set_bot(
+                &mut config,
+                &printer,
+                &bot,
+                name.as_deref(),
+                true,
+                unattended,
+            )?;
+            config.save(paths)?;
+            println!(
+                "{} is shared with bot {bot}. {}",
+                printer.label,
+                if unattended {
+                    "It prints here without anyone approving each job."
+                } else {
+                    "Each job waits for you to approve it in Chat with Work."
+                }
+            );
+            notify_daemon(paths, "");
+        }
+        PrintersCommand::Unshare { printer, bot } => {
+            let printer = settings::set_bot(&mut config, &printer, &bot, None, false, false)?;
+            config.save(paths)?;
+            println!("{} is no longer shared with bot {bot}.", printer.label);
+            notify_daemon(paths, "");
+        }
     }
     Ok(())
 }

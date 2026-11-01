@@ -5,6 +5,7 @@
 import { ICONS } from "./icons.js";
 import welcome from "./pages/welcome.js";
 import folders from "./pages/folders.js";
+import printers from "./pages/printers.js";
 import browser from "./pages/browser.js";
 import privacy from "./pages/privacy.js";
 import activity from "./pages/activity.js";
@@ -13,8 +14,8 @@ import notifications from "./pages/notifications.js";
 import general from "./pages/general.js";
 import botSharing from "./pages/bot_sharing.js";
 
-const PAGES = { welcome, folders, browser, privacy, activity, account, notifications, general, "bot-sharing": botSharing };
-const NAV = ["general", "folders", "browser", "notifications", "account", "activity"];
+const PAGES = { welcome, folders, printers, browser, privacy, activity, account, notifications, general, "bot-sharing": botSharing };
+const NAV = ["general", "folders", "printers", "browser", "notifications", "account", "activity"];
 
 // The app's commands. A refusal comes back as { code, message }.
 const internals = window.__TAURI_INTERNALS__;

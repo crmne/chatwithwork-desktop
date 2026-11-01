@@ -15,7 +15,7 @@ Options:
   --settings           Open settings in the Chat with Work window
   --scan               Open the scan window
   --page <name>        Open settings on a page: welcome, folders,
-                       browser, privacy, activity, account, notifications, general
+                       printers, browser, privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
   --server <url>       Show this Chat with Work server instead of the paired
                        one (for development)
@@ -25,9 +25,10 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 /// The settings pages, as the bundled pages name them.
-pub const PAGES: [&str; 8] = [
+pub const PAGES: [&str; 9] = [
     "welcome",
     "folders",
+    "printers",
     "browser",
     "privacy",
     "activity",

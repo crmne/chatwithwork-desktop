@@ -14,7 +14,8 @@
 //! then the reader or the writer (path parsing, root lookup, deny list, safe
 //! open), and is appended to the audit log whatever the outcome. Folders that also
 //! allow commands add `run`, `run_status`, `run_output` and `run_stop`
-//! (see `crate::commands`).
+//! (see `crate::commands`). Allowed printers add `printers`, `print` and
+//! `print_bytes` (see `crate::printing`).
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -39,6 +40,7 @@ use crate::browsing::tools::{Answer, BrowserTools, Kind, is_browser_tool};
 use crate::commands::tools::{COMMAND_TOOLS, CommandTools, Progress};
 use crate::error::{ErrorCode, ToolError};
 use crate::limits::{Limiter, ReadScope};
+use crate::printing::tools::{PRINT_TOOLS, PrintTools};
 use crate::reader::code::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::reader::{
     ListRequest, ListResponse, ReadBytesRequest, ReadBytesResponse, ReadRequest, ReadResponse,
@@ -134,6 +136,8 @@ pub struct LocalFiles {
 
 struct Inner {
     commands: Option<CommandTools>,
+    /// The printing tools, while a printer is allowed.
+    printing: Option<PrintTools>,
     /// The browser tools, while the person turned the browser on.
     browser: Option<BrowserTools>,
     reader: Arc<Reader>,
@@ -156,6 +160,7 @@ impl LocalFiles {
         Self {
             inner: Arc::new(Inner {
                 commands: None,
+                printing: None,
                 browser: None,
                 reader,
                 writer,
@@ -178,6 +183,17 @@ impl LocalFiles {
         }
     }
 
+    /// Offer the printing tools too.
+    pub fn with_printing(self, printing: PrintTools) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                printing: printing.offered().then_some(printing),
+                ..inner
+            }),
+        }
+    }
+
     /// Offer the browser tools too.
     pub fn with_browser(self, browser: Option<BrowserTools>) -> Self {
         let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
@@ -192,6 +208,10 @@ impl LocalFiles {
 
     fn commands(&self) -> Option<&CommandTools> {
         self.inner.commands.as_ref()
+    }
+
+    fn printing(&self) -> Option<&PrintTools> {
+        self.inner.printing.as_ref()
     }
 
     /// Run one tool call. Returns `None` for an unknown tool name.
@@ -244,6 +264,7 @@ impl LocalFiles {
             && (READ_TOOLS.contains(&name)
                 || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
                 || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
+                || (PRINT_TOOLS.contains(&name) && self.printing().is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -357,6 +378,7 @@ impl LocalFiles {
                     entry.effect = match name {
                         "run" if !dry_run => Some("ran".into()),
                         "run_stop" => Some("stopped".into()),
+                        "print" if !dry_run => Some("printed".into()),
                         _ => None,
                     };
                     entry.detail = match (detail, &for_bot) {
@@ -726,6 +748,13 @@ impl LocalFiles {
                 let (value, detail) = commands.call(command, args, progress).await?;
                 Ok(Output::Command(value, detail))
             }
+            print if PRINT_TOOLS.contains(&print) => {
+                let Some(printing) = self.printing() else {
+                    unreachable!("checked against the tool names")
+                };
+                let (value, detail) = printing.call(print, args, caller).await?;
+                Ok(Output::Command(value, detail))
+            }
             _ => unreachable!("checked against the tool names"),
         }
     }
@@ -858,6 +887,9 @@ impl LocalFiles {
         if self.commands().is_some() {
             all.extend(command_tools());
         }
+        if self.printing().is_some() {
+            all.extend(print_tools());
+        }
         if let Some(browser) = self.browser() {
             all.extend(browser_tools(browser));
         }
@@ -869,6 +901,20 @@ impl LocalFiles {
     pub fn local_browser_tools(&self) -> Vec<Tool> {
         self.browser().map(browser_tools).unwrap_or_default()
     }
+}
+
+/// The printing tools: `printers` only reads; `print` and `print_bytes` are
+/// writes (paper and toner, nothing leaves the premises), and sending a chunk
+/// again changes nothing.
+pub fn print_tools() -> Vec<Tool> {
+    crate::printing::tools::definitions()
+        .into_iter()
+        .map(|(name, title, description, input, kind)| match kind {
+            "read" => tool(name, title, description, input),
+            "bytes" => change_tool(name, title, description, input, false, true, None),
+            _ => change_tool(name, title, description, input, false, true, None),
+        })
+        .collect()
 }
 
 /// The browser tools offered: all open-world, since they reach the web;

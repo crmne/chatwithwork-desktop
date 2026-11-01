@@ -33,6 +33,12 @@ pub enum Call {
     List,
     /// The device was revoked: stop every run.
     StopAll,
+    /// The system's printers, and the pages left today.
+    Printers,
+    /// Print a file that arrived (`crate::printing`).
+    Print {
+        request: crate::printing::Request,
+    },
 }
 
 /// Answer one call, as the supervisor does.
@@ -73,6 +79,14 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
         Call::StopAll => {
             runs.stop_all();
             serde_json::Value::Null
+        }
+        Call::Printers => serde_json::json!({
+            "printers": crate::printing::system_printers()?,
+            "pages_left": crate::printing::pages_left(paths, &config()?),
+        }),
+        Call::Print { request } => {
+            let _turn = crate::printing::one_job_at_a_time();
+            to_value(crate::printing::print(paths, &config()?, &request)?)
         }
     };
     Ok(value)
