@@ -109,6 +109,9 @@ pub fn system_printers() -> Result<Vec<SystemPrinter>, RunError> {
     }
 }
 
+/// A job that may have printed: the system stopped answering partway.
+pub(crate) const UNCONFIRMED: &str = "unconfirmed";
+
 fn submit(job: &Job) -> Result<String, RunError> {
     #[cfg(unix)]
     {
@@ -141,6 +144,15 @@ static JOBS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Do one job, as the supervisor does. Every check is made here again.
 pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receipt, RunError> {
+    print_through(paths, config, request, submit)
+}
+
+fn print_through(
+    paths: &Paths,
+    config: &Config,
+    request: &Request,
+    submit: impl FnOnce(&Job) -> Result<String, RunError>,
+) -> Result<Receipt, RunError> {
     let _one_at_a_time = JOBS.lock().unwrap_or_else(|held| held.into_inner());
     if !transfer::valid_id(&request.transfer) {
         return Err(RunError::new("invalid_argument", "not a print file's id"));
@@ -186,6 +198,10 @@ pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receip
             ),
         ));
     }
+    // Counted first, and kept unless the job certainly didn't print: paper
+    // that isn't counted is what the limit is there to stop.
+    counted.0.push((now, sheets));
+    write_count(&dir, &counted)?;
     let job = submit(&Job {
         queue: printer.queue.clone(),
         file: file.clone(),
@@ -193,8 +209,13 @@ pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receip
         copies: request.copies,
         duplex: request.duplex,
         pages: request.pages.clone(),
+    })
+    .inspect_err(|error| {
+        if error.code != UNCONFIRMED {
+            counted.0.pop();
+            let _ = write_count(&dir, &counted);
+        }
     })?;
-    counted.0.push((now, sheets));
     let receipt = Receipt {
         job,
         state: "queued".into(),
@@ -202,7 +223,6 @@ pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receip
         copies: request.copies,
         already: false,
     };
-    write_count(&dir, &counted);
     write_receipt(&dir, &request.transfer, &receipt);
     let _ = std::fs::remove_file(file);
     Ok(receipt)
@@ -265,10 +285,11 @@ fn read_count(dir: &Path, now: u64) -> Count {
     count
 }
 
-fn write_count(dir: &Path, count: &Count) {
-    if let Ok(bytes) = serde_json::to_vec(count) {
-        let _ = write_private_file(&dir.join("pages.json"), &bytes);
-    }
+fn write_count(dir: &Path, count: &Count) -> Result<(), RunError> {
+    serde_json::to_vec(count)
+        .ok()
+        .and_then(|bytes| write_private_file(&dir.join("pages.json"), &bytes).ok())
+        .ok_or_else(|| RunError::new("unavailable", "couldn't save today's page count"))
 }
 
 fn receipt_path(dir: &Path, transfer: &str) -> PathBuf {

@@ -34,7 +34,7 @@ The daemon can't tell an approval from a forged one, so what it holds to is what
 
 ## The day's pages
 
-This computer prints at most 200 pages in any 24 hours, copies counted, however many printers it has, so a bot gone wrong can't empty a tray. It's `print_pages_per_day` under `[limits]` in `config.toml`; 0 means no limit. Past it, a job is refused and says how many pages are left.
+This computer prints at most 200 pages in any 24 hours, copies counted, however many printers it has, so a bot gone wrong can't empty a tray. It's `print_pages_per_day` under `[limits]` in `config.toml`; 0 means no limit. Past it, a job is refused and says how many pages are left. A job counts before it goes out, and is refused if the count can't be saved. A job that fails gives its pages back, unless it may have printed (`lp` timed out, or Windows couldn't finish it), which keeps them counted.
 
 ## How it works
 

@@ -279,6 +279,48 @@ fn the_day_keeps_its_page_limit_and_a_receipt_answers_a_second_call() {
     assert_eq!(again.job, "Office-1");
 }
 
+#[test]
+fn a_job_counts_unless_it_certainly_did_not_print() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut config = config_with(printer(true, vec![]));
+    config.limits.print_pages_per_day = 20;
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+    let job = request(None, false);
+    let submit = |code: &'static str| {
+        print_through(&paths, &config, &job, |_| {
+            // Saved before the job goes out, however it ends.
+            assert_eq!(pages_left(&paths, &config), Some(14));
+            Err(RunError::new(code, "no"))
+        })
+        .unwrap_err()
+    };
+
+    assert_eq!(submit("unavailable").code, "unavailable");
+    assert_eq!(pages_left(&paths, &config), Some(20));
+
+    assert_eq!(submit(UNCONFIRMED).code, UNCONFIRMED);
+    assert_eq!(pages_left(&paths, &config), Some(14));
+}
+
+#[test]
+fn a_job_whose_count_cannot_be_saved_does_not_print() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(dir.join("pages.json")).unwrap();
+    let config = config_with(printer(true, vec![]));
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+
+    let error = print_through(&paths, &config, &request(None, false), |_| {
+        panic!("a job went out uncounted")
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "unavailable");
+}
+
 mod tools_for_callers {
     use serde_json::json;
 

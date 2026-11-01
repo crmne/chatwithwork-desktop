@@ -45,7 +45,7 @@ pub(super) fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(RunError::new(
-                    "unavailable",
+                    super::UNCONFIRMED,
                     format!("{program} took too long"),
                 ));
             }
@@ -112,7 +112,7 @@ pub fn submit(job: &Job) -> Result<String, RunError> {
     let args = lp_args(job);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     parse_job(&run("lp", &args)?)
-        .ok_or_else(|| RunError::new("unavailable", "lp didn't say what became of the job"))
+        .ok_or_else(|| RunError::new(super::UNCONFIRMED, "lp didn't say what became of the job"))
 }
 
 pub(super) fn lp_args(job: &Job) -> Vec<String> {

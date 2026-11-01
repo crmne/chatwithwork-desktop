@@ -374,7 +374,10 @@ pub fn submit(job: &Job) -> Result<String, RunError> {
     }
     // SAFETY: as above.
     if unsafe { EndDoc(context.0) } <= 0 {
-        return Err(failed("finish the job"));
+        return Err(RunError::new(
+            super::UNCONFIRMED,
+            "Windows couldn't finish the job",
+        ));
     }
     Ok(id.to_string())
 }
