@@ -339,7 +339,7 @@ jobs:
         run: |
           name="cww-v${VERSION}-macos-universal"
           mkdir -p "$RUNNER_TEMP/portable-input" dist
-          cp universal/cww README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE "$RUNNER_TEMP/portable-input/"
+          cp universal/cww README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE "$RUNNER_TEMP/portable-input/"
           native-packages notarize-macos "$RUNNER_TEMP/portable-input" \
             --output "$RUNNER_TEMP/signed-portable/$name"
           tar -C "$RUNNER_TEMP/signed-portable" -czf "dist/$name.tar.gz" "$name"

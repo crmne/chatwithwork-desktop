@@ -40,7 +40,7 @@ ignore = [
 ]
 
 [licenses]
-# Every license here is compatible with shipping cww as MIT OR Apache-2.0.
+# Every license here is compatible with shipping cww as GPL-3.0-only.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -58,15 +58,32 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Our own crates, and nothing else, may be GPL.
+[[licenses.exceptions]]
+crate = "cww"
+allow = ["GPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "cww-app"
+allow = ["GPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "cww-scan"
+allow = ["GPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "cww-notification-broker"
+allow = ["GPL-3.0-only"]
+
 # option-ext (through dirs, for the Documents folder) is MPL-2.0: file-level
-# copyleft, fine to link into an MIT/Apache binary. Allowed for it alone.
+# copyleft, and GPL-compatible. Allowed for it alone.
 [[licenses.exceptions]]
 crate = "option-ext"
 allow = ["MPL-2.0"]
 
 # Servo's CSS parser and selector matching, which Tauri's build and
 # config code use to read HTML, are MPL-2.0 too: file-level copyleft, fine
-# to link into an MIT/Apache binary, and we ship them unmodified.
+# to link into a GPL binary, and we ship them unmodified.
 [[licenses.exceptions]]
 crate = "cssparser"
 allow = ["MPL-2.0"]

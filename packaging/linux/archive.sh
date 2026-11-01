@@ -25,7 +25,7 @@ cp -R "$engine" "$work/$name/browser-engine"
 install -m644 "$root/packaging/linux/cww-app.desktop" "$work/$name/"
 install -m644 "$root/app/assets/mark.svg" "$work/$name/cww-app.svg"
 install -m644 "$root/packaging/systemd/cww.service" "$work/$name/packaging/systemd/"
-for doc in README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE-MIT LICENSE-APACHE; do
+for doc in README.md PROTOCOL.md CONTROL.md SECURITY.md LICENSE; do
   install -m644 "$root/$doc" "$work/$name/"
 done
 tar -C "$work" -czf "$output/$name.tar.gz" "$name"

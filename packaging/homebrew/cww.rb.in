@@ -2,7 +2,7 @@ class Cww < Formula
   desc "Chat with Work Desktop app, terminal interface and background agent"
   homepage "https://github.com/crmne/chatwithwork-desktop"
   version "@VERSION@"
-  license any_of: ["MIT", "Apache-2.0"]
+  license "GPL-3.0-only"
 
   on_macos do
     # Universal CLI and app bundle, signed with Developer ID and notarized.

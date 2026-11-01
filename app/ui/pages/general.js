@@ -262,7 +262,7 @@ export function render(app) {
       group(
         row({
           title: `Chat with Work Desktop ${app.info.version}`,
-          text: "Open source under the MIT or Apache 2.0 license. The code, the wire protocol and the threat model are public.",
+          text: "Open source under the GNU GPL, version 3. The code, the wire protocol and the threat model are public.",
           extra: h("p", {}, h("button", { type: "button", class: "link", onclick: () => call("open_url", { url: REPOSITORY }) }, "Source code and security notes")),
         }),
         row({
