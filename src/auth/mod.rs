@@ -399,9 +399,13 @@ pub fn logout(paths: &Paths) -> Result<bool> {
     let lock = lock_pairing(paths)?;
     next_generation(paths, &lock)?;
     let mut config = Config::load(paths)?;
-    let store = SecretStore::for_config(&config, paths);
-    store.delete(DEVICE_KEY)?;
-    store.delete(REFRESH_TOKEN)?;
+    // Nothing to forget when nothing is paired: without a server, the
+    // keychain's only entries here may be another install's older ones.
+    if config.server.is_some() {
+        let store = SecretStore::for_config(&config, paths);
+        store.delete(DEVICE_KEY)?;
+        store.delete(REFRESH_TOKEN)?;
+    }
     let was_paired = config.server.take().is_some();
     config.save(paths)?;
     Ok(was_paired)
@@ -505,6 +509,16 @@ mod tests {
         let err = p.wait(&cancel).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn logging_out_with_nothing_paired_touches_no_keychain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        Config::default().save(&paths).unwrap();
+        // Unit tests refuse the keychain, so reaching it would fail this.
+        assert!(!logout(&paths).unwrap());
+        assert!(!logout(&paths).unwrap());
     }
 
     #[test]
