@@ -19,8 +19,9 @@ use crate::desktop::Desktop;
 
 pub const PREFIX: &str = "computer-pane-";
 pub const SHELL: &str = "settings-shell.html";
-const PAGES: [&str; 6] = [
+const PAGES: [&str; 7] = [
     "folders",
+    "printers",
     "browser",
     "general",
     "notifications",
@@ -508,6 +509,18 @@ pub fn question(
             })
         }
         R::RootsAdd { path, .. } => ask("Share a folder", format!("Share {} with Chat with Work? It can read files here, except the files excluded by your private-file rules.", path.display())),
+        R::PrintersAdd { queue, chats: true, .. } => ask("Allow a printer", format!("Let your chats print on “{queue}”? You approve each job in Chat with Work.")),
+        R::PrintersBot { printer, bot, lent: true, unattended, .. } => {
+            let confirmed = context["bot"]["id"].as_u64().map(|id| id.to_string()).or_else(|| context["bot"]["id"].as_str().map(str::to_owned));
+            if confirmed.as_deref() != Some(bot) { return Err("Choose printer access from this bot’s settings.".into()); }
+            let found = status.printers.iter().find(|found| &found.id == printer).ok_or("That printer is no longer allowed.")?;
+            let name = context["bot"]["name"].as_str().unwrap_or("this bot");
+            let existing = found.bots.iter().find(|grant| &grant.id == bot);
+            if existing.is_none() || (*unattended && existing.is_some_and(|grant| !grant.unattended)) {
+                ask("Share printer with bot", format!("Let {name} (bot {bot}) print on “{}”? {}", found.label,
+                    if *unattended { "It can print without anyone approving each job, up to this computer’s daily page limit." } else { "You approve each job in Chat with Work." }))
+            } else { None }
+        }
         R::RootsBot { root, bot, lent: true, unattended, .. } => {
             let confirmed = context["bot"]["id"].as_u64().map(|id| id.to_string()).or_else(|| context["bot"]["id"].as_str().map(str::to_owned));
             if confirmed.as_deref() != Some(bot) { return Err("Choose folder access from this bot’s settings.".into()); }
@@ -545,7 +558,9 @@ pub fn grant_context(
 ) -> Result<Value, String> {
     use cww::control::ControlRequest as R;
     let bot = match request {
-        R::RootsBot { bot, .. } | R::BrowserBot { bot, .. } => Some(bot.as_str()),
+        R::RootsBot { bot, .. } | R::BrowserBot { bot, .. } | R::PrintersBot { bot, .. } => {
+            Some(bot.as_str())
+        }
         _ => None,
     };
     let widening = matches!(
@@ -556,6 +571,8 @@ pub fn grant_context(
                 ..
             }
             | R::RootsAdd { .. }
+            | R::PrintersAdd { .. }
+            | R::PrintersBot { lent: true, .. }
             | R::RootsWritable { writable: true, .. }
             | R::RootsCommands { commands: true, .. }
             | R::RootsCommands { network: true, .. }

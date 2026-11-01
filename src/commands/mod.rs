@@ -654,6 +654,33 @@ impl Runner {
         parse(self.call(channel_call::Call::List).await?)
     }
 
+    /// The system's printers, and how many pages may still print today.
+    pub async fn printers(
+        &self,
+    ) -> Result<(Vec<crate::printing::SystemPrinter>, Option<u32>), RunError> {
+        #[derive(Deserialize)]
+        struct Answer {
+            printers: Vec<crate::printing::SystemPrinter>,
+            pages_left: Option<u32>,
+        }
+        let answer: Answer = parse(self.call(channel_call::Call::Printers).await?)?;
+        Ok((answer.printers, answer.pages_left))
+    }
+
+    /// Print a file that arrived. Windows draws the pages itself, which can
+    /// take longer than a call may: `None` says it's still at it, and it
+    /// goes on.
+    pub async fn print(
+        &self,
+        request: crate::printing::Request,
+    ) -> Result<Option<crate::printing::Receipt>, RunError> {
+        let call = self.call(channel_call::Call::Print { request });
+        match tokio::time::timeout(tools::FOREGROUND_WAIT, call).await {
+            Ok(answer) => parse(answer?).map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// The device was revoked: stop every run, without waiting.
     pub async fn stop_everything(&self) {
         let _ = self.call(channel_call::Call::StopAll).await;

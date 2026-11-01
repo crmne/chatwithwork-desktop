@@ -35,6 +35,10 @@ pub struct Config {
     pub crash_reports: Option<bool>,
     /// Folders shared with the server. Nothing outside them is readable.
     pub roots: Vec<Root>,
+    /// Printers Chat with Work may use (docs/printing.md). None until the
+    /// person adds one here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub printers: Vec<Printer>,
     pub deny: DenyConfig,
     pub limits: Limits,
     pub index: IndexConfig,
@@ -242,6 +246,34 @@ impl Root {
     }
 }
 
+/// A printer of this computer's system that Chat with Work may use. Only
+/// ever changed here or from this computer's apps, never by the server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Printer {
+    /// Short, stable ID used in tool calls.
+    pub id: String,
+    /// The system's name for it, as `lp -d` or the spooler takes it. Never
+    /// sent to the server.
+    pub queue: String,
+    /// Name shown to the server and the model.
+    pub label: String,
+    /// The owner's chats may print here, each job approved in Chat with Work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chats: bool,
+    /// Bots this printer is lent to. Each job asks, unless the loan is
+    /// `unattended`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bots: Vec<BotLoan>,
+}
+
+impl Printer {
+    /// The loan of this printer to the bot with this ID, if it has one.
+    pub fn loan(&self, bot: &str) -> Option<&BotLoan> {
+        self.bots.iter().find(|loan| loan.id == bot)
+    }
+}
+
 /// A shared folder lent to one Chat with Work bot: the bot's ID on the
 /// server, the name it had when it was lent (for the local user only), and
 /// whether its commands here may run without a person approving each one.
@@ -328,6 +360,9 @@ pub struct Limits {
     /// files copied into a chat's files, apart from the read budgets. Zero
     /// is no limit, the default.
     pub copy_bytes_per_hour: u64,
+    /// Pages all printers on this computer may print per rolling day,
+    /// copies counted. Zero is unlimited.
+    pub print_pages_per_day: u32,
 }
 
 impl Limits {
@@ -400,6 +435,7 @@ impl Default for Limits {
             commands_running: 4,
             command_output_chars: 20_000,
             copy_bytes_per_hour: 0,
+            print_pages_per_day: 200,
         }
     }
 }

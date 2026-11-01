@@ -25,9 +25,10 @@ Options:
 The cww command runs the agent itself; see `cww --help`.";
 
 /// The settings pages, as the bundled pages name them.
-pub const PAGES: [&str; 8] = [
+pub const PAGES: [&str; 9] = [
     "welcome",
     "folders",
+    "printers",
     "browser",
     "privacy",
     "activity",

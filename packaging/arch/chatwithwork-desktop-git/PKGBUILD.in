@@ -12,6 +12,7 @@ makedepends=('git' 'cargo' 'pkgconf' 'cmake' 'clang' 'python' 'npm')
 optdepends=('org.freedesktop.secrets: store the device key in your keyring'
             'xdg-desktop-portal: native folder picker'
             'sane: scan with a USB scanner'
+            'cups: print with your printers'
             'tesseract: make scans searchable (with tesseract-data-<language>)'
             'systemd: start the agent now and at login with cww daemon install')
 provides=('cww' 'cww-app' 'chatwithwork-desktop')

@@ -115,6 +115,32 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         network: bool,
     },
+    /// The system's printers, and which of them Chat with Work may use.
+    Printers,
+    /// Let Chat with Work use a printer of the system's, for this person's
+    /// chats (`chats`) or only for the bots it's lent to.
+    PrintersAdd {
+        queue: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        chats: bool,
+    },
+    /// Stop letting Chat with Work use a printer.
+    PrintersRemove {
+        printer: String,
+    },
+    /// Lend a printer to a Chat with Work bot, or stop. `unattended` lets it
+    /// print there without anyone approving each job.
+    PrintersBot {
+        printer: String,
+        bot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        lent: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unattended: bool,
+    },
     /// Lend a shared folder to a Chat with Work bot, or stop lending it
     /// (PROTOCOL.md section 7.2.1). `unattended` lets the bot's commands
     /// there start without anyone approving each one, only where commands

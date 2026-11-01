@@ -256,6 +256,17 @@ Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and
 
 The desktop app lists these grants in Shared folders. Selection and unattended command controls live in the bot’s computer integration, in an app-owned settings pane; native confirmation is required to widen access. The old `lend` and `stop-lending` CLI names remain hidden aliases.
 
+### Printers
+
+```json
+{"cmd": "printers"}
+{"cmd": "printers_add", "queue": "Office_Brother", "label": "Office Brother", "chats": true}
+{"cmd": "printers_remove", "printer": "office-brother"}
+{"cmd": "printers_bot", "printer": "office-brother", "bot": "42", "name": "Door list", "lent": true, "unattended": false}
+```
+
+`printers` answers `system` (what this computer's CUPS or spooler has: `queue`, `default`, `state`, `duplex`, `color`), `printers` (those Chat with Work may use: `id`, `queue`, `label`, `chats`, `bots`), `pages_left_today` and `pages_per_day`. `printers_add` allows one of the system's, for this person's chats where `chats` is true (adding it again changes `label` and `chats`), `printers_remove` stops it for chats and bots alike, and `printers_bot` lends it to a bot or stops, with `unattended` letting that bot print there without anyone approving each job. Each changes `config.toml`, writes a `printer_allowed`, `printer_removed`, `printer_bot_lent` or `printer_bot_withdrawn` audit entry, and reconnects, so the server lists the tools again. `status` lists `printers` the same way. `cww printers`, `cww printers add`, `remove`, `share` and `unshare` do the same from the command line. See docs/printing.md.
+
 ### Browser
 
 The browser settings (docs/browser.md), and the connection the extension's native messaging host makes. Only this channel and `config.toml` change them, never the server.

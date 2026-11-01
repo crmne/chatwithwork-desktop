@@ -29,6 +29,7 @@ pub mod notifications;
 pub mod paths;
 pub mod people;
 pub mod policy;
+pub mod printing;
 pub mod projects;
 pub mod proxy;
 pub mod reader;

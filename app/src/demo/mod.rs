@@ -599,6 +599,29 @@ impl Demo {
                 });
                 json!({ "ok": true })
             }
+            // Printers, as the daemon's `printers*`.
+            "printers" => {
+                let state = self.state.lock().expect("demo lock");
+                json!({
+                    "ok": true,
+                    "system": [{ "queue": "Office_Brother", "default": true, "state": "idle", "duplex": true, "color": false }],
+                    "printers": state.status["printers"],
+                    "pages_left_today": 200,
+                    "pages_per_day": 200,
+                })
+            }
+            "printers_add" => {
+                let queue = request["queue"].as_str().unwrap_or_default().to_string();
+                let chats = request["chats"].as_bool().unwrap_or(false);
+                self.change(|s| {
+                    s.status["printers"] = json!([{ "id": "office-brother", "queue": queue, "label": "Office Brother", "chats": chats, "bots": [] }]);
+                });
+                json!({ "ok": true })
+            }
+            "printers_remove" => {
+                self.change(|s| s.status["printers"] = json!([]));
+                json!({ "ok": true })
+            }
             // Lending a folder to a bot, as the daemon's `roots_bot`.
             "roots_bot" => {
                 let which = request["root"].as_str().unwrap_or_default().to_string();

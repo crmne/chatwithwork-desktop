@@ -18,6 +18,8 @@ pub struct Status {
     pub device_id: Option<String>,
     pub paused: bool,
     pub roots: Vec<RootStatus>,
+    /// The printers Chat with Work may use (`printers_add`).
+    pub printers: Vec<PrinterStatus>,
     /// The latest tool call. Filled in by the app from the audit log and
     /// its events; the daemon's status doesn't carry it.
     pub last_access: Option<AuditEntry>,
@@ -116,6 +118,18 @@ pub struct RootStatus {
     /// Those commands may use the network.
     pub network: bool,
     /// The Chat with Work bots it is lent to (`roots_bot`).
+    pub bots: Vec<BotLoan>,
+}
+
+/// A printer Chat with Work may use: for the owner's chats, for the bots it's
+/// lent to, with `unattended` those print without anyone approving a job.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PrinterStatus {
+    pub id: String,
+    pub queue: String,
+    pub label: String,
+    pub chats: bool,
     pub bots: Vec<BotLoan>,
 }
 

@@ -319,7 +319,7 @@ Each folder still allows only what it allows anyone: changes where changes are a
 |---|---|
 | `server/discover` | `supportedVersions`, `capabilities: {"tools":{}}`, and `_meta["io.modelcontextprotocol/serverInfo"] = {"name":"cww","version":…}`. |
 | `initialize` | Legacy handshake (7.1). `serverInfo.name` is `cww`, and the result carries instructions. |
-| `tools/list` | The seven read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
+| `tools/list` | The seven read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the printing tools while a printer is allowed (8.21), the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands, printers or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
 | `tools/call` | See section 8. |
 | `notifications/initialized`, `notifications/cancelled` | Accepted. Cancelling abandons a call in progress. |
 | `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, anything else | `-32601` method not found. |
@@ -750,6 +750,45 @@ Applied:
 
 It counts as one change per file against any changes-per-minute and per-day limit set, plus the bytes written, all or none. Each file gets its own entry in the local audit log, as a change of its own would (tool `patch`, the path, its effect, the bytes written, where its previous version went in the trash; never contents); a refused patch is one entry naming its first file.
 
+### 8.21 Printing
+
+Offered only while a printer on this computer is allowed: its owner turned it on for their chats, or lent it to a bot, on this computer (`printers_add` and `printers_bot`, CONTROL.md; `cww printers`), never from the server. See [docs/printing.md](docs/printing.md).
+
+`printers` (read-only) answers the printers this caller may use, for a bot only those lent to it, each saying whether it may print there unattended:
+
+```json
+{ "printers": [{ "id": "office", "label": "Office Brother", "state": "idle", "default": true, "duplex": true, "color": false, "unattended": false }], "pages_left_today": 180 }
+```
+
+`state` is `idle`, `printing`, `stopped`, or `missing` (the system doesn't have it any more). `pages_left_today` is `null` without a limit.
+
+`print_bytes` sends a PDF a chunk at a time, like `read_bytes` the other way. It's the server's own, never offered to a model (a write, idempotent):
+
+| Argument | Type | Notes |
+|---|---|---|
+| `printer` | string, required | The printer it's for, checked as `print` checks it. |
+| `transfer` | string, required | 16 to 64 lowercase hex digits, the server's name for this file. A job made again names the same one. |
+| `offset` | integer, required | Where this chunk goes. At most what has arrived; a chunk sent again starts over from there. |
+| `size` | integer, required | The whole file, at most 25 MiB. |
+| `sha256` | string, required | The whole file's, in hex. |
+| `data` | string, required | The chunk in standard base64, at most 64 KiB before it. |
+
+It answers `{ "transfer", "received", "complete" }`. The last chunk's file must have that SHA-256 (`invalid_argument`) and start with `%PDF-` (`unsupported`). At most 4 files wait at once (`rate_limited`), each for an hour, in a private folder of the daemon's own.
+
+`print` (a write, idempotent):
+
+| Argument | Type | Notes |
+|---|---|---|
+| `printer` | string, required | An `id` from `printers`. |
+| `transfer` | string | The file; required unless `dry_run`. |
+| `title` | string | The job's name in the print queue, at most 120 characters. |
+| `copies` | integer | 1 to 99, default 1. |
+| `duplex` | boolean | Both sides, or one. Left out, the printer's own default. |
+| `pages` | string | Like `1-3,7`. Left out, all of them. |
+| `dry_run` | boolean | Answer `{ "dry_run": true, "id", "label", "state", "default", "duplex", "color", "copies", "duplex_asked", "pages_left_today" }`, needing no file, so nothing reaches the computer before the person approves it. |
+
+It answers `{ "printer", "label", "job", "state", "pages", "copies", "already" }`. `state` is `queued`, the system took the job, or on Windows `spooling` when it's still drawing pages after 15 seconds and goes on. `already: true` says this `transfer` printed before, within a day, and nothing printed now: tools run at least once. The daemon reads the PDF: one it can't open, or an encrypted one, is `unsupported`. Refusals: `not_found` (a person's chat, a printer not allowed for chats, or a file that hasn't arrived), `not_lent` (a bot, a printer not lent to it), `needs_approval` (a job carrying `com.chatwithwork/unattended` on a printer whose loan doesn't allow it), `printer_unavailable`, and `rate_limited` past the computer's pages per day, copies counted (`[limits] print_pages_per_day`, 200 by default, 0 for none). The confined daemon can't print: the process above it reads `config.toml` again, finds the printer and the file by their IDs, and makes all of these checks itself. The audit log says which printer, how many pages and copies, and the job's number, never the file.
+
 ## 9. Errors
 
 **OAuth endpoints** return `{"error": "<code>", "error_description": "<optional>"}` with a 4xx status, using the codes above plus RFC 6749 codes. `use_dpop_nonce` triggers one retry. `invalid_grant`, `unauthorized_client` and `access_denied` on refresh mean the device is revoked.
@@ -830,6 +869,8 @@ Limits on size protect memory and the model's context, and are always on. Limits
 | Files and folders one move or delete of a folder may carry | 1000 |
 | Changes in one `patch` / files they touch | 50 / 20 |
 | A `patch` dry run's diffs, together | 64 KiB |
+| Pages printed per rolling day, all printers, copies counted | 200 (`print_pages_per_day`, 0 for none) |
+| Largest file `print_bytes` takes | 25 MiB |
 
 `Config::save` writes every limit into the file, so a saved file holds whatever the default was. Values that were ever a default (120 or 240 calls/minute, 256 000, 1 000 000 or 5 000 000 characters per chat per hour, 2 000 000 or 10 000 000 characters per hour, 100 MiB copied per hour, 30 changes/minute, 500 changes/day and 50 MiB written/hour) count as unset and become unlimited when loaded, so to set a cap choose any other number; other values stay in place. A folder's `read_budget` stays in the file and stops counting while no hourly read limit is set, since it existed to raise one. Per-file and per-operation size limits still apply.
 

@@ -43,6 +43,20 @@ export function render(app) {
   });
   append(page, group(...(folders.length ? folders : [h("div", { class: "empty" },
     h("p", {}, "Add a shared folder in Settings, This computer, Shared folders first."))])));
+  const printers = (app.status.printers || []).map(printer => {
+    const grant = (printer.bots || []).find(grant => String(grant.id) === id);
+    const set = (lent, unattended = false) => change(app, { cmd: "printers_bot", printer: printer.id, bot: id, name: bot.name, lent, unattended });
+    return h("div", { class: "row row--stack" },
+      h("div", { class: "row__head" }, h("div", { class: "row__body" },
+        h("h3", {}, printer.label),
+        h("p", {}, "Prints PDFs with approval.")),
+      switchInput(!!grant, on => set(on), { label: `Share ${printer.label} with ${bot.name}`, disabled: view.busy })),
+      grant ? h("div", { class: "row__head" }, h("div", { class: "row__body" },
+        h("h3", {}, "Unattended printing"),
+        h("p", {}, "Jobs print without a person approving each one, up to this computer’s daily page limit.")),
+      switchInput(grant.unattended, on => set(true, on), { label: `Unattended printing on ${printer.label}`, disabled: view.busy })) : null);
+  });
+  if (printers.length) append(page, group(...printers));
   const browser = app.status.browser;
   if (browser?.enabled) {
     const shared = browser.bots.some(grant => String(grant.id) === id);

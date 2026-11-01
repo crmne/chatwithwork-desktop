@@ -65,7 +65,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu
+          sudo apt-get install -y libsane1 tesseract-ocr tesseract-ocr-deu cups cups-client
+          echo "CWW_PRINT_REQUIRE_CUPS=1" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/sane.d"
           echo test > "$RUNNER_TEMP/sane.d/dll.conf"
           echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"

@@ -62,6 +62,9 @@ pub enum ErrorCode {
     WouldSubmit,
     /// The page or the browser failed to do what was asked.
     PageError,
+    /// The system's printing can't take a job: no CUPS, a printer that's
+    /// gone or stopped.
+    PrinterUnavailable,
     Internal,
 }
 
@@ -88,6 +91,7 @@ impl ErrorCode {
             Self::NotLent => "not_lent",
             Self::NeedsApproval => "needs_approval",
             Self::BrowserUnavailable => "browser_unavailable",
+            Self::PrinterUnavailable => "printer_unavailable",
             Self::BrowserStopped => "browser_stopped",
             Self::SiteNotAllowed => "site_not_allowed",
             Self::NotInGroup => "not_in_group",

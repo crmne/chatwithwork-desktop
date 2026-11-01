@@ -81,6 +81,7 @@ nfpm:
       # Scanning: USB scanners through SANE, and searchable scans through
       # Tesseract. Loaded at run time; the app runs without them.
       - libsane1
+      - cups-client
       - tesseract-ocr
     rpm:
       depends: [alsa-lib, pipewire-libs, libstdc++, libgcc, bubblewrap, slirp4netns, util-linux, iptables-nft]
@@ -91,6 +92,7 @@ nfpm:
       - xdg-desktop-portal
       - gnome-keyring
       - sane-backends-libs
+      - cups-client
       - sane-backends-drivers-scanners
       - tesseract
   rpm:

@@ -648,6 +648,11 @@ impl Daemon {
             config.limits.max_message_bytes,
         )
         .with_commands(command_tools(&config, &self.runner))
+        .with_printing(crate::printing::tools::PrintTools {
+            runner: self.runner.clone(),
+            printers: crate::printing::settings::offered(&config),
+            dir: self.paths.state_dir.join("printing"),
+        })
         .with_browser(
             (self.organization.is_none() && config.browser.enabled).then(|| {
                 crate::browsing::tools::BrowserTools::new(
@@ -817,6 +822,8 @@ impl Daemon {
             || config.proxy != new.proxy
             || writable_roots(&config) != writable_roots(&new)
             || command_roots(&config) != command_roots(&new)
+            || crate::printing::settings::offered(&config)
+                != crate::printing::settings::offered(&new)
             || config.browser.enabled != new.browser.enabled
             || config.browser.changes != new.browser.changes
             || config.browser.ask_before_actions != new.browser.ask_before_actions;
@@ -948,6 +955,92 @@ impl Daemon {
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
+    }
+
+    /// The system's printers beside what's allowed on each, and the pages
+    /// left today, for this computer's own windows.
+    async fn printers(&self) -> Result<Value> {
+        let (system, pages_left) = self.runner.printers().await.map_err(command_refusal)?;
+        let config = self.config.lock().await;
+        Ok(json!({
+            "system": system,
+            "printers": config.printers,
+            "pages_left_today": pages_left,
+            "pages_per_day": config.limits.print_pages_per_day,
+        }))
+    }
+
+    async fn add_printer(
+        &self,
+        queue: String,
+        label: Option<String>,
+        chats: bool,
+    ) -> Result<Value> {
+        let (system, _) = self.runner.printers().await.map_err(command_refusal)?;
+        let printer = self
+            .edit_config(move |config, _| {
+                crate::printing::settings::add(config, &system, &queue, label.as_deref(), chats)
+            })
+            .await?;
+        let mut entry = AuditEntry::event("printer_allowed");
+        entry.detail = Some(format!(
+            "{} ({}){}",
+            printer.id,
+            printer.label,
+            if printer.chats { ", for chats" } else { "" }
+        ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "printer": printer }))
+    }
+
+    async fn remove_printer(&self, which: String) -> Result<Value> {
+        let printer = self
+            .edit_config(move |config, _| crate::printing::settings::remove(config, &which))
+            .await?;
+        let mut entry = AuditEntry::event("printer_removed");
+        entry.detail = Some(format!("{} ({})", printer.id, printer.label));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "printer": printer }))
+    }
+
+    async fn set_printer_bot(
+        &self,
+        which: String,
+        bot: String,
+        name: Option<String>,
+        lent: bool,
+        unattended: bool,
+    ) -> Result<Value> {
+        let id = bot.clone();
+        let printer = self
+            .edit_config(move |config, _| {
+                crate::printing::settings::set_bot(
+                    config,
+                    &which,
+                    &bot,
+                    name.as_deref(),
+                    lent,
+                    unattended,
+                )
+            })
+            .await?;
+        let mut entry = AuditEntry::event(if lent {
+            "printer_bot_lent"
+        } else {
+            "printer_bot_withdrawn"
+        });
+        let unattended = printer.loan(&id).is_some_and(|loan| loan.unattended);
+        entry.detail = Some(format!(
+            "{} ({}) to bot {id}{}",
+            printer.id,
+            printer.label,
+            if unattended { ", unattended" } else { "" }
+        ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "printer": printer }))
     }
 
     /// Give a folder a read budget of its own, or take it away. Only this
@@ -1254,6 +1347,7 @@ impl Daemon {
             "proxy": proxy_info(&config),
             "paused": self.paused.load(Ordering::SeqCst),
             "roots": roots,
+            "printers": config.printers,
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
             "commands": commands_host(&config),
         })
@@ -1404,6 +1498,10 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
                     | ControlRequest::RootsBot { .. }
+                    | ControlRequest::Printers
+                    | ControlRequest::PrintersAdd { .. }
+                    | ControlRequest::PrintersRemove { .. }
+                    | ControlRequest::PrintersBot { .. }
                     | ControlRequest::RootsReadBudget { .. }
                     | ControlRequest::RootsLabel { .. }
                     | ControlRequest::Pause
@@ -1490,6 +1588,23 @@ impl ControlHandler for Daemon {
                 commands,
                 network,
             } => self.set_commands(root, commands, network).await,
+            ControlRequest::Printers => self.printers().await,
+            ControlRequest::PrintersAdd {
+                queue,
+                label,
+                chats,
+            } => self.add_printer(queue, label, chats).await,
+            ControlRequest::PrintersRemove { printer } => self.remove_printer(printer).await,
+            ControlRequest::PrintersBot {
+                printer,
+                bot,
+                name,
+                lent,
+                unattended,
+            } => {
+                self.set_printer_bot(printer, bot, name, lent, unattended)
+                    .await
+            }
             ControlRequest::RootsBot {
                 root,
                 bot,
