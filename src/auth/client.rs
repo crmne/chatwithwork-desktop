@@ -221,9 +221,10 @@ pub enum PollOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RefreshError {
-    /// The server rejected the refresh credential: the device was revoked
-    /// or the grant expired. Pair again with `cww login`.
-    #[error("the server revoked this computer ({0}); run `cww login` to pair again")]
+    /// The server rejected the refresh credential. What people read, never
+    /// a protocol's code: the owner removed this computer, or it just has to
+    /// sign in again.
+    #[error("{0}")]
     Revoked(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -559,12 +560,25 @@ impl AuthClient {
                 .map_err(RefreshError::Other);
         }
         match body["error"].as_str() {
-            Some(code @ ("invalid_grant" | "unauthorized_client" | "access_denied")) => {
-                Err(RefreshError::Revoked(code.to_string()))
+            Some("invalid_grant" | "unauthorized_client" | "access_denied") => {
+                Err(RefreshError::Revoked(signed_out(body["reason"].as_str())))
             }
             _ => Err(RefreshError::Other(oauth_error(status, &body))),
         }
     }
+}
+
+/// The owner removed this computer, say, or it has to sign in again: only
+/// the server's own `reason` says the first.
+pub const REMOVED: &str = "This computer was removed from Chat with Work.";
+pub const SIGN_IN_AGAIN: &str = "This computer needs to sign in to Chat with Work again.";
+
+fn signed_out(reason: Option<&str>) -> String {
+    match reason {
+        Some("revoked") => REMOVED,
+        _ => SIGN_IN_AGAIN,
+    }
+    .to_string()
 }
 
 fn oauth_error(status: u16, body: &serde_json::Value) -> anyhow::Error {
@@ -583,6 +597,13 @@ fn oauth_error(status: u16, body: &serde_json::Value) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_servers_own_reason_says_the_owner_removed_this_computer() {
+        assert_eq!(signed_out(Some("revoked")), REMOVED);
+        assert_eq!(signed_out(Some("unknown_credential")), SIGN_IN_AGAIN);
+        assert_eq!(signed_out(None), SIGN_IN_AGAIN);
+    }
 
     #[test]
     fn device_id_may_be_a_number() {

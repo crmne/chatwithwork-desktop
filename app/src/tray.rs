@@ -12,7 +12,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use crate::model::{Platform, TrayView};
+use crate::model::{Health, Platform, TrayView};
 
 mod ids {
     pub const HEADLINE: &str = "headline";
@@ -25,6 +25,9 @@ mod ids {
     pub const QUIT: &str = "quit";
     pub const UPDATE: &str = "update";
 }
+
+/// The first line, as an action, while this computer has to sign in again.
+pub const RECONNECT_LABEL: &str = "Reconnect…";
 
 /// The entry while an update waits for a restart.
 pub fn update_label(version: &str) -> String {
@@ -65,6 +68,7 @@ pub fn tooltip(view: &TrayView, platform: Platform) -> String {
 /// What a menu entry asks of the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    Reconnect,
     Open,
     TogglePause,
     ToggleBrowser,
@@ -76,6 +80,7 @@ pub enum Action {
 
 pub fn action(id: &str) -> Option<Action> {
     Some(match id {
+        ids::HEADLINE => Action::Reconnect,
         ids::OPEN => Action::Open,
         ids::PAUSE => Action::TogglePause,
         ids::BROWSER => Action::ToggleBrowser,
@@ -133,7 +138,18 @@ fn icon(dimmed: bool) -> Image<'static> {
 impl Tray {
     pub fn new(app: &AppHandle, view: &TrayView) -> tauri::Result<Self> {
         let platform = Platform::current();
-        let headline = MenuItem::with_id(app, ids::HEADLINE, &view.headline, false, None::<&str>)?;
+        let reconnects = view.health == Health::Revoked;
+        let headline = MenuItem::with_id(
+            app,
+            ids::HEADLINE,
+            if reconnects {
+                RECONNECT_LABEL
+            } else {
+                &view.headline
+            },
+            reconnects,
+            None::<&str>,
+        )?;
         let detail = MenuItem::with_id(
             app,
             ids::DETAIL,
@@ -252,8 +268,14 @@ impl Tray {
         }
         let platform = Platform::current();
         let old = std::mem::replace(&mut self.view, view.clone());
-        if view.headline != old.headline {
-            let _ = self.headline.set_text(&view.headline);
+        let reconnects = view.health == Health::Revoked;
+        if view.headline != old.headline || view.health != old.health {
+            let _ = self.headline.set_text(if reconnects {
+                RECONNECT_LABEL
+            } else {
+                &view.headline
+            });
+            let _ = self.headline.set_enabled(reconnects);
         }
         // A missing detail leaves the menu, rather than showing as an
         // empty line.
@@ -330,7 +352,7 @@ mod tests {
         assert_eq!(action("quit"), Some(Action::Quit));
         assert_eq!(action("update"), Some(Action::RestartToUpdate));
         assert_eq!(update_label("0.7.0"), "Restart to Update to 0.7.0");
-        assert_eq!(action("headline"), None);
+        assert_eq!(action("headline"), Some(Action::Reconnect));
         assert_eq!(action("detail"), None);
         assert_eq!(pause_label(true), "Resume Sharing");
         assert_eq!(pause_label(false), "Pause Sharing");

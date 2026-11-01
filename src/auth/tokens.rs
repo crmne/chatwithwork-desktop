@@ -89,7 +89,7 @@ impl Tokens {
         let refresh = self
             .store
             .get(REFRESH_TOKEN)?
-            .ok_or_else(|| RefreshError::Revoked("no refresh credential stored".into()))?;
+            .ok_or_else(|| RefreshError::Revoked(super::client::SIGN_IN_AGAIN.into()))?;
         let response: TokenResponse = self.client.refresh(&self.key, &refresh)?;
         if let Some(rotated) = &response.refresh_token
             && rotated != &refresh

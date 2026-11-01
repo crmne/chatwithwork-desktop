@@ -232,6 +232,16 @@ pub fn tray_action(app: &AppHandle, id: &str) {
                 let _ = windows::show_main(&app, None);
             });
         }
+        Some(Action::Reconnect) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                if windows::show_settings(&app, Some("account")).is_ok() {
+                    // The page listens once it has loaded.
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    windows::tell_settings(&app, "reconnect", ());
+                }
+            });
+        }
         Some(Action::Settings) => {
             let app = app.clone();
             std::thread::spawn(move || {

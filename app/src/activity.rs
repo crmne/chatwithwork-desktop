@@ -106,7 +106,7 @@ fn describe(entry: &AuditEntry) -> (String, Option<String>) {
         "exclusion_removed" => "Custom exclusion removed",
         "paired" => "Paired with Chat with Work",
         "logged_out" => "Pairing removed from this computer",
-        "revoked" => "Chat with Work revoked this computer",
+        "revoked" => "This computer was signed out of Chat with Work",
         other => return (capitalize(&other.replace('_', " ")), entry.detail.clone()),
     };
     (text.to_string(), entry.detail.clone())

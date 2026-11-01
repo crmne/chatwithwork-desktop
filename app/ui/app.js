@@ -9,7 +9,7 @@ import printers from "./pages/printers.js";
 import browser from "./pages/browser.js";
 import privacy from "./pages/privacy.js";
 import activity from "./pages/activity.js";
-import account from "./pages/account.js";
+import account, { reconnect } from "./pages/account.js";
 import notifications from "./pages/notifications.js";
 import general from "./pages/general.js";
 import botSharing from "./pages/bot_sharing.js";
@@ -97,9 +97,45 @@ export const row = ({ title, text, micro, actions, attention, extra } = {}) =>
 export const button = (label, onclick, { kind = "", disabled = false, key } = {}) =>
   h("button", { type: "button", class: `btn ${kind}`.trim(), onclick, disabled, "data-key": key }, label);
 
-export const switchInput = (checked, onchange, { label, disabled = false, key } = {}) =>
-  h("input", { type: "checkbox", role: "switch", class: "switch", checked, disabled, "aria-label": label, "data-key": key,
-    onchange: (event) => onchange(event.target.checked) });
+// What each switch is being changed to. A change takes a moment to reach the
+// status the page draws from, and the page redraws meanwhile, so it's kept
+// here: the switch moves at once, waits with a spinner, and goes back if the
+// change never arrives. The page says why, as it does for any failed change.
+const saving = new Map();
+const SETTLE_MS = 3000;
+
+// A switch that asks first answers at once, and has nothing to wait for.
+function save(id, want, change) {
+  const answer = change();
+  if (!answer?.then) return;
+  const entry = { want };
+  saving.set(id, entry);
+  if (app.page) app.render();
+  const settle = () => {
+    const timer = setTimeout(() => {
+      if (saving.get(id) !== entry) return;
+      saving.delete(id);
+      if (app.page) app.render();
+    }, SETTLE_MS);
+    timer.unref?.();
+  };
+  answer.then(settle, settle);
+}
+
+export const forgetSaving = () => saving.clear();
+
+export function switchInput(checked, onchange, { label, disabled = false, key } = {}) {
+  const id = key || label;
+  if (saving.get(id)?.want === checked) saving.delete(id);
+  const entry = saving.get(id);
+  return h("input", { type: "checkbox", role: "switch", class: entry ? "switch switch--saving" : "switch",
+    checked: entry ? entry.want : checked, disabled: disabled || !!entry, "aria-busy": entry ? "true" : undefined,
+    "aria-label": label, "data-key": key,
+    onchange: (event) => {
+      const want = event.target.checked;
+      save(id, want, () => onchange(want));
+    } });
+}
 
 export const notice = (text, tone = "negative") => h("div", { class: `notice notice--${tone}`, role: tone === "negative" ? "alert" : "status" }, text);
 
@@ -204,7 +240,9 @@ function renderNav() {
         onclick: () => app.go(page) }, icon(PAGES[page].icon), PAGES[page].title)),
     h("div", { class: "nav__foot" },
       h("span", { class: `nav__status state state--${app.health.tone}` }, app.known ? app.health.label : "Checking…"),
-      button("Open Chat with Work", () => call("show_main"), { kind: "btn-primary" })),
+      app.status?.connection?.connection === "revoked"
+        ? button("Reconnect", () => reconnect(app), { kind: "btn-primary" })
+        : button("Open Chat with Work", () => call("show_main"), { kind: "btn-primary" })),
   );
 }
 

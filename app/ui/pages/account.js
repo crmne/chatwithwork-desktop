@@ -14,6 +14,7 @@ function pairing(app) {
 }
 
 export async function listen(app, on) {
+  await on("reconnect", () => reconnect(app));
   await on("pairing", (event) => {
     const view = pairing(app);
     view.requesting = false;
@@ -30,6 +31,12 @@ export async function listen(app, on) {
     }
     app.render();
   });
+}
+
+// One click, wherever it's offered: the same sign-in as pairing.
+export function reconnect(app) {
+  app.go("account");
+  if (!pairing(app).active) pair(app, app.status?.server);
 }
 
 export async function pair(app, server) {
@@ -112,12 +119,12 @@ function pairedCard(app, status) {
       h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, "Chat with Work")), h("span", { class: "muted" }, host(status.server))),
       h("div", { class: "row" },
         h("div", { class: "row__body" }, h("h3", {}, "Connection"),
-          status.connection?.last_error && !health.serving ? h("span", { class: "micro" }, status.connection.last_error) : null),
+          status.connection?.last_error && !health.serving && !revoked ? h("span", { class: "micro" }, status.connection.last_error) : null),
         h("span", { class: `state state--${health.tone}` }, connection)),
       h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, "Device ID")), h("span", { class: "muted mono" }, status.device_id || ""))),
     revoked ? h("div", { class: "section" },
-      notice("Chat with Work no longer accepts this computer. Pair it again to keep sharing.", "attention"),
-      h("div", { class: "inline" }, button(view.requesting ? "Asking Chat with Work…" : "Pair Again…",
+      notice(status.connection?.last_error || "This computer needs to sign in to Chat with Work again.", "attention"),
+      h("div", { class: "inline" }, button(view.requesting ? "Asking Chat with Work…" : "Reconnect",
         () => pair(app, status.server), { kind: "btn-primary", disabled: view.requesting }))) : null,
     view.confirmLogout
       ? h("div", { class: "confirm confirm--negative" },

@@ -495,7 +495,7 @@ fn account(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut H
                     (DOT, Signal::Positive, since)
                 }
                 "connecting" => (DOT, Signal::Attention, "Connecting…".into()),
-                "revoked" => (DOT, Signal::Negative, "Revoked".into()),
+                "revoked" => (DOT, Signal::Negative, "Needs to reconnect".into()),
                 _ => (DOT, Signal::Negative, "Offline".into()),
             };
             vec![

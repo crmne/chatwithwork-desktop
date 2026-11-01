@@ -268,7 +268,7 @@ impl Health {
             Self::Connecting => "Connecting…",
             Self::Online => "Online",
             Self::Offline => "Offline, retrying",
-            Self::Revoked => "Disconnected from Chat with Work",
+            Self::Revoked => "Needs to reconnect",
         }
     }
 }

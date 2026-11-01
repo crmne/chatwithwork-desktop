@@ -118,9 +118,7 @@ impl Tunnel {
                 Err(RefreshError::Revoked(reason)) => {
                     self.status.set(Connection::Revoked, Some(reason.clone()));
                     let mut entry = AuditEntry::event("revoked");
-                    entry.detail = Some(format!(
-                        "the server rejected the refresh credential ({reason})"
-                    ));
+                    entry.detail = Some(reason);
                     self.audit.append(&entry);
                     return TunnelExit::Revoked;
                 }

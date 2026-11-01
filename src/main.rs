@@ -950,7 +950,10 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
     }
     println!(
         "Connection: {} since {}{}",
-        str(&conn["connection"]).replace('_', " "),
+        match str(&conn["connection"]) {
+            "revoked" => "signed out".to_string(),
+            connection => connection.replace('_', " "),
+        },
         str(&conn["since"]),
         conn["last_error"]
             .as_str()
