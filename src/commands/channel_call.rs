@@ -84,7 +84,10 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
             "printers": crate::printing::system_printers()?,
             "pages_left": crate::printing::pages_left(paths, &config()?),
         }),
-        Call::Print { request } => to_value(crate::printing::print(paths, &config()?, &request)?),
+        Call::Print { request } => {
+            let _turn = crate::printing::one_job_at_a_time();
+            to_value(crate::printing::print(paths, &config()?, &request)?)
+        }
     };
     Ok(value)
 }

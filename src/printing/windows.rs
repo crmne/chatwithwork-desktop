@@ -353,6 +353,7 @@ pub fn submit(job: &Job) -> Result<String, RunError> {
     if id <= 0 {
         return Err(failed("start the job"));
     }
+    let mut sent = false;
     for index in page_numbers(job.pages.as_deref(), total) {
         // SAFETY: a document is open on this context.
         let drawn = unsafe {
@@ -368,9 +369,14 @@ pub fn submit(job: &Job) -> Result<String, RunError> {
         };
         if drawn.is_err() {
             // SAFETY: as above.
-            let _ = unsafe { AbortDoc(context.0) };
-            return Err(failed("draw that page"));
+            let aborted = unsafe { AbortDoc(context.0) } > 0;
+            return Err(if sent || !aborted {
+                RunError::new(super::UNCONFIRMED, "Windows couldn't draw a page")
+            } else {
+                failed("draw that page")
+            });
         }
+        sent = true;
     }
     // SAFETY: as above.
     if unsafe { EndDoc(context.0) } <= 0 {

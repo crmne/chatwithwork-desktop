@@ -62,13 +62,17 @@ fn whole(dir: &Path, id: &str) -> PathBuf {
 /// The file `id` once all of it arrived and checked out.
 pub fn finished(dir: &Path, id: &str) -> Option<PathBuf> {
     let path = whole(dir, id);
-    path.is_file().then_some(path)
+    (path.is_file() && !older_than(&path, FILE_LIFE)).then_some(path)
 }
 
 /// Add a chunk. A chunk sent again (the answer was lost) starts over from
 /// its offset. The last chunk's file must have the SHA-256 it was announced
 /// with, and be a PDF.
 pub fn receive(dir: &Path, chunk: &Chunk<'_>) -> Result<Received, ToolError> {
+    // One at a time: a slot among `MAX_OPEN`, and a file being written, are
+    // each checked and then used.
+    static RECEIVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = RECEIVING.lock().unwrap_or_else(|held| held.into_inner());
     if !valid_id(chunk.transfer) {
         return Err(invalid("`transfer` is 16 to 64 lowercase hex digits"));
     }
@@ -212,14 +216,16 @@ pub fn purge(dir: &Path) {
         } else {
             continue;
         };
-        let old = entry
-            .metadata()
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age > life);
-        if old {
+        if older_than(&entry.path(), life) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+fn older_than(path: &Path, life: Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > life)
 }

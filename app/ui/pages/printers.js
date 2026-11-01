@@ -36,6 +36,11 @@ async function change(app, request) {
   app.render();
 }
 
+// Coming back: printers and the day's pages may have changed meanwhile.
+export function enter(app) {
+  if (app.view("printers").system) load(app);
+}
+
 export function render(app) {
   const view = app.view("printers");
   const page = h("div", { class: "page page--printers" }, pageHeader("Printers",
@@ -68,4 +73,4 @@ export function render(app) {
   return page;
 }
 
-export default { title, icon, render };
+export default { title, icon, enter, render };

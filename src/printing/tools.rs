@@ -325,7 +325,7 @@ fn clean_title(title: Option<&str>) -> String {
 }
 
 /// The ranges of a page list: `1-3,7`.
-pub(super) fn parse_pages(list: &str) -> Result<Vec<(u32, u32)>, ToolError> {
+pub fn parse_pages(list: &str) -> Result<Vec<(u32, u32)>, ToolError> {
     let bad = || ToolError::invalid_argument("`pages` is a list like 1-3,7");
     let page = |text: &str| {
         (!text.is_empty() && text.len() <= 6 && text.bytes().all(|b| b.is_ascii_digit()))
@@ -354,7 +354,7 @@ pub(super) fn parse_pages(list: &str) -> Result<Vec<(u32, u32)>, ToolError> {
 
 /// Pages a page list prints of a file of `total`, each counted once it's
 /// asked for.
-pub(super) fn count_pages(ranges: &[(u32, u32)], total: u32) -> Result<u32, ToolError> {
+pub fn count_pages(ranges: &[(u32, u32)], total: u32) -> Result<u32, ToolError> {
     let mut count = 0u32;
     for (from, to) in ranges {
         if *to > total {

@@ -273,7 +273,8 @@ fn the_day_keeps_its_page_limit_and_a_receipt_answers_a_second_call() {
             copies: 2,
             already: false,
         },
-    );
+    )
+    .unwrap();
     let again = print(&paths, &config, &request(None, false)).unwrap();
     assert!(again.already);
     assert_eq!(again.job, "Office-1");
@@ -303,6 +304,71 @@ fn a_job_counts_unless_it_certainly_did_not_print() {
 
     assert_eq!(submit(UNCONFIRMED).code, UNCONFIRMED);
     assert_eq!(pages_left(&paths, &config), Some(14));
+}
+
+#[test]
+fn a_job_that_may_have_printed_never_goes_out_twice() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = config_with(printer(true, vec![]));
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+    let job = request(None, false);
+
+    let error = print_through(&paths, &config, &job, |_| {
+        Err(RunError::new(UNCONFIRMED, "no answer"))
+    })
+    .unwrap_err();
+    assert_eq!(error.code, UNCONFIRMED);
+
+    let again = print_through(&paths, &config, &job, |_| panic!("printed twice")).unwrap();
+    assert!(again.already);
+    assert_eq!(again.state, UNCONFIRMED);
+}
+
+#[test]
+fn a_job_that_failed_can_try_again() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = config_with(printer(true, vec![]));
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+    let job = request(None, false);
+
+    print_through(&paths, &config, &job, |_| {
+        Err(RunError::new("unavailable", "the queue refused it"))
+    })
+    .unwrap_err();
+    let receipt = print_through(&paths, &config, &job, |_| Ok("Office-2".into())).unwrap();
+    assert!(!receipt.already);
+    assert_eq!(receipt.job, "Office-2");
+}
+
+#[test]
+fn a_file_past_its_hour_does_not_print() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(&dir).unwrap();
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+    let file = dir.join(format!("{ID}.pdf"));
+    let hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(hours_ago)
+        .unwrap();
+
+    let config = config_with(printer(true, vec![]));
+    let error = print_through(&paths, &config, &request(None, false), |_| {
+        panic!("an expired file went out")
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "not_found");
+    assert!(!file.exists());
 }
 
 #[test]

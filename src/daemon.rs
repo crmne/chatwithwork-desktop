@@ -607,6 +607,9 @@ async fn run_with_notifications(
         paths,
     });
     tokio::spawn(Arc::clone(&daemon).publish_status(shutdown.clone()));
+    tokio::spawn(crate::printing::purge_print_files(
+        daemon.paths.state_dir.join("printing"),
+    ));
 
     if handle_signals {
         let shutdown = shutdown.clone();

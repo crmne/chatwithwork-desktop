@@ -15,7 +15,7 @@
 mod cups;
 pub mod settings;
 pub mod tools;
-mod transfer;
+pub(crate) mod transfer;
 #[cfg(windows)]
 mod windows;
 
@@ -143,6 +143,22 @@ pub fn permitted(printer: &Printer, bot: Option<&str>) -> bool {
 static JOBS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Do one job, as the supervisor does. Every check is made here again.
+/// Files nobody printed leave within minutes of their time, whether or not
+/// anything else arrives. Ends with the daemon.
+pub async fn purge_print_files(dir: PathBuf) {
+    loop {
+        let folder = dir.clone();
+        let _ = tokio::task::spawn_blocking(move || transfer::purge(&folder)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
+    }
+}
+
+/// One job at a time. Held from before the settings are read for a job, so a
+/// job that waited still answers to the settings of its turn.
+pub fn one_job_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    JOBS.lock().unwrap_or_else(|held| held.into_inner())
+}
+
 pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receipt, RunError> {
     print_through(paths, config, request, submit)
 }
@@ -153,7 +169,6 @@ fn print_through(
     request: &Request,
     submit: impl FnOnce(&Job) -> Result<String, RunError>,
 ) -> Result<Receipt, RunError> {
-    let _one_at_a_time = JOBS.lock().unwrap_or_else(|held| held.into_inner());
     if !transfer::valid_id(&request.transfer) {
         return Err(RunError::new("invalid_argument", "not a print file's id"));
     }
@@ -176,6 +191,7 @@ fn print_through(
         ));
     }
     let dir = dir(paths);
+    transfer::purge(&dir);
     if let Some(receipt) = read_receipt(&dir, &request.transfer) {
         return Ok(Receipt {
             already: true,
@@ -199,9 +215,18 @@ fn print_through(
         ));
     }
     // Counted first, and kept unless the job certainly didn't print: paper
-    // that isn't counted is what the limit is there to stop.
+    // that isn't counted is what the limit is there to stop. A receipt goes
+    // first too: a job that may have printed never goes out a second time.
     counted.0.push((now, sheets));
     write_count(&dir, &counted)?;
+    let mut receipt = Receipt {
+        job: String::new(),
+        state: UNCONFIRMED.into(),
+        pages: request.pages_counted,
+        copies: request.copies,
+        already: false,
+    };
+    write_receipt(&dir, &request.transfer, &receipt)?;
     let job = submit(&Job {
         queue: printer.queue.clone(),
         file: file.clone(),
@@ -212,18 +237,14 @@ fn print_through(
     })
     .inspect_err(|error| {
         if error.code != UNCONFIRMED {
+            let _ = std::fs::remove_file(receipt_path(&dir, &request.transfer));
             counted.0.pop();
             let _ = write_count(&dir, &counted);
         }
     })?;
-    let receipt = Receipt {
-        job,
-        state: "queued".into(),
-        pages: request.pages_counted,
-        copies: request.copies,
-        already: false,
-    };
-    write_receipt(&dir, &request.transfer, &receipt);
+    receipt.job = job;
+    receipt.state = "queued".into();
+    let _ = write_receipt(&dir, &request.transfer, &receipt);
     let _ = std::fs::remove_file(file);
     Ok(receipt)
 }
@@ -302,10 +323,11 @@ fn read_receipt(dir: &Path, transfer: &str) -> Option<Receipt> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn write_receipt(dir: &Path, transfer: &str, receipt: &Receipt) {
-    if let Ok(bytes) = serde_json::to_vec(receipt) {
-        let _ = write_private_file(&receipt_path(dir, transfer), &bytes);
-    }
+fn write_receipt(dir: &Path, transfer: &str, receipt: &Receipt) -> Result<(), RunError> {
+    serde_json::to_vec(receipt)
+        .ok()
+        .and_then(|bytes| write_private_file(&receipt_path(dir, transfer), &bytes).ok())
+        .ok_or_else(|| RunError::new("unavailable", "couldn't save the job's receipt"))
 }
 
 #[cfg(test)]

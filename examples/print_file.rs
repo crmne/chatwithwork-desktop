@@ -4,6 +4,7 @@
 
 use cww::config::{Config, Printer};
 use cww::paths::Paths;
+use cww::printing::tools::{count_pages, parse_pages};
 use cww::printing::{Request, print, system_printers};
 
 fn main() -> anyhow::Result<()> {
@@ -30,6 +31,15 @@ fn main() -> anyhow::Result<()> {
         }],
         ..Config::default()
     };
+    // A whole file counts as one page: this runs on a throwaway count.
+    let pages_counted = match args.get(2) {
+        Some(pages) => count_pages(
+            &parse_pages(pages).map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            u32::MAX,
+        )
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        None => 1,
+    };
     let receipt = print(
         &paths,
         &config,
@@ -40,7 +50,7 @@ fn main() -> anyhow::Result<()> {
             copies: 1,
             duplex: None,
             pages: args.get(2).cloned(),
-            pages_counted: 1,
+            pages_counted,
             bot: None,
             unattended: false,
         },
