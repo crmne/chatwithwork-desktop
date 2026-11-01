@@ -103,21 +103,27 @@ export const button = (label, onclick, { kind = "", disabled = false, key } = {}
 // change never arrives. The page says why, as it does for any failed change.
 const saving = new Map();
 const SETTLE_MS = 3000;
+const GIVE_UP_MS = 20000;
 
 // A switch that asks first answers at once, and has nothing to wait for.
 function save(id, want, change) {
   const answer = change();
   if (!answer?.then) return;
-  const entry = { want };
+  const entry = { want, settled: false };
   saving.set(id, entry);
   if (app.page) app.render();
+  const finish = () => {
+    if (saving.get(id) !== entry) return;
+    saving.delete(id);
+    if (app.page) app.render();
+  };
+  const giveUp = setTimeout(finish, GIVE_UP_MS);
+  giveUp.unref?.();
   const settle = () => {
-    const timer = setTimeout(() => {
-      if (saving.get(id) !== entry) return;
-      saving.delete(id);
-      if (app.page) app.render();
-    }, SETTLE_MS);
-    timer.unref?.();
+    clearTimeout(giveUp);
+    entry.settled = true;
+    setTimeout(finish, SETTLE_MS).unref?.();
+    if (app.page) app.render();
   };
   answer.then(settle, settle);
 }
@@ -126,7 +132,7 @@ export const forgetSaving = () => saving.clear();
 
 export function switchInput(checked, onchange, { label, disabled = false, key } = {}) {
   const id = key || label;
-  if (saving.get(id)?.want === checked) saving.delete(id);
+  if (saving.get(id)?.settled && saving.get(id).want === checked) saving.delete(id);
   const entry = saving.get(id);
   return h("input", { type: "checkbox", role: "switch", class: entry ? "switch switch--saving" : "switch",
     checked: entry ? entry.want : checked, disabled: disabled || !!entry, "aria-busy": entry ? "true" : undefined,
@@ -262,6 +268,10 @@ async function start() {
     const changed = serialized !== previous;
     previous = serialized;
     take(payload);
+    if (app.reconnecting && app.status) {
+      app.reconnecting = false;
+      reconnect(app);
+    }
     if (changed) {
       for (const page of Object.values(PAGES)) page.statusChanged?.(app);
       app.render();
@@ -286,7 +296,8 @@ async function start() {
     return;
   }
   const wanted = location.hash.slice(1);
-  app.go(PAGES[wanted] ? wanted : app.info.onboarded ? "general" : "welcome");
+  app.reconnecting = wanted === "reconnect";
+  app.go(PAGES[wanted] ? wanted : app.reconnecting ? "account" : app.info.onboarded ? "general" : "welcome");
 }
 
 start().catch((error) => {

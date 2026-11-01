@@ -233,13 +233,11 @@ pub fn tray_action(app: &AppHandle, id: &str) {
             });
         }
         Some(Action::Reconnect) => {
+            // The page starts the sign-in once it knows this computer's
+            // server.
             let app = app.clone();
             std::thread::spawn(move || {
-                if windows::show_settings(&app, Some("account")).is_ok() {
-                    // The page listens once it has loaded.
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    windows::tell_settings(&app, "reconnect", ());
-                }
+                let _ = windows::show_settings(&app, Some("reconnect"));
             });
         }
         Some(Action::Settings) => {

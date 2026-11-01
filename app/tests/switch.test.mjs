@@ -57,3 +57,23 @@ test("a switch that asks first has nothing to wait for", async () => {
   assert.equal(draw(false).checked, false);
   assert.equal(draw(false).disabled, false);
 });
+
+test("a change that never answers goes back too", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const draw = (on) => switchInput(on, () => new Promise(() => {}), { label: "Seven" });
+  await turn(draw(false), true);
+  t.mock.timers.tick(19999);
+  assert.equal(draw(false).disabled, true);
+  t.mock.timers.tick(1);
+  assert.equal(draw(false).checked, false);
+});
+
+test("a switch keeps waiting while its change runs, even if the page already shows it", async () => {
+  let finish;
+  const draw = (on) => switchInput(on, () => new Promise((resolve) => { finish = resolve; }), { label: "Eight" });
+  await turn(draw(false), true);
+  assert.equal(draw(true).disabled, true);
+  finish();
+  await flush();
+  assert.equal(draw(true).disabled, false);
+});

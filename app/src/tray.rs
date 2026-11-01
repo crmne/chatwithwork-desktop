@@ -12,7 +12,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use crate::model::{Health, Platform, TrayView};
+use crate::model::{Platform, TrayView};
 
 mod ids {
     pub const HEADLINE: &str = "headline";
@@ -138,7 +138,7 @@ fn icon(dimmed: bool) -> Image<'static> {
 impl Tray {
     pub fn new(app: &AppHandle, view: &TrayView) -> tauri::Result<Self> {
         let platform = Platform::current();
-        let reconnects = view.health == Health::Revoked;
+        let reconnects = view.reconnects;
         let headline = MenuItem::with_id(
             app,
             ids::HEADLINE,
@@ -268,8 +268,8 @@ impl Tray {
         }
         let platform = Platform::current();
         let old = std::mem::replace(&mut self.view, view.clone());
-        let reconnects = view.health == Health::Revoked;
-        if view.headline != old.headline || view.health != old.health {
+        let reconnects = view.reconnects;
+        if view.headline != old.headline || reconnects != old.reconnects {
             let _ = self.headline.set_text(if reconnects {
                 RECONNECT_LABEL
             } else {
@@ -340,6 +340,7 @@ mod tests {
             tooltip: "Chat with Work Desktop: Online".into(),
             dimmed: false,
             browser_stopped: None,
+            reconnects: false,
         }
     }
 

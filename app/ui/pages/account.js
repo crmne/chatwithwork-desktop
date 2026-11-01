@@ -14,7 +14,6 @@ function pairing(app) {
 }
 
 export async function listen(app, on) {
-  await on("reconnect", () => reconnect(app));
   await on("pairing", (event) => {
     const view = pairing(app);
     view.requesting = false;

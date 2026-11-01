@@ -334,6 +334,8 @@ pub struct TrayView {
     /// `Some(true)` offers Resume Using the Browser, `Some(false)` Stop
     /// Using the Browser, `None` neither: the browser is off.
     pub browser_stopped: Option<bool>,
+    /// This computer has to sign in again, even while it's paused.
+    pub reconnects: bool,
 }
 
 impl TrayView {
@@ -373,6 +375,7 @@ impl TrayView {
             detail,
             paused,
             dimmed: !health.is_serving(),
+            reconnects: status.is_some_and(|s| s.connection.connection == "revoked"),
             browser_stopped: status
                 .filter(|s| s.browser.enabled)
                 .map(|s| s.browser.stopped),
