@@ -322,9 +322,8 @@ fn a_job_that_may_have_printed_never_goes_out_twice() {
     .unwrap_err();
     assert_eq!(error.code, UNCONFIRMED);
 
-    let again = print_through(&paths, &config, &job, |_| panic!("printed twice")).unwrap();
-    assert!(again.already);
-    assert_eq!(again.state, UNCONFIRMED);
+    let again = print_through(&paths, &config, &job, |_| panic!("printed twice")).unwrap_err();
+    assert_eq!(again.code, UNCONFIRMED);
 }
 
 #[test]

@@ -193,6 +193,12 @@ fn print_through(
     let dir = dir(paths);
     transfer::purge(&dir);
     if let Some(receipt) = read_receipt(&dir, &request.transfer) {
+        if receipt.state == UNCONFIRMED {
+            return Err(RunError::new(
+                UNCONFIRMED,
+                "this job may have printed, so it won't go out again: check the printer",
+            ));
+        }
         return Ok(Receipt {
             already: true,
             ..receipt
