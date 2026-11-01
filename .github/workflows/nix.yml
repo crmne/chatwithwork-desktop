@@ -1,0 +1,38 @@
+name: Nix
+
+# The Linux Nix package on a pull request that changes what it's built from.
+# It takes half an hour, so other pull requests leave it to main, in ci.yml.
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - packaging/nix/**
+      - browser/engine/package.json
+      - browser/engine/package-lock.json
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - .cargo/config.toml
+      - .github/workflows/nix.yml
+
+concurrency:
+  group: nix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  nix:
+    name: Nix package (x86_64-linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Check flake outputs
+        run: nix flake check --no-build
+      - name: Build package
+        run: nix build .#default -L
+      - run: ./result/bin/cww --version
+      - run: ./result/bin/cww-app --version
