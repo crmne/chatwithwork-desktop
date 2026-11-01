@@ -8,8 +8,8 @@
 //! The keychain is one per user, whatever the paths, so its entries name the
 //! server they're for: signing in to a second server, a development one say,
 //! never touches another server's key. A pairing saved before they did keeps
-//! working: its entries are copied on first use, and go when they're proved
-//! to be that server's.
+//! working: its entries are copied on first use. Nothing says which server
+//! those were for, so they stay until a purge.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -166,16 +166,7 @@ impl SecretStore {
 
     pub fn delete(&self, name: &str) -> Result<()> {
         match self {
-            Self::ServerKeyring(origin) => {
-                let scoped = server_entry(origin, name);
-                let ours = Self::Keyring.get(&scoped)?;
-                Self::Keyring.delete(&scoped)?;
-                // An older version's entry goes only if it's this server's.
-                if ours.is_some() && Self::Keyring.get(name)? == ours {
-                    Self::Keyring.delete(name)?;
-                }
-                Ok(())
-            }
+            Self::ServerKeyring(origin) => Self::Keyring.delete(&server_entry(origin, name)),
             Self::OrganizationKeyring(id) => {
                 Self::Keyring.delete(&format!("organization:{id}:{name}"))
             }
