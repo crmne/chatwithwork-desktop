@@ -31,8 +31,8 @@ class RuntimePackageTest(unittest.TestCase):
         (root / "notices/Node-LICENSE").write_text("Node aggregate notices")
         dependency = root / "node_modules/@xmorse/playwright-core"
         dependency.mkdir(parents=True)
-        (dependency / "package.json").write_text('{"version":"1.59.13"}')
-        (root / "package.json").write_text('{"dependencies":{"@xmorse/playwright-core":"1.59.13"}}')
+        (dependency / "package.json").write_text('{"version":"1.59.14"}')
+        (root / "package.json").write_text('{"dependencies":{"@xmorse/playwright-core":"1.59.14"}}')
         return root
 
     def test_manifest_detects_changed_added_and_removed_files(self):
@@ -61,7 +61,7 @@ class RuntimePackageTest(unittest.TestCase):
 
     def test_exact_engine_version_and_node_license_required(self):
         root = self.fixture()
-        (root / "package.json").write_text('{"dependencies":{"@xmorse/playwright-core":"^1.59.13"}}')
+        (root / "package.json").write_text('{"dependencies":{"@xmorse/playwright-core":"^1.59.14"}}')
         with self.assertRaisesRegex(ValueError, "exact registry"):
             package.write_manifest(root, "0.9.1", "x86_64-unknown-linux-gnu", self.config)
         (root / "notices/Node-LICENSE").unlink()
