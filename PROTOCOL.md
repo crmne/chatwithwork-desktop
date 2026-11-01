@@ -178,7 +178,7 @@ grant_type=refresh_token
 }
 ```
 
-- The access token is opaque to the daemon. The design calls for a signed token with a 10-minute lifetime, `aud` equal to the server origin, `scope=desktop:serve`, and binding to the device key (`cnf.jkt`). That scope MUST NOT grant access to any other API. While the owner lets the computer use their chats, the scope also carries `desktop:chat`, which opens the chat API of section 12 and nothing else.
+- The access token is opaque to the daemon. The design calls for a signed token with a 10-minute lifetime, `aud` equal to the server origin, `scope=desktop:serve`, and binding to the device key (`cnf.jkt`). That scope MUST NOT grant access to any other API. While the owner lets the computer use their chats, the scope also carries `desktop:chat`, which opens the chat API of section 12 and nothing else. While they let it manage bots, it carries `desktop:bots`, which opens the bots' endpoints (`cww bots`) and nothing else, not even this socket.
 - `refresh_token` in the response is OPTIONAL. If present and different, the daemon replaces the stored one (rotation). Servers that rotate SHOULD accept the previous refresh token for a short grace period, because the daemon may crash between receiving and storing it.
 - The daemon caches the access token in memory and refreshes it 60 seconds before `expires_in` runs out, or after the server rejects it.
 - The refresh request MUST be rejected with `400 {"error":"invalid_grant"}` once the device is revoked. On `invalid_grant`, `unauthorized_client` or `access_denied`, the daemon marks itself **revoked**, closes the tunnel, stops reconnecting, and waits for the user to run `cww login`. Any other failure (network error, 5xx, other error codes) is retried with backoff.

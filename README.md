@@ -242,6 +242,57 @@ Chats in the terminal are a separate permission from sharing folders. `cww login
 
 The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 256 colours on terminals without true colour.
 
+## Bots from the terminal
+
+`cww bots` makes and manages your Chat with Work bots from a terminal, for you or for an agent running there, as many as you like. It does what the Bots pages do, as you, and nothing you couldn't do there.
+
+It's a separate permission from folders and chats. Ask for it while pairing with `cww login --bots`, which adds an unticked choice to the approval page. On a computer that's already paired, the first `cww bots` asks, and you allow it in Chat with Work under Settings, Computers, where you can turn it off at any time. Anything running on this computer can use it once it's allowed. It uses the computer's own key, so the daemon doesn't need to be running.
+
+```sh
+cww bots list
+cww bots show 42
+cww bots recipes                       # what you can start from
+cww bots recipes lead_triage           # every choice its page asks, and what's still needed
+cww bots recipes blank                 # the same, from nothing
+cww bots triggers invoice              # what can start a bot
+cww bots triggers --app github         # one app's events and fields
+
+cww bots create --recipe lead_triage --tool crm=hubspot
+cww bots create --name "Morning" --instructions "Summarize my day." \
+  --app schedule --frequency weekday --at 08:30
+cww bots create --file bot.yaml --name "Overrides the file"
+
+cww bots update 42 --name "Triage" --when "every day at 10:00" --notify never
+cww bots update 42 --writes slack=automatic --policy calendar_delete=ask
+cww bots pause 42
+cww bots resume 42
+cww bots delete 42                     # asks first; --yes for agents
+cww bots run 42                        # a try
+cww bots run --recipe lead_triage      # a try of one not made yet
+cww bots run 42 --no-wait              # then: cww bots run --follow <try>
+```
+
+Add `--org NAME` to work in another organization you signed in to with `cww login --organization --bots`, as `cww organizations` lists them. Add `--json` for programs: every command prints the server's JSON, and a failure prints `{"error": {"code": "...", "message": "...", ...}}` on stdout and exits with status 1. `delete` without a terminal needs `--yes`.
+
+A bot starts as New bot would start it: from the recipe's own choices, with only what you say on top, replying as drafts and asking before changes. Anything the page requires is a flag or a setting in the file, and a missing one is refused with what's wrong (`cww bots recipes KEY` lists it as "Still needed"). Nothing gets wider than the page allows: `--writes automatic` is the page's own choice, only the person an integration acts as can let its changes run without asking, and a destructive tool set to automatic also needs `--yes`.
+
+`--file` takes plain settings in YAML, the same names as the flags with `tools`, `integrations`, `monthly_credits_cap`, and `schedule` (for `update`, `when`, `tell`, `changes`, `reply_mode`, `writes`, `policies`):
+
+```yaml
+recipe: lead_triage
+name: Lead triage
+tools:
+  crm: hubspot
+integrations: [notion]
+schedule:
+  frequency: weekday
+  at: "08:30"
+```
+
+Secrets never go through `cww bots`: it refuses any flag or file key that names one before anything is sent, and it never prints one. A webhook's address and secret, a channel's token, and a bot's API keys are on the bot's page.
+
+Making a bot uses no credits by itself. `cww bots run` tries it once, changing nothing outside, and uses your credits like a chat, which it says first. Every create, update, pause, delete, and try is audited, naming this computer.
+
 ## Desktop app
 
 `cww-app` is Chat with Work Desktop: the Chat with Work web app in a window of its own, a menu bar (macOS), notification area (Windows) or tray (Linux) item for the daemon, and the background agent's settings. It is built with [Tauri](https://tauri.app) on the system's web view (WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows).

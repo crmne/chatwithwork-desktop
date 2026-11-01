@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
 
+use cww::bots::{self, Bots};
 use cww::config::{Config, DEFAULT_SERVER};
 use cww::control::{self, ControlRequest};
 use cww::paths::Paths;
@@ -47,6 +48,9 @@ enum Command {
         /// Sign in to another organization for chats, without changing shared folders.
         #[arg(long, conflicts_with = "no_chats")]
         organization: bool,
+        /// Also ask to manage your bots with `cww bots`.
+        #[arg(long)]
+        bots: bool,
         /// Print JSON lines for a program to read (the desktop app): the
         /// code, then the outcome. Never asks anything.
         #[arg(long)]
@@ -120,6 +124,235 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Make and manage your bots, for you or an agent. Allowed separately
+    /// from folders and chats, in `cww login --bots` or in Settings.
+    Bots {
+        /// Saved organization name or ID from `cww organizations`.
+        #[arg(
+            long,
+            global = true,
+            allow_hyphen_values = true,
+            alias = "organization"
+        )]
+        org: Option<String>,
+        /// Print JSON for a program to read. Failures print {"error": {...}}.
+        #[arg(long, global = true)]
+        json: bool,
+        #[command(subcommand)]
+        command: BotsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BotsCommand {
+    /// List the bots you can read.
+    List,
+    /// Show one bot.
+    Show { id: String },
+    /// List recipes, or show every choice one asks. KEY "blank" is from nothing.
+    Recipes {
+        key: Option<String>,
+        /// See the choices with this tool in a slot: kind=tool.
+        #[arg(long = "tool", value_parser = bots::pair)]
+        tools: Vec<(String, String)>,
+    },
+    /// List or search what can start a bot, or show one app's events and fields.
+    Triggers {
+        /// Words to search for, or an app's key with --app.
+        query: Option<String>,
+        /// Show this app's events and fields.
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Make a bot, from a recipe or from nothing. Spends nothing by itself.
+    Create(Box<BotForm>),
+    /// Change a bot. Only what's given changes.
+    Update(Box<BotChange>),
+    /// Stop a bot answering until it's resumed.
+    Pause { id: String },
+    /// Let a paused bot answer again.
+    Resume { id: String },
+    /// Delete a bot. Its chats stay.
+    Delete {
+        id: String,
+        /// Don't ask to confirm.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Try a bot once. It changes nothing outside, and uses your credits.
+    Run(Box<BotRun>),
+}
+
+#[derive(clap::Args, Default)]
+struct BotFields {
+    /// Start from this recipe (see `cww bots recipes`).
+    #[arg(long)]
+    recipe: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    description: Option<String>,
+    /// What it should do.
+    #[arg(long)]
+    instructions: Option<String>,
+    /// Plain settings in YAML, with flags over them. Never secrets.
+    #[arg(long)]
+    file: Option<PathBuf>,
+    /// The tool for one of the recipe's slots: kind=tool, or kind=none.
+    #[arg(long = "tool", value_parser = bots::pair)]
+    tools: Vec<(String, String)>,
+    /// Another service it uses, as you. It must be connected.
+    #[arg(long = "integration")]
+    integrations: Vec<String>,
+    /// Let it run code in the sandbox.
+    #[arg(long)]
+    code: bool,
+    /// When it tells you: when_needed, always, or never.
+    #[arg(long)]
+    notify: Option<String>,
+    /// Its changes: ask, or automatic, the same choice as on New bot.
+    #[arg(long)]
+    writes: Option<String>,
+    /// Share it in a project (owners and admins).
+    #[arg(long)]
+    shared: bool,
+    /// The project's number, for --shared.
+    #[arg(long)]
+    project: Option<u64>,
+    /// A shared bot's monthly credits.
+    #[arg(long)]
+    cap: Option<u64>,
+    /// What starts it, an app from `cww bots triggers`.
+    #[arg(long)]
+    app: Option<String>,
+    /// One of the app's events that starts it. Repeat for several.
+    #[arg(long = "event")]
+    events: Vec<String>,
+    /// One of the app's fields: key=value.
+    #[arg(long = "trigger-field", value_parser = bots::pair)]
+    trigger_fields: Vec<(String, String)>,
+    /// day, weekday, week, month, or custom.
+    #[arg(long)]
+    frequency: Option<String>,
+    /// The time of day, like 08:30.
+    #[arg(long)]
+    at: Option<String>,
+    /// For --frequency week.
+    #[arg(long)]
+    on_weekday: Option<String>,
+    /// For --frequency month.
+    #[arg(long)]
+    on_day: Option<String>,
+    /// Run once, at this date and time, like 2026-12-01T09:00.
+    #[arg(long)]
+    once: Option<String>,
+    /// In words, like "every friday at 16:00".
+    #[arg(long)]
+    recurrence: Option<String>,
+    #[arg(long)]
+    time_zone: Option<String>,
+}
+
+impl BotFields {
+    fn into_form(self) -> (bots::Form, Option<PathBuf>) {
+        let file = self.file;
+        let form = bots::Form {
+            recipe: self.recipe,
+            name: self.name,
+            description: self.description,
+            instructions: self.instructions,
+            tools: self.tools,
+            integrations: self.integrations,
+            code: self.code,
+            notify: self.notify,
+            writes: self.writes,
+            shared: self.shared,
+            project: self.project,
+            cap: self.cap,
+            app: self.app,
+            events: self.events,
+            trigger_fields: self.trigger_fields,
+            frequency: self.frequency,
+            at: self.at,
+            on_weekday: self.on_weekday,
+            on_day: self.on_day,
+            once: self.once,
+            recurrence: self.recurrence,
+            time_zone: self.time_zone,
+        };
+        (form, file)
+    }
+}
+
+#[derive(clap::Args)]
+struct BotForm {
+    #[command(flatten)]
+    fields: BotFields,
+}
+
+#[derive(clap::Args)]
+struct BotRun {
+    /// A bot that exists. Without it, tries the form the other flags give.
+    id: Option<String>,
+    #[command(flatten)]
+    fields: BotFields,
+    /// Try it on this recent event, not the newest.
+    #[arg(long)]
+    sample: Option<String>,
+    /// Start it and print its ID without waiting.
+    #[arg(long)]
+    no_wait: bool,
+    /// Follow a try already started, by its ID.
+    #[arg(long, conflicts_with = "no_wait")]
+    follow: Option<u64>,
+    /// How long to wait, in seconds.
+    #[arg(long, default_value_t = 300)]
+    timeout: u64,
+}
+
+#[derive(clap::Args)]
+struct BotChange {
+    id: String,
+    /// Plain settings in YAML, with flags over them. Never secrets.
+    #[arg(long)]
+    file: Option<PathBuf>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    description: Option<String>,
+    #[arg(long)]
+    instructions: Option<String>,
+    /// When it runs, in words, or a date and time for once.
+    #[arg(long)]
+    when: Option<String>,
+    #[arg(long)]
+    time_zone: Option<String>,
+    /// A service of yours to add. It must be connected.
+    #[arg(long = "add-integration")]
+    add: Vec<String>,
+    #[arg(long = "remove-integration")]
+    remove: Vec<String>,
+    /// When it tells you: when_needed, always, or never.
+    #[arg(long)]
+    notify: Option<String>,
+    /// Your own connections' changes: ask, or automatic.
+    #[arg(long)]
+    changes: Option<String>,
+    /// How it replies: draft, or automatic.
+    #[arg(long)]
+    reply_mode: Option<String>,
+    /// A shared bot's monthly credits.
+    #[arg(long)]
+    cap: Option<u64>,
+    /// One integration's changes: provider=off|ask|automatic.
+    #[arg(long = "writes", value_parser = bots::pair)]
+    writes: Vec<(String, String)>,
+    /// One tool's policy: tool=off|ask|automatic.
+    #[arg(long = "policy", value_parser = bots::pair)]
+    policies: Vec<(String, String)>,
+    /// Confirm a policy that lets a destructive tool run without asking.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Subcommand)]
@@ -413,12 +646,17 @@ fn run(cli: Cli) -> Result<()> {
             no_daemon,
             json: true,
             organization,
+            bots,
         } => login_json(
             &paths,
             &server,
-            name,
-            !no_browser,
-            no_chats,
+            auth::LoginOptions {
+                name,
+                store: None,
+                open_browser: !no_browser,
+                without_chats: no_chats,
+                with_bots: bots,
+            },
             !no_daemon,
             organization,
         )?,
@@ -430,12 +668,14 @@ fn run(cli: Cli) -> Result<()> {
             no_chats,
             json: false,
             organization,
+            bots,
         } => {
             let options = auth::LoginOptions {
                 name,
                 store: None,
                 open_browser: !no_browser,
                 without_chats: no_chats,
+                with_bots: bots,
             };
             if organization {
                 let profile =
@@ -487,6 +727,18 @@ fn run(cli: Cli) -> Result<()> {
         Command::Roots { command } => roots(&paths, command)?,
         Command::Printers { command } => {
             printers(&paths, command.unwrap_or(PrintersCommand::List))?
+        }
+        Command::Bots { org, json, command } => {
+            if let Err(error) = bots_command(&paths, org.as_deref(), json, command) {
+                if json {
+                    println!("{}", bots::error_json(&error));
+                } else {
+                    for line in bots::error_lines(&error) {
+                        eprintln!("{line}");
+                    }
+                }
+                std::process::exit(1);
+            }
         }
         Command::Status { json } => status(&paths, json)?,
         Command::Pause => pause(&paths, true)?,
@@ -1115,6 +1367,122 @@ fn proxy_hint(paths: &Paths) {
     }
 }
 
+/// `cww bots`: each command is one request, printed in words or as the
+/// server's JSON, which is the stable shape agents read.
+fn bots_command(
+    paths: &Paths,
+    organization: Option<&str>,
+    json: bool,
+    command: BotsCommand,
+) -> Result<()> {
+    let client = Bots::connect(paths, organization)?;
+    let print = |answer: Value, render: fn(&Value) -> Vec<String>| -> Result<()> {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&answer)?);
+        } else {
+            for line in render(&answer) {
+                println!("{line}");
+            }
+        }
+        Ok(())
+    };
+    match command {
+        BotsCommand::List => print(client.list()?, bots::render_list),
+        BotsCommand::Show { id } => print(client.show(&id)?, bots::render_bot),
+        BotsCommand::Recipes { key: None, .. } => print(client.recipes()?, bots::render_recipes),
+        BotsCommand::Recipes {
+            key: Some(key),
+            tools,
+        } => print(client.recipe(&key, &tools)?, bots::render_recipe),
+        BotsCommand::Triggers { app: Some(app), .. } => {
+            print(client.trigger(&app)?, bots::render_trigger)
+        }
+        BotsCommand::Triggers { query, app: None } => {
+            print(client.triggers(query.as_deref())?, bots::render_triggers)
+        }
+        BotsCommand::Create(form) => {
+            let (form, file) = form.fields.into_form();
+            print(
+                client.create(&form.body(file.as_deref())?)?,
+                bots::render_bot,
+            )
+        }
+        BotsCommand::Update(change) => {
+            let id = change.id.clone();
+            let file = change.file.clone();
+            let change = bots::Change {
+                name: change.name,
+                description: change.description,
+                instructions: change.instructions,
+                when: change.when,
+                time_zone: change.time_zone,
+                add: change.add,
+                remove: change.remove,
+                notify: change.notify,
+                changes: change.changes,
+                reply_mode: change.reply_mode,
+                cap: change.cap,
+                writes: change.writes,
+                policies: change.policies,
+                allow_destructive: change.yes,
+            };
+            print(
+                client.update(&id, &change.body(file.as_deref())?)?,
+                bots::render_bot,
+            )
+        }
+        BotsCommand::Pause { id } => print(client.pause(&id)?, bots::render_bot),
+        BotsCommand::Resume { id } => print(client.resume(&id)?, bots::render_bot),
+        BotsCommand::Delete { id, yes } => {
+            let name = client.show(&id)?["bot"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            bots::confirm(&format!("Delete {name}? Its chats stay."), yes)?;
+            print(client.delete(&id)?, |answer| {
+                vec![format!(
+                    "Deleted {}.",
+                    answer["deleted"]["name"].as_str().unwrap_or_default()
+                )]
+            })
+        }
+        BotsCommand::Run(run) => bots_run(&client, *run, json),
+    }
+}
+
+fn bots_run(client: &Bots, run: BotRun, json: bool) -> Result<()> {
+    let print = |answer: &Value| -> Result<()> {
+        if json {
+            println!("{}", serde_json::to_string_pretty(answer)?);
+        } else {
+            for line in bots::render_trial(answer) {
+                println!("{line}");
+            }
+        }
+        Ok(())
+    };
+    let limit = std::time::Duration::from_secs(run.timeout);
+    if let Some(id) = run.follow {
+        return print(&client.wait_for_trial(id, limit)?);
+    }
+    let (form, file) = run.fields.into_form();
+    let mut body = match run.id {
+        Some(id) => serde_json::json!({ "bot_id": bots::bot_id(&id)? }),
+        None => form.body(file.as_deref())?,
+    };
+    if let Some(sample) = run.sample {
+        body["event"] = sample.into();
+    }
+    // Before it starts, and on stderr, so --json stays one document.
+    eprintln!("This try uses your credits, like a chat. It changes nothing outside.");
+    let started = client.start_trial(&body)?;
+    if run.no_wait {
+        return print(&started);
+    }
+    let id = started["trial"]["id"].as_u64().unwrap_or_default();
+    print(&client.wait_for_trial(id, limit)?)
+}
+
 /// `cww login --json`: one JSON object per line on stdout. First
 /// `{"event":"code",...}` with what to show and open, then `{"event":"paired",...}`
 /// or `{"event":"error",...}`. On success the daemon is started as by
@@ -1123,21 +1491,15 @@ fn proxy_hint(paths: &Paths) {
 fn login_json(
     paths: &Paths,
     server: &str,
-    name: Option<String>,
-    open: bool,
-    without_chats: bool,
+    mut options: auth::LoginOptions,
     start: bool,
     organization: bool,
 ) -> Result<()> {
     use std::sync::atomic::AtomicBool;
 
     let emit = |value: Value| println!("{value}");
-    let options = auth::LoginOptions {
-        name,
-        store: None,
-        open_browser: false,
-        without_chats,
-    };
+    // Opened below, after the code is printed.
+    let open = std::mem::take(&mut options.open_browser);
     let pending = if organization {
         auth::start_organization_login(paths, server, options)
     } else {

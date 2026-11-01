@@ -21,6 +21,7 @@ pub const SCOPE: &str = "desktop:serve";
 /// UI's chats, relayed by the daemon. The server asks the user about it
 /// separately and may leave it out.
 pub const CHAT_SCOPE: &str = "desktop:chat";
+pub const BOTS_SCOPE: &str = "desktop:bots";
 
 /// A validated server origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,12 +335,15 @@ impl AuthClient {
         key: &DeviceKey,
         info: &DeviceInfo,
         chats: bool,
+        bots: bool,
     ) -> Result<DeviceAuthorization> {
-        let scope = if chats {
-            format!("{SCOPE} {CHAT_SCOPE}")
-        } else {
-            SCOPE.to_string()
-        };
+        let mut scope = SCOPE.to_string();
+        if chats {
+            scope = format!("{scope} {CHAT_SCOPE}");
+        }
+        if bots {
+            scope = format!("{scope} {BOTS_SCOPE}");
+        }
         self.start_pairing_with_scope(key, info, &scope)
     }
 
@@ -348,8 +352,13 @@ impl AuthClient {
         &self,
         key: &DeviceKey,
         info: &DeviceInfo,
+        bots: bool,
     ) -> Result<DeviceAuthorization> {
-        self.start_pairing_with_scope(key, info, CHAT_SCOPE)
+        if bots {
+            self.start_pairing_with_scope(key, info, &format!("{CHAT_SCOPE} {BOTS_SCOPE}"))
+        } else {
+            self.start_pairing_with_scope(key, info, CHAT_SCOPE)
+        }
     }
 
     fn start_pairing_with_scope(

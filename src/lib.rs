@@ -9,6 +9,7 @@
 pub mod account_settings;
 pub mod audit;
 pub mod auth;
+pub mod bots;
 pub mod browser;
 pub mod browsing;
 pub mod chats;

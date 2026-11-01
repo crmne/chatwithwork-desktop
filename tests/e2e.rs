@@ -67,6 +67,10 @@ struct ServerState {
     /// Images asked for that came with a token or a proof.
     assets_with_credentials: usize,
     workspace_requests: Vec<Value>,
+    /// The owner lets this computer manage bots.
+    bots_access: bool,
+    /// Requests made to the bots' endpoints: (method, path, body).
+    bot_requests: Vec<(String, String, Value)>,
 }
 
 struct FakeServer {
@@ -325,6 +329,7 @@ async fn http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, origin: Str
     }
     let (status, json) = if [
         "/desktop/chat",
+        "/desktop/bot",
         "/desktop/models",
         "/desktop/model_preferences",
         "/desktop/account_settings",
@@ -396,6 +401,71 @@ struct ChatRequest<'a> {
     body: &'a str,
 }
 
+/// The bots' endpoints, as Rails serves them to `cww bots`.
+fn bots_api(
+    st: &mut ServerState,
+    method: &str,
+    path: &str,
+    body: &str,
+    approve_url: &str,
+) -> (u16, Value) {
+    let account = json!({ "id": "482139075", "name": "Northwind" });
+    let bot = json!({ "id": 7, "name": "Triage", "state": "next", "project": null, "url": "https://x/bots/7" });
+    st.bot_requests.push((
+        method.to_string(),
+        path.to_string(),
+        serde_json::from_str(body).unwrap_or(Value::Null),
+    ));
+    if path == "/desktop/bots_access_request" {
+        return (
+            202,
+            json!({ "granted": st.bots_access, "requested": true, "approve_url": approve_url }),
+        );
+    }
+    if !st.bots_access {
+        return (
+            403,
+            json!({ "error": "bots_access_required", "error_description": "Allow this computer", "requested": false, "approve_url": approve_url }),
+        );
+    }
+    match (method, path) {
+        ("GET", "/desktop/bots") => (200, json!({ "account": account, "bots": [bot] })),
+        ("POST", "/desktop/bots") => {
+            let posted: Value = serde_json::from_str(body).unwrap();
+            if posted["bot"]["name"].is_null() {
+                return (
+                    422,
+                    json!({ "error": "invalid", "error_description": "Name can't be blank",
+                            "errors": ["Name can't be blank"], "trigger_missing": true }),
+                );
+            }
+            (
+                201,
+                json!({ "account": account, "bot": bot, "connect_first": [] }),
+            )
+        }
+        ("GET" | "PATCH", "/desktop/bots/7") | ("POST" | "DELETE", "/desktop/bots/7/pause") => {
+            (200, json!({ "account": account, "bot": bot }))
+        }
+        ("DELETE", "/desktop/bots/7") => (
+            200,
+            json!({ "account": account, "deleted": { "id": 7, "name": "Triage" } }),
+        ),
+        ("POST", "/desktop/bot_trials") => (
+            201,
+            json!({ "trial": { "id": 9, "state": "running", "title": "Try of Triage", "uses_credits": true } }),
+        ),
+        ("GET", "/desktop/bot_trials/9") => (
+            200,
+            json!({ "trial": { "id": 9, "state": "done", "title": "Try of Triage", "answer": "All quiet.", "would_ask": ["slack_post"] } }),
+        ),
+        _ => (
+            404,
+            json!({ "error": "not_found", "error_description": "No such bot" }),
+        ),
+    }
+}
+
 /// The chat API, as Rails serves it to a device allowed to chat.
 fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (u16, Value) {
     let ChatRequest {
@@ -442,6 +512,9 @@ fn chat_api(state: &Mutex<ServerState>, origin: &str, request: ChatRequest) -> (
             202,
             json!({ "granted": st.chat_access, "requested": !st.chat_access, "approve_url": approve_url }),
         );
+    }
+    if path.starts_with("/desktop/bot") {
+        return bots_api(&mut st, method, path, body, &approve_url);
     }
     if !st.chat_access {
         return (
@@ -1961,6 +2034,147 @@ async fn organization_login_keeps_the_primary_folder_pairing_and_refreshes_with_
         panic!("test uses only private files")
     };
     assert_mode(&path, 0o600);
+}
+
+/// `cww bots`, the real binary against the fake server: it asks to be
+/// allowed, makes a bot from a file with flags over it, tries it, deletes it
+/// only when told to, and leaves the token out of everything it prints.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bots_commands_run_as_the_device_and_never_print_a_secret() {
+    let fx = fixture();
+    let server = FakeServer::start().await;
+    pair(&fx, &server);
+    let home = fx.paths.config_file();
+    let home = home.parent().unwrap().parent().unwrap().to_path_buf();
+    let cww = |args: Vec<&'static str>| {
+        let home = home.clone();
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new(env!("CARGO_BIN_EXE_cww"))
+                .arg("bots")
+                .args(args)
+                .env("CWW_HOME", home)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        })
+    };
+
+    // Not allowed yet: it asks, says where to answer, and fails.
+    let output = cww(vec!["list", "--json"]).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refused["error"]["code"], "bots_access_required");
+    assert!(
+        refused["error"]["approve_url"]
+            .as_str()
+            .unwrap()
+            .contains("settings")
+    );
+    assert!(
+        server
+            .state
+            .lock()
+            .unwrap()
+            .bot_requests
+            .iter()
+            .any(|(method, path, _)| method == "POST" && path == "/desktop/bots_access_request")
+    );
+
+    server.state.lock().unwrap().bots_access = true;
+    let output = cww(vec!["list", "--json"]).await.unwrap();
+    assert!(output.status.success());
+    let listed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed["bots"][0]["id"], 7);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(ACCESS_TOKEN),
+        "the token stays out of what it prints"
+    );
+
+    // A file with a flag over it, in one request.
+    let file = fx.base.join("bot.yaml");
+    std::fs::write(
+        &file,
+        "recipe: lead_triage\nname: From the file\ntools:\n  crm: hubspot\n",
+    )
+    .unwrap();
+    let path: &'static str = Box::leak(file.to_str().unwrap().to_string().into_boxed_str());
+    let output = cww(vec![
+        "create",
+        "--file",
+        path,
+        "--name",
+        "From the flag",
+        "--frequency",
+        "day",
+        "--at",
+        "09:00",
+        "--json",
+    ])
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let (_, _, posted) = server
+        .state
+        .lock()
+        .unwrap()
+        .bot_requests
+        .iter()
+        .rfind(|(method, path, _)| method == "POST" && path == "/desktop/bots")
+        .cloned()
+        .unwrap();
+    assert_eq!(posted["recipe"], "lead_triage");
+    assert_eq!(posted["bot"]["name"], "From the flag");
+    assert_eq!(posted["bot"]["choices"]["crm"], "hubspot");
+    assert_eq!(posted["schedule"]["at"], "09:00");
+
+    // What the server refuses comes back in full, in words too.
+    let output = cww(vec!["create"]).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Name can't be blank"), "{stderr}");
+    assert!(stderr.contains("--app"), "{stderr}");
+
+    // A secret in the file never leaves the computer.
+    std::fs::write(&file, "name: Leaky\nschedule:\n  api_key: hunter2\n").unwrap();
+    let before = server.state.lock().unwrap().bot_requests.len();
+    let output = cww(vec!["create", "--file", path, "--json"]).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(server.state.lock().unwrap().bot_requests.len(), before);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("hunter2"));
+
+    // A try says it uses credits, then shows what came of it.
+    let output = cww(vec!["run", "7", "--json"]).await.unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("uses your credits"));
+    let tried: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(tried["trial"]["state"], "done");
+
+    // Deleting never waits on a program, and needs --yes without a terminal.
+    let output = cww(vec!["delete", "7", "--json"]).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refused["error"]["code"], "confirm");
+    assert!(
+        !server
+            .state
+            .lock()
+            .unwrap()
+            .bot_requests
+            .iter()
+            .any(|(method, path, _)| method == "DELETE" && path == "/desktop/bots/7")
+    );
+    let output = cww(vec!["delete", "7", "--yes"]).await.unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Deleted Triage.\n");
+
+    let output = cww(vec!["pause", "7"]).await.unwrap();
+    assert!(output.status.success());
+    let output = cww(vec!["show", "../etc"]).await.unwrap();
+    assert_eq!(output.status.code(), Some(1));
 }
 
 /// A CONNECT proxy that wants Basic auth, like a company's.
