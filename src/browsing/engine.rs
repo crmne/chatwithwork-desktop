@@ -334,6 +334,11 @@ impl Installation {
         let executable = root.join(if cfg!(windows) { "node.exe" } else { "node" });
         // Without Windows' `\\?\` prefix: Node can't load an entry named with it.
         let entry = crate::roots::canonical(&root.join("entry.mjs"))?;
+        // A network share keeps the prefix, and Node couldn't load the entry.
+        anyhow::ensure!(
+            !entry.to_string_lossy().starts_with(r"\\?\"),
+            "runtime on a network share"
+        );
         for required in [
             executable.file_name().unwrap().to_str().unwrap(),
             "entry.mjs",
