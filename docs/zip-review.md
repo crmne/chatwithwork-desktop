@@ -1,6 +1,6 @@
-# ZIP dependency review, 16 October 2026 (updated 29 October 2026)
+# ZIP dependency review, 16 October 2026 (updated 1 November 2026)
 
-The direct ZIP reader uses registry `zip` 9.1.3. `calamine` 0.37 and
+The direct ZIP reader uses registry `zip` 9.2.0. `calamine` 0.37 and
 `rust_xlsxwriter` 0.101 use zip 9 too, but the locked `docx-rs` 0.4.22
 still requires zip 8, so the lockfile also retains 8.6.0. RustSec now
 lists the three advisories below for zip 8 (RUSTSEC-2026-0367, -0368 and
