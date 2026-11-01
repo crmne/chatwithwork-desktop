@@ -127,7 +127,7 @@ if [ "$platform" = Linux ]; then
         else if (c == "\"" || c == "`" || c == "$") quoted = quoted "\\\\" c
         else quoted = quoted c
       }
-      print "Exec=\"" quoted "\""
+      print "Exec=\"" quoted "\" %u"
       next
     }
     { print }

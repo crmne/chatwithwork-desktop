@@ -37,6 +37,7 @@ mod demo;
 mod desktop;
 mod downloads;
 mod first_launch;
+mod links;
 mod linux;
 mod local;
 mod loopback;
@@ -61,6 +62,13 @@ mod windows;
 use cww_notification_broker as notifications;
 
 fn main() {
+    // Before anything reads the command line, the update helper's flags
+    // included: a link must not be able to add arguments of its own.
+    let raw: Vec<_> = std::env::args_os().skip(1).collect();
+    if !args::link_alone(&raw) {
+        eprintln!("a link must be the only argument");
+        std::process::exit(2);
+    }
     // First, before any state: `--apply-update` makes this process the
     // update helper (update.rs), which installs and exits; an update's
     // receipt or rollback message is taken off the command line.

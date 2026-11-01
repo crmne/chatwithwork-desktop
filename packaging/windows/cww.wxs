@@ -12,6 +12,7 @@
     folders, the index, the log, keys, the app's web view data). An upgrade
     only stops the agent (`cww daemon uninstall`), keeping all of it.
   - Start menu shortcuts open the desktop app and the terminal UI.
+  - Registers the links that open in the app, for this user (app/src/links.rs).
 
   Build (see packaging/windows/build-msi.ps1):
     wix build cww.wxs -arch x64 -ext WixToolset.Util.wixext -d Version=1.2.3 -d SourceDir=... -o cww.msi
@@ -73,6 +74,33 @@
         <File Id="CwwAppExe" Name="cww-app.exe" Source="$(SourceDir)\cww-app.exe" KeyPath="no" />
         <RegistryValue Root="HKCU" Key="Software\Chat with Work\Desktop"
           Name="DesktopApp" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="LinkChatwithwork" Guid="{7C1D0A52-4B7E-4E0B-9B55-3A0E6F2D1C10}">
+        <RegistryKey Root="HKCU" Key="Software\Classes\chatwithwork" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="URL:Chat with Work" KeyPath="yes" />
+          <RegistryValue Name="URL Protocol" Type="string" Value="" />
+          <RegistryValue Key="DefaultIcon" Type="string" Value="[#CwwAppExe],0" />
+          <!-- The quotes matter: args.rs refuses a link that isn't alone. -->
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[#CwwAppExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+      <Component Id="LinkCwwstaging" Guid="{0F6B2E94-5C3A-4D7F-8A21-6E9D4B7C2F31}">
+        <RegistryKey Root="HKCU" Key="Software\Classes\cww-staging" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="URL:Chat with Work" KeyPath="yes" />
+          <RegistryValue Name="URL Protocol" Type="string" Value="" />
+          <RegistryValue Key="DefaultIcon" Type="string" Value="[#CwwAppExe],0" />
+          <!-- The quotes matter: args.rs refuses a link that isn't alone. -->
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[#CwwAppExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+      <Component Id="LinkCwwdev" Guid="{A93E5D17-2F68-4C1B-B7D4-1C8F0E6A3D52}">
+        <RegistryKey Root="HKCU" Key="Software\Classes\cww-dev" ForceDeleteOnUninstall="yes">
+          <RegistryValue Type="string" Value="URL:Chat with Work" KeyPath="yes" />
+          <RegistryValue Name="URL Protocol" Type="string" Value="" />
+          <RegistryValue Key="DefaultIcon" Type="string" Value="[#CwwAppExe],0" />
+          <!-- The quotes matter: args.rs refuses a link that isn't alone. -->
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[#CwwAppExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
       </Component>
       <!-- The installer's marker beside cww-app.exe: the app updates itself
            through this package (fastframe-update's WindowsInstaller kind,

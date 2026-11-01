@@ -127,7 +127,7 @@ native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-
 | `packaging/homebrew/cww.rb.in` | The formula, with a `brew services` definition. |
 | `packaging/homebrew/chat-with-work.rb.in` | The desktop app's cask, from the notarized `.dmg`. |
 | `packaging/macos/` | `bundle.sh` (the desktop app's bundle), `pkg.sh` (the installer package), its `postinstall`, `distribution.xml` and pages, and `import-installer-identity.sh` for CI. |
-| `packaging/linux/cww-app.desktop` | Applications-menu entry, installed with the `cww-app.svg` icon by every Linux package. |
+| `packaging/linux/cww-app.desktop` | Applications-menu entry and the `chatwithwork://` link handler (`Exec=cww-app %u`), installed with the `cww-app.svg` icon by every Linux package. |
 | `packaging/linux/archive.sh` | Assembles the complete Linux package payload, shared by release and packaging-test builds. |
 | `packaging/test-packaging.py` | Installer, archive and AUR package-layout regression tests, isolated from the user's account. |
 | `.github/workflows/desktop-preview.yml` | By hand: the desktop app for macOS and Windows as a `desktop-preview-<run>` prerelease, to try a change between releases. |

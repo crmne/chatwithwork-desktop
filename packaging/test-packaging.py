@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -198,7 +199,8 @@ cp "$TEST_RELEASE/$name" "$output"
         self.assertEqual((self.work / "calls").read_text(), "daemon install\n")
         self.assertIn("will start at every login", result.stdout)
         entry = (data / "applications/cww-app.desktop").read_text()
-        self.assertIn(f'Exec="{install}/cww-app"', entry)
+        self.assertIn(f'Exec="{install}/cww-app" %u', entry)
+        self.assertIn("x-scheme-handler/chatwithwork;", entry)
         self.assertTrue((data / "icons/hicolor/scalable/apps/cww-app.svg").is_file())
 
     def test_installer_reports_failed_service_setup_without_failing_install(self):
@@ -373,11 +375,38 @@ cp "$TEST_RELEASE/$name" "$output"
         # and percent field codes. The result must be precisely the binary path.
         command = next(line[5:] for line in entry.splitlines() if line.startswith("Exec="))
         command = command.replace("\\\\", "\\")
+        self.assertTrue(command.endswith(' %u'))
+        command = command.removesuffix(' %u')
         self.assertTrue(command.startswith('"') and command.endswith('"'))
         command = command[1:-1]
         for char in ('"', '`', '$', '\\'):
             command = command.replace("\\" + char, char)
         self.assertEqual(command.replace("%%", "%"), str(install / "cww-app"))
+
+    def test_every_platform_registers_the_same_link_schemes(self):
+        source = (ROOT / "app/src/links.rs").read_text()
+        schemes = re.search(r'pub const SCHEMES: \[&str; 3\] = \[(.+?)\]', source).group(1)
+        schemes = re.findall(r'"([a-z-]+)"', schemes)
+        self.assertEqual(schemes, ["chatwithwork", "cww-staging", "cww-dev"])
+
+        entry = (ROOT / "packaging/linux/cww-app.desktop").read_text()
+        self.assertIn("Exec=cww-app %u\n", entry)
+        mime = next(line[9:] for line in entry.splitlines() if line.startswith("MimeType="))
+        self.assertEqual(mime, "".join(f"x-scheme-handler/{s};" for s in schemes))
+
+        plist = plistlib.loads((ROOT / "packaging/macos/Info.plist").read_bytes())
+        self.assertEqual(plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"], schemes)
+
+        from xml.etree import ElementTree
+        wxs = ElementTree.parse(ROOT / "packaging/windows/cww.wxs").getroot()
+        ns = {"w": "http://wixtoolset.org/schemas/v4/wxs"}
+        keys = [k.get("Key") for k in wxs.iterfind(".//w:RegistryKey", ns)
+                if k.get("Key").startswith("Software\\Classes\\")]
+        self.assertEqual(keys, [f"Software\\Classes\\{s}" for s in schemes])
+        for key in wxs.iterfind(".//w:RegistryKey", ns):
+            values = {(v.get("Name"), v.get("Key")): v.get("Value") for v in key}
+            self.assertEqual(values[("URL Protocol", None)], "")
+            self.assertEqual(values[(None, "shell\\open\\command")], '"[#CwwAppExe]" "%1"')
 
     def test_linux_postinstall_and_arch_upgrade_explain_per_user_startup(self):
         for command in (("sh", str(ROOT / "packaging/linux/postinstall.sh")),

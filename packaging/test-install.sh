@@ -43,7 +43,8 @@ docker run --rm --platform "linux/${target#linux-}" \
     cww --version
     cww-app --version
     test -s /usr/share/applications/cww-app.desktop
-    grep -qx "Exec=cww-app" /usr/share/applications/cww-app.desktop
+    grep -qx "Exec=cww-app %u" /usr/share/applications/cww-app.desktop
+    grep -q "^MimeType=x-scheme-handler/chatwithwork;" /usr/share/applications/cww-app.desktop
     grep -qx "Icon=cww-app" /usr/share/applications/cww-app.desktop
     test -s /usr/share/icons/hicolor/scalable/apps/cww-app.svg
     # Python is a test dependency, installed only after the package itself.

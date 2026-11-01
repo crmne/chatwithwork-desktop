@@ -40,6 +40,9 @@ pub struct Desktop {
     /// One of the app's questions to the person is showing (computer.rs).
     pub asking: crate::computer::Asking,
     pub preferences: crate::preferences::Panels,
+    /// One launch's opening at a time: a link that starts the app on macOS
+    /// arrives beside the launch itself, and both would make the window.
+    opening: Mutex<()>,
     /// What the web app's pages last heard of this computer, so an audit
     /// entry that changes nothing they see sends them nothing.
     computer_view: Mutex<Option<serde_json::Value>>,
@@ -329,12 +332,21 @@ fn start_updates(desktop: &Arc<Desktop>, receipt: Option<fastframe_update::Recei
 /// Opens what a launch asked for.
 fn open(app: &AppHandle, open: &Open) {
     let desktop = app.state::<Arc<Desktop>>().inner().clone();
+    let _opening = desktop.opening.lock().expect("opening lock");
     let result = match open {
         Open::Main => windows::show_main(app, None),
         Open::Chat(target) => match desktop.server().chat_url(target) {
             Some(url) => windows::show_main(app, Some(url)),
             None => {
                 log::info!("a notification for another server; ignored");
+                Ok(())
+            }
+        },
+        // Never logged: a link is whatever a web page wrote.
+        Open::Link(link) => match crate::links::page(&desktop.server(), link) {
+            Some(url) => windows::show_main(app, Some(url)),
+            None => {
+                log::info!("refused a link");
                 Ok(())
             }
         },
@@ -411,6 +423,7 @@ pub fn run(
         quitting: AtomicBool::new(false),
         asking: Default::default(),
         preferences: Default::default(),
+        opening: Mutex::new(()),
         computer_view: Mutex::new(None),
         updates: Arc::new(crate::update::Updates::new(update_error)),
     });
@@ -564,6 +577,15 @@ pub fn run(
         .build(tauri::generate_context!())?;
 
     app.run(move |app, event| match event {
+        // macOS hands links over as an event, to the running app or to the
+        // one it just started, never on the command line.
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => {
+            for url in urls {
+                let app = app.clone();
+                std::thread::spawn(move || open(&app, &Open::Link(url.to_string())));
+            }
+        }
         // Closing the last window leaves the tray item running, and the
         // web views' processes with the windows. Quit (or a tray-less
         // desktop) ends the app.

@@ -10,6 +10,20 @@
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>__VERSION__</string>
     <key>CFBundleVersion</key><string>__VERSION__</string>
+    <!-- Links that open in the app: app/src/links.rs. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.chatwithwork.desktop.link</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>chatwithwork</string>
+                <string>cww-staging</string>
+                <string>cww-dev</string>
+            </array>
+        </dict>
+    </array>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <!-- A menu bar app: no Dock icon and no menu bar of its own. -->
