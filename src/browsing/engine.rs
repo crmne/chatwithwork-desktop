@@ -332,7 +332,8 @@ impl Installation {
             "incompatible runtime manifest"
         );
         let executable = root.join(if cfg!(windows) { "node.exe" } else { "node" });
-        let entry = root.join("entry.mjs");
+        // Without Windows' `\\?\` prefix: Node can't load an entry named with it.
+        let entry = crate::roots::canonical(&root.join("entry.mjs"))?;
         for required in [
             executable.file_name().unwrap().to_str().unwrap(),
             "entry.mjs",
@@ -394,7 +395,7 @@ impl Installation {
         let mut command = Command::new(&self.executable);
         command
             .env_clear()
-            .current_dir(&self.root)
+            .current_dir(self.entry.parent().unwrap_or(&self.root))
             .kill_on_drop(true);
         // Windows needs its system directory for ordinary OS services. None
         // of the Node/module/loader environment is inherited.

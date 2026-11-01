@@ -42,7 +42,9 @@ def smoke(binary, timeout=60):
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("CWW_") and key not in ("NODE_OPTIONS", "NODE_PATH")}
     with tempfile.TemporaryDirectory(prefix="cww-engine-smoke-") as temporary:
-        home = Path(temporary)
+        # macOS's temporary directory sits behind symlinks, and Seatbelt matches
+        # real paths, so a home named through them would deny the daemon its own.
+        home = Path(temporary).resolve()
         (home / "config").mkdir()
         (home / "config/config.toml").write_text(
             'secret_store = "file"\ncrash_reports = false\n[browser]\nenabled = true\n')

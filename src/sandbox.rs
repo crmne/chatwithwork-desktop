@@ -567,7 +567,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let modules = temp.path().join("engine");
         std::fs::create_dir(&modules).unwrap();
-        let node = modules.join("node");
+        // Nix's `true` is coreutils' multi-call binary, which picks its program
+        // by the name it runs under, so the allowed copy keeps that name.
+        let node = modules.join("true");
         let other = modules.join("other");
         // Nix puts coreutils in its store, without /usr/bin/true. Keep the
         // same executable fixture and confinement assertions on either host.
