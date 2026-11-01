@@ -1045,6 +1045,13 @@ impl ChatClient {
         }
     }
 
+    /// A call to the bots' endpoints (`cww bots`), with the same refreshing
+    /// and refusals as the chats'.
+    pub fn bots_call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
+        let body = body.map_or(Body::Empty, Body::Json);
+        self.call(method, path, body)
+    }
+
     /// One call, refreshing the token and trying again once when the server
     /// says it's expired, or lacks chats that were allowed since it was
     /// issued. Failures come back as [`Refusal`]s with the server's code.

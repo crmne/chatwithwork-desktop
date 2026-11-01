@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::client::{CHAT_SCOPE, Organization, ServerUrl, TokenResponse};
+use super::client::{BOTS_SCOPE, CHAT_SCOPE, Organization, ServerUrl, TokenResponse};
 use super::key::DeviceKey;
 use super::secrets::{DEVICE_KEY, REFRESH_TOKEN, SecretStore};
 use super::{Credentials, lock_pairing, next_generation};
@@ -112,6 +112,15 @@ pub fn list(paths: &Paths) -> Result<Vec<SavedOrganization>> {
     Ok(saved.organizations)
 }
 
+/// A sign-in for chats, and maybe bots, that shares no folders.
+fn chats_without_folders(scope: &str) -> bool {
+    let scopes: Vec<&str> = scope.split_whitespace().collect();
+    scopes.contains(&CHAT_SCOPE)
+        && scopes
+            .iter()
+            .all(|scope| [CHAT_SCOPE, BOTS_SCOPE].contains(scope))
+}
+
 /// Select a saved sign-in by its local ID, account ID or unambiguous name.
 pub fn resolve(paths: &Paths, selector: &str) -> Result<SavedOrganization> {
     let profiles = list(paths)?;
@@ -156,10 +165,7 @@ pub(super) fn save_grant(
     store_kind: &str,
 ) -> Result<SavedOrganization> {
     ensure!(
-        token
-            .scope
-            .as_deref()
-            .is_some_and(|s| s.split_whitespace().eq([CHAT_SCOPE])),
+        token.scope.as_deref().is_some_and(chats_without_folders),
         "This server does not support signing in without folder sharing."
     );
     let account = token
@@ -239,6 +245,17 @@ pub fn forget_all(paths: &Paths) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    #[test]
+    fn a_saved_sign_in_shares_no_folders() {
+        assert!(chats_without_folders("desktop:chat"));
+        assert!(chats_without_folders("desktop:chat desktop:bots"));
+        assert!(chats_without_folders("desktop:bots desktop:chat"));
+        assert!(!chats_without_folders("desktop:serve desktop:chat"));
+        assert!(!chats_without_folders("desktop:chat desktop:serve"));
+        assert!(!chats_without_folders("desktop:bots"));
+        assert!(!chats_without_folders(""));
+    }
 
     fn token(account: &str) -> TokenResponse {
         serde_json::from_value(serde_json::json!({

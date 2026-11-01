@@ -55,6 +55,8 @@ pub struct LoginOptions {
     pub open_browser: bool,
     /// Don't ask for the terminal UI's chats, only for sharing folders.
     pub without_chats: bool,
+    /// Also ask to manage the person's bots with `cww bots`.
+    pub with_bots: bool,
 }
 
 /// A pairing started with [`start_login`], waiting for the user to approve
@@ -305,6 +307,7 @@ fn start_login_for(
         name,
         store,
         without_chats,
+        with_bots,
         ..
     } = options;
     let server = ServerUrl::parse(server)?;
@@ -317,9 +320,9 @@ fn start_login_for(
     // out supersedes it, however long the server takes to answer.
     let attempt = begin_attempt(paths)?;
     let auth = if chats_only {
-        client.start_chat_pairing(&key, &info)
+        client.start_chat_pairing(&key, &info, with_bots)
     } else {
-        client.start_pairing(&key, &info, !without_chats)
+        client.start_pairing(&key, &info, !without_chats, with_bots)
     }
     .context("starting pairing")?;
     let deadline = Instant::now() + Duration::from_secs(auth.expires_in.max(1));
