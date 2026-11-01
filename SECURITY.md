@@ -62,6 +62,16 @@ button under the pointer. Remote pages never receive this token or the local
 command capability and retain their native confirmation dialog. Other settings
 that already have one dialog keep it.
 
+## Links
+
+`chatwithwork://` links reach the app from any web page or program, so they
+are hostile input (`app/src/links.rs`). A link must match a fixed grammar for
+the paired server, or it's dropped: nothing is decoded or normalized. It only
+moves the Chat with Work window to one of a few account pages, never approves
+or runs anything, and widens neither the page API nor what a page may do. On
+Linux and Windows, a command line where a link isn't the only argument is
+refused before anything reads it, so a link can't add options like `--server`.
+
 ## Bundled browser engine boundary
 
 The optional full browser engine is trusted installed code, not code supplied

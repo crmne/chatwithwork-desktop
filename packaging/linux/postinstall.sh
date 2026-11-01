@@ -1,6 +1,10 @@
 #!/bin/sh
 # Runs as root after the .deb or .rpm is installed. The daemon runs per
-# user, so nothing is started here; this only says how.
+# user, so nothing is started here; this only says how. The applications
+# database learns which app opens chatwithwork:// links.
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
 cat <<'MSG'
 Chat with Work is installed: desktop app, terminal interface and background agent.
 

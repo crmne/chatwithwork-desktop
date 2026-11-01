@@ -39,6 +39,18 @@ impl Server {
         }
     }
 
+    /// The scheme a link to this server must use, the same rule as the
+    /// server's (`DesktopApp.link_scheme`): staging and local development
+    /// have their own, so they never open in a window showing another.
+    pub fn link_scheme(&self) -> &'static str {
+        match self.origin.host_str().unwrap_or_default() {
+            "staging.chatwithwork.com" => "cww-staging",
+            "localhost" | "127.0.0.1" | "[::1]" => "cww-dev",
+            host if host.ends_with(".localhost") => "cww-dev",
+            _ => "chatwithwork",
+        }
+    }
+
     /// `https://host[:port]`, without a trailing slash.
     pub fn origin(&self) -> String {
         self.origin.origin().ascii_serialization()

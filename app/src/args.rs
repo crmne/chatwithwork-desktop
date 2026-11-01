@@ -17,6 +17,7 @@ Options:
   --page <name>        Open settings on a page: welcome, folders,
                        printers, browser, privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
+  <link>               Open a chatwithwork:// link, alone on the command line
   --server <url>       Show this Chat with Work server instead of the paired
                        one (for development)
   --version            Print the version
@@ -43,6 +44,8 @@ pub enum Open {
     Main,
     /// A chat a notification pointed at.
     Chat(Target),
+    /// A link, unchecked: only the running app knows its server (links.rs).
+    Link(String),
     /// Local settings in the same window, on the named page.
     Settings(Option<&'static str>),
     /// The scan window.
@@ -72,13 +75,28 @@ pub fn page(name: &str) -> Option<&'static str> {
     PAGES.iter().copied().find(|page| *page == name)
 }
 
-pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> {
+/// Whether a link, if there is one, is the only argument. The system starts
+/// the app with a link's text in a quoted argument (`cww-app "%1"` on
+/// Windows), so a link that closes the quote would otherwise add options of
+/// its own, like `--server`. Nothing on a command line with a link is
+/// believed, not even the link.
+pub fn link_alone<T: AsRef<std::ffi::OsStr>>(args: &[T]) -> bool {
+    let is_link = |arg: &T| crate::links::is_link(&arg.as_ref().to_string_lossy());
+    args.len() == 1 || !args.iter().any(is_link)
+}
+
+pub fn parse(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
+    let args: Vec<_> = args.collect();
+    if !link_alone(&args) {
+        return Err("a link must be the only argument".into());
+    }
     let mut options = Options {
         open: Open::Main,
         background: false,
         server: None,
         demo: None,
     };
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--open-chat" => {
@@ -112,6 +130,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 println!("{USAGE}");
                 return Ok(Parsed::Printed);
             }
+            link if crate::links::is_link(link) => options.open = Open::Link(arg),
             // macOS passes this when an app is opened from Finder.
             other if other.starts_with("-psn_") => {}
             other => return Err(format!("unknown option {other:?}")),
@@ -171,5 +190,39 @@ mod tests {
         assert!(matches!(options.open, Open::Chat(target) if target.chat() == 16));
         assert!(args(&["--open-chat", "https://example.test/482139075/chats/16"]).is_err());
         assert!(args(&["--open-chat"]).is_err());
+    }
+
+    #[test]
+    fn a_link_opens_unchecked_until_the_app_knows_its_server() {
+        let link = "chatwithwork://work.example/482139075/chats/16";
+        assert_eq!(args(&[link]).unwrap().open, Open::Link(link.into()));
+        // Refused by links::page, not here, but never as an unknown option.
+        assert_eq!(
+            args(&["CHATWITHWORK:x"]).unwrap().open,
+            Open::Link("CHATWITHWORK:x".into())
+        );
+    }
+
+    /// What `cww-app.exe "%1"` becomes for a link that closes the quote.
+    #[test]
+    fn a_link_never_brings_options_with_it() {
+        let link = "chatwithwork://x";
+        for injected in [
+            &[link, "--server", "https://evil.example"][..],
+            &["--server", "https://evil.example", link],
+            &[link, "--background"],
+            &[link, "--page", "privacy"],
+            &[link, "--open-chat", "{}"],
+            &[link, link],
+            &[link, ""],
+            &["chatwithwork:", "--scan"],
+            &["--scan", "CWW-DEV:x"],
+        ] {
+            assert!(args(injected).is_err(), "{injected:?}");
+            assert!(!link_alone(injected), "{injected:?}");
+        }
+        assert!(link_alone(&[link]));
+        assert!(link_alone(&["--server", "http://localhost:3000"]));
+        assert!(link_alone::<String>(&[]));
     }
 }
