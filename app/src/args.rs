@@ -15,7 +15,7 @@ Options:
   --settings           Open settings in the Chat with Work window
   --scan               Open the scan window
   --page <name>        Open settings on a page: welcome, folders,
-                       browser, privacy, activity, account, notifications, general
+                       printers, browser, privacy, activity, account, notifications, general
   --open-chat <json>   Open an account-scoped chat from a native notification
   --server <url>       Show this Chat with Work server instead of the paired
                        one (for development)

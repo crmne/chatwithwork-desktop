@@ -62,7 +62,7 @@ export function render(app) {
       h("p", {}, "This computer has no printers yet. Add one in its system settings."))])));
   }
   if (view.limit) {
-    append(page, h("p", { class: "note" }, `${view.left} of ${view.limit} pages left today, the most this computer prints in a day.`));
+    append(page, h("p", { class: "note" }, `${view.limit - view.left} of ${view.limit} pages printed today. This computer prints at most ${view.limit} in a day.`));
   }
   if (view.error) append(page, notice(view.error));
   return page;

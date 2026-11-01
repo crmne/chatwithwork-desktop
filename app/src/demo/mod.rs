@@ -432,6 +432,7 @@ fn sample() -> State {
                 "extension":{"browser":"Chromium","version":"0.1.2","site_policy_version":2,"stopped":false}})
         } else { Value::Null },
         "paused": false,
+        "printers": [{ "id": "office-brother", "queue": "Office_Brother", "label": "Office Brother", "chats": true, "bots": [] }],
         "roots": [
             { "id": "documents", "label": "Documents", "available": true, "index": "ready",
               "indexed_files": 1532, "local_path": home.join("Documents") },
