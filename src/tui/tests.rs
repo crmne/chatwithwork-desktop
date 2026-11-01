@@ -719,7 +719,7 @@ fn one_status_word_and_only_when_something_needs_you() {
     assert!(screen.contains("p resume sharing"), "{screen}");
     for (connection, word) in [
         ("offline", "offline"),
-        ("revoked", "revoked"),
+        ("revoked", "needs to reconnect"),
         ("not_paired", "not paired"),
         ("connecting", "connecting"),
     ] {
@@ -2192,7 +2192,7 @@ fn live_updates_for_another_chat_are_ignored_and_offline_shows() {
 fn chat_cards_say_what_to_do() {
     for (code, title) in [
         ("unsupported", "This server doesn't offer chats here"),
-        ("revoked", "Chat with Work revoked this computer"),
+        ("revoked", "This computer needs to reconnect"),
         ("unreachable", "Can't reach Chat with Work"),
     ] {
         let mut app = app();

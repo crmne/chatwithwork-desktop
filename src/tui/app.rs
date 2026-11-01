@@ -2665,7 +2665,7 @@ impl App {
                     "connected" => "Connected to",
                     "connecting" => "Connecting to",
                     "offline" => "Can't reach",
-                    "revoked" => "Revoked by",
+                    "revoked" => "Needs to reconnect to",
                     _ => "Not paired with",
                 };
                 let server = status.server.as_deref().map(host).unwrap_or_default();

@@ -481,7 +481,7 @@ pub(super) fn attention(
             },
             "connecting" => Some((spinner(now), Signal::Attention, "connecting")),
             "not_paired" => Some((RING, Signal::Attention, "not paired")),
-            "revoked" => Some((DOT, Signal::Negative, "revoked")),
+            "revoked" => Some((DOT, Signal::Negative, "needs to reconnect")),
             _ => Some((DOT, Signal::Negative, "offline")),
         },
     }
@@ -731,10 +731,14 @@ fn cards(app: &App) -> Vec<Card> {
             }),
             "revoked" if app.pairing.is_none() => cards.push(Card {
                 signal: Signal::Negative,
-                title: "Chat with Work revoked this computer".into(),
+                title: status
+                    .connection
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "This computer needs to sign in again".into()),
                 lines: vec![
-                    CardLine::Text("It won't reconnect until you pair it again.".into()),
-                    CardLine::Keys(vec![("c", "pair again")]),
+                    CardLine::Text("Your folders aren't shared until it reconnects.".into()),
+                    CardLine::Keys(vec![("c", "reconnect")]),
                 ],
             }),
             "offline" => cards.push(Card {
@@ -831,7 +835,7 @@ fn chat_card(app: &App) -> Option<Card> {
             let (signal, title) = match failure.code.as_str() {
                 "unsupported" => (Signal::Idle, "This server doesn't offer chats here"),
                 "daemon_outdated" => (Signal::Attention, "The daemon needs restarting"),
-                "revoked" => (Signal::Negative, "Chat with Work revoked this computer"),
+                "revoked" => (Signal::Negative, "This computer needs to reconnect"),
                 "unreachable" => (Signal::Attention, "Can't reach Chat with Work"),
                 "forbidden" => (Signal::Attention, "Chats aren't available to you here"),
                 _ => (Signal::Negative, "Chats aren't available"),

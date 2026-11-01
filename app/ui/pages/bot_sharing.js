@@ -35,11 +35,11 @@ export function render(app) {
       h("div", { class: "row__head" }, h("div", { class: "row__body" },
         h("h3", {}, root.label),
         h("p", {}, root.writable ? "Can read and change files with approval." : "Read-only.")),
-      switchInput(!!grant, on => set(on), { label: `Share ${root.label} with ${bot.name}`, disabled: view.busy })),
+      switchInput(!!grant, on => set(on), { key: `share-${root.id}-${bot.name}`, label: `Share ${root.label} with ${bot.name}`, disabled: view.busy })),
       grant && root.allows_commands ? h("div", { class: "row__head" }, h("div", { class: "row__body" },
         h("h3", {}, "Unattended commands"),
         h("p", {}, "Commands can start without a person approving each one. The folder’s sandbox and network limits still apply.")),
-      switchInput(grant.unattended, on => set(true, on), { label: `Unattended commands in ${root.label}`, disabled: view.busy })) : null);
+      switchInput(grant.unattended, on => set(true, on), { key: `unattended-${root.id}-${bot.name}`, label: `Unattended commands in ${root.label}`, disabled: view.busy })) : null);
   });
   append(page, group(...(folders.length ? folders : [h("div", { class: "empty" },
     h("p", {}, "Add a shared folder in Settings, This computer, Shared folders first."))])));
@@ -50,11 +50,11 @@ export function render(app) {
       h("div", { class: "row__head" }, h("div", { class: "row__body" },
         h("h3", {}, printer.label),
         h("p", {}, "Prints PDFs with approval.")),
-      switchInput(!!grant, on => set(on), { label: `Share ${printer.label} with ${bot.name}`, disabled: view.busy })),
+      switchInput(!!grant, on => set(on), { key: `share-printer-${printer.id}-${bot.name}`, label: `Share ${printer.label} with ${bot.name}`, disabled: view.busy })),
       grant ? h("div", { class: "row__head" }, h("div", { class: "row__body" },
         h("h3", {}, "Unattended printing"),
         h("p", {}, "Jobs print without a person approving each one, up to this computer’s daily page limit.")),
-      switchInput(grant.unattended, on => set(true, on), { label: `Unattended printing on ${printer.label}`, disabled: view.busy })) : null);
+      switchInput(grant.unattended, on => set(true, on), { key: `unattended-printer-${printer.id}-${bot.name}`, label: `Unattended printing on ${printer.label}`, disabled: view.busy })) : null);
   });
   if (printers.length) append(page, group(...printers));
   const browser = app.status.browser;

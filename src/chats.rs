@@ -1193,12 +1193,7 @@ fn multipart_with(
 
 fn refresh_refusal(e: RefreshError) -> Refusal {
     match e {
-        RefreshError::Revoked(reason) => Refusal::new(
-            "revoked",
-            format!(
-                "Chat with Work revoked this computer ({reason}). Pair it again with cww login."
-            ),
-        ),
+        RefreshError::Revoked(reason) => Refusal::new("revoked", reason),
         RefreshError::Other(e) => {
             Refusal::new("unreachable", format!("Can't reach Chat with Work: {e:#}"))
         }

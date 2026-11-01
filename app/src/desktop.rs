@@ -232,6 +232,14 @@ pub fn tray_action(app: &AppHandle, id: &str) {
                 let _ = windows::show_main(&app, None);
             });
         }
+        Some(Action::Reconnect) => {
+            // The page starts the sign-in once it knows this computer's
+            // server.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = windows::show_settings(&app, Some("reconnect"));
+            });
+        }
         Some(Action::Settings) => {
             let app = app.clone();
             std::thread::spawn(move || {

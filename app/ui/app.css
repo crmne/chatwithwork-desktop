@@ -602,6 +602,25 @@ code,
   cursor: default;
 }
 
+/* Saving: the knob stands for where it's going, as a small spinner */
+
+.switch--saving:disabled {
+  opacity: 1;
+}
+
+.switch--saving::after {
+  box-sizing: border-box;
+  border: 2px solid var(--ink-muted, currentColor);
+  border-block-start-color: transparent;
+  animation: switch-saving 0.7s linear infinite;
+}
+
+@keyframes switch-saving {
+  to {
+    rotate: 1turn;
+  }
+}
+
 /* Choices: radios as a segmented control */
 
 .segmented {

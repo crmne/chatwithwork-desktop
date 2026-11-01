@@ -224,7 +224,7 @@ function folderRow(app, root) {
         if (on) {
           confirm(app, root, "allowing", { cmd: "roots_writable", root: root.id, writable: true });
         } else {
-          change(app, root.id, { cmd: "roots_writable", root: root.id, writable: false });
+          return change(app, root.id, { cmd: "roots_writable", root: root.id, writable: false });
         }
       }, { label: `Allow changes in ${root.label}`, disabled: busy || allowing })),
       allowing ? h("div", { class: "confirm" },
@@ -245,7 +245,7 @@ function folderRow(app, root) {
         if (on) {
           confirm(app, root, "commanding", { cmd: "roots_commands", root: root.id, commands: true, network: false });
         } else {
-          change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
+          return change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
         }
       }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!root.writable || !runsCommands)) })),
       commanding ? h("div", { class: "confirm" },
@@ -260,7 +260,7 @@ function folderRow(app, root) {
         ? "Commands here can reach the internet, to install packages or fetch dependencies."
         : "Commands here run without a network.",
       switchInput(root.network, (on) => change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: on }),
-        { label: `Commands in ${root.label} use the network`, disabled: busy })) : null,
+        { label: `Commands in ${root.label} use the network`, key: `network-${root.id}`, disabled: busy })) : null,
       bots(app, root, busy)));
 }
 

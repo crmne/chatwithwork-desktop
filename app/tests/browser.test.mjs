@@ -1,8 +1,9 @@
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { install, calls, byKey, byText, walk } from "./dom.mjs";
 install();
-await import("../ui/app.js");
+const { forgetSaving } = await import("../ui/app.js");
+beforeEach(forgetSaving);
 const { render } = await import("../ui/pages/browser.js");
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(overrides = {}) {

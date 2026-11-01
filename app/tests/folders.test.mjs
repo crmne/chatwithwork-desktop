@@ -1,12 +1,13 @@
 // The shared folders page on Windows, in a stand-in document (dom.mjs):
 // the Run commands switch where macOS and Linux have it, the reason where
 // this Windows can't sandbox commands, and the drive step Node.js needs.
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { install, byText, walk, calls } from "./dom.mjs";
 
 install();
-await import("../ui/app.js");
+const { forgetSaving } = await import("../ui/app.js");
+beforeEach(forgetSaving);
 const { render, leave } = await import("../ui/pages/folders.js");
 
 const root = { id: "work", label: "work", local_path: "C:\\Users\\a\\work", writable: true, allows_commands: false, network: false, available: true, index: { state: "ready" }, bots: [] };
