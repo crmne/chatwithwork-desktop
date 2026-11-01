@@ -171,18 +171,25 @@ impl PendingLogin {
         let paths = &self.paths;
         commit_attempt(paths, self.attempt, cancel, || {
             let mut config = Config::load(paths)?;
-            // Forget an earlier pairing, wherever its secrets were.
+            let store = self
+                .store
+                .unwrap_or_else(|| SecretStore::choose(paths))
+                .for_server(&self.server.origin());
+            // Forget an earlier pairing, wherever its secrets were. In the
+            // same store they're just replaced: a running daemon reading
+            // between a delete and a write would fall back to an older entry.
             if config.server.is_some() {
                 let old_store = SecretStore::recorded(&config, paths);
-                old_store
-                    .delete(DEVICE_KEY)
-                    .context("removing the previous pairing's device key")?;
-                old_store
-                    .delete(REFRESH_TOKEN)
-                    .context("removing the previous pairing's refresh token")?;
+                if old_store != store {
+                    old_store
+                        .delete(DEVICE_KEY)
+                        .context("removing the previous pairing's device key")?;
+                    old_store
+                        .delete(REFRESH_TOKEN)
+                        .context("removing the previous pairing's refresh token")?;
+                }
             }
 
-            let store = self.store.unwrap_or_else(|| SecretStore::choose(paths));
             store.set(DEVICE_KEY, &self.key.to_stored())?;
             store.set(REFRESH_TOKEN, &refresh)?;
             let server_config = ServerConfig {
@@ -392,9 +399,13 @@ pub fn logout(paths: &Paths) -> Result<bool> {
     let lock = lock_pairing(paths)?;
     next_generation(paths, &lock)?;
     let mut config = Config::load(paths)?;
-    let store = SecretStore::for_config(&config, paths);
-    store.delete(DEVICE_KEY)?;
-    store.delete(REFRESH_TOKEN)?;
+    // Nothing to forget when nothing is paired: without a server, the
+    // keychain's only entries here may be another install's older ones.
+    if config.server.is_some() {
+        let store = SecretStore::for_config(&config, paths);
+        store.delete(DEVICE_KEY)?;
+        store.delete(REFRESH_TOKEN)?;
+    }
     let was_paired = config.server.take().is_some();
     config.save(paths)?;
     Ok(was_paired)
@@ -428,6 +439,11 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
+        // What an older version saved, here too if it was never carried over.
+        if store.in_keychain() {
+            SecretStore::Keyring.delete(DEVICE_KEY)?;
+            SecretStore::Keyring.delete(REFRESH_TOKEN)?;
+        }
     }
     // A damaged list fails the purge: deleting it would leave keys nothing
     // names any more.
@@ -493,6 +509,16 @@ mod tests {
         let err = p.wait(&cancel).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn logging_out_with_nothing_paired_touches_no_keychain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        Config::default().save(&paths).unwrap();
+        // Unit tests refuse the keychain, so reaching it would fail this.
+        assert!(!logout(&paths).unwrap());
+        assert!(!logout(&paths).unwrap());
     }
 
     #[test]
