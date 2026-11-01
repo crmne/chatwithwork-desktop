@@ -669,9 +669,8 @@ impl Runner {
 
     /// Print a file that arrived. Windows draws the pages itself, here,
     /// which can take longer than a call may: `None` says it's still at it,
-    /// and it goes on. The supervisor's channel is never left waiting like
-    /// that, since an answer abandoned there would reach the next call: `lp`
-    /// answers within the channel's own time.
+    /// and it goes on. A call on the supervisor's channel isn't given up on
+    /// here: `lp` answers within the channel's own time.
     pub async fn print(
         &self,
         request: crate::printing::Request,

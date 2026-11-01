@@ -88,6 +88,25 @@ pub struct Client {
 struct Connection {
     reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
+    /// Answers still to come. The supervisor answers each call once, in
+    /// order, so one left over from a call that timed out or was dropped
+    /// is read and thrown away first: it must never answer the next call.
+    unanswered: usize,
+}
+
+impl Connection {
+    async fn reply(&mut self, lost: impl Fn() -> RunError) -> Result<String, RunError> {
+        let mut reply = String::new();
+        let read = tokio::io::AsyncReadExt::take(&mut self.reader, MAX_LINE as u64)
+            .read_line(&mut reply)
+            .await
+            .map_err(|_| lost())?;
+        if read == 0 || !reply.ends_with('\n') {
+            return Err(lost());
+        }
+        self.unanswered -= 1;
+        Ok(reply)
+    }
 }
 
 /// The inherited descriptor, taken before confinement, if this is a worker
@@ -117,6 +136,7 @@ impl Client {
             inner: std::sync::Arc::new(tokio::sync::Mutex::new(Connection {
                 reader: tokio::io::BufReader::new(reader),
                 writer,
+                unanswered: 0,
             })),
         })
     }
@@ -130,26 +150,59 @@ impl Client {
         };
         let mut connection = self.inner.lock().await;
         let exchange = async {
+            while connection.unanswered > 0 {
+                connection.reply(lost).await?;
+            }
             let mut line = serde_json::to_vec(call).map_err(|_| lost())?;
             line.push(b'\n');
+            connection.unanswered += 1;
             connection
                 .writer
                 .write_all(&line)
                 .await
                 .map_err(|_| lost())?;
-            let mut reply = String::new();
-            let read = tokio::io::AsyncReadExt::take(&mut connection.reader, MAX_LINE as u64)
-                .read_line(&mut reply)
-                .await
-                .map_err(|_| lost())?;
-            if read == 0 || !reply.ends_with('\n') {
-                return Err(lost());
-            }
+            let reply = connection.reply(lost).await?;
             serde_json::from_str::<Result<serde_json::Value, RunError>>(&reply)
                 .map_err(|_| lost())?
         };
         tokio::time::timeout(TIMEOUT, exchange)
             .await
             .map_err(|_| lost())?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_answer_nobody_waited_for_never_answers_the_next_call() {
+        let (supervisor, worker) = UnixStream::pair().unwrap();
+        let client = Client::new(OwnedFd::from(worker)).unwrap();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        // Answers each call in order, the first only once it's been given up on.
+        std::thread::spawn(move || {
+            let mut writer = supervisor.try_clone().unwrap();
+            let mut lines = BufReader::new(supervisor).lines();
+            lines.next().unwrap().unwrap();
+            released.recv().unwrap();
+            writer.write_all(b"{\"Ok\":\"late\"}\n").unwrap();
+            lines.next().unwrap().unwrap();
+            writer.write_all(b"{\"Ok\":\"second\"}\n").unwrap();
+        });
+
+        let given_up = tokio::time::timeout(
+            Duration::from_millis(20),
+            client.call(&Call::Status { run: "one".into() }),
+        )
+        .await;
+        assert!(given_up.is_err());
+        release.send(()).unwrap();
+
+        let answer = client
+            .call(&Call::Status { run: "two".into() })
+            .await
+            .unwrap();
+        assert_eq!(answer, serde_json::json!("second"));
     }
 }
