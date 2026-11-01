@@ -13,6 +13,13 @@ fn digest(path: &Path) -> String {
         .collect()
 }
 
+#[test]
+fn the_entry_node_is_given_has_no_windows_verbatim_prefix() {
+    let (_temp, installation, _paths) = installation("");
+    assert!(installation.entry.is_absolute());
+    assert!(!installation.entry.to_string_lossy().starts_with(r"\\?\"));
+}
+
 fn installation(body: &str) -> (tempfile::TempDir, Installation, Paths) {
     installation_with_startup(body, "printf '%s\\n' '{\"type\":\"ready\",\"protocol\":1}'")
 }
@@ -104,11 +111,7 @@ fn locator_pins_an_immutable_manifest_and_cannot_redirect_an_existing_installati
         assert!(Installation::load(&container, &Config::default(), &paths).is_err());
         assert_eq!(
             pinned.entry,
-            container
-                .join(&version)
-                .join("entry.mjs")
-                .canonicalize()
-                .unwrap()
+            crate::roots::canonical(&container.join(&version).join("entry.mjs")).unwrap()
         );
     }
     std::fs::write(
