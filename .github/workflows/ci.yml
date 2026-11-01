@@ -48,15 +48,14 @@ jobs:
       # After the toolchain, so the cache key follows the pinned rustc. The
       # key carries no job name, so each job sets its own generation.
       # Saved when the dependencies change, not on every push: a key per
-      # commit let each Linux save (about 8 GiB) push the other platforms'
-      # caches past the repository's 10 GB. On Linux it saves mbx's objects
-      # without native links, the largest part, since a target tree keeps them.
+      # commit let each save push the other platforms' caches past the
+      # repository's 10 GB. Linux keeps none: even as objects it's 4.5 GiB,
+      # which macOS and Windows can't spare, and it rebuilds the fastest.
       - uses: jdx/mr-boxington-action@v1
         with:
-          cache-key: test-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: test-app-v2-${{ runner.os }}-${{ runner.arch }}-
-          github-cache-mode: ${{ runner.os == 'Linux' && 'objects' || 'target' }}
-          cache-links: ${{ runner.os == 'Linux' && 'false' || 'auto' }}
+          backend: ${{ runner.os == 'Linux' && 'local' || 'github' }}
+          cache-key: ${{ runner.os != 'Linux' && format('test-app-v2-{0}-{1}-{2}', runner.os, runner.arch, hashFiles('Cargo.lock', 'rust-toolchain.toml')) || '' }}
+          restore-keys: ${{ runner.os != 'Linux' && format('test-app-v2-{0}-{1}-', runner.os, runner.arch) || '' }}
       - uses: ./.github/actions/speech-build
       # Printing and scanning, before the tests that need them: on Linux
       # against a private CUPS, SANE's own test device (a fake feeder of
