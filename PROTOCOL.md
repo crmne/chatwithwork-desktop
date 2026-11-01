@@ -383,7 +383,7 @@ Arguments: none (`{}`).
 }
 ```
 
-`writable` is true when the user allowed changes in the folder; the change tools only work there. `read_budget` is there when the person gave the folder a read budget of its own on the computer: the characters a chat may read from it per rolling hour (section 10). `allows_commands` is there, true, when it also allows commands (section 8.15), and `network` when they may use the network. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
+`writable` is true when the user allowed changes in the folder; the change tools only work there. `read_budget` is there when the person gave the folder a read budget of its own on the computer and an hourly read limit is set: the characters a chat may read from it per rolling hour (section 10). `allows_commands` is there, true, when it also allows commands (section 8.15), and `network` when they may use the network. `index` is `pending`, `indexing`, `ready`, `error` or `disabled`. `available` is false when the folder is missing, for example on an unmounted drive. Labels are chosen by the user and are the only description of a root the server gets.
 
 ### 8.4 `search`
 
@@ -438,7 +438,7 @@ Arguments: none (`{}`).
 |---|---|---|
 | `path` | string, required | A file. |
 | `offset` | integer | Character offset, default 0. |
-| `max_chars` | integer | 1 to 32000, default 32000. It is lowered further by the remaining hourly budget (section 10). |
+| `max_chars` | integer | 1 to 32000, default 32000. It is lowered by what's left of any hourly read limit set (section 10). |
 
 ```json
 {
@@ -452,7 +452,7 @@ Arguments: none (`{}`).
 }
 ```
 
-`next_offset` is `null` at the end of the file. `max_chars` is lowered by what is left of the read budget of the file's folder (section 10). PDF, DOCX, PPTX (slides marked `--- Slide N ---`), and XLSX/XLS/ODS (one `## Sheet` section per sheet, tab-separated rows) are converted to text. Other files are read as UTF-8 (invalid bytes are replaced) unless they look binary, which gives `unsupported`. Files over 64 MiB give `too_large`.
+`next_offset` is `null` at the end of the file. `max_chars` is lowered by what is left of any read limit set for the file's folder (section 10). PDF, DOCX, PPTX (slides marked `--- Slide N ---`), and XLSX/XLS/ODS (one `## Sheet` section per sheet, tab-separated rows) are converted to text. Other files are read as UTF-8 (invalid bytes are replaced) unless they look binary, which gives `unsupported`. Files over 64 MiB give `too_large`.
 
 ### 8.7 Changes
 
@@ -482,10 +482,10 @@ All of them are `openWorldHint: false`.
 - **Text tools write text.** `create`, `write` and `edit` take UTF-8 without NUL characters, refuse names of documents and media that text would corrupt (`.pdf`, `.docx`, `.xlsx`, `.zip`, images, ...; `not_changeable`, pointing `.docx` and `.xlsx` to `create_document`), and only change existing files that are UTF-8 text (`not_changeable`). `edit` and `append` keep the file's line endings and byte order mark.
 - **Nothing is deleted for good.** A replaced, appended or edited file's previous version, a deleted file or folder, and a file a `move` or `create_document` replaces all go to the **system trash** on the user's computer: the freedesktop.org trash on Linux (`$XDG_DATA_HOME/Trash`, or `$topdir/.Trash/$uid` or `$topdir/.Trash-$uid` for other filesystems, with a `.trashinfo` record so file managers can restore it), the Trash on macOS (`~/.Trash`, or `.Trashes/$uid` on other volumes), and the Recycle Bin on Windows (with the `$I` record Restore uses). When the trash can't take an item (a network drive, a removable drive on Windows, a mount inside the folder), the change is refused with `trash_unavailable` and nothing changes.
 - **Atomic.** New content is written to a hidden file beside the target and flushed to disk. A new file is renamed into place without replacing anything (`renameat2(RENAME_NOREPLACE)`, `renamex_np(RENAME_EXCL)`, or a handle rename without `ReplaceIfExists`). A replaced file is swapped with its new version in one step where the filesystem can (Linux, macOS), keeping its group, extended attributes and ACLs, and the old version then goes to the trash; elsewhere (Windows, which keeps the access list) the old version goes to the trash first. A crash leaves the old file, the new file, or the old one in the trash or beside the file under a hidden name; never half a file. A move to another filesystem copies, then moves the original to the trash.
-- **Budgets** (section 10): changes per minute and per day and bytes written per hour, separate from the read budgets, and a size cap per file. A `patch` counts as one change per file it changes. Dry runs and refused calls don't count against them.
+- **Limits** (section 10): a size cap per file and, only if the person set them, changes per minute and per day and bytes written per hour, separate from the read limits. A `patch` counts as one change per file it changes. Dry runs and refused calls don't count against them.
 - Changes run one at a time, and every one is in the local audit log with its effect, the paths before and after, the bytes written, and where the old version went in the trash.
 
-**Dry runs.** Every change tool takes `dry_run: true`: the daemon runs every check above against the files as they are now and answers what the call would do (`"dry_run": true`), without changing anything or counting against the change budgets. For `write` and `edit` the answer includes a unified diff (`diff`, at most 32 KiB) and the file's current SHA-256 (`previous.sha256`); for `patch`, one per file (8.20). The diff shows the file as it is, so it counts against the read budgets of the file's folder (section 10) like a `read` of as many characters: it is cut to what the budget allows (ending with a line that says so), and once the budget is used up, a dry run of `write` or `edit` is refused with `rate_limited`, as a read would be. A server that gets `rate_limited` for its own preview can show the card without the diff (with `old_text` and `new_text` for `edit`). A server can make a dry run itself, with the model's arguments plus `dry_run: true`, to fill the approval card, and then pass the SHA-256 back as `expected_sha256` when the user approves, so `write` and `edit` fail with `conflict` if the file changed in between. Dry runs are logged locally like other calls.
+**Dry runs.** Every change tool takes `dry_run: true`: the daemon runs every check above against the files as they are now and answers what the call would do (`"dry_run": true`), without changing anything or counting against any change limit. For `write` and `edit` the answer includes a unified diff (`diff`, at most 32 KiB) and the file's current SHA-256 (`previous.sha256`); for `patch`, one per file (8.20). The diff shows the file as it is, so it counts against any read limit set for the file's folder (section 10) like a `read` of as many characters: it is cut to what the limit allows (ending with a line that says so), and once a limit is used up, a dry run of `write` or `edit` is refused with `rate_limited`, as a read would be. A server that gets `rate_limited` for its own preview can show the card without the diff (with `old_text` and `new_text` for `edit`). A server can make a dry run itself, with the model's arguments plus `dry_run: true`, to fill the approval card, and then pass the SHA-256 back as `expected_sha256` when the user approves, so `write` and `edit` fail with `conflict` if the file changed in between. Dry runs are logged locally like other calls.
 
 **Results.** A change answers:
 
@@ -679,7 +679,7 @@ Searches the text of files for lines matching a regular expression, as ripgrep d
 
 The walk is ripgrep's: it respects `.gitignore`, `.ignore` and Git's `info/exclude` (from the shared folder down, also when `path` is a folder inside it), skips hidden files and folders, and never follows a symlink. A folder named as `path` is searched even when hidden or ignored, and a file named as `path` is searched as it is. The deny list applies exactly as for `read` and the index, and files are opened with `read`'s refusals (no links, no special files, no files with more than one hard link unless the config allows them). Binary files (any NUL byte), documents (PDF, Office) and files over the index's size cap (32 MiB) are skipped. `files_searched` counts the files whose text was searched. Lines are cut at 500 characters; `before` and `after` appear only with `context` above 0, and a match's context may repeat lines another match shows. Results are in path order (by shared folder, then one folder level at a time, names in byte order), then line order. `truncated` is true, and `next_offset` the `offset` of the next page, when there were more results than `limit`. After 10 seconds the search stops and answers what it found, with `timed_out: true` and a `note`.
 
-The characters returned (paths and line texts) count against the read budgets of their folders (section 10). When a budget runs out mid-answer, the answer stops before the first result that doesn't fit, with `truncated: true`, `next_offset`, and a `note`; when not even the first fits, the call is `rate_limited`. An answer too large for one message is cut the same way. The audit log records it as `search` is: the pattern (its first 256 characters), the path, and how many results it returned.
+The characters returned (paths and line texts) count against any read limit set for their folders (section 10). When one runs out mid-answer, the answer stops before the first result that doesn't fit, with `truncated: true`, `next_offset`, and a `note`; when not even the first fits, the call is `rate_limited`. An answer too large for one message is cut the same way. The audit log records it as `search` is: the pattern (its first 256 characters), the path, and how many results it returned.
 
 ### 8.18 `glob`
 
@@ -698,7 +698,7 @@ Finds files by name. Offered always, with the read tools.
   "truncated": false, "next_offset": null }
 ```
 
-Files only, walked as `grep` walks (ignore files respected, the deny list, no symlinks followed), sorted by path. The paths returned count against the read budgets as `grep`'s do, and the answer is cut the same way. After 10 seconds the walk stops and the answer adds `"timed_out": true` and a `note`; the field is there only then.
+Files only, walked as `grep` walks (ignore files respected, the deny list, no symlinks followed), sorted by path. The paths returned count against any read limit as `grep`'s do, and the answer is cut the same way. After 10 seconds the walk stops and the answer adds `"timed_out": true` and a `note`; the field is there only then.
 
 ### 8.19 `read_bytes`
 
@@ -726,7 +726,7 @@ A change tool (8.7), listed with the others while a folder allows changes: edits
 | `expected_sha256` | object | A path (any spelling of `<root>:rel` that normalizes to a file the patch edits) to the hex SHA-256 its current content must have; `conflict` otherwise. A key naming a file the patch creates, or doesn't touch, is `invalid_argument`. |
 | `dry_run` | boolean | |
 
-Every rule of 8.7 applies to every file (the folder allows changes, the deny lists, the never-changed list, no programs, text only, the trash, the budgets, the size cap). **All or nothing:** every change is checked against the files as they are before anything is written; if one fails, nothing changes, and the error names the change by its index in `changes` (from 0) and its path, in the usual error sentence: `invalid_argument: Change 2 (app:src/lib.rs): old_text was not found in the file. Read the file again and quote the text exactly, whitespace included. No file was changed.` Then the files are changed: each new version is written to a hidden file beside its file and flushed; then, one file at a time, it takes the file's name, an edited file's previous version staying beside it under a hidden name (swapped in one step on Linux and macOS, moved aside first on Windows); only once every file is in place do the previous versions go to the system trash. If any step fails, the files already changed get their previous versions back (from beside them, or, once a previous version is in the trash, from the content read before), new files are removed, and the error says the folder is as it was. Should putting one back fail too, the error names it and says its previous version is beside it under a hidden name or in the trash. See [docs/file-changes.md](docs/file-changes.md).
+Every rule of 8.7 applies to every file (the folder allows changes, the deny lists, the never-changed list, no programs, text only, the trash, any limits set, the size cap). **All or nothing:** every change is checked against the files as they are before anything is written; if one fails, nothing changes, and the error names the change by its index in `changes` (from 0) and its path, in the usual error sentence: `invalid_argument: Change 2 (app:src/lib.rs): old_text was not found in the file. Read the file again and quote the text exactly, whitespace included. No file was changed.` Then the files are changed: each new version is written to a hidden file beside its file and flushed; then, one file at a time, it takes the file's name, an edited file's previous version staying beside it under a hidden name (swapped in one step on Linux and macOS, moved aside first on Windows); only once every file is in place do the previous versions go to the system trash. If any step fails, the files already changed get their previous versions back (from beside them, or, once a previous version is in the trash, from the content read before), new files are removed, and the error says the folder is as it was. Should putting one back fail too, the error names it and says its previous version is beside it under a hidden name or in the trash. See [docs/file-changes.md](docs/file-changes.md).
 
 Dry run:
 
@@ -737,7 +737,7 @@ Dry run:
     { "path": "app:src/new.rs", "effect": "created", "diff": "...", "size": 120 } ] }
 ```
 
-Files are in the order they first appear in `changes`. Each diff is a unified diff like `edit`'s dry run (a new file's adds every line). The diffs together are cut at 64 KiB: the file whose diff was cut ends with a line saying so, and later files get `"diff": null` with `"diff_cut": true`. The diffs read the files as they are, so each counts against the read budgets of its file's folder like `edit`'s dry run: cut where a budget ends (ending with a line that says so, later files `null` and `diff_cut`), and a dry run that touches a folder whose budget is spent is `rate_limited`. A diff that would make the answer too large for one message is dropped the same way, from the last file.
+Files are in the order they first appear in `changes`. Each diff is a unified diff like `edit`'s dry run (a new file's adds every line). The diffs together are cut at 64 KiB: the file whose diff was cut ends with a line saying so, and later files get `"diff": null` with `"diff_cut": true`. The diffs read the files as they are, so each counts against any read limit set for its file's folder like `edit`'s dry run: cut where a limit ends (ending with a line that says so, later files `null` and `diff_cut`), and a dry run that touches a folder whose limit is spent is `rate_limited`. A diff that would make the answer too large for one message is dropped the same way, from the last file.
 
 Applied:
 
@@ -748,7 +748,7 @@ Applied:
     { "path": "app:src/new.rs", "effect": "created", "size": 120, "sha256": "..." } ] }
 ```
 
-It counts as one change per file against the changes-per-minute and per-day budgets, plus the bytes written, all or none. Each file gets its own entry in the local audit log, as a change of its own would (tool `patch`, the path, its effect, the bytes written, where its previous version went in the trash; never contents); a refused patch is one entry naming its first file.
+It counts as one change per file against any changes-per-minute and per-day limit set, plus the bytes written, all or none. Each file gets its own entry in the local audit log, as a change of its own would (tool `patch`, the path, its effect, the bytes written, where its previous version went in the trash; never contents); a refused patch is one entry naming its first file.
 
 ## 9. Errors
 
@@ -784,7 +784,7 @@ It counts as one change per file against the changes-per-minute and per-day budg
 | `not_a_file` / `not_a_directory` | Wrong kind of entry for `read` / `list`, or for a change. |
 | `too_large` | The file is over the size limit, or a folder holds more than a change may move. |
 | `unsupported` | The file can't be turned into text (binary, encrypted or damaged). |
-| `rate_limited` | A daemon-side rate or volume limit was hit, for reads or for changes. The refusals of the tool calls per minute and of the hourly read budgets say when they free up ("It frees up in about 12 minutes: stop calling this computer's tools until then, and tell the person."), so the caller stops calling instead of spending its turns on refusals; the change budgets and the copy budget say only to try again later. A `grep` or `glob` whose first result is larger than what's left of the read budget says so, and to narrow the search, instead. |
+| `rate_limited` | A time-based limit the person set on the computer was hit, for reads or for changes (none is set by default, section 10), or as many commands as may run at once are running. The refusals of the tool calls per minute and of the hourly read budgets say when they free up ("It frees up in about 12 minutes: stop calling this computer's tools until then, and tell the person."), so the caller stops calling instead of spending its turns on refusals; the change budgets and the copy budget say only to try again later. A `grep` or `glob` whose first result is larger than what's left of the read budget says so, and to narrow the search, instead. |
 | `paused` | The user ran `cww pause`. |
 | `not_writable` | A change in a shared folder that doesn't allow changes. The message names the folder's label and says the person can allow changes on their computer. |
 | `exists` | Something is already at the path (or at `to`), and the call doesn't replace it. |
@@ -802,16 +802,18 @@ Messages are written for the model and the user. They never include absolute pat
 
 ## 10. Limits
 
-These are enforced by the daemon whatever the server does. The defaults can be changed only in the local config file, under `[limits]`.
+These are enforced by the daemon whatever the server does. They can be changed only in the local config file, under `[limits]`.
+
+Limits on size protect memory and the model's context, and are always on. Limits on time are off by default: zero means no limit, each on its own. An owner who wants a local cap sets one, and it holds even if the server is compromised; nothing else does (SECURITY.md).
 
 | Limit | Default |
 |---|---|
 | Tool calls per rolling minute (all chats) | Unlimited (`calls_per_minute = 0`) |
 | Characters per `read` call | 32 000 |
-| Characters read per chat per rolling hour, from folders without a budget of their own | 5 000 000 |
-| Characters read per rolling hour, all chats, from those folders | 10 000 000 |
-| A folder's own read budget (`read_budget`), per chat per rolling hour | 5 000 000 (the shared per-chat budget) to 20 000 000; all chats together twice it |
-| Bytes `read_bytes` returns per rolling hour, all chats | 100 MiB |
+| Characters read per chat per rolling hour, from folders without a budget of their own | Unlimited (`read_chars_per_chat_hour = 0`) |
+| Characters read per rolling hour, all chats, from those folders | Unlimited (`read_chars_per_hour = 0`) |
+| A folder's own read budget (`read_budget`), per chat per rolling hour | Counts only with one of those two set: from `read_chars_per_chat_hour` to 20 000 000; all chats together twice it |
+| Bytes `read_bytes` returns per rolling hour, all chats | Unlimited (`copy_bytes_per_hour = 0`) |
 | Search hits per call / snippet length | 20 / 300 characters |
 | `list` entries per page | 200 |
 | Largest file `read` opens | 64 MiB |
@@ -829,9 +831,11 @@ These are enforced by the daemon whatever the server does. The defaults can be c
 | Changes in one `patch` / files they touch | 50 / 20 |
 | A `patch` dry run's diffs, together | 64 KiB |
 
-Call and change quotas are optional local settings. Zero disables each quota independently. Existing saved defaults (120 or 240 calls/minute, 30 changes/minute, 500 changes/day and 50 MiB written/hour) migrate to unlimited when loaded; other locally configured values stay in place. Per-file and per-operation size limits still apply.
+`Config::save` writes every limit into the file, so a saved file holds whatever the default was. Values that were ever a default (120 or 240 calls/minute, 256 000, 1 000 000 or 5 000 000 characters per chat per hour, 2 000 000 or 10 000 000 characters per hour, 100 MiB copied per hour, 30 changes/minute, 500 changes/day and 50 MiB written/hour) count as unset and become unlimited when loaded, so to set a cap choose any other number; other values stay in place. A folder's `read_budget` stays in the file and stops counting while no hourly read limit is set, since it existed to raise one. Per-file and per-operation size limits still apply.
 
-**Read budgets.** "Characters read" are what `read`, `grep` and `glob` return (paths and line texts), what `browser_read` returns, and the diffs of dry runs of `write`, `edit` and `patch`. They count against the budgets of the folder they come from: the shared ones (`read_chars_per_chat_hour`, `read_chars_per_hour`), or, for a folder the person gave a budget of its own on the computer (`read_budget` on the root in `config.toml`, `cww roots read-budget`, or the control API's `roots_read_budget`, CONTROL.md), a per-chat budget of that size and an all-chats budget of twice it for that folder alone, instead of the shared ones. The server can't set or raise either. `read` stops at the budget left; `grep` and `glob` stop their answer at the first result that doesn't fit (with `truncated`, `next_offset` and a `note`), and answer `rate_limited` when not even the first does; a dry run's diff is cut where the budget ends, and a dry run touching a folder whose budget is spent is `rate_limited`. `read_bytes` has its own budget, in bytes, for all chats (`copy_bytes_per_hour`), and doesn't count against the read budgets.
+A read longer than one call pages: `read`, `browser_read`, `grep`, `glob` and `list` each answer where to go on (`next_offset`, or `next_cursor`), with nothing to wait for. The time limits per call that remain (`grep_timeout_ms`, the 10 seconds of `grep` and `glob`, `command_timeout_seconds`, `command_cpu_seconds`, a browser action's deadline) stop one runaway call, and aren't budgets: the next call starts afresh.
+
+**Read limits, when set.** "Characters read" are what `read`, `grep` and `glob` return (paths and line texts), what `browser_read` returns, and the diffs of dry runs of `write`, `edit` and `patch`. They count against the budgets of the folder they come from: the shared ones (`read_chars_per_chat_hour`, `read_chars_per_hour`), or, for a folder the person gave a budget of its own on the computer (`read_budget` on the root in `config.toml`, `cww roots read-budget`, or the control API's `roots_read_budget`, CONTROL.md), a per-chat budget of that size and an all-chats budget of twice it for that folder alone, instead of the shared ones. The server can't set or raise either. `read` stops at the budget left; `grep` and `glob` stop their answer at the first result that doesn't fit (with `truncated`, `next_offset` and a `note`), and answer `rate_limited` when not even the first does; a dry run's diff is cut where the budget ends, and a dry run touching a folder whose budget is spent is `rate_limited`. `read_bytes` has its own limit, in bytes, for all chats (`copy_bytes_per_hour`), and doesn't count against the read limits.
 
 ## 11. Decisions this spec makes
 
@@ -853,7 +857,7 @@ Call and change quotas are optional local settings. Zero disables each quota ind
 14. **Revocation handling.** `invalid_grant`, `unauthorized_client` and `access_denied` on refresh stop the daemon's reconnect loop until `cww login`. Everything else is retried.
 15. **One server per daemon.** Open question 1 in the design is answered as one pairing at a time. `cww login` again replaces it.
 16. **Chats for the terminal** use the device's own token with a second scope, not a separate grant, and the daemon makes every call, so the terminal UI never holds a token. Answers stream over the tunnel's socket (section 12) rather than Server-Sent Events.
-17. **Changes are opt-in per folder, on the computer.** Approval of each change happens on the server, and the daemon can't tell a real approval from a forged one, so the daemon also makes every change recoverable (the system trash), bounded (budgets and caps), contained (handle-based resolution, the deny lists, the sandbox's write rights for exactly those folders) and visible (the audit log). See README.md, "Threat model".
+17. **Changes are opt-in per folder, on the computer.** Approval of each change happens on the server, and the daemon can't tell a real approval from a forged one, so the daemon also makes every change recoverable (the system trash), bounded in size per file (with limits in time only if the person sets them), contained (handle-based resolution, the deny lists, the sandbox's write rights for exactly those folders) and visible (the audit log). See README.md, "Threat model".
 
 ## 12. Chats for the terminal UI
 

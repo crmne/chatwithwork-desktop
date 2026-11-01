@@ -204,10 +204,12 @@ pub struct Root {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bots: Vec<BotLoan>,
     /// Characters a chat may read from this folder per rolling hour, in
-    /// place of `[limits] read_chars_per_chat_hour`; all chats together may
-    /// read twice it. For folders worked in a lot, such as code. Between
-    /// that limit and [`MAX_READ_BUDGET`]; only ever changed here or from
-    /// this computer's apps, never by the server.
+    /// place of the hourly read limits in `[limits]`; all chats together may
+    /// read twice it. It raises a limit, so it counts only while one of
+    /// those is set: with none, reading has no hourly limit and neither does
+    /// this folder. Between `read_chars_per_chat_hour` and
+    /// [`MAX_READ_BUDGET`]; only ever changed here or from this computer's
+    /// apps, never by the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_budget: Option<usize>,
 }
@@ -217,16 +219,16 @@ pub struct Root {
 pub const MAX_READ_BUDGET: usize = 20_000_000;
 
 impl Root {
-    /// This folder's own read budget, if it has one, within its bounds:
-    /// at least the per-chat budget every folder has (`limits`), at most
-    /// [`MAX_READ_BUDGET`].
+    /// This folder's own read budget, if it has one and an hourly read
+    /// limit is set, within its bounds: at least the per-chat budget every
+    /// folder has (`limits`), at most [`MAX_READ_BUDGET`]. Without a limit
+    /// to raise, a budget set for one would only cap this folder alone.
     pub fn read_budget(&self, limits: &Limits) -> Option<usize> {
-        self.read_budget.map(|budget| {
-            budget.clamp(
-                limits.read_chars_per_chat_hour.min(MAX_READ_BUDGET),
-                MAX_READ_BUDGET,
-            )
-        })
+        if !limits.reads_capped() {
+            return None;
+        }
+        self.read_budget
+            .map(|budget| budget.clamp(limits.least_read_budget(), MAX_READ_BUDGET))
     }
 
     /// Commands may run here: changes and commands are both allowed.
@@ -270,15 +272,17 @@ pub struct DenyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
-    /// Optional tool calls per rolling minute, across all chats. Zero is unlimited.
+    /// Tool calls per rolling minute, across all chats. Zero is no limit,
+    /// the default.
     pub calls_per_minute: u32,
     /// Maximum characters one `read` call returns.
     pub read_chars_per_call: usize,
-    /// Characters reads (`read`, `grep`, `glob`, the diffs of dry runs) may
-    /// return per chat in a rolling hour, from folders without a
-    /// `read_budget` of their own.
+    /// Characters reads (`read`, `grep`, `glob`, `browser_read`, the diffs
+    /// of dry runs) may return per chat in a rolling hour, from folders
+    /// without a `read_budget` of their own. Zero is no limit, the default.
     pub read_chars_per_chat_hour: usize,
-    /// Characters those reads may return across all chats in a rolling hour.
+    /// Characters those reads may return across all chats in a rolling
+    /// hour. Zero is no limit, the default.
     pub read_chars_per_hour: usize,
     /// Maximum search hits per call.
     pub search_hits: usize,
@@ -295,11 +299,12 @@ pub struct Limits {
     /// Time budget for the live grep fallback, in milliseconds.
     pub grep_timeout_ms: u64,
     /// Changes (create, write, edit, mkdir, move, delete) accepted per
-    /// rolling minute, across all chats. Zero is unlimited.
+    /// rolling minute, across all chats. Zero is no limit, the default.
     pub changes_per_minute: u32,
-    /// Optional changes accepted per rolling day. Zero is unlimited.
+    /// Changes accepted per rolling day. Zero is no limit, the default.
     pub changes_per_day: u32,
-    /// Optional bytes changes may write per rolling hour. Zero is unlimited.
+    /// Bytes changes may write per rolling hour. Zero is no limit, the
+    /// default.
     pub change_bytes_per_hour: u64,
     /// Largest file a change creates, edits or copies, in bytes.
     pub max_change_file_bytes: u64,
@@ -320,14 +325,26 @@ pub struct Limits {
     /// result keeps, from the end.
     pub command_output_chars: usize,
     /// Bytes `read_bytes` may return per rolling hour, across all chats:
-    /// files copied into a chat's files, apart from the read budgets.
+    /// files copied into a chat's files, apart from the read budgets. Zero
+    /// is no limit, the default.
     pub copy_bytes_per_hour: u64,
 }
 
 impl Limits {
+    /// Whether an hourly read limit is set.
+    pub fn reads_capped(&self) -> bool {
+        self.read_chars_per_chat_hour > 0 || self.read_chars_per_hour > 0
+    }
+
+    /// The smallest read budget a folder may have.
+    pub fn least_read_budget(&self) -> usize {
+        self.read_chars_per_chat_hour.clamp(1, MAX_READ_BUDGET)
+    }
+
     /// Older files contain every old default because `Config::save` writes
-    /// them out whole. Move those exact values to the current defaults,
-    /// including unlimited calls/changes; preserve other local values.
+    /// them out whole. Move those exact values, from every release, to the
+    /// current defaults, which set no time-based limit; preserve other
+    /// local values.
     pub fn raise_old_defaults(&mut self) {
         let new = Self::default();
         if matches!(self.calls_per_minute, 120 | 240) {
@@ -342,11 +359,17 @@ impl Limits {
         if self.change_bytes_per_hour == 50 * 1024 * 1024 {
             self.change_bytes_per_hour = new.change_bytes_per_hour;
         }
-        if self.read_chars_per_chat_hour == 1_000_000 {
+        if matches!(
+            self.read_chars_per_chat_hour,
+            256_000 | 1_000_000 | 5_000_000
+        ) {
             self.read_chars_per_chat_hour = new.read_chars_per_chat_hour;
         }
-        if self.read_chars_per_hour == 2_000_000 {
+        if matches!(self.read_chars_per_hour, 2_000_000 | 10_000_000) {
             self.read_chars_per_hour = new.read_chars_per_hour;
+        }
+        if self.copy_bytes_per_hour == 100 * 1024 * 1024 {
+            self.copy_bytes_per_hour = new.copy_bytes_per_hour;
         }
     }
 }
@@ -356,8 +379,8 @@ impl Default for Limits {
         Self {
             calls_per_minute: 0,
             read_chars_per_call: 32_000,
-            read_chars_per_chat_hour: 5_000_000,
-            read_chars_per_hour: 10_000_000,
+            read_chars_per_chat_hour: 0,
+            read_chars_per_hour: 0,
             search_hits: 20,
             snippet_chars: 300,
             list_page: 200,
@@ -376,7 +399,7 @@ impl Default for Limits {
             command_processes: 256,
             commands_running: 4,
             command_output_chars: 20_000,
-            copy_bytes_per_hour: 100 * 1024 * 1024,
+            copy_bytes_per_hour: 0,
         }
     }
 }
@@ -477,12 +500,73 @@ mod tests {
             calls_per_minute: 120,
             read_chars_per_chat_hour: 1_000_000,
             read_chars_per_hour: 3_000_000,
+            copy_bytes_per_hour: 7,
             ..Limits::default()
         };
         limits.raise_old_defaults();
         assert_eq!(limits.calls_per_minute, 0);
-        assert_eq!(limits.read_chars_per_chat_hour, 5_000_000);
+        assert_eq!(limits.read_chars_per_chat_hour, 0);
         assert_eq!(limits.read_chars_per_hour, 3_000_000);
+        assert_eq!(limits.copy_bytes_per_hour, 7);
+    }
+
+    /// Every release wrote its defaults into the file with the first save,
+    /// so each has to lose them, the first release's small one included.
+    #[test]
+    fn every_former_default_read_limit_is_lifted_from_a_saved_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        for (chat, all) in [
+            (256_000, 2_000_000),
+            (1_000_000, 2_000_000),
+            (5_000_000, 10_000_000),
+            (256_000, 10_000_000),
+        ] {
+            let saved = Config {
+                limits: Limits {
+                    read_chars_per_chat_hour: chat,
+                    read_chars_per_hour: all,
+                    copy_bytes_per_hour: 100 * 1024 * 1024,
+                    ..Limits::default()
+                },
+                ..Config::default()
+            };
+            saved.save(&paths).unwrap();
+            let text = std::fs::read_to_string(paths.config_file()).unwrap();
+            assert!(
+                text.contains(&format!("read_chars_per_chat_hour = {chat}")),
+                "the file spells them out: {text}"
+            );
+            assert_eq!(Config::load(&paths).unwrap().limits, Limits::default());
+        }
+    }
+
+    #[test]
+    fn a_folders_budget_counts_only_beside_an_hourly_limit() {
+        let root = Root {
+            bots: Vec::new(),
+            id: "code".into(),
+            label: "Code".into(),
+            path: "/tmp/code".into(),
+            follow_symlinks: false,
+            writable: false,
+            commands: false,
+            network: false,
+            read_budget: Some(10_000_000),
+        };
+        assert_eq!(root.read_budget(&Limits::default()), None);
+        for capped in [
+            Limits {
+                read_chars_per_chat_hour: 1_000,
+                ..Limits::default()
+            },
+            Limits {
+                read_chars_per_hour: 1_000,
+                ..Limits::default()
+            },
+        ] {
+            assert_eq!(root.read_budget(&capped), Some(10_000_000));
+        }
     }
 
     #[test]

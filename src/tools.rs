@@ -10,9 +10,9 @@
 //! changes approved together; they are annotated `readOnlyHint: false`, with
 //! `destructiveHint: true` for the ones that can replace or remove
 //! something, and run in the writer (see `crate::writer`). Every call
-//! passes, in order: pause check, rate limit, argument validation, then the
-//! reader or the writer (path parsing, root lookup, deny list, safe open),
-//! and is appended to the audit log whatever the outcome. Folders that also
+//! passes, in order: pause check, any rate limit set, argument validation,
+//! then the reader or the writer (path parsing, root lookup, deny list, safe
+//! open), and is appended to the audit log whatever the outcome. Folders that also
 //! allow commands add `run`, `run_status`, `run_output` and `run_stop`
 //! (see `crate::commands`).
 
@@ -50,8 +50,8 @@ use crate::writer::{
     MoveRequest, WriteRequest, Writer,
 };
 
-/// Request `_meta` key carrying the Chat with Work chat ID, used for the
-/// per-chat read budget and the audit log.
+/// Request `_meta` key carrying the Chat with Work chat ID, used for any
+/// per-chat read limit and the audit log.
 pub const CHAT_ID_META: &str = "com.chatwithwork/chatId";
 
 /// Tool `_meta` key: the call is a plain (non-destructive) write when every
@@ -1046,7 +1046,7 @@ impl Output {
 
 /// Cut `text` to at most `max` characters, saying so at the end.
 fn cut_to_chars(text: &mut String, max: usize) {
-    const MORE: &str = "\n… (the read budget ends here)\n";
+    const MORE: &str = "\n… (cut here)\n";
     if text.chars().count() <= max {
         return;
     }
@@ -1742,7 +1742,7 @@ mod tests {
         let mut text = "é".repeat(100);
         cut_to_chars(&mut text, 60);
         assert_eq!(text.chars().count(), 60);
-        assert!(text.ends_with("(the read budget ends here)\n"));
+        assert!(text.ends_with("(cut here)\n"));
         let mut short = "abc".to_string();
         cut_to_chars(&mut short, 60);
         assert_eq!(short, "abc");

@@ -254,10 +254,11 @@ enum RootsCommand {
     #[command(name = "unshare", alias = "stop-lending")]
     StopLending { root: String, bot: String },
     /// Set how many characters a chat may read from a shared folder in an
-    /// hour, for a folder worked in a lot, such as code: from the budget
-    /// every folder has (1,000,000 unless `[limits]` says otherwise) to
-    /// 20,000,000. All chats together may read twice it. `default` puts
-    /// the folder back on the budget every folder shares.
+    /// hour, when `[limits]` sets an hourly read limit: from that limit to
+    /// 20,000,000, for a folder worked in a lot, such as code. All chats
+    /// together may read twice it. Reading has no hourly limit by default,
+    /// and then this has no effect. `default` puts the folder back on the
+    /// limit every folder shares.
     ReadBudget {
         root: String,
         /// Characters per chat per hour, or `default`.
@@ -688,6 +689,12 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             let root = cww::roots::set_read_budget(&mut config, &root, budget)?;
             config.save(paths)?;
             match root.read_budget {
+                Some(_) if !config.limits.reads_capped() => println!(
+                    "Saved for {} ({}), but reading has no hourly limit on this computer, so it \
+                     counts only once [limits] in config.toml sets one.",
+                    root.label,
+                    root.path.display()
+                ),
                 Some(budget) => println!(
                     "A chat may now read {budget} characters an hour from {} ({}), and all chats \
                      together twice that.",

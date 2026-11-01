@@ -15,7 +15,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
   | Tool | Effect | Does |
   |---|---|---|
   | `browser_tabs` | read | The group's tabs: id, title, URL, whether its site is allowed |
-  | `browser_read` | read | A tab's accessible text (roles, names, values, `[ref=…]` for what can be clicked or typed in), never raw HTML; paged, capped, counted against the read budget |
+  | `browser_read` | read | A tab's accessible text (roles, names, values, `[ref=…]` for what can be clicked or typed in), never raw HTML; paged, at most 32,000 characters a page, counted against any hourly read limit set |
   | `browser_screenshot` | read | A JPEG of the tab, cut to fit a tool result |
   | `browser_scroll` | read | Scroll a tab, or bring a `ref` into view |
   | `browser_wait` | read | Wait up to 15 seconds for text to appear, or for the page to settle |
@@ -70,9 +70,10 @@ cww browser call browser_click --input approved-action.json --approve
 
 The local client offers only the fixed `browser_` tools. It has no evaluate,
 raw CDP, filesystem or command endpoint. The same daemon-owned pause state,
-site rules, group boundary, field redaction, rate limits and audit log apply.
-All local calls share one `local-browser` read budget across processes and
-connections; callers cannot select a new chat ID to reset it. A chat-only
+site rules, group boundary, field redaction, any rate limits set, and audit log
+apply. All local calls share one `local-browser` read budget across processes
+and connections, when one is set; callers cannot select a new chat ID to reset
+it. A chat-only
 organization runtime refuses these requests. Pages remain untrusted data,
 and the coding agent must apply its own user-approval and data-sharing rules.
 No local stdio MCP server is installed by these commands.
@@ -93,7 +94,7 @@ All of it holds on the computer, whatever the server sends. The extension enforc
 - **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something remains destructive, and asks with a screenshot while Ask before browser actions is on. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat or explicitly turned off browser prompts on the computer.
 - **Passwords and payments.** The extension never types into, and never reads, password fields, card fields (`autocomplete="cc-*"`, card number, expiry, security code) or one-time codes (`sensitive_field`). `browser_read` leaves their values out, and screenshots blur them: a screenshot is refused (`page_error`) unless every such field it finds is blurred.
 - **Outside text.** What a page says is outside text for the taint rule: after a chat reads a page, browser changes ask again unless the owner explicitly turned off Ask before browser actions on this computer. That local choice applies to the owner’s ordinary turn and its delegated sub-agents; independent bots, agent chats and triggered runs keep their own rules. Browser changes never count as "writes to the computer’s own files", since they leave the computer.
-- **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, the change budgets). A file is fetched only from an allowed address, with no redirect followed, not even within an allowed site, so the person's sign-in never goes anywhere unchecked. A download a page starts by itself while the extension acts on its tab (until it detaches, a minute after its last call) is cancelled and removed; the person's own downloads elsewhere are untouched.
+- **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, any change limits set). A file is fetched only from an allowed address, with no redirect followed, not even within an allowed site, so the person's sign-in never goes anywhere unchecked. A download a page starts by itself while the extension acts on its tab (until it detaches, a minute after its last call) is cancelled and removed; the person's own downloads elsewhere are untouched.
 - **Visible.** While the agent acts on a tab, the tab shows a "Chat with Work is using this tab" bar, the group's title says so, and the extension's icon has a badge. Chrome also shows its own "started debugging this browser" bar while the debugger is attached; the extension detaches after a minute without a call, so the bar doesn't stay.
 - **Kill switch.** "Stop" in the extension's menu, "Stop Using the Browser" in the tray menu (shown while the browser is on), turning off Use your browser in the desktop app’s settings, and `cww browser stop` detach at once and refuse every browser call (`browser_stopped`) until the person resumes. Pausing the computer stops it too.
 - **Bots.** A bot's chats reach the browser only when the person shares it on the computer (`cww browser share <bot>`), like a folder, and only the sites allowed there.

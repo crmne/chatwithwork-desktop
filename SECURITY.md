@@ -19,7 +19,7 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 - Getting the daemon to write, move or delete anything outside a folder where the user allowed changes, or on the deny list or the never-changed list there; to delete anything without it going to the system trash; to write anything that runs (a program, a launcher, an execute bit); to execute anything; or to open network connections other than its own tunnel (and, only when the user turned them on, its crash reports).
 - Turning on changes for a folder from the server, or keeping them after the user turned them off.
 - Getting the browser extension or the daemon to act on a tab outside the "Chat with Work" tab group or on a site the user didn't allow, to type into or read a password, payment or one-time code field, to act while stopped, to run code a server sends in a page, or to let another extension or a web page drive it.
-- Bypassing the daemon's rate and volume limits, pause, or audit log.
+- Bypassing a rate or volume limit the owner set, or the daemon's pause or audit log.
 - Dispatching non-browser tools through the local browser-call adapter,
   changing its fixed read-budget scope, or bypassing its per-action approval
   acknowledgement and mandatory dry run. Local clients still run as the
@@ -28,6 +28,18 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 - Driving the daemon through its control socket as another local user.
 - Memory-safety or denial-of-service bugs triggered by a malicious server or a malicious local file.
 - Supply-chain issues in the release process.
+
+## Time-based limits
+
+The daemon's time-based limits are off by default: tool calls per minute, characters read per chat and per hour, bytes copied per hour, changes per minute and per day, and bytes written per hour. They stopped ordinary work, such as reading a long page or a large project, with a wait, so they are now each `0` (no limit) until the computer's owner sets one under `[limits]` in `config.toml`. Saved values that were once a default count as unset; any other number stays. The size limits stay on: per call, per file, per message, and a command's CPU, memory and run time.
+
+What that means if the server is compromised, or a model is turned against you by text it read:
+
+- **Nothing slows down reading.** Everything in a shared folder that isn't on the deny list, and every page on a site you allowed in the browser, can be read as fast as the connection carries it. An hourly limit used to make that take longer; it never prevented it.
+- **Nothing counts changes.** In a folder that allows changes, any number of files can be changed or sent to the trash, one after another, and any number of browser actions taken where actions are allowed. The trash, the size caps, the deny lists and the audit log still hold.
+- **The server's own limits don't count.** They are defense in depth, and a compromised server doesn't apply them.
+
+Time-based limits set under `[limits]` are the only checks on volume that hold whatever the server does: set them if that matters more to you than never being interrupted, and don't reuse a former default's number, which counts as unset. What protects you either way is sharing narrow folders, allowing changes only where you could restore the files, the audit log (`cww log`, the Activity pages), and `cww pause`.
 
 ## Out of scope
 

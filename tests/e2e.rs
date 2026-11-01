@@ -2220,8 +2220,13 @@ impl Watcher {
 async fn the_settings_app_manages_folders_over_the_control_channel() {
     let fx = fixture();
     // Not paired yet; secrets go to the file store, not the test machine's keychain.
+    // A read limit, for a folder's budget to raise further down.
     Config {
         secret_store: Some("file".into()),
+        limits: Limits {
+            read_chars_per_chat_hour: 1_500_000,
+            ..Limits::default()
+        },
         ..Config::default()
     }
     .save(&fx.paths)
@@ -4436,9 +4441,12 @@ async fn old_default_limits_do_not_interrupt_project_creation() {
         true,
         Some(Limits {
             calls_per_minute: 240,
+            read_chars_per_chat_hour: 256_000,
+            read_chars_per_hour: 10_000_000,
             changes_per_minute: 30,
             changes_per_day: 500,
             change_bytes_per_hour: 50 * 1024 * 1024,
+            copy_bytes_per_hour: 100 * 1024 * 1024,
             ..Limits::default()
         }),
     );
