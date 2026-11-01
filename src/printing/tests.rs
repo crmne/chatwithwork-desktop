@@ -94,7 +94,7 @@ fn a_transfer_id_can_only_name_a_file_in_its_folder() {
 #[test]
 fn a_chunk_can_be_sent_again_but_cannot_leave_a_gap() {
     let home = tempfile::tempdir().unwrap();
-    let bytes = vec![b'%'; 100];
+    let bytes = [b'%'; 100];
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes[..10]);
     let chunk = |offset| Chunk {
         transfer: ID,
