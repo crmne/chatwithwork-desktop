@@ -12,11 +12,19 @@ use crate::commands::RunError;
 
 /// `lpstat` can wait on printers found on the network.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// `lp` sends the whole file, up to 25 MiB, perhaps over a network: killed
+/// partway, the job counts as one that may have printed. Within the 15
+/// seconds the supervisor's channel gives a call.
+const SUBMITTING: Duration = Duration::from_secs(12);
 /// What listing all printers may take, within the 15 seconds the supervisor's
 /// channel gives a call. Past it, printers are listed without what they can do.
 const LISTING: Duration = Duration::from_secs(8);
 
 pub(super) fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
+    run_within(program, args, TIMEOUT)
+}
+
+fn run_within(program: &str, args: &[&str], limit: Duration) -> Result<String, RunError> {
     let mut child = Command::new(program)
         .args(args)
         .env("LC_ALL", "C")
@@ -41,7 +49,7 @@ pub(super) fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() > TIMEOUT => {
+            Ok(None) if started.elapsed() > limit => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(RunError::new(
@@ -111,7 +119,7 @@ pub fn printers() -> Result<Vec<SystemPrinter>, RunError> {
 pub fn submit(job: &Job) -> Result<String, RunError> {
     let args = lp_args(job);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    parse_job(&run("lp", &args)?)
+    parse_job(&run_within("lp", &args, SUBMITTING)?)
         .ok_or_else(|| RunError::new(super::UNCONFIRMED, "lp didn't say what became of the job"))
 }
 
