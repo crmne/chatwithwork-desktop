@@ -19,8 +19,9 @@ use crate::server::Server;
 /// pair with any server.
 pub const SCHEMES: [&str; 3] = ["chatwithwork", "cww-staging", "cww-dev"];
 
-/// Longer than any link the server writes.
-const MAX_LENGTH: usize = 256;
+/// Longer than any link the server writes, on the longest host a name can
+/// have: 253 characters, with a port.
+const MAX_LENGTH: usize = 512;
 
 /// The sections a link may open. Each is a list, a record, or either.
 const SECTIONS: [(&str, Record); 4] = [
@@ -107,6 +108,19 @@ mod tests {
 
     fn opened(link: &str) -> Option<String> {
         page(&server(), link).map(|url| url.to_string())
+    }
+
+    #[test]
+    fn a_long_host_is_a_host_like_any_other() {
+        let host = format!("{}.example", vec!["a".repeat(60); 4].join("."));
+        let server = Server::parse(&format!("https://{host}")).unwrap();
+        assert!(
+            page(
+                &server,
+                &format!("chatwithwork://{host}/482139075/chats/16")
+            )
+            .is_some()
+        );
     }
 
     #[test]
