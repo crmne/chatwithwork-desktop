@@ -41,6 +41,15 @@
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
 
+    <!--
+      A custom INSTALLFOLDER isn't kept by Windows Installer: without this,
+      an uninstall or an upgrade looks in the default folder, and leaves
+      the program and its agent where they are.
+    -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="RememberInstallFolder" Root="HKCU" Key="Software\Chat with Work\Desktop"
+        Name="InstallDir" Type="raw" />
+    </Property>
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
         <Directory Id="INSTALLFOLDER" Name="Chat with Work Desktop" />
