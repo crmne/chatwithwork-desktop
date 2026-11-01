@@ -277,8 +277,7 @@ fn confine(config: &Config, paths: &Paths) {
     if let Some(dir) = paths.socket_path().parent() {
         let _ = crate::paths::ensure_private_dir(dir);
     }
-    let keychain = crate::auth::secrets::SecretStore::for_config(config, paths)
-        == crate::auth::secrets::SecretStore::Keyring;
+    let keychain = crate::auth::secrets::SecretStore::for_config(config, paths).in_keychain();
     // Folders that allow changes, and the trash their files go to: made
     // now, since the sandbox won't let the daemon make them later.
     let writable = writable_roots(config);

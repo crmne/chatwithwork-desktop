@@ -182,7 +182,10 @@ impl PendingLogin {
                     .context("removing the previous pairing's refresh token")?;
             }
 
-            let store = self.store.unwrap_or_else(|| SecretStore::choose(paths));
+            let store = self
+                .store
+                .unwrap_or_else(|| SecretStore::choose(paths))
+                .for_server(&self.server.origin());
             store.set(DEVICE_KEY, &self.key.to_stored())?;
             store.set(REFRESH_TOKEN, &refresh)?;
             let server_config = ServerConfig {
@@ -428,6 +431,11 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
+        // What an older version saved, here too if it was never carried over.
+        if store.in_keychain() {
+            SecretStore::Keyring.delete(DEVICE_KEY)?;
+            SecretStore::Keyring.delete(REFRESH_TOKEN)?;
+        }
     }
     // A damaged list fails the purge: deleting it would leave keys nothing
     // names any more.
