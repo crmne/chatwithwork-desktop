@@ -667,17 +667,23 @@ impl Runner {
         Ok((answer.printers, answer.pages_left))
     }
 
-    /// Print a file that arrived. Windows draws the pages itself, which can
-    /// take longer than a call may: `None` says it's still at it, and it
-    /// goes on.
+    /// Print a file that arrived. Windows draws the pages itself, here,
+    /// which can take longer than a call may: `None` says it's still at it,
+    /// and it goes on. The supervisor's channel is never left waiting like
+    /// that, since an answer abandoned there would reach the next call: `lp`
+    /// answers within the channel's own time.
     pub async fn print(
         &self,
         request: crate::printing::Request,
     ) -> Result<Option<crate::printing::Receipt>, RunError> {
         let call = self.call(channel_call::Call::Print { request });
-        match tokio::time::timeout(tools::FOREGROUND_WAIT, call).await {
-            Ok(answer) => parse(answer?).map(Some),
-            Err(_) => Ok(None),
+        if matches!(self, Self::Local(_)) {
+            match tokio::time::timeout(tools::FOREGROUND_WAIT, call).await {
+                Ok(answer) => parse(answer?).map(Some),
+                Err(_) => Ok(None),
+            }
+        } else {
+            parse(call.await?).map(Some)
         }
     }
 

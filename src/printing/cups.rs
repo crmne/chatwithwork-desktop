@@ -3,6 +3,7 @@
 //! person's settings and `CUPS_SERVER`, and they keep libcups out of this
 //! binary. Every command runs in the C locale, since their output is read.
 
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -10,9 +11,12 @@ use super::{Job, SystemPrinter};
 use crate::commands::RunError;
 
 /// `lpstat` can wait on printers found on the network.
-const TIMEOUT: Duration = Duration::from_secs(10);
+const TIMEOUT: Duration = Duration::from_secs(5);
+/// What listing all printers may take, within the 15 seconds the supervisor's
+/// channel gives a call. Past it, printers are listed without what they can do.
+const LISTING: Duration = Duration::from_secs(8);
 
-fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
+pub(super) fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
     let mut child = Command::new(program)
         .args(args)
         .env("LC_ALL", "C")
@@ -30,10 +34,13 @@ fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
                 RunError::new("unavailable", format!("couldn't start {program}"))
             }
         })?;
+    // Read as it comes: a command that fills a pipe nobody reads never ends.
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
     let started = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() > TIMEOUT => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -45,20 +52,30 @@ fn run(program: &str, args: &[&str]) -> Result<String, RunError> {
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
             Err(_) => return Err(RunError::new("unavailable", format!("{program} failed"))),
         }
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|_| RunError::new("unavailable", format!("{program} failed")))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let read = |pipe: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        pipe.and_then(|pipe| pipe.join().ok()).unwrap_or_default()
+    };
+    let (stdout, stderr) = (read(stdout), read(stderr));
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
     } else {
-        let said = String::from_utf8_lossy(&output.stderr);
+        let said = String::from_utf8_lossy(&stderr);
         let said: String = said.trim().chars().take(200).collect();
         Err(RunError::new("unavailable", said))
     }
 }
 
+fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
 pub fn printers() -> Result<Vec<SystemPrinter>, RunError> {
+    let started = Instant::now();
     let names = run("lpstat", &["-e"])?;
     // With no default printer, `lpstat -d` says so and still exits 0; with
     // no printers at all, some versions fail.
@@ -70,7 +87,11 @@ pub fn printers() -> Result<Vec<SystemPrinter>, RunError> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(|queue| {
-            let options = run("lpoptions", &["-p", queue, "-l"]).unwrap_or_default();
+            let options = if started.elapsed() < LISTING {
+                run("lpoptions", &["-p", queue, "-l"]).unwrap_or_default()
+            } else {
+                String::new()
+            };
             let (duplex, color) = parse_options(&options);
             SystemPrinter {
                 queue: queue.to_string(),

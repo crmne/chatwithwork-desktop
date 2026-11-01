@@ -236,10 +236,14 @@ fn draw(hdc: HDC, document: &PdfDocument, index: u32) -> windows::core::Result<(
             GetDeviceCaps(Some(hdc), LOGPIXELSY),
         )
     };
-    let dpi = dpi_x.min(dpi_y).clamp(72, 300);
-    // A PDF's size comes in units of 1/96 inch here.
-    let width = ((size.Width as f64) * dpi as f64 / 96.0).round() as u32;
-    let height = ((size.Height as f64) * dpi as f64 / 96.0).round() as u32;
+    // Rendered only as large as it prints, at most 300 dpi, whatever size
+    // the PDF claims: a page can say it's 200 inches wide. Its size comes in
+    // units of 1/96 inch here.
+    let (page_width, page_height) = (size.Width.max(1.0) as f64, size.Height.max(1.0) as f64);
+    let fit = (area_x as f64 / page_width).min(area_y as f64 / page_height);
+    let scale = fit.min(dpi_x.min(dpi_y).clamp(72, 300) as f64 / 96.0);
+    let width = (page_width * scale).round().max(1.0) as u32;
+    let height = (page_height * scale).round().max(1.0) as u32;
 
     let stream = InMemoryRandomAccessStream::new()?;
     let options = PdfPageRenderOptions::new()?;
@@ -253,7 +257,9 @@ fn draw(hdc: HDC, document: &PdfDocument, index: u32) -> windows::core::Result<(
         .GetSoftwareBitmapConvertedAsync(BitmapPixelFormat::Bgra8, BitmapAlphaMode::Ignore)?
         .join()?;
     let (pixel_width, pixel_height) = (bitmap.PixelWidth()?, bitmap.PixelHeight()?);
-    let buffer = Buffer::Create((pixel_width * pixel_height * 4) as u32)?;
+    let bytes = u64::from(pixel_width.unsigned_abs()) * u64::from(pixel_height.unsigned_abs()) * 4;
+    let bytes = u32::try_from(bytes).map_err(|_| windows::core::Error::from_thread())?;
+    let buffer = Buffer::Create(bytes)?;
     bitmap.CopyToBuffer(&buffer)?;
     let reader = DataReader::FromBuffer(&buffer)?;
     let mut pixels = vec![0u8; buffer.Length()? as usize];

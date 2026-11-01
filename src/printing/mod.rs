@@ -134,8 +134,14 @@ pub fn permitted(printer: &Printer, bot: Option<&str>) -> bool {
     }
 }
 
+/// One job at a time, from the receipt's check to its writing, so a call made
+/// again while Windows still draws the first prints nothing, and the day's
+/// count holds.
+static JOBS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Do one job, as the supervisor does. Every check is made here again.
 pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receipt, RunError> {
+    let _one_at_a_time = JOBS.lock().unwrap_or_else(|held| held.into_inner());
     if !transfer::valid_id(&request.transfer) {
         return Err(RunError::new("invalid_argument", "not a print file's id"));
     }
@@ -166,6 +172,7 @@ pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receip
     }
     let file = transfer::finished(&dir, &request.transfer)
         .ok_or_else(|| RunError::new("not_found", "that file hasn't arrived here yet"))?;
+    check_counts(request)?;
     let sheets = request.pages_counted.saturating_mul(request.copies);
     let limit = config.limits.print_pages_per_day;
     let now = now();
@@ -199,6 +206,27 @@ pub fn print(paths: &Paths, config: &Config, request: &Request) -> Result<Receip
     write_receipt(&dir, &request.transfer, &receipt);
     let _ = std::fs::remove_file(file);
     Ok(receipt)
+}
+
+/// What a job says it prints, as far as it can be told without reading the
+/// PDF, which stays in the confined worker: the day's limit counts this.
+fn check_counts(request: &Request) -> Result<(), RunError> {
+    let invalid = |message: &str| RunError::new("invalid_argument", message);
+    if !(1..=tools::MAX_COPIES).contains(&request.copies) {
+        return Err(invalid("that's not a number of copies"));
+    }
+    if request.pages_counted == 0 {
+        return Err(invalid("a job prints at least one page"));
+    }
+    if let Some(pages) = &request.pages {
+        let ranges = tools::parse_pages(pages).map_err(|_| invalid("that's not a page list"))?;
+        let listed =
+            tools::count_pages(&ranges, u32::MAX).map_err(|_| invalid("that's not a page list"))?;
+        if request.pages_counted < listed {
+            return Err(invalid("that page list is longer than the job says"));
+        }
+    }
+    Ok(())
 }
 
 /// Pages this computer may still print today; `None` without a limit.

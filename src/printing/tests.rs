@@ -222,6 +222,33 @@ fn the_supervisor_checks_every_job_again() {
 }
 
 #[test]
+fn the_supervisor_counts_no_job_as_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::under(home.path());
+    let dir = super::dir(&paths);
+    std::fs::create_dir_all(&dir).unwrap();
+    send(&dir, ID, b"%PDF-1.7 whatever").unwrap();
+    let config = config_with(printer(true, vec![]));
+    let refused = |change: &dyn Fn(&mut Request)| {
+        let mut job = request(None, false);
+        change(&mut job);
+        print(&paths, &config, &job).unwrap_err().code
+    };
+
+    assert_eq!(refused(&|job| job.pages_counted = 0), "invalid_argument");
+    assert_eq!(refused(&|job| job.copies = 0), "invalid_argument");
+    assert_eq!(refused(&|job| job.copies = 100), "invalid_argument");
+    assert_eq!(
+        refused(&|job| job.pages = Some("1;2".into())),
+        "invalid_argument"
+    );
+    assert_eq!(
+        refused(&|job| job.pages = Some("1-50".into())),
+        "invalid_argument"
+    );
+}
+
+#[test]
 fn the_day_keeps_its_page_limit_and_a_receipt_answers_a_second_call() {
     let home = tempfile::tempdir().unwrap();
     let paths = Paths::under(home.path());
@@ -397,6 +424,12 @@ mod cups_output {
             parse_job("request id is Brother-12 (1 file(s))\n").as_deref(),
             Some("Brother-12")
         );
+    }
+
+    #[test]
+    fn a_command_that_prints_a_lot_ends_with_all_of_it() {
+        let printed = run("sh", &["-c", "head -c 300000 /dev/zero | tr '\\0' x"]).unwrap();
+        assert_eq!(printed.len(), 300_000);
     }
 
     #[test]
