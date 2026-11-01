@@ -534,3 +534,5 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 Copyright (c) 2026 Carmine Paolino
 
 Licensed under the GNU General Public License, version 3 only ([LICENSE](LICENSE)). Versions up to 0.9.2 stay available under MIT or Apache 2.0, as published.
+
+"Chat with Work" and its logo are trademarks of PlentyLabs UG (haftungsbeschränkt) & Co. KG. The license covers the code, not the name or the logo in `app/assets`.

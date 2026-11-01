@@ -15,7 +15,7 @@ https://github.com/remorses/playwright/tree/1ca511869834700a64cc6d72ad228c2dd0e3
   packages/injected/src/injectedScript.ts
   packages/playwright-core/src/server/dom.ts
 Distributed by Playwriter as @xmorse/playwright-core. The outer Playwriter
-project's GPL-3.0-only license does not replace these files' Apache-2.0 license.
+project's MIT license does not replace these files' Apache-2.0 license.
 
 Adaptations by Chat with Work: a fixed isolated-world implementation,
 privacy-limited obstruction descriptions, finite background-tab polling,
