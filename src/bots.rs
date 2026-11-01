@@ -60,6 +60,19 @@ const CREATE_KEYS: &[&str] = &[
     "github",
     "schedule",
 ];
+/// What `schedule` in a file may hold. Its trigger's own fields are the
+/// server's to check.
+const SCHEDULE_KEYS: &[&str] = &[
+    "frequency",
+    "at",
+    "on_weekday",
+    "on_day",
+    "recurrence",
+    "time_zone",
+    "repeats",
+    "run_at",
+    "trigger_attributes",
+];
 /// The settings `update` reads from a file.
 const UPDATE_KEYS: &[&str] = &[
     "name",
@@ -422,7 +435,7 @@ impl Form {
         }
 
         self.fill_timing(&mut schedule);
-        self.fill_trigger(&mut schedule)?;
+        self.fill_trigger(&mut schedule, recipe.is_some())?;
 
         let mut body = Map::new();
         if let Some(recipe) = recipe {
@@ -458,7 +471,7 @@ impl Form {
     }
 
     /// When's fields: its app, with its events and fields under its key.
-    fn fill_trigger(&self, schedule: &mut Map<String, Value>) -> Result<()> {
+    fn fill_trigger(&self, schedule: &mut Map<String, Value>, recipe: bool) -> Result<()> {
         let attributes = schedule
             .entry("trigger_attributes")
             .or_insert_with(|| json!({}))
@@ -475,7 +488,7 @@ impl Form {
                 .get("app")
                 .and_then(Value::as_str)
                 .map(str::to_string))
-            .or((timed && self.recipe.is_none()).then(|| "schedule".to_string()));
+            .or((timed && !recipe).then(|| "schedule".to_string()));
         if let Some(app) = &app {
             attributes.insert("app".into(), json!(app));
             if !self.events.is_empty() || !self.trigger_fields.is_empty() {
@@ -594,13 +607,21 @@ fn parse_settings(text: &str, allowed: &[&str]) -> Result<Map<String, Value>> {
         return Err(invalid("That file should be a mapping of settings."));
     };
     refuse_secrets(&Value::Object(settings.clone()))?;
+    only_known(&settings, allowed)?;
+    if let Some(Value::Object(schedule)) = settings.get("schedule") {
+        only_known(schedule, SCHEDULE_KEYS)?;
+    }
+    Ok(settings)
+}
+
+fn only_known(settings: &Map<String, Value>, allowed: &[&str]) -> Result<()> {
     let unknown: Vec<&str> = settings
         .keys()
         .map(String::as_str)
         .filter(|key| !allowed.contains(key))
         .collect();
     if unknown.is_empty() {
-        Ok(settings)
+        Ok(())
     } else {
         Err(invalid(&format!(
             "That file has settings cww doesn't know: {}. It takes {}.",
@@ -616,8 +637,11 @@ fn refuse_secrets(value: &Value) -> Result<()> {
     match value {
         Value::Object(fields) => {
             for (key, nested) in fields {
-                let key = key.to_lowercase().replace('-', "_");
-                if SECRET_WORDS.iter().any(|word| key.contains(word)) {
+                let key = key.to_lowercase().replace(['-', '_'], "");
+                if SECRET_WORDS
+                    .iter()
+                    .any(|word| key.contains(&word.replace('_', "")))
+                {
                     return Err(invalid(
                         "A secret can't be set from a file or a flag: add it on the bot's page.",
                     ));
@@ -643,8 +667,9 @@ pub fn confirm(question: &str, yes: bool) -> Result<()> {
             format!("{question} Pass --yes to confirm.")
         ));
     }
-    print!("{question} [y/N] ");
-    std::io::stdout().flush()?;
+    // Beside the answer, never in it: stdout may be a program's JSON.
+    eprint!("{question} [y/N] ");
+    std::io::stderr().flush()?;
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer)?;
     if matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
@@ -1189,6 +1214,48 @@ mod tests {
         let lines = error_lines(&error);
         assert_eq!(lines[0], "Name can't be blank");
         assert!(lines[2].contains("--app"));
+    }
+
+    #[test]
+    fn a_secret_is_refused_however_its_name_is_written() {
+        for key in [
+            "privateKey",
+            "accessKey",
+            "api-key",
+            "ApiKey",
+            "client_secret",
+        ] {
+            let error = refuse_secrets(&json!({ "webhook": { key: "x" } })).unwrap_err();
+            assert!(error.to_string().contains("secret"), "{key}");
+        }
+        assert!(refuse_secrets(&json!({ "keywords": "x", "monkey": 1 })).is_ok());
+    }
+
+    #[test]
+    fn a_misspelled_schedule_setting_is_refused_before_anything_is_sent() {
+        let error = parse_settings("schedule:\n  frequncy: weekday\n", CREATE_KEYS).unwrap_err();
+        assert!(error.to_string().contains("frequncy"), "{error}");
+        let good = "schedule:\n  frequency: weekday\n  trigger_attributes:\n    app: schedule\n";
+        assert!(parse_settings(good, CREATE_KEYS).is_ok());
+    }
+
+    #[test]
+    fn a_time_keeps_the_trigger_of_a_recipe_from_a_file() {
+        let form = Form {
+            at: Some("09:00".into()),
+            ..Form::default()
+        };
+        let file = parse_settings("recipe: triage\n", CREATE_KEYS).unwrap();
+        let body = form.body_over(file).unwrap();
+        assert!(
+            body.pointer("/bot/schedule/trigger_attributes/app")
+                .is_none(),
+            "{body}"
+        );
+        assert!(
+            body.to_string().find("\"app\":\"schedule\"").is_none(),
+            "{body}"
+        );
     }
 
     #[test]

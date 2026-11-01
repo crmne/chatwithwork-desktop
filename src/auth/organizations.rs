@@ -114,8 +114,11 @@ pub fn list(paths: &Paths) -> Result<Vec<SavedOrganization>> {
 
 /// A sign-in for chats, and maybe bots, that shares no folders.
 fn chats_without_folders(scope: &str) -> bool {
-    let mut scopes = scope.split_whitespace();
-    scopes.next() == Some(CHAT_SCOPE) && scopes.all(|scope| scope == BOTS_SCOPE)
+    let scopes: Vec<&str> = scope.split_whitespace().collect();
+    scopes.contains(&CHAT_SCOPE)
+        && scopes
+            .iter()
+            .all(|scope| [CHAT_SCOPE, BOTS_SCOPE].contains(scope))
 }
 
 /// Select a saved sign-in by its local ID, account ID or unambiguous name.
@@ -247,6 +250,7 @@ mod tests {
     fn a_saved_sign_in_shares_no_folders() {
         assert!(chats_without_folders("desktop:chat"));
         assert!(chats_without_folders("desktop:chat desktop:bots"));
+        assert!(chats_without_folders("desktop:bots desktop:chat"));
         assert!(!chats_without_folders("desktop:serve desktop:chat"));
         assert!(!chats_without_folders("desktop:chat desktop:serve"));
         assert!(!chats_without_folders("desktop:bots"));
