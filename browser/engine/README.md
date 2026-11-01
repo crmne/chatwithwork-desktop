@@ -1,7 +1,7 @@
 # Fixed browser engine helper
 
 This private helper runs the unchanged, integrity-pinned
-`@xmorse/playwright-core@1.59.13` used by Playwriter. It uses `CRBrowser` and
+`@xmorse/playwright-core@1.59.14` used by Playwriter. It uses `CRBrowser` and
 `ElementHandle.click`, `fill`, `press` and `selectOption`, including their
 upstream actionability, scrolling, hit interception, trusted input, waits and
 state verification. It does not run Playwriter's arbitrary-JavaScript executor.

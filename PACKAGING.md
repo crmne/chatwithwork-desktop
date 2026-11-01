@@ -21,7 +21,7 @@ at startup. `browser/engine/scripts/package.py stage` verifies an official Node
 archive against the pinned SHA-256 in `runtime-platforms.json`, extracts only its
 executable and aggregate `LICENSE`, and runs `npm ci --omit=dev --ignore-scripts
 --bin-links=false`. The dependency is the unchanged registry
-`@xmorse/playwright-core` 1.59.13; its original notices remain in `node_modules`,
+`@xmorse/playwright-core` 1.59.14; its original notices remain in `node_modules`,
 with provenance and runtime notices under `notices/`.
 
 Node 22.23.4 preserves the macOS 11 minimum. **Node 22 support ends on

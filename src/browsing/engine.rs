@@ -29,7 +29,7 @@ use crate::paths::Paths;
 use super::bridge::{Bridge, EngineSession};
 
 const NODE_VERSION: &str = "22.23.4";
-const ENGINE_VERSION: &str = "1.59.13";
+const ENGINE_VERSION: &str = "1.59.14";
 const MAX_FRAME: usize = 2 * 1024 * 1024;
 const MAX_TOTAL: usize = 16 * 1024 * 1024;
 // First launch on Windows can spend over 20 seconds in OS inspection.
