@@ -1,7 +1,8 @@
 //! Daemon-side rate and volume limits.
 //!
-//! Read budgets and any locally configured call/change quotas hold regardless
-//! of the server. Calls and changes have no timed quotas by default.
+//! None is on by default: reading, calling tools and making changes have no
+//! time-based limit unless the computer's owner sets one under `[limits]`,
+//! where zero means no limit. One that is set holds whatever the server does.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -105,8 +106,8 @@ impl Limiter {
     }
 
     /// How many characters one `read` may return right now for `chat`,
-    /// from `scope`: what is left of its hourly budgets, at most a call's
-    /// worth. Refused when nothing is left.
+    /// from `scope`: a call's worth, or what is left of any hourly limit
+    /// set if that's less. Refused when nothing is left.
     pub fn read_allowance(&self, chat: &str, scope: &ReadScope) -> Result<usize, ToolError> {
         self.read_allowance_at(chat, scope, Instant::now())
     }
@@ -127,13 +128,16 @@ impl Limiter {
 
     /// Characters `chat` may still read from `scope` in this rolling hour,
     /// with no cap per call: what `grep`, `glob` and the diffs of a patch
-    /// may return, cut where it runs out.
+    /// may return, cut where it runs out. `usize::MAX` with no limit set.
     pub fn read_remaining(&self, chat: &str, scope: &ReadScope) -> usize {
         self.read_remaining_at(chat, scope, Instant::now())
     }
 
     fn read_remaining_at(&self, chat: &str, scope: &ReadScope, now: Instant) -> usize {
         let (per_chat, all_chats) = scope.budgets(&self.limits.lock().expect("limits"));
+        if per_chat == 0 && all_chats == 0 {
+            return usize::MAX;
+        }
         let key = scope.key();
         let mut w = self.windows.lock().expect("windows");
         let total: usize = match w.reads.get_mut(&key) {
@@ -150,9 +154,7 @@ impl Limiter {
             }
             None => 0,
         };
-        all_chats
-            .saturating_sub(total)
-            .min(per_chat.saturating_sub(chat_used))
+        left_of(all_chats, total).min(left_of(per_chat, chat_used))
     }
 
     /// The refusal for a read from `scope` once nothing is left of its
@@ -165,11 +167,12 @@ impl Limiter {
         let (per_chat, all_chats) = scope.budgets(&self.limits.lock().expect("limits"));
         let key = scope.key();
         let w = self.windows.lock().expect("windows");
-        // How long until the oldest read in `q` leaves the hour, when `q`
-        // has used up `budget`.
         // How long until enough reads in `q` leave the hour for it to fall
         // below `budget` again, when it has used it up.
         let frees = |q: Option<&Window>, budget: usize| {
+            if budget == 0 {
+                return None;
+            }
             let q = q?;
             let mut used: usize = q.iter().map(|(_, n)| n).sum();
             let mut reads = q.iter();
@@ -187,14 +190,14 @@ impl Limiter {
             .max()
             .unwrap_or(HOUR);
         let what = match scope {
-            ReadScope::Global => "The hourly reading allowance on this computer is used up.",
-            ReadScope::Folder { .. } => "The hourly reading allowance for this folder is used up.",
+            ReadScope::Global => "The hourly reading limit set on this computer is used up.",
+            ReadScope::Folder { .. } => "The hourly reading limit set for this folder is used up.",
         };
         ToolError::new(
             ErrorCode::RateLimited,
             format!(
-                "{what} {} The person can raise a folder's allowance on the computer \
-                 (cww roots read-budget).",
+                "{what} {} The person can change it on the computer ([limits] in config.toml, \
+                 or cww roots read-budget).",
                 wait_message(frees_in)
             ),
         )
@@ -206,15 +209,21 @@ impl Limiter {
     }
 
     fn record_read_at(&self, chat: &str, scope: &ReadScope, chars: usize, now: Instant) {
-        if chars == 0 {
+        let (per_chat, all_chats) = scope.budgets(&self.limits.lock().expect("limits"));
+        if chars == 0 || (per_chat == 0 && all_chats == 0) {
             return;
         }
         let key = scope.key();
         let mut w = self.windows.lock().expect("windows");
-        w.reads
-            .entry(key.clone())
-            .or_default()
-            .push_back((now, chars));
+        if all_chats > 0 {
+            w.reads
+                .entry(key.clone())
+                .or_default()
+                .push_back((now, chars));
+        }
+        if per_chat == 0 {
+            return;
+        }
         let chat_key = (key, chat.to_string());
         if !w.chat_reads.contains_key(&chat_key) && w.chat_reads.len() >= MAX_TRACKED_CHATS {
             w.chat_reads
@@ -227,13 +236,16 @@ impl Limiter {
     }
 
     /// Bytes `read_bytes` may return right now, across all chats, at most
-    /// `wanted`. Refused when the hour's copy budget is used up.
+    /// `wanted`. Refused when an hourly copy limit is set and used up.
     pub fn copy_allowance(&self, wanted: u64) -> Result<u64, ToolError> {
         self.copy_allowance_at(wanted, Instant::now())
     }
 
     fn copy_allowance_at(&self, wanted: u64, now: Instant) -> Result<u64, ToolError> {
         let max = self.limits.lock().expect("limits").copy_bytes_per_hour;
+        if max == 0 {
+            return Ok(wanted);
+        }
         let mut w = self.windows.lock().expect("windows");
         prune(&mut w.copies, now, HOUR, |(t, _)| *t);
         let used: u64 = w.copies.iter().map(|(_, n)| n).sum();
@@ -257,7 +269,7 @@ impl Limiter {
     }
 
     fn record_copy_at(&self, bytes: u64, now: Instant) {
-        if bytes > 0 {
+        if bytes > 0 && self.limits.lock().expect("limits").copy_bytes_per_hour > 0 {
             let mut w = self.windows.lock().expect("windows");
             w.copies.push_back((now, bytes));
         }
@@ -354,6 +366,15 @@ impl Limiter {
     }
 }
 
+/// What's left of `budget` once `used` is spent; a `budget` of zero is no limit.
+fn left_of(budget: usize, used: usize) -> usize {
+    if budget == 0 {
+        usize::MAX
+    } else {
+        budget.saturating_sub(used)
+    }
+}
+
 fn prune<T>(q: &mut VecDeque<T>, now: Instant, window: Duration, at: impl Fn(&T) -> Instant) {
     while q
         .front()
@@ -406,6 +427,58 @@ mod tests {
         let windows = l.windows.lock().unwrap();
         assert!(windows.calls.is_empty());
         assert!(windows.changes.is_empty());
+    }
+
+    #[test]
+    fn default_reads_and_copies_never_run_out_or_pile_up() {
+        let l = Limiter::new(Limits::default());
+        let now = Instant::now();
+        // Far past every former default, in one instant, so no window
+        // could have let any of it go.
+        for _ in 0..1000 {
+            assert_eq!(l.read_allowance_at("a", &G, now).unwrap(), 32_000);
+            l.record_read_at("a", &G, 1_000_000, now);
+            assert_eq!(l.copy_allowance_at(64 * 1024, now).unwrap(), 64 * 1024);
+            l.record_copy_at(1024 * 1024, now);
+        }
+        assert_eq!(l.read_remaining_at("a", &G, now), usize::MAX);
+        let windows = l.windows.lock().unwrap();
+        assert!(windows.reads.is_empty());
+        assert!(windows.chat_reads.is_empty());
+        assert!(windows.copies.is_empty());
+    }
+
+    #[test]
+    fn read_limits_can_be_set_independently() {
+        let now = Instant::now();
+        let per_chat = Limiter::new(Limits {
+            read_chars_per_chat_hour: 10,
+            ..Limits::default()
+        });
+        per_chat.record_read_at("a", &G, 10, now);
+        assert_eq!(per_chat.read_remaining_at("a", &G, now), 0);
+        assert_eq!(per_chat.read_remaining_at("b", &G, now), 10);
+        let err = per_chat.read_allowance_at("a", &G, now).unwrap_err();
+        assert!(
+            err.message.contains("in about 60 minutes"),
+            "{}",
+            err.message
+        );
+        assert!(per_chat.windows.lock().unwrap().reads.is_empty());
+
+        let all_chats = Limiter::new(Limits {
+            read_chars_per_hour: 10,
+            ..Limits::default()
+        });
+        all_chats.record_read_at("a", &G, 10, now);
+        assert_eq!(all_chats.read_remaining_at("b", &G, now), 0);
+        let err = all_chats.read_allowance_at("b", &G, now).unwrap_err();
+        assert!(
+            err.message.contains("in about 60 minutes"),
+            "{}",
+            err.message
+        );
+        assert!(all_chats.windows.lock().unwrap().chat_reads.is_empty());
     }
 
     #[test]

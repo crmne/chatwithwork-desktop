@@ -213,6 +213,33 @@ async fn grep_answers_count_against_the_shared_read_budget() {
     assert_eq!(grep.results, Some(2));
 }
 
+/// Past every former hourly default, one page at a time, with nothing
+/// waiting or refused: a long read just pages.
+#[tokio::test]
+async fn a_long_file_reads_through_to_its_end_with_no_limit_set() {
+    const FILE: usize = 6_000_000;
+    let f = fixture(Limits::default(), None);
+    std::fs::write(f.base.join("docs/long.md"), "x".repeat(FILE)).unwrap();
+    let (mut read, mut offset) = (0, json!(0));
+    while !offset.is_null() {
+        let answer = call(
+            &f,
+            "read",
+            json!({ "path": "docs:long.md", "offset": offset }),
+        )
+        .await;
+        read += answer["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{answer}"))
+            .len();
+        offset = answer["next_offset"].clone();
+    }
+    assert_eq!(read, FILE);
+    let answer = call(&f, "grep", json!({ "pattern": "run", "path": "app:" })).await;
+    assert_eq!(answer["truncated"], false, "{answer}");
+    assert_eq!(answer["note"], Value::Null, "{answer}");
+}
+
 #[tokio::test]
 async fn a_cut_answer_says_where_the_next_page_starts() {
     let f = fixture(
@@ -479,7 +506,7 @@ async fn a_patch_dry_run_reads_against_each_folders_budget() {
     // The shared budget (60) cuts the second, and the third gets none.
     let second = answer["files"][1]["diff"].as_str().unwrap();
     assert_eq!(second.chars().count(), 60, "{second}");
-    assert!(second.ends_with("(the read budget ends here)\n"));
+    assert!(second.ends_with("(cut here)\n"));
     assert_eq!(answer["files"][2]["diff"], Value::Null);
     assert_eq!(answer["files"][2]["diff_cut"], true);
     // With the shared budget spent, a dry run touching docs is refused.

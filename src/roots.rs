@@ -248,7 +248,7 @@ pub fn set_bot(
 /// or put it back on the budget every folder shares (`None`). Only the
 /// user does this, here or through the control channel; the server can't.
 pub fn set_read_budget(config: &mut Config, which: &str, budget: Option<usize>) -> Result<Root> {
-    let least = config.limits.read_chars_per_chat_hour.min(MAX_READ_BUDGET);
+    let least = config.limits.least_read_budget();
     if let Some(budget) = budget
         && !(least..=MAX_READ_BUDGET).contains(&budget)
     {
@@ -447,6 +447,7 @@ fn new_id(config: &Config, label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Limits;
 
     #[test]
     fn ids_are_readable_and_unique() {
@@ -470,7 +471,13 @@ mod tests {
 
     #[test]
     fn sets_a_folders_read_budget_within_its_bounds() {
-        let mut config = Config::default();
+        let mut config = Config {
+            limits: Limits {
+                read_chars_per_chat_hour: 5_000_000,
+                ..Limits::default()
+            },
+            ..Config::default()
+        };
         config.roots.push(Root {
             bots: Vec::new(),
             id: "app".into(),

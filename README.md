@@ -111,7 +111,7 @@ cww roots add ~/Documents/Work --label "Work docs"
 cww roots list
 cww roots allow-changes work-docs   # let Chat with Work change files there too
 cww roots deny-changes work-docs    # read-only again
-cww roots read-budget app 5000000   # let a chat read more of a folder in an hour, such as code
+cww roots read-budget app 5000000   # where [limits] sets an hourly read limit, let a chat read more of a folder
 cww roots remove work-docs
 ```
 
@@ -121,7 +121,7 @@ A shared folder is read-only until you allow changes in it (and a folder you sha
 
 Symlinks are not followed. `--follow-symlinks` allows links that stay inside the folder; links that point outside are refused either way.
 
-A chat may read 5,000,000 characters an hour from your shared folders, and all chats together 10,000,000, enough for a working session on code. A folder you work in a lot, such as code, can have a budget of its own: `cww roots read-budget <root> <characters>`, from 5,000,000 to 20,000,000 characters a chat an hour (all chats together twice it), counted for that folder alone; `default` puts it back on the shared budget. Only you can set it, here or over the control API (`roots_read_budget`); the server can't.
+Reading has no hourly limit: a chat reads as much of your shared folders, and of pages in the browser, as its work needs, a page at a time. If you want a local cap, set `read_chars_per_chat_hour` or `read_chars_per_hour` under `[limits]` in the config file. With one set, a folder you work in a lot, such as code, can have a budget of its own: `cww roots read-budget <root> <characters>`, from that limit to 20,000,000 characters a chat an hour (all chats together twice it), counted for that folder alone; `default` puts it back on the shared limit. With none set, a folder's budget does nothing. Only you can set these, here or over the control API (`roots_read_budget`); the server can't.
 
 ## Run the daemon
 
@@ -271,7 +271,7 @@ Through version 0.3.1, the desktop app was a native egui app with its own chat w
 | `read` | Returns the text of one file, 32 000 characters at a time. PDF, Word, PowerPoint and Excel files are converted to text. |
 | `grep` | Searches code like ripgrep: lines matching a regular expression, with context lines, or the files that match, or how many lines in each. It skips what Git ignores, hidden files and binary files. |
 | `glob` | Finds files by name (`**/*.rb`), with their size and modification time. |
-| `read_bytes` | Copies one file, of any kind, up to 25 MiB, a chunk at a time, for Chat with Work to attach to a chat. Chat with Work uses it itself, never the model, with its own budget of 100 MiB an hour. |
+| `read_bytes` | Copies one file, of any kind, up to 25 MiB, a chunk at a time, for Chat with Work to attach to a chat. Chat with Work uses it itself, never the model. |
 
 In folders where you allow changes, and only while at least one folder does:
 
@@ -344,7 +344,7 @@ label = "Work docs"
 path = "/Users/carmine/Documents/Work"
 follow_symlinks = false
 writable = false      # true lets Chat with Work change files here (cww roots allow-changes)
-# read_budget = 5000000  # characters a chat may read from this folder an hour (cww roots read-budget)
+# read_budget = 5000000  # raises the hourly read limit for this folder, if [limits] sets one (cww roots read-budget)
 
 [deny]
 extra = ["*.secret", "Clients/Confidential"]  # more patterns to block
@@ -353,14 +353,17 @@ remove = ["*.key"]                             # built-in patterns to drop (Keyn
 allow_hardlinks = false                        # reads only: changes never touch hard links
 
 [limits]
-calls_per_minute = 0            # unlimited; optional local quota
-read_chars_per_call = 32000
-read_chars_per_chat_hour = 5000000
-read_chars_per_hour = 10000000
-copy_bytes_per_hour = 104857600  # 100 MiB of files read_bytes copies into chats
-changes_per_minute = 0          # unlimited changes
-changes_per_day = 0             # unlimited changes
-change_bytes_per_hour = 0       # unlimited total bytes written by changes
+# Time-based limits are off: 0 means no limit. Set any of them for a local
+# cap that holds whatever the server does (see SECURITY.md).
+calls_per_minute = 0
+read_chars_per_chat_hour = 0
+read_chars_per_hour = 0
+copy_bytes_per_hour = 0         # files read_bytes copies into chats
+changes_per_minute = 0
+changes_per_day = 0
+change_bytes_per_hour = 0       # total bytes written by changes
+# Size limits are always on.
+read_chars_per_call = 32000     # longer reads page through with next_offset
 max_change_file_bytes = 10485760 # largest file a change writes or copies
 max_change_entries = 1000        # most files a folder move or delete may carry
 
@@ -462,7 +465,7 @@ The rule behind the design: **every control that must hold against a compromised
 | A stolen access token | It is useless without the device key: every connection needs a fresh proof signed by that key. |
 | Revocation | Revoking a device in Settings closes its socket and makes every later token refresh fail. The daemon then stops reconnecting. |
 
-**Allowing changes trusts the server's approvals.** Chat with Work asks you before each change, but that approval happens on the server, and the daemon can't tell a real approval from a forged one. So a compromised server could change files in folders where you allow changes, without asking you. What limits the damage, whatever the server does: changes are off unless you turn them on for a folder, on your computer; everything replaced or deleted is in the system trash, where you can restore it; changes have their own budgets (30 a minute, 500 a day, 50 MB written an hour, 10 MB per file); every change is in the local audit log with what it did and where the old version went; and the deny list and the never-changed list hold. Allow changes only in folders whose contents you could restore, and `cww pause` (or the switch) stops everything at once.
+**Allowing changes trusts the server's approvals.** Chat with Work asks you before each change, but that approval happens on the server, and the daemon can't tell a real approval from a forged one. So a compromised server could change files in folders where you allow changes, without asking you. What limits the damage, whatever the server does: changes are off unless you turn them on for a folder, on your computer; everything replaced or deleted is in the system trash, where you can restore it; no change writes a file over 10 MB; every change is in the local audit log with what it did and where the old version went; and the deny list and the never-changed list hold. Allow changes only in folders whose contents you could restore, and `cww pause` (or the switch) stops everything at once.
 
 **Default deny list:** matched on path components, even inside shared folders, ignoring case the way case-insensitive filesystems do: names are compared in full Unicode case folding and NFD, without zero-width and direction marks, so `.Kube` (with a Kelvin sign), `.zſhrc` or a decomposed accent match the name they stand for. The never-changed list below is matched the same way.
 
@@ -473,7 +476,8 @@ The rule behind the design: **every control that must hold against a compromised
 ### What it does not protect against
 
 - **Anything inside a shared folder that isn't on the deny list can be read.** Share narrow folders. A secret stored in `notes.txt` is readable.
-- **In a folder that allows changes, a compromised server can change files without your approval** (see above): recoverable from the trash, within the budgets, and logged, but changed.
+- **In a folder that allows changes, a compromised server can change files without your approval** (see above): recoverable from the trash and logged, but changed, and with no limit on how many or how fast unless you set one under `[limits]`.
+- **A compromised server can read everything in your shared folders, as fast as your connection carries it.** Time-based limits are off by default, so nothing slows it down unless you set them under `[limits]` (see [SECURITY.md](SECURITY.md#time-based-limits)). The deny list and the audit log still hold.
 - **In a folder that allows commands, a compromised server could run commands without your approval**, as it could make changes: commands are approved in Chat with Work, or run without asking in a chat set to Allow everything, and the daemon can't tell either from a forged approval. Only you turn commands on, per folder, on this computer.
 - **In a folder that allows commands, a command can do anything there**: change or delete any file (the trash doesn't keep those), and read the files the deny list keeps from the tools. It can't reach the rest of your home folder or, unless you allow it, the network ([docs/commands.md](docs/commands.md)). Where Bubblewrap can't run, commands run on Landlock instead, without the network and without `chmod` by name. On Windows they run in a process container, which only Windows 11 24H2 with the August 2026 update and later have; there Node.js and cmd's `dir` need an administrator to run `cww roots prepare-commands` once.
 - **Text that runs later can be written.** cww writes no programs and sets no execute bit, and the never-changed list keeps out the files that run on their own (startup files, autostart, editor and hook settings). But build files and scripts are ordinary text people ask to have edited, and stay changeable: a changed `Makefile`, `package.json` script, `build.rs`, test, or shell script runs when you build, test or run the project yourself, and changed source code runs when you run the program. Settings of programs that live outside the home folder's dot files (`~/Library/Application Support` on macOS, `AppData` on Windows) are only out of reach because those folders are too broad to share without `--i-know`. Read the diff before you build or run something a change touched.

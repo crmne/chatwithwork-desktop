@@ -384,3 +384,98 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     daemon.await.unwrap().unwrap();
     extension.join().unwrap();
 }
+
+/// Reading a page has no hourly limit by default: however long it is, it
+/// pages through to the end. The extension here pages as `snapshot.ts` does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_page_reads_through_to_its_end() {
+    const PAGE: usize = 6_000_000;
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = Paths::under(tmp.path());
+    let mut config = Config {
+        secret_store: Some("file".into()),
+        ..Config::default()
+    };
+    config.index.enabled = false;
+    config.browser.enabled = true;
+    config.browser.sites = vec!["example.com".into()];
+    config.save(&paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(paths.clone(), shutdown.clone(), false));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !paths.socket_path().exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let socket = paths.socket_path();
+    let (ready, attached) = tokio::sync::oneshot::channel();
+    let extension = std::thread::spawn(move || {
+        let control::BrowserAttach::Attached {
+            mut reader,
+            mut writer,
+        } = control::attach_browser(&socket, &origin(EXTENSION_ID)).unwrap()
+        else {
+            panic!("extension attached");
+        };
+        writeln!(
+            writer,
+            "{}",
+            json!({"event":"hello","version":"test","site_policy_version":2,"stopped":false})
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        ready.send(()).unwrap();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            line.clear();
+            if request.get("id").is_none() {
+                continue;
+            }
+            let args = &request["params"];
+            let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+            let max = args["max_chars"].as_u64().unwrap() as usize;
+            let end = PAGE.min(offset + max);
+            let result = json!({
+                "url": "https://example.com/long",
+                "text": "x".repeat(end - offset),
+                "offset": offset,
+                "next_offset": (end < PAGE).then_some(end),
+            });
+            writeln!(
+                writer,
+                "{}",
+                json!({ "id": request["id"], "result": result })
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        }
+    });
+    attached.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while control(&paths, ControlRequest::Browser).await["browser"]["extension"]["site_policy_version"] != 2 {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+
+    let (mut read, mut offset) = (0, Some(0));
+    while let Some(at) = offset {
+        let answer = control(&paths, call("browser_read", json!({ "offset": at }), false)).await;
+        assert_ne!(answer["result"]["isError"], true, "at {at}: {answer}");
+        let page = &answer["result"]["structuredContent"];
+        read += page["text"].as_str().unwrap().len();
+        offset = page["next_offset"].as_u64();
+    }
+    assert_eq!(read, PAGE);
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+    extension.join().unwrap();
+}
