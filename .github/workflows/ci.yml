@@ -1,10 +1,11 @@
 name: CI
 
 # Pull requests run the checks that catch most breakage (lint and tests on
-# the three platforms, the extension, cargo-deny, the Linux Nix package);
-# main, and a run started by hand on any branch, also build the release
-# binaries, the installers and the other Nix packages. Changes to only
-# Markdown or docs/ run nothing.
+# the three platforms, the extension, cargo-deny); main, and a run started by
+# hand on any branch, also build the release binaries, the installers and the
+# Nix packages. On a pull request the Linux Nix package runs only when what
+# it's built from changes (nix.yml). Changes to only Markdown or docs/ run
+# nothing.
 on:
   push:
     branches: [main]
@@ -247,8 +248,11 @@ jobs:
           # only the root package's are checked.
           arguments: --workspace --all-features
 
+  # Off pull requests, where nix.yml runs it: it's the slowest job, rebuilding
+  # the whole app and rerunning its tests with no cache.
   nix:
     name: Nix package (x86_64-linux)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
