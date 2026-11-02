@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::client::ServerUrl;
 use crate::notifications::{
+    navigation::Place,
     protocol::{self, Command, Event, PermissionState},
     supervisor,
 };
@@ -85,13 +86,12 @@ impl From<PermissionState> for Permission {
 pub struct Activation {
     pub server: ServerUrl,
     pub account: String,
-    pub chat: u64,
+    pub place: Place,
 }
 
 impl Activation {
     pub fn browser_url(&self) -> String {
-        self.server
-            .endpoint(&format!("/{}/chats/{}", self.account, self.chat))
+        self.server.endpoint(&self.place.path(&self.account))
     }
 }
 
@@ -185,7 +185,7 @@ fn open_activation_with_window(
         && let Ok(target) = crate::notifications::navigation::Target::new(
             activation.server.clone(),
             activation.account.clone(),
-            activation.chat,
+            activation.place,
         )
         && let Ok(mut child) = std::process::Command::new(app)
             .arg("--open-chat")
@@ -635,6 +635,16 @@ struct Offer {
     expires_at: String,
 }
 
+impl Offer {
+    /// A digest is about everything waiting, not the chat that set it off.
+    fn place(&self) -> Place {
+        match self.kind.as_str() {
+            "decisions_waiting" => Place::Decisions,
+            _ => Place::Chat(self.chat),
+        }
+    }
+}
+
 struct Connection {
     generation: u64,
     server: ServerUrl,
@@ -1032,7 +1042,7 @@ impl Bridge {
                         (self.activated)(Activation {
                             server: connection.server.clone(),
                             account: pending.offer.account.clone(),
-                            chat: pending.offer.chat,
+                            place: pending.offer.place(),
                         });
                     }
                     self.active.remove(&id);

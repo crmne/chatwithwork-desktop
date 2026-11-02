@@ -335,7 +335,7 @@ fn open(app: &AppHandle, open: &Open) {
     let _opening = desktop.opening.lock().expect("opening lock");
     let result = match open {
         Open::Main => windows::show_main(app, None),
-        Open::Chat(target) => match desktop.server().chat_url(target) {
+        Open::Chat(target) => match desktop.server().notification_url(target) {
             Some(url) => windows::show_main(app, Some(url)),
             None => {
                 log::info!("a notification for another server; ignored");

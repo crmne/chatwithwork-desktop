@@ -72,14 +72,12 @@ impl Server {
         self.origin.join("/chats/new").expect("a fixed path joins")
     }
 
-    /// A chat a notification points at, on this server only.
-    pub fn chat_url(&self, target: &Target) -> Option<Url> {
+    /// The chat or Decisions a notification points at, on this server only.
+    pub fn notification_url(&self, target: &Target) -> Option<Url> {
         if target.server().origin() != self.origin() {
             return None;
         }
-        self.origin
-            .join(&format!("/{}/chats/{}", target.account(), target.chat()))
-            .ok()
+        self.origin.join(&target.path()).ok()
     }
 
     /// One of this server's pages, from a path like `/settings?tab=x`.
@@ -179,13 +177,21 @@ mod tests {
             Target::parse(r#"{"server":"https://work.example","account":"482139075","chat":16}"#)
                 .unwrap();
         assert_eq!(
-            server().chat_url(&here).unwrap().as_str(),
+            server().notification_url(&here).unwrap().as_str(),
             "https://work.example/482139075/chats/16"
+        );
+        let decisions = Target::parse(
+            r#"{"server":"https://work.example","account":"482139075","decisions":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            server().notification_url(&decisions).unwrap().as_str(),
+            "https://work.example/482139075/decisions"
         );
         let elsewhere =
             Target::parse(r#"{"server":"https://other.example","account":"482139075","chat":16}"#)
                 .unwrap();
-        assert!(server().chat_url(&elsewhere).is_none());
+        assert!(server().notification_url(&elsewhere).is_none());
     }
 
     #[test]
