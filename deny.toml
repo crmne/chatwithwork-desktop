@@ -20,9 +20,10 @@ all-features = false
 unmaintained = "all"
 yanked = "deny"
 # docx-rs 0.4.22, the latest release, still requires zip 8 (calamine and
-# rust_xlsxwriter have moved to zip 9). Its three advisories concern
-# extracting archives to disk, and docx-rs only builds documents in memory. See docs/zip-review.md. Remove these when docx-rs
-# supports zip 9.
+# rust_xlsxwriter have moved to zip 9; docx-rs's main branch has too, but
+# isn't released). Its four advisories concern extracting archives to disk,
+# and docx-rs only builds documents in memory. See docs/zip-review.md. Remove
+# these when docx-rs releases zip 9 support.
 #
 # zbus 6 folded zvariant, zvariant_derive and zbus_names into zbus, so the
 # standalone crates are marked unmaintained. They come only
@@ -33,6 +34,7 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip 8 (GHSA-vv5m-jxxh-4627) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
     { id = "RUSTSEC-2026-0368", reason = "zip 8 (GHSA-4v9h-p7m9-rh26) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
     { id = "RUSTSEC-2026-0369", reason = "zip 8 (GHSA-4684-h2q9-2vcp) through docx-rs, which never extracts archives to disk; see docs/zip-review.md" },
+    { id = "RUSTSEC-2026-0429", reason = "zip 8 (GHSA-q7v9-x93c-xqv3, ZipArchive::extract on a symlink entry) through docx-rs, which never calls extract and whose reader cww doesn't use; see docs/zip-review.md" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; keyring's Secret Service store still requires zbus 5" },
