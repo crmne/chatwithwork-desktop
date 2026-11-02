@@ -16,7 +16,7 @@ Options:
   --scan               Open the scan window
   --page <name>        Open settings on a page: welcome, folders,
                        printers, browser, privacy, activity, account, notifications, general
-  --open-chat <json>   Open an account-scoped chat from a native notification
+  --open-chat <json>   Open a chat or Decisions from a native notification
   <link>               Open a chatwithwork:// link, alone on the command line
   --server <url>       Show this Chat with Work server instead of the paired
                        one (for development)
@@ -187,7 +187,9 @@ mod tests {
             r#"{"server":"https://example.test","account":"482139075","chat":16}"#,
         ])
         .unwrap();
-        assert!(matches!(options.open, Open::Chat(target) if target.chat() == 16));
+        assert!(
+            matches!(options.open, Open::Chat(target) if target.path() == "/482139075/chats/16")
+        );
         assert!(args(&["--open-chat", "https://example.test/482139075/chats/16"]).is_err());
         assert!(args(&["--open-chat"]).is_err());
     }

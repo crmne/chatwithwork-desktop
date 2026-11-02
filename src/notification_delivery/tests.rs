@@ -8,7 +8,7 @@ fn notification_navigation_falls_back_only_when_the_desktop_launcher_fails() {
     let activation = Activation {
         server: ServerUrl::parse("https://staging.example.com").unwrap(),
         account: "482139075".into(),
-        chat: 16,
+        place: Place::Chat(16),
     };
     let mut opened = Vec::new();
     for exit_code in [0, 2, 1] {
@@ -43,7 +43,7 @@ fn notification_navigation_does_not_reopen_the_browser_after_a_later_desktop_fai
     let activation = Activation {
         server: ServerUrl::parse("https://staging.example.com").unwrap(),
         account: "482139075".into(),
-        chat: 16,
+        place: Place::Chat(16),
     };
     let mut opened = Vec::new();
     open_activation_with_window(
@@ -153,6 +153,45 @@ fn offer(id: u64, chat: u64) -> Offer {
             .format(&Rfc3339)
             .unwrap(),
     }
+}
+
+#[test]
+fn every_kind_the_server_offers_is_accepted_with_the_words_it_sends() {
+    for kind in [
+        "answered",
+        "approval_waiting",
+        "input_requested",
+        "handed_off",
+        "failed",
+        "decisions_waiting",
+    ] {
+        let mut offered = offer(1, 16);
+        offered.kind = kind.into();
+        offered.title = "Morning brief".into();
+        offered.body = "Revenue grew 12% on the new plans.".into();
+        assert!(valid_offer(&offered), "{kind}");
+    }
+
+    let mut unknown = offer(1, 16);
+    unknown.kind = "something_new".into();
+    assert!(!valid_offer(&unknown));
+}
+
+#[test]
+fn a_digest_opens_decisions_and_everything_else_its_chat() {
+    let mut digest = offer(1, 16);
+    digest.kind = "decisions_waiting".into();
+    assert_eq!(digest.place(), Place::Decisions);
+    assert_eq!(offer(1, 16).place(), Place::Chat(16));
+    assert_eq!(
+        Activation {
+            server: ServerUrl::parse("https://staging.example.com").unwrap(),
+            account: "482139075".into(),
+            place: digest.place(),
+        }
+        .browser_url(),
+        "https://staging.example.com/482139075/decisions"
+    );
 }
 
 #[test]
