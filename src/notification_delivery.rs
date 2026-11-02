@@ -1193,7 +1193,12 @@ fn valid_offer(offer: &Offer) -> bool {
         && offer.chat > 0
         && matches!(
             offer.kind.as_str(),
-            "answered" | "approval_waiting" | "input_requested" | "failed"
+            "answered"
+                | "approval_waiting"
+                | "input_requested"
+                | "handed_off"
+                | "failed"
+                | "decisions_waiting"
         )
         && !offer.thread.is_empty()
         && offer.thread.len() <= 200

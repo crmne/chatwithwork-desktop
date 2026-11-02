@@ -156,6 +156,28 @@ fn offer(id: u64, chat: u64) -> Offer {
 }
 
 #[test]
+fn every_kind_the_server_offers_is_accepted_with_the_words_it_sends() {
+    for kind in [
+        "answered",
+        "approval_waiting",
+        "input_requested",
+        "handed_off",
+        "failed",
+        "decisions_waiting",
+    ] {
+        let mut offered = offer(1, 16);
+        offered.kind = kind.into();
+        offered.title = "Morning brief".into();
+        offered.body = "Revenue grew 12% on the new plans.".into();
+        assert!(valid_offer(&offered), "{kind}");
+    }
+
+    let mut unknown = offer(1, 16);
+    unknown.kind = "something_new".into();
+    assert!(!valid_offer(&unknown));
+}
+
+#[test]
 fn native_acceptance_is_the_only_receipt_and_a_duplicate_is_ignored() {
     let mut fixture = Fixture::new();
     let (id, attempt) = fixture.show(1, 16);
