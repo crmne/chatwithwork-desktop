@@ -20,7 +20,7 @@ What goes into each field of the Developer Dashboard for the Chat with Work exte
 >
 > It works only in its own tab group, "Chat with Work", in the background, so you keep using your other tabs. It reads a page the way a screen reader does, takes a screenshot when it needs to see the layout, scrolls and waits for pages to load.
 >
-> If you also allow actions, it can open pages on your allowed sites, click, type, choose from lists, close its tabs and save files into a folder you share. Every action asks you first in Chat with Work. Anything that may send, buy, post or delete something shows you a screenshot of the tab with the button outlined before you approve it.
+> If you also allow actions, it can open pages on your allowed sites, click, type, choose from lists, close its tabs and save files into a folder you share. Actions ask first, unless you let them run. Anything that may send, buy, post or delete something shows you a screenshot of the tab with the button outlined before you approve it.
 >
 > What it never does:
 > - Act on a tab outside its tab group, or on a site you didn't allow.

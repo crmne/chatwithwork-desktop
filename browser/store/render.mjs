@@ -29,7 +29,7 @@ const style = `
 
 const slides = [
   { file: "1-tab-group.png", title: "Your browser, in its own tab group", text: "Chat with Work uses tabs only in its “Chat with Work” group, on sites you allow in Chat with Work Desktop. You keep using the rest.", image: capture("menu-ready-dark.png"), width: 380 },
-  { file: "2-approval.png", title: "Every action asks you first", text: "Before it clicks, types or opens anything, you see what it will do. Anything that may send, buy, post or delete shows you a picture of it.", image: capture("approval-card-dark.png"), width: 560 },
+  { file: "2-approval.png", title: "Actions ask first, unless you let them run", text: "When it asks, you see what it will do before it clicks, types or opens anything. Anything that may send, buy, post or delete shows you a picture of it.", image: capture("approval-card-dark.png"), width: 560 },
   { file: "3-stop.png", title: "Stop it at any time", text: "Stop in the extension's menu or in Chat with Work Desktop ends it at once. It never reads or types passwords, card numbers or one-time codes.", image: capture("menu-stopped-dark.png"), width: 380 },
 ];
 
