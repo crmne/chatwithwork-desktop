@@ -364,6 +364,8 @@ Paths always look like `work-docs:plans/q3.pdf`.
 
 The daemon does nothing until something happens. There is no polling: the index follows file events (inotify, FSEvents, ReadDirectoryChangesW) and waits for a folder to be quiet for a moment before it updates, and only the directories that changed are rescanned. The only regular wake-ups are the server's WebSocket pings.
 
+The index watches only the folders it indexes: never what Git or `.ignore` ignores, hidden folders such as `.git`, dependencies (`node_modules`, Python virtual environments), build output in a software project (`target`, `build`, `dist`, `vendor`, `tmp` and the like), caches marked with a `CACHEDIR.TAG`, linked Git worktrees, anything on the deny list, or a link out of the folder. None of those are indexed either. On Linux each watched folder takes a kernel watch from a pool every program on the computer shares, so the daemon holds at most 8,192 of them, or a tenth of the system's limit (`fs.inotify.max_user_watches`) when that is less, the shallowest folders first. Folders past that are brought up to date when a search asks (at most once a minute) and by the periodic rescan, and the log says so once. On macOS and Windows one watch covers each shared folder, and events from folders the index skips are dropped before they cost a rescan.
+
 Measured on real Documents folders, connected to a Chat with Work server:
 
 | | Linux | macOS | Windows |
@@ -423,7 +425,7 @@ max_change_entries = 1000        # most files a folder move or delete may carry
 [index]
 enabled = true
 watch = true          # follow file events; the index sleeps between them
-rescan_secs = 1800    # full rescan interval, only when watching is off or unavailable
+rescan_secs = 1800    # rescan interval for folders not watched in full (watching off, or past the watch limit)
 
 [sandbox]
 enabled = true        # Landlock on Linux, Seatbelt on macOS

@@ -16,6 +16,7 @@ pub mod index;
 pub mod indexer;
 pub mod safe_fs;
 pub mod walk;
+pub mod watch;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
@@ -317,6 +318,10 @@ impl Reader {
 
         let mut hits: Vec<SearchHit> = Vec::new();
         let mut engines = Vec::new();
+        if let Some(indexer) = &self.indexer {
+            // Folders past the watch limit catch up now, for the next search.
+            indexer.refresh();
+        }
         if let Some(index) = self.indexer.as_ref().and_then(Indexer::index) {
             let ids: Vec<String> = roots.iter().map(|r| r.id.clone()).collect();
             let fetch = if glob.is_some() {
@@ -705,6 +710,7 @@ fn indexer_settings(state: &State, config: &Config) -> IndexerSettings {
         allow_hardlinks: state.allow_hardlinks,
         max_file_bytes: state.limits.max_index_file_bytes,
         watch: config.index.watch,
+        max_watches: watch::default_limit(),
         rescan: Duration::from_secs(config.index.rescan_secs.max(60)),
     }
 }

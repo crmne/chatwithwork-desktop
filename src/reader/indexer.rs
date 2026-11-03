@@ -7,8 +7,13 @@
 //! no polling. Events are collected until the folder has been quiet for a
 //! moment (or a burst has gone on for a while), then only the directories
 //! they touched are rescanned. A full rescan of a root happens at start,
-//! after a config change, and when the OS says events were lost. Only when
-//! watching is off or unavailable does a periodic rescan take over.
+//! after a config change, and when the OS says events were lost.
+//!
+//! Only the directories the index walks are watched, within a limit that
+//! leaves the system's pool of watches to other programs (see
+//! [`super::watch`]). A folder with directories left unwatched (or every
+//! folder, when watching is off or unavailable) is rescanned when a search
+//! asks, at most once a minute, and periodically.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
@@ -25,6 +30,7 @@ use super::extract::{self, format_for, read_capped};
 use super::index::{MAX_BODY_CHARS, SearchIndex};
 use super::safe_fs::{OpenPolicy, RelPath, RootHandle};
 use super::walk::{Scope, Target, walk_scoped_until};
+use super::watch::{self, Watches};
 use crate::policy::DenyList;
 use crate::status::Changes;
 
@@ -42,6 +48,12 @@ const COMMIT_INTERVAL: Duration = Duration::from_secs(15);
 /// A parser may still be completing one bounded file. Do not hold a sandbox
 /// restart hostage to that synchronous third-party call.
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
+/// A search rescans folders that aren't watched in full, unless they were
+/// scanned this recently.
+const REFRESH_AFTER: Duration = Duration::from_secs(60);
+/// Lost events rebuild the watches at most this often; in between they only
+/// rescan.
+const REWATCH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,7 +80,9 @@ pub struct IndexerSettings {
     pub allow_hardlinks: bool,
     pub max_file_bytes: u64,
     pub watch: bool,
-    /// Full rescan interval, used only when watching is off or failed.
+    /// The most OS watches to hold (see [`watch::default_limit`]).
+    pub max_watches: usize,
+    /// Full rescan interval, used only for folders not watched in full.
     pub rescan: Duration,
 }
 
@@ -77,6 +91,9 @@ enum Command {
     Changed(Vec<PathBuf>),
     /// The watcher lost events; rescan everything.
     Rescan,
+    /// A search is about to run: rescan folders that aren't watched in full,
+    /// if they haven't been lately.
+    Refresh,
     Shutdown,
 }
 
@@ -147,7 +164,7 @@ impl Indexer {
                             tx: worker_tx,
                             settings,
                             watcher: None,
-                            watching: false,
+                            last_rewatch: None,
                             pending: HashMap::new(),
                             burst: None,
                             last_full: Instant::now(),
@@ -189,6 +206,12 @@ impl Indexer {
         scan.cancel();
         *scan = self.stopped.child_token();
         let _ = self.tx.send(Command::Configure(settings, scan.clone()));
+    }
+
+    /// A search is coming: bring folders that aren't watched in full up to
+    /// date first, if they haven't been lately. Doesn't wait.
+    pub fn refresh(&self) {
+        let _ = self.tx.send(Command::Refresh);
     }
 
     pub fn stop(&self) {
@@ -253,9 +276,9 @@ struct Worker {
     changes: Changes,
     tx: mpsc::Sender<Command>,
     settings: IndexerSettings,
-    watcher: Option<notify::RecommendedWatcher>,
-    /// Every root is watched, so no periodic rescan is needed.
-    watching: bool,
+    watcher: Option<Watches>,
+    /// When lost events last rebuilt the watches.
+    last_rewatch: Option<Instant>,
     pending: HashMap<String, Pending>,
     burst: Option<Burst>,
     last_full: Instant,
@@ -281,17 +304,31 @@ impl Worker {
                 }
                 Ok(Command::Changed(paths)) => self.note_changes(paths),
                 Ok(Command::Rescan) => {
+                    // Directories made while events were lost aren't watched.
+                    if self.settings.watch
+                        && self
+                            .last_rewatch
+                            .is_none_or(|at| at.elapsed() >= REWATCH_AFTER)
+                    {
+                        self.last_rewatch = Some(Instant::now());
+                        self.start_watcher();
+                    }
                     for root in &self.settings.roots {
                         self.pending.entry(root.id.clone()).or_default().full = true;
                     }
                     self.note_burst();
+                }
+                Ok(Command::Refresh) => {
+                    if self.last_full.elapsed() >= REFRESH_AFTER {
+                        self.scan_unwatched();
+                    }
                 }
                 Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
                     if self.burst.take().is_some() {
                         self.flush_pending();
                     } else {
-                        self.scan_all();
+                        self.scan_unwatched();
                     }
                 }
             }
@@ -307,7 +344,7 @@ impl Worker {
             let cap = MAX_WAIT.saturating_sub(burst.first.elapsed());
             return Some(quiet.min(cap));
         }
-        if self.watching || self.settings.roots.is_empty() {
+        if self.settings.roots.iter().all(|r| self.watched(&r.id)) {
             return None;
         }
         Some(
@@ -328,7 +365,18 @@ impl Worker {
         });
     }
 
+    /// Whether every directory the index walks in this folder is watched.
+    fn watched(&self, root_id: &str) -> bool {
+        self.watcher.as_ref().is_some_and(|w| w.covers(root_id))
+    }
+
     fn note_changes(&mut self, paths: Vec<PathBuf>) {
+        let paths = match &mut self.watcher {
+            Some(watches) => {
+                watches.filter(paths, &self.settings.roots, &self.settings.deny, &self.scan)
+            }
+            None => paths,
+        };
         let mut any = false;
         for path in paths {
             // Our own index and logs are denied; ignoring them also stops
@@ -416,7 +464,6 @@ impl Worker {
             return;
         }
         self.watcher = None;
-        self.watching = false;
         if self.settings.watch {
             self.start_watcher();
         }
@@ -424,21 +471,24 @@ impl Worker {
     }
 
     fn start_watcher(&mut self) {
-        use notify::{RecursiveMode, Watcher};
-
+        // Let go of the old watches first, so the new ones fit the limit.
+        self.watcher = None;
         let tx = self.tx.clone();
-        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let command = match event {
-                Ok(event) if event.need_rescan() => Command::Rescan,
-                Ok(event) if event.kind.is_access() => return,
-                Ok(event) => Command::Changed(event.paths),
-                Err(e) => {
-                    tracing::warn!("file watcher error, rescanning: {e}");
-                    Command::Rescan
-                }
-            };
-            let _ = tx.send(command);
-        });
+        let watcher = Watches::new(
+            self.settings.max_watches,
+            move |event: notify::Result<notify::Event>| {
+                let command = match event {
+                    Ok(event) if event.need_rescan() => Command::Rescan,
+                    Ok(event) if event.kind.is_access() => return,
+                    Ok(event) => Command::Changed(event.paths),
+                    Err(e) => {
+                        watch::note_error(&e);
+                        Command::Rescan
+                    }
+                };
+                let _ = tx.send(command);
+            },
+        );
         let mut watcher = match watcher {
             Ok(w) => w,
             Err(e) => {
@@ -446,17 +496,12 @@ impl Worker {
                 return;
             }
         };
-        let mut all = true;
         for root in &self.settings.roots {
             if self.scan.is_cancelled() {
                 return;
             }
-            if let Err(e) = watcher.watch(&root.path, RecursiveMode::Recursive) {
-                tracing::warn!(root = %root.id, "can't watch root, rescanning periodically: {e}");
-                all = false;
-            }
+            watcher.add_root(root, &self.settings.deny, &self.scan);
         }
-        self.watching = all;
         self.watcher = Some(watcher);
     }
 
@@ -469,6 +514,19 @@ impl Worker {
                 break;
             }
             self.scan(&root, None);
+        }
+    }
+
+    /// Rescan the folders the watcher doesn't cover in full.
+    fn scan_unwatched(&mut self) {
+        self.last_full = Instant::now();
+        for root in self.settings.roots.clone() {
+            if self.scan.is_cancelled() {
+                break;
+            }
+            if !self.watched(&root.id) {
+                self.scan(&root, None);
+            }
         }
     }
 
@@ -671,6 +729,7 @@ mod tests {
             allow_hardlinks: false,
             max_file_bytes: 1024,
             watch: false,
+            max_watches: 64,
             rescan: Duration::from_secs(3600),
         }
     }
