@@ -365,8 +365,8 @@ impl Plan {
     }
 
     /// What a bot's run allowed Claude Code gets: its token, in Claude
-    /// Code's own variable, and no self-updates, whose folder it can't
-    /// write.
+    /// Code's own variable, no self-updates, whose folder it can't write,
+    /// and its temporary files in the run's own.
     pub fn coding_environment(&self) -> Vec<(String, String)> {
         match &self.coding.claude {
             Some(claude) => vec![
@@ -375,6 +375,13 @@ impl Plan {
                     claude.token.expose().to_string(),
                 ),
                 ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
+                // Claude Code keeps its own files under /tmp otherwise,
+                // which Seatbelt and the process container don't give a
+                // run: the run's own temporary folder instead.
+                (
+                    "CLAUDE_CODE_TMPDIR".to_string(),
+                    display(&self.home.join("tmp")),
+                ),
             ],
             None => Vec::new(),
         }

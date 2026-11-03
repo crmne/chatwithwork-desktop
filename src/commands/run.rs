@@ -68,6 +68,9 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
             return State::Failed(refusal(&e));
         }
     };
+    // Nothing to read: a program that waits for input (Claude Code waits
+    // three seconds) sees its end at once.
+    drop(process.take_stdin());
     let readers: Vec<_> = [
         (process.take_stdout(), Stream::Out),
         (process.take_stderr(), Stream::Err),
