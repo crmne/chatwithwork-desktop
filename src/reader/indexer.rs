@@ -515,6 +515,8 @@ impl Worker {
             }
             self.scan(&root, None);
         }
+        // Searches queued during a long pass don't start another.
+        self.last_full = Instant::now();
     }
 
     /// Rescan the folders the watcher doesn't cover in full.
@@ -528,6 +530,7 @@ impl Worker {
                 self.scan(&root, None);
             }
         }
+        self.last_full = Instant::now();
     }
 
     fn set_status(&self, id: &str, state: IndexState, files: Option<u64>, error: Option<String>) {
