@@ -5018,6 +5018,18 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
     let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
     let mut s = connect(&mut server).await;
 
+    // Claude Code needs the network; where the sandbox can't give one (CI's
+    // Ubuntu refuses network namespaces), there's nothing to check.
+    let probe = s
+        .call("run", json!({ "command": "true", "path": "docs:" }))
+        .await;
+    if probe["structuredContent"]["state"] == "failed" {
+        eprintln!("no network for commands here");
+        shutdown.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(10), daemon).await;
+        return;
+    }
+
     let roots = s.bot_call("roots", json!({}), "42").await;
     let coding = &roots["structuredContent"]["roots"][0]["coding"];
     assert_eq!(coding["claude_code"], "ready", "{roots}");
