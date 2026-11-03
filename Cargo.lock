@@ -710,7 +710,7 @@ dependencies = [
  "log",
  "quick-xml 0.42.0",
  "serde",
- "zip 9.2.2",
+ "zip 9.2.3",
 ]
 
 [[package]]
@@ -1369,7 +1369,7 @@ dependencies = [
  "webpki-root-certs",
  "windows",
  "windows-sys 0.61.2",
- "zip 9.2.2",
+ "zip 9.2.3",
 ]
 
 [[package]]
@@ -5311,7 +5311,7 @@ version = "0.102.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ca3d0e879a578c1313c2800ab0c6c029d38eed18098675e50341a30d32372ed"
 dependencies = [
- "zip 9.2.2",
+ "zip 9.2.3",
 ]
 
 [[package]]
@@ -8410,9 +8410,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.2"
+version = "9.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e408c6cc4699dd017d53dc080cd51c2cea2b5354af57a1479bd265ed42911487"
+checksum = "00fb4744e923442ecadfd3f85f51a5d24e03bf43d53813b81ebb4c91d02baa62"
 dependencies = [
  "crc32fast",
  "flate2",
