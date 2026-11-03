@@ -1,0 +1,17 @@
+$ErrorActionPreference = 'Stop'
+
+# The official per-user MSI from the GitHub release, checked by SHA-256.
+$packageArgs = @{
+  packageName    = $env:ChocolateyPackageName
+  fileType       = 'msi'
+  url64bit       = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-x86_64-pc-windows-msvc.msi'
+  checksum64     = '@WINDOWS_X64_MSI_SHA256@'
+  checksumType64 = 'sha256'
+  silentArgs     = "/qn /norestart /l*v `"$($env:TEMP)\$($env:ChocolateyPackageName).$($env:ChocolateyPackageVersion).MsiInstall.log`""
+  validExitCodes = @(0, 3010, 1641)
+}
+if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+  $packageArgs.url64bit = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.msi'
+  $packageArgs.checksum64 = '@WINDOWS_ARM64_MSI_SHA256@'
+}
+Install-ChocolateyPackage @packageArgs

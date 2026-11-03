@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey community package. Rendered and packed by submit.ps1 from a
+     release; see PACKAGING.md, "Package managers". -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>chatwithwork-desktop</id>
+    <version>@VERSION@</version>
+    <title>Chat with Work Desktop</title>
+    <authors>Carmine Paolino</authors>
+    <owners>crmne</owners>
+    <projectUrl>https://github.com/crmne/chatwithwork-desktop</projectUrl>
+    <packageSourceUrl>https://github.com/crmne/chatwithwork-desktop/tree/main/packaging/chocolatey</packageSourceUrl>
+    <projectSourceUrl>https://github.com/crmne/chatwithwork-desktop</projectSourceUrl>
+    <docsUrl>https://github.com/crmne/chatwithwork-desktop#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/crmne/chatwithwork-desktop/issues</bugTrackerUrl>
+    <releaseNotes>https://github.com/crmne/chatwithwork-desktop/releases/tag/v@VERSION@</releaseNotes>
+    <licenseUrl>https://github.com/crmne/chatwithwork-desktop/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <iconUrl>https://cdn.jsdelivr.net/gh/crmne/chatwithwork-desktop@v@VERSION@/app/assets/icon-1024.png</iconUrl>
+    <copyright>Copyright (c) 2026 Carmine Paolino</copyright>
+    <tags>chatwithwork cww ai assistant files mcp desktop</tags>
+    <summary>The Chat with Work desktop app, terminal interface and local background agent.</summary>
+    <description><![CDATA[Chat with Work Desktop is the open-source desktop app for [Chat with Work](https://chatwithwork.com): Chat with Work in a window of its own, and a background agent (`cww` on the command line) that lets Chat with Work read, and with your approval change files and run commands, in folders you share on this computer, and nothing else.
+
+- Shared folders are read-only unless you allow changes on the computer, each change approved by you.
+- One outbound WebSocket; no port is opened on your machine.
+- The full-text index stays on your machine, and secrets such as keys, `.env` files and password databases are never shared, even inside a shared folder.
+- Every request is written to a local audit log (`cww log -f`).
+
+This package runs the official signed per-user MSI from the GitHub release. It installs for the account that runs Chocolatey (into `%LOCALAPPDATA%\Programs\Chat with Work Desktop`), puts `cww` on that account's PATH, and starts the agent at login. The app updates through Chocolatey: `choco upgrade chatwithwork-desktop`.
+]]></description>
+    <dependencies>
+      <dependency id="webview2-runtime" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
