@@ -222,6 +222,8 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
         let ok = std::process::Command::new("git")
             .args([
                 "-c",
+                "commit.gpgsign=false",
+                "-c",
                 "user.name=t",
                 "-c",
                 "user.email=t@t",
