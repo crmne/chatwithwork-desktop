@@ -7,7 +7,8 @@
 # signature checks out against the release key. Then, on Windows, in a copy
 # of dist/chocolatey:
 #   choco pack chatwithwork-desktop.nuspec
-#   choco install chatwithwork-desktop --source . -y      # test
+#   choco install chatwithwork-desktop -y --source "'.;https://community.chocolatey.org/api/v2/'"  # test
+# (the community feed resolves its webview2-runtime dependency)
 #   choco push chatwithwork-desktop.X.Y.Z.nupkg --source https://push.chocolatey.org/
 set -euo pipefail
 version="${1:?version, e.g. 0.11.0}"
