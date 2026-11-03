@@ -1092,6 +1092,13 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
     crate::coding::store(&fx.config, &paths)
         .set(crate::coding::TOKEN_NAME, TOKEN)
         .unwrap();
+    // Claude Code needs the network; where the sandbox can't give one (CI's
+    // Ubuntu refuses network namespaces), there's nothing to check.
+    let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+    if wait(&fx.runs, &probe.id).status.state == "failed" {
+        eprintln!("no network for commands here");
+        return;
+    }
 
     let (line, echo) = if cfg!(windows) {
         (
