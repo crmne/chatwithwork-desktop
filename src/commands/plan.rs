@@ -400,7 +400,7 @@ impl Plan {
         }
         let mut read: Vec<String> = Vec::new();
         for dir in dirs {
-            let Ok(real) = dir.canonicalize() else {
+            let Ok(real) = crate::roots::canonical(&dir) else {
                 continue;
             };
             if real.exists() {

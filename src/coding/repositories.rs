@@ -144,7 +144,7 @@ pub fn check_ssh_key(key: &Path, roots: &[crate::config::Root]) -> Result<()> {
     if !key.is_absolute() || !key.is_file() {
         bail!("{} isn't a key file", key.display());
     }
-    let real = key.canonicalize()?;
+    let real = crate::roots::canonical(key)?;
     if roots.iter().any(|r| real.starts_with(&r.path)) {
         bail!("keep the deploy key outside the shared folders, where no command can read it");
     }

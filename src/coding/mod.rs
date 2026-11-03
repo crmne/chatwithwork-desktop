@@ -186,11 +186,8 @@ impl Claude {
 /// only, so there such a program gets nothing.
 pub fn grant(real: &Path, config: &Config, paths: &Paths) -> Option<PathBuf> {
     let dir = real.parent()?;
-    let holds = |inner: &Path| {
-        inner
-            .canonicalize()
-            .is_ok_and(|inner| inner.starts_with(dir))
-    };
+    let holds =
+        |inner: &Path| crate::roots::canonical(inner).is_ok_and(|inner| inner.starts_with(dir));
     let broad = crate::roots::too_broad(dir).map_or(true, |reason| reason.is_some())
         || config.roots.iter().any(|r| holds(&r.path))
         || [&paths.config_dir, &paths.data_dir, &paths.state_dir]
@@ -228,7 +225,10 @@ pub fn for_run(
             return None;
         }
         let program = config.coding.claude.clone()?;
-        let real = program.canonicalize().ok().filter(|p| p.is_file())?;
+        // Without Windows' `\\?\` prefix, which a run's PATH and grants can't use.
+        let real = crate::roots::canonical(&program)
+            .ok()
+            .filter(|p| p.is_file())?;
         let read = grant(&real, config, paths)?;
         let token = token()?;
         Some(Claude {
