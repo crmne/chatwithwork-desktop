@@ -97,15 +97,31 @@ fn git() -> Command {
 /// agent's.
 fn git_for(repo: Option<&Repository>) -> Command {
     let mut command = git();
+    let quote = |path: &str| format!("'{}'", path.replace('\\', "/").replace('\'', "'\\''"));
+    // The person's own ~/.ssh/config, never the system's: inside the
+    // background service's user namespace, root's files under /etc/ssh look
+    // foreign, and ssh refuses to start ("Bad owner or permissions").
+    let config = if cfg!(unix) {
+        let own = crate::paths::home_dir()
+            .ok()
+            .map(|home| home.join(".ssh").join("config"))
+            .filter(|config| config.is_file());
+        Some(own.map_or_else(|| "/dev/null".to_string(), |c| quote(&c.to_string_lossy())))
+    } else {
+        None
+    };
+    let mut ssh = String::from("ssh");
+    if let Some(config) = &config {
+        ssh.push_str(&format!(" -F {config}"));
+    }
     if let Some(key) = repo.and_then(|r| r.ssh_key.as_ref()) {
-        let key = key.to_string_lossy().replace('\\', "/");
-        command.env(
-            "GIT_SSH_COMMAND",
-            format!(
-                "ssh -i '{}' -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes",
-                key.replace('\'', "'\\''")
-            ),
-        );
+        ssh.push_str(&format!(
+            " -i {} -o IdentitiesOnly=yes -o IdentityAgent=none",
+            quote(&key.to_string_lossy())
+        ));
+    }
+    if ssh != "ssh" {
+        command.env("GIT_SSH_COMMAND", format!("{ssh} -o BatchMode=yes"));
     }
     command
 }
