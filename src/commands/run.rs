@@ -40,13 +40,20 @@ pub(super) fn spawn(
 }
 
 fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
+    // The run's clock starts now, fetching included.
+    let deadline = Instant::now() + Duration::from_secs(plan.limits.timeout_seconds.max(1));
     // The folder's repositories, fresh: `git fetch origin` in the run reads
-    // the mirror, which only this side fetches.
+    // the mirror, which only this side fetches. A stop ends a fetch too.
+    let stopped = || lock(cell).stop;
     for (mirror, repo) in &plan.coding.mirrors {
-        if lock(cell).stop {
+        if stopped() {
             return State::Stopped;
         }
-        crate::coding::repositories::fetch_if_stale(mirror, Some(repo));
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return State::TimedOut;
+        }
+        crate::coding::repositories::fetch_if_stale(mirror, Some(repo), left, &stopped);
     }
     if let Err(e) = make_home(plan) {
         return State::Failed(format!("couldn't make its home folder: {e}"));
@@ -61,6 +68,14 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if let Some(e) = sandbox.refuses(plan) {
         tracing::info!(run = %plan.id, code = %e.code, "the sandbox refused a command");
         return State::Failed(e.message);
+    }
+    // A stop that came during the fetches, or the clock run out on them,
+    // starts nothing.
+    if stopped() {
+        return State::Stopped;
+    }
+    if Instant::now() >= deadline {
+        return State::TimedOut;
     }
     let home = crate::paths::home_dir().ok();
     let request = plan.request_json(home.as_deref(), sandbox);
@@ -94,7 +109,6 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     })
     .collect();
     let closers = [process.stdout_closer(), process.stderr_closer()];
-    let deadline = Instant::now() + Duration::from_secs(plan.limits.timeout_seconds.max(1));
     let mut ended = None;
     let mut polls: u32 = 0;
     let state = loop {

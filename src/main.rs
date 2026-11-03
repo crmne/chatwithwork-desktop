@@ -1059,7 +1059,7 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
             println!("Claude Code's sign-in is in this computer's secret store.");
         }
         CodingCommand::SignOut => {
-            coding::store(&config, paths).delete(coding::TOKEN_NAME)?;
+            coding::forget_token(&config, paths)?;
             config.coding.claude_signed_in = false;
             config.save(paths)?;
             println!(
@@ -1081,6 +1081,13 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
         CodingCommand::Fetch => {
             for repo in &config.coding.repositories {
                 let mirror = repositories::mirror_dir(paths, repo);
+                if repositories::writable_by_commands(&mirror, &config.roots) {
+                    println!(
+                        "{} isn't fetched: its mirror is in a shared folder that allows changes",
+                        repo.name
+                    );
+                    continue;
+                }
                 match repositories::fetch(&mirror, Some(repo)) {
                     Ok(()) => println!("Fetched {} ({}).", repo.name, repo.url),
                     Err(e) => println!("{} didn't fetch: {e:#}", repo.name),

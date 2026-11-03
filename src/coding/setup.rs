@@ -115,8 +115,38 @@ impl Asker {
     }
 }
 
+/// The config as setup last read or wrote it. Setup waits on people,
+/// browsers and clones; if the file changed meanwhile (a folder unshared,
+/// commands turned off), saving its older copy would put back what was
+/// taken away, so it stops instead.
+static LAST_SEEN: std::sync::Mutex<Option<Config>> = std::sync::Mutex::new(None);
+
+/// Forget the snapshot when setup ends, however it ends.
+struct Reset;
+
+impl Drop for Reset {
+    fn drop(&mut self) {
+        *LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+fn seen(config: &Config) {
+    *LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(config.clone());
+}
+
 fn save(config: &Config, paths: &Paths) -> Result<()> {
+    let last = LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(last) = last
+        && Config::load(paths)? != last
+    {
+        bail!(
+            "this computer's settings changed while setup ran (in the app, or with `cww \
+             roots`); nothing was saved over them. Run `cww coding setup` again"
+        );
+    }
     config.save(paths)?;
+    // As it reads back, which is what the next save compares.
+    seen(&Config::load(paths)?);
     match control::request(&paths.socket_path(), ControlRequest::Reload) {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -130,6 +160,8 @@ fn save(config: &Config, paths: &Paths) -> Result<()> {
 pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     let ask = Asker { yes: options.yes };
     let mut config = Config::load(paths)?;
+    seen(&config);
+    let _reset = Reset;
     println!("Lending this computer to a coding bot. Each step says what it does first.\n");
 
     // 1. Paired, and the daemon running.
@@ -210,21 +242,11 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     let checkout = repository_step(&mut config, paths, &ask, &options, &root_id)?;
 
     // 7. The toolchain.
-    if let Some((_, path, fresh)) = &checkout {
+    if let Some((name, _, mirror)) = &checkout {
         if options.skip_install {
             Step::Skipped("--skip-install".into()).print("Toolchain");
-        } else if !fresh {
-            // Its install scripts run as you, outside the sandbox: only from
-            // a checkout this setup just made, never one a bot's commands
-            // could have changed since.
-            Step::NeedsYou(
-                "the checkout was already there, and a bot's commands may have changed its \
-                 install files; check them, then install its toolchain yourself"
-                    .into(),
-            )
-            .print("Toolchain");
         } else {
-            toolchain_step(&ask, path)?;
+            toolchain_step(&ask, paths, &root_id, name, mirror)?;
         }
     }
 
@@ -669,7 +691,7 @@ fn repository_step(
     ask: &Asker,
     options: &Options,
     root_id: &str,
-) -> Result<Option<(String, PathBuf, bool)>> {
+) -> Result<Option<(String, PathBuf, PathBuf)>> {
     let root = config.root(root_id).cloned().context("the folder")?;
     let existing = config
         .coding
@@ -714,15 +736,13 @@ fn repository_step(
          without keys, and can't push.",
         repo.url, root.label
     );
-    let mirror = match repositories::create_mirror(paths, &repo) {
+    let mirror = match repositories::create_mirror(paths, &repo, &config.roots) {
         Ok(m) => m,
         Err(e) => {
             Step::Failed(format!("{e:#}")).print("Repository");
             return Ok(None);
         }
     };
-    // Made now, from the mirror, rather than one a bot may have changed.
-    let fresh = !root.path.join(&repo.name).exists();
     let checkout = match repositories::create_checkout(&root.path, &repo.name, &mirror) {
         Ok(c) => c,
         Err(e) => {
@@ -744,7 +764,7 @@ fn repository_step(
         repo.url, root.label, repo.name
     ))
     .print("Repository");
-    Ok(Some((repo.name, checkout, fresh)))
+    Ok(Some((repo.name, checkout, mirror)))
 }
 
 fn shell(command: &str, dir: &Path) -> std::io::Result<std::process::ExitStatus> {
@@ -761,18 +781,71 @@ fn shell(command: &str, dir: &Path) -> std::io::Result<std::process::ExitStatus>
     }
 }
 
-fn toolchain_step(ask: &Asker, checkout: &Path) -> Result<()> {
-    let needs = detect::needs(checkout);
+/// Run `install` in `dir`: through the repository's own mise environment
+/// when it uses mise, so its Ruby or Node is the one that runs.
+fn install_in(
+    install: &str,
+    dir: &Path,
+    with_mise: bool,
+) -> std::io::Result<std::process::ExitStatus> {
+    if with_mise && !install.starts_with("mise ") {
+        let mut command = Command::new("mise");
+        command.args(["exec", "--"]).current_dir(dir);
+        if cfg!(windows) {
+            command.args(["cmd", "/C", install]);
+        } else {
+            command.args(["sh", "-c", install]);
+        }
+        command.status()
+    } else {
+        shell(install, dir)
+    }
+}
+
+/// Install what the repository needs, as the person, outside the sandbox,
+/// from a clone of the mirror in Desktop's own data folder: never from the
+/// checkout in the shared folder, whose install files a bot's commands
+/// could change before they run. Toolchains (mise) and packages installed
+/// for the whole computer (Ruby gems in mise's Ruby, Cargo's registry) are
+/// what carries over; a project's own folders (`node_modules`, `.venv`) are
+/// the bot's commands to make in the checkout.
+fn toolchain_step(ask: &Asker, paths: &Paths, root: &str, name: &str, mirror: &Path) -> Result<()> {
+    let staging = paths
+        .data_dir
+        .join("staging")
+        .join(root)
+        .join(format!("{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(staging.parent().unwrap_or(&staging))?;
+    let cloned = Command::new("git")
+        .args(["clone", "--quiet", "--no-hardlinks", "--"])
+        .arg(mirror)
+        .arg(&staging)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .status();
+    if !cloned.is_ok_and(|s| s.success()) {
+        Step::Failed("couldn't make a private copy of the repository to install from".into())
+            .print("Toolchain");
+        return Ok(());
+    }
+    let result = install_from(ask, &staging);
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+fn install_from(ask: &Asker, staging: &Path) -> Result<()> {
+    let needs = detect::needs(staging);
     if needs.is_empty() {
         Step::Ok("nothing to install that it can tell".into()).print("Toolchain");
         return Ok(());
     }
+    let with_mise = needs.iter().any(|n| n.program == "mise") && which("mise").is_some();
     let mut missing = Vec::new();
     for need in &needs {
         // mise installs the rest, so its programs may come later.
         let present = which(need.program).is_some();
-        if !present && need.program != "mise" && which("mise").is_some() {
-            // Installed by mise below, perhaps.
+        if !present && need.program != "mise" && with_mise {
+            // Installed by mise above, perhaps.
         } else if !present {
             missing.push(format!("{} needs {}", need.what, need.program));
             continue;
@@ -781,13 +854,12 @@ fn toolchain_step(ask: &Asker, checkout: &Path) -> Result<()> {
             continue;
         };
         println!(
-            "{}: `{install}` runs in {} as you, outside the sandbox, with the repository's own \
-             install scripts.",
+            "{}: `{install}` runs as you, outside the sandbox, with the repository's own \
+             install scripts, in a private copy of the repository from Desktop's mirror.",
             need.what,
-            checkout.display()
         );
         if ask.confirm("Run it?", true)? {
-            match shell(install, checkout) {
+            match install_in(install, staging, with_mise) {
                 Ok(s) if s.success() => {}
                 _ => missing.push(format!("`{install}` failed")),
             }
@@ -845,6 +917,7 @@ fn check(
         )? {
             offset = chunk["next_offset"].as_u64().unwrap_or(offset);
             output.push_str(chunk["text"].as_str().unwrap_or_default());
+            keep_tail(&mut output);
         }
         let list =
             control::request(&paths.socket_path(), ControlRequest::Commands)?.unwrap_or_default();
@@ -861,16 +934,26 @@ fn check(
             .unwrap_or("running")
             .to_string();
         if state != "running" {
-            // What it printed last.
-            if let Some(chunk) = control::request(
-                &paths.socket_path(),
-                ControlRequest::CommandOutput {
-                    run: id.clone(),
-                    offset,
-                    max: None,
-                },
-            )? {
+            // Everything it printed since, a chunk at a time, to its end:
+            // the failure is usually last.
+            for _ in 0..4096 {
+                let Some(chunk) = control::request(
+                    &paths.socket_path(),
+                    ControlRequest::CommandOutput {
+                        run: id.clone(),
+                        offset,
+                        max: None,
+                    },
+                )?
+                else {
+                    break;
+                };
+                let next = chunk["next_offset"].as_u64().unwrap_or(offset);
                 output.push_str(chunk["text"].as_str().unwrap_or_default());
+                if chunk["done"] == true || next <= offset {
+                    break;
+                }
+                offset = next;
             }
             let error = status
                 .and_then(|s| s["error"].as_str())
@@ -890,6 +973,18 @@ fn check(
             return Ok(("timed_out".into(), None, output));
         }
         std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Keep only the last 256 KiB of what a check printed: only its end shows.
+fn keep_tail(output: &mut String) {
+    const KEEP: usize = 256 * 1024;
+    if output.len() > KEEP {
+        let mut cut = output.len() - KEEP;
+        while !output.is_char_boundary(cut) {
+            cut += 1;
+        }
+        output.drain(..cut);
     }
 }
 

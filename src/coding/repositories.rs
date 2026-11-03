@@ -60,35 +60,47 @@ pub fn check_url(url: &str) -> Result<()> {
     if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_whitespace) {
         bail!("that isn't a repository's address");
     }
-    if let Some(rest) = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-    {
+    if url.starts_with("ext::") || url.starts_with("fd::") {
+        bail!("that kind of address runs a program; use an SSH or https address");
+    }
+    let secret = || {
+        anyhow::anyhow!(
+            "the address has a user name, password or token in it. Use one without (an SSH \
+             key, or https with a credential helper), so no secret is kept in Desktop's settings"
+        )
+    };
+    if let Some((scheme, rest)) = url.split_once("://") {
         let authority = rest.split('/').next().unwrap_or_default();
-        if authority.contains('@') {
-            bail!(
-                "the address has a user name or token in it. Use one without (an SSH address, or \
-                 https with a credential helper), so no token is kept in Desktop's settings"
-            );
+        let user = authority.rsplit_once('@').map(|(user, _)| user);
+        return match scheme {
+            // A user at all, on the web: that's a token.
+            "https" | "http" if user.is_some() => Err(secret()),
+            "https" | "http" => Ok(()),
+            // `git@host` is fine; `user:secret@host` never is.
+            "ssh" | "git+ssh" | "ssh+git" if user.is_some_and(|u| u.contains(':')) => Err(secret()),
+            "ssh" | "git+ssh" | "ssh+git" | "git" | "file" => Ok(()),
+            _ => bail!("use the repository's SSH or https address"),
+        };
+    }
+    // scp's form, `user@host:path`: a user with a password before the host.
+    if let Some((before, _)) = url.split_once(':')
+        && before.contains('@')
+    {
+        if before
+            .split_once('@')
+            .is_some_and(|(user, _)| user.contains(':'))
+        {
+            return Err(secret());
         }
         return Ok(());
     }
-    if url.starts_with("ssh://") || url.starts_with("git@") || url.contains(':') {
-        if url.starts_with("ext::") || url.starts_with("fd::") {
-            bail!("that kind of address runs a program; use an SSH or https address");
-        }
-        // A user with a password (`ssh://user:secret@host/`, or
-        // `user:secret@host:path` in scp's form): never kept.
-        let rest = url.strip_prefix("ssh://").unwrap_or(url);
-        let authority = rest.split('/').next().unwrap_or_default();
-        if let Some((user, _)) = authority.split_once('@')
-            && user.contains(':')
-        {
-            bail!(
-                "the address has a password or token in it. Use an SSH key instead, so no \
-                 secret is kept in Desktop's settings"
-            );
-        }
+    if let Some((user, rest)) = url.split_once('@')
+        && user.contains(':')
+        && rest.contains(':')
+    {
+        return Err(secret());
+    }
+    if url.contains(':') && !url.starts_with('/') {
         return Ok(());
     }
     bail!("use the repository's SSH or https address, like git@github.com:acme/app.git")
@@ -122,11 +134,18 @@ fn git_for(repo: Option<&Repository>) -> Command {
     } else {
         None
     };
+    let key = repo.and_then(|r| r.ssh_key.as_ref());
+    // With a deploy key, no config at all: one's `IdentityFile` lines would
+    // be offered beside it, `IdentitiesOnly` notwithstanding.
+    let config = match (key, config) {
+        (Some(_), Some(_)) => Some("/dev/null".to_string()),
+        (_, config) => config,
+    };
     let mut ssh = String::from("ssh");
     if let Some(config) = &config {
         ssh.push_str(&format!(" -F {config}"));
     }
-    if let Some(key) = repo.and_then(|r| r.ssh_key.as_ref()) {
+    if let Some(key) = key {
         ssh.push_str(&format!(
             " -i {} -o IdentitiesOnly=yes -o IdentityAgent=none",
             quote(&key.to_string_lossy())
@@ -152,7 +171,12 @@ pub fn check_ssh_key(key: &Path, roots: &[crate::config::Root]) -> Result<()> {
 }
 
 /// Run `command`, giving up after `limit`. The error is Git's last line.
-fn run(mut command: Command, limit: Duration) -> Result<()> {
+fn run(command: Command, limit: Duration) -> Result<()> {
+    run_until(command, limit, &|| false)
+}
+
+/// As [`run`], ended early (and the process killed) once `stop` says so.
+fn run_until(mut command: Command, limit: Duration, stop: &dyn Fn() -> bool) -> Result<()> {
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -174,6 +198,11 @@ fn run(mut command: Command, limit: Duration) -> Result<()> {
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
+        }
+        if stop() {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("stopped");
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -202,9 +231,30 @@ fn no_hooks(mirror: &Path) -> String {
 }
 
 /// Make the mirror of `repo`, as the person, with their credentials.
-pub fn create_mirror(paths: &Paths, repo: &Repository) -> Result<PathBuf> {
+/// Whether a command could write in `mirror`: it's in a shared folder that
+/// allows changes. Desktop never fetches such a mirror, whose config a
+/// command could have written.
+pub fn writable_by_commands(mirror: &Path, roots: &[crate::config::Root]) -> bool {
+    let mirror = crate::roots::canonical(mirror).unwrap_or_else(|_| mirror.to_path_buf());
+    roots.iter().any(|root| {
+        root.writable
+            && crate::roots::canonical(&root.path).is_ok_and(|path| mirror.starts_with(path))
+    })
+}
+
+pub fn create_mirror(
+    paths: &Paths,
+    repo: &Repository,
+    roots: &[crate::config::Root],
+) -> Result<PathBuf> {
     check_url(&repo.url)?;
     let mirror = mirror_dir(paths, repo);
+    if writable_by_commands(&paths.data_dir, roots) {
+        bail!(
+            "Desktop's data folder is inside a shared folder that allows changes, where a \
+             command could change a mirror's settings: share a narrower folder"
+        );
+    }
     if mirror.join("HEAD").is_file() {
         let mut origin = git();
         origin
@@ -326,6 +376,16 @@ pub fn last_failure(mirror: &Path) -> Option<String> {
 
 /// Fetch the mirror, as the person. Only a mirror in Desktop's data folder.
 pub fn fetch(mirror: &Path, repo: Option<&Repository>) -> Result<()> {
+    fetch_until(mirror, repo, FETCH_LIMIT, &|| false)
+}
+
+/// As [`fetch`], within `limit`, ended early once `stop` says so.
+pub fn fetch_until(
+    mirror: &Path,
+    repo: Option<&Repository>,
+    limit: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<()> {
     let mut fetch = git_for(repo);
     fetch
         .arg("--git-dir")
@@ -339,7 +399,7 @@ pub fn fetch(mirror: &Path, repo: Option<&Repository>) -> Result<()> {
             "--no-write-fetch-head",
             "origin",
         ]);
-    match run(fetch, FETCH_LIMIT) {
+    match run_until(fetch, limit.min(FETCH_LIMIT), stop) {
         Ok(()) => {
             stamp(mirror);
             Ok(())
@@ -353,11 +413,16 @@ pub fn fetch(mirror: &Path, repo: Option<&Repository>) -> Result<()> {
 
 /// Fetch the mirror unless it was fetched within [`FRESH`]. A failure
 /// doesn't stop the run; it's kept for `cww coding status`.
-pub fn fetch_if_stale(mirror: &Path, repo: Option<&Repository>) {
+pub fn fetch_if_stale(
+    mirror: &Path,
+    repo: Option<&Repository>,
+    limit: Duration,
+    stop: &dyn Fn() -> bool,
+) {
     let fresh = fetched_at(mirror)
         .and_then(|at| at.elapsed().ok())
         .is_some_and(|age| age < FRESH);
-    if !fresh && let Err(e) = fetch(mirror, repo) {
+    if !fresh && let Err(e) = fetch_until(mirror, repo, limit, stop) {
         tracing::info!(error = %e, "fetching a repository's mirror failed");
     }
 }

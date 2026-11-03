@@ -67,6 +67,18 @@ pub fn store(config: &Config, paths: &Paths) -> SecretStore {
     SecretStore::for_config(config, paths)
 }
 
+/// Forget the token everywhere it can be: the store this computer uses, and
+/// the keychain's unscoped entry, which a sign-in before pairing wrote and
+/// which pairing would otherwise copy back.
+pub fn forget_token(config: &Config, paths: &Paths) -> anyhow::Result<()> {
+    let store = store(config, paths);
+    store.delete(TOKEN_NAME)?;
+    if store.in_keychain() {
+        SecretStore::Keyring.delete(TOKEN_NAME)?;
+    }
+    SecretStore::File(paths.secrets_file()).delete(TOKEN_NAME)
+}
+
 /// The stored token, if there is one and it can be read.
 pub fn token(config: &Config, paths: &Paths) -> Option<Secret> {
     store(config, paths)
@@ -185,7 +197,32 @@ impl Claude {
 /// or Desktop's own), only the program itself. Windows grants a run folders
 /// only, so there such a program gets nothing.
 pub fn grant(real: &Path, config: &Config, paths: &Paths) -> Option<PathBuf> {
+    grant_with(real, config, paths, &crate::commands::toolchain_dirs())
+}
+
+/// As [`grant`], with the toolchain folders every run reads: a program in
+/// one gets its own folder even where that is under a broad one (mise's
+/// installs in `%LOCALAPPDATA%` on Windows, which `roots::too_broad` counts
+/// as the profile's application data).
+pub fn grant_with(
+    real: &Path,
+    config: &Config,
+    paths: &Paths,
+    toolchains: &[PathBuf],
+) -> Option<PathBuf> {
     let dir = real.parent()?;
+    let canonical = |p: &Path| crate::roots::canonical(p).unwrap_or_else(|_| p.to_path_buf());
+    if toolchains
+        .iter()
+        .map(|t| canonical(t))
+        .any(|t| dir.starts_with(&t) && dir != t)
+        && !config
+            .roots
+            .iter()
+            .any(|r| canonical(&r.path).starts_with(dir))
+    {
+        return Some(dir.to_path_buf());
+    }
     let holds =
         |inner: &Path| crate::roots::canonical(inner).is_ok_and(|inner| inner.starts_with(dir));
     let broad = crate::roots::too_broad(dir).map_or(true, |reason| reason.is_some())
@@ -217,7 +254,9 @@ pub fn for_run(
         .iter()
         .filter(|repo| repo.root == root)
         .map(|repo| (repositories::mirror_dir(paths, repo), repo.clone()))
-        .filter(|(dir, _)| dir.is_dir())
+        // Never one a command could have changed: fetching it would run what
+        // its config says, outside the sandbox.
+        .filter(|(dir, _)| dir.is_dir() && !repositories::writable_by_commands(dir, &config.roots))
         .collect();
     let claude = bot.and_then(|bot| {
         let root = config.roots.iter().find(|r| r.id == root)?;

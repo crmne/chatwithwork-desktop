@@ -39,6 +39,19 @@ pub use plan::{Plan, Request, Sandbox, plan};
 use crate::config::Config;
 use crate::paths::Paths;
 
+/// The language toolchains every run on this computer reads: a program
+/// inside one (Claude Code installed by mise, say) is already readable.
+pub fn toolchain_dirs() -> Vec<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        windows::Host::current().toolchains().read
+    }
+    #[cfg(not(windows))]
+    {
+        plan::toolchain_dirs(crate::paths::home_dir().ok().as_deref())
+    }
+}
+
 /// Longest command line accepted, in characters.
 pub const MAX_COMMAND_CHARS: usize = 8_000;
 /// Most bytes one [`Runs::output`] call returns.

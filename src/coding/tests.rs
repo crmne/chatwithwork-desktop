@@ -200,6 +200,8 @@ fn repository_addresses_never_hold_a_token() {
     assert!(check_url("ssh://user:password@host/acme/app").is_err());
     assert!(check_url("user:token@github.com:acme/app.git").is_err());
     assert!(check_url("ssh://git@host:2222/acme/app").is_ok());
+    assert!(check_url("ftp://alice:secret@example.com/app.git").is_err());
+    assert!(check_url("git+ssh://alice:secret@example.com/app.git").is_err());
     assert_eq!(
         name_from_url("git@github.com:acme/app.git").as_deref(),
         Some("app")
@@ -258,7 +260,7 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
     };
-    let mirror = repositories::create_mirror(&paths, &repo).unwrap();
+    let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
     assert!(mirror.starts_with(&paths.data_dir));
     let folder = dir.path().join("bots");
     std::fs::create_dir(&folder).unwrap();
@@ -330,14 +332,14 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
     };
-    let mirror = repositories::create_mirror(&paths, &repo).unwrap();
+    let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
 
     // Another address under the same name never reuses this mirror.
     let other = Repository {
         url: "git@github.com:acme/other.git".into(),
         ..repo.clone()
     };
-    assert!(repositories::create_mirror(&paths, &other).is_err());
+    assert!(repositories::create_mirror(&paths, &other, &[]).is_err());
 
     // A checkout from before, with a push address of its own.
     let folder = dir.path().join("bots");
@@ -369,4 +371,32 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         std::os::unix::fs::symlink(&checkout, folder.join("linked")).unwrap();
         assert!(repositories::create_checkout(&folder, "linked", &mirror).is_err());
     }
+}
+
+#[test]
+fn claude_inside_a_toolchain_gets_its_own_folder_even_under_a_broad_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = crate::roots::canonical(dir.path()).unwrap();
+    let paths = crate::paths::Paths::under(&base.join("cww"));
+    let toolchain = base.join("mise");
+    let install = toolchain.join("installs").join("claude").join("2.1.316");
+    std::fs::create_dir_all(&install).unwrap();
+    let program = install.join("claude.exe");
+    std::fs::write(&program, "").unwrap();
+    let config = Config::default();
+    assert_eq!(
+        grant_with(&program, &config, &paths, std::slice::from_ref(&toolchain)),
+        Some(install.clone())
+    );
+    // Never the toolchain's own top, and never a folder holding a shared one.
+    let mut shared = Config::default();
+    shared.roots.push(Root {
+        path: install.join("work"),
+        ..root(None)
+    });
+    std::fs::create_dir_all(install.join("work")).unwrap();
+    assert_ne!(
+        grant_with(&program, &shared, &paths, std::slice::from_ref(&toolchain)),
+        Some(install)
+    );
 }

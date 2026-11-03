@@ -314,6 +314,15 @@ struct Found {
     env: Vec<(String, String)>,
 }
 
+/// The toolchain folders a run reads on Linux and macOS.
+pub(super) fn toolchain_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+    toolchains(home)
+        .read
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+}
+
 fn toolchains(home: Option<&Path>) -> Found {
     let mut found = Found {
         read: Vec::new(),
