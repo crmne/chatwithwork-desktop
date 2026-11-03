@@ -3,9 +3,10 @@
 #
 #   render.sh 0.11.0
 #
-# Fills the MSIs' SHA-256s from the release's checksums.txt, as
-# packaging/windows/winget-submit.sh does. Then, on Windows:
-#   choco pack dist\chocolatey\chatwithwork-desktop.nuspec
+# Fills the MSIs' SHA-256s from the release's checksums.txt, once its
+# signature checks out against the release key. Then, on Windows, in a copy
+# of dist/chocolatey:
+#   choco pack chatwithwork-desktop.nuspec
 #   choco install chatwithwork-desktop --source . -y      # test
 #   choco push chatwithwork-desktop.X.Y.Z.nupkg --source https://push.chocolatey.org/
 set -euo pipefail
@@ -14,8 +15,11 @@ version="${version#v}"
 repo="crmne/chatwithwork-desktop"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 out="$root/dist/chocolatey"
-rm -rf "$out" && mkdir -p "$out/tools"
-sums="$(gh release download "v$version" -R "$repo" -p checksums.txt -O -)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+gh release download "v$version" -R "$repo" -p checksums.txt -p checksums.txt.sig -D "$work"
+"$root/packaging/verify-checksums.sh" "$work"
+sums="$(cat "$work/checksums.txt")"
 msi_sha256() {
   local sha
   sha="$(awk -v name="cww-v$version-$1.msi" '$2 == name { print $1 }' <<<"$sums")"
@@ -24,6 +28,7 @@ msi_sha256() {
 }
 x64="$(msi_sha256 x86_64-pc-windows-msvc)"
 arm64="$(msi_sha256 aarch64-pc-windows-msvc)"
+rm -rf "$out" && mkdir -p "$out/tools"
 render() {
   sed -e "s/@VERSION@/$version/g" -e "s/@WINDOWS_X64_MSI_SHA256@/$x64/g" \
       -e "s/@WINDOWS_ARM64_MSI_SHA256@/$arm64/g" "$1" > "$2"
