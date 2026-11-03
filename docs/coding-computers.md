@@ -2,7 +2,7 @@
 
 A coding bot in Chat with Work (the Issue fixer with Claude Code, the Dependency upgrader on a computer, and bots like them) runs commands on a computer lent to it: it fetches the repository, has Claude Code (`claude -p`) make a change in a fresh worktree, runs the tests, and then commits the changed files through Chat with Work's GitHub App. This page is how a person gets a computer ready for that in one guided step, on Linux, macOS and Windows, and what the computer then holds to.
 
-Status: designed 2026-11-03. Built in `cww coding` ([below](#the-guided-setup)); the desktop app's page for it is not built yet ([Not built yet](#not-built-yet)).
+Status: built in `cww coding` ([below](#the-guided-setup)) and tried on Linux, macOS and Windows on 2026-11-03 ([Testing](#testing)); the desktop app's page for it is not built yet ([Not built yet](#not-built-yet)).
 
 **Nothing here widens what the server can do.** Every choice is made on this computer: which folder, which bot, whether its commands run unattended, whether it gets your Claude Code sign-in. The server learns only whether a lent folder is ready, never a token, a path or a repository's address.
 
@@ -110,7 +110,12 @@ The rules in [SECURITY.md](../SECURITY.md) and [commands.md](commands.md) all st
 
 ## Testing
 
-Each system is tried for real before this is called built on it: setup from nothing, a bot's `claude -p` run through the tunnel, the token absent from output, from the audit log and from the run's home, a push from the checkout refused, and the mirror fetched with the person's own credentials.
+Tried for real on 2026-11-03:
+
+- **Linux (Fedora 43, Bubblewrap), Plenty's NUC.** Moved from the hand-made setup: `cww coding sign-in --stdin` from the old `.env` file, then `cww coding setup --bot 24 --repo ... --ssh-key ...`, which kept the existing checkout and pointed its `origin` at the new mirror. Through the daemon, as bot 24, `bin/rails test` passed in the sandbox with the network, and `claude -p` answered from it, with `claude` on mise's `installs/claude/latest` link. The daemon fetched the stale mirror itself before the run, with the deploy key. Trying it found two bugs, fixed before this was called built. Bubblewrap can't start with a link given as a folder to bind (the program's folder is now bound where it really is), and ssh refused the system's `/etc/ssh` config inside the service's user namespace (Desktop's fetches now use `~/.ssh/config`).
+- **macOS 27 (Seatbelt), the Mac mini.** The real Claude Code answered from the sandbox with a setup token (`real_claude_code_answers_from_the_sandbox`). That run found Claude Code writing to `/tmp/claude-<uid>`, which Seatbelt refuses (now `CLAUDE_CODE_TMPDIR`), and waiting three seconds on an open stdin (now closed). The redaction test also ran there in Seatbelt, and `cww coding setup` ran side by side from nothing: folder, sign-in, mirror, checkout and status.
+- **Windows 11 (26H2), the test VM.** The installer CI built, then `cww coding setup` from nothing over SSH. It installed Claude Code with Anthropic's installer and found it outside `PATH` in `~\.local\bin`, kept the token in the file store, and made the mirror and the checkout (`origin` is the mirror) and fetched it. Over SSH the Credential Manager isn't reachable (`ERROR_NO_SUCH_LOGON_SESSION`), and the setup says so. Commands can't run in a sandbox from an SSH session, so on Windows the run itself was tested in CI on Windows 11 on Arm, in a process container: the redaction test with a stand-in `claude.cmd` (the sign-in reaches only the allowed bot, with the token taken out of stdout, stderr and the output window). The real Claude Code from a Windows sandbox, which needs a desktop session, hasn't been tried.
+- **Everywhere, in CI:** the unit tests, and on Linux the e2e test through the tunnel (`roots` says `ready`, the bot's run gets the sign-in redacted, a person's doesn't, and so does `coding_check`).
 
 ## Not built yet
 

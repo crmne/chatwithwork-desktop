@@ -388,8 +388,10 @@ fn which(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// The `claude` this computer has: the person's `PATH`, then where its
-/// installers put it. A mise shim is followed to the program it runs.
+/// The `claude` this computer has and that runs: the person's `PATH`, then
+/// mise's, then where its installers put it. A mise shim is followed to the
+/// program it runs. A leftover that doesn't run (an old `~/.claude/local`
+/// install, say) is passed over.
 pub fn find_claude() -> Option<PathBuf> {
     let home = crate::paths::home_dir().ok()?;
     let exe = if cfg!(windows) {
@@ -397,23 +399,35 @@ pub fn find_claude() -> Option<PathBuf> {
     } else {
         "claude"
     };
-    let candidates = [
-        home.join(".local").join("bin").join(exe),
-        home.join(".claude").join("local").join(exe),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        home.join(".npm-global").join("bin").join("claude"),
-    ];
-    let found = which("claude").or_else(|| candidates.into_iter().find(|p| p.is_file()))?;
-    if found.to_string_lossy().contains("mise") && found.to_string_lossy().contains("shims") {
-        let out = Command::new("mise")
+    let mise = || {
+        Command::new("mise")
             .args(["which", "claude"])
             .output()
-            .ok()?;
-        let real = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-        return real.is_file().then_some(real);
-    }
-    Some(found)
+            .ok()
+            .map(|out| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+            .filter(|p| p.is_file())
+    };
+    let on_path = which("claude").and_then(|found| {
+        let text = found.to_string_lossy();
+        if text.contains("mise") && text.contains("shims") {
+            mise()
+        } else {
+            Some(found)
+        }
+    });
+    let candidates = [
+        on_path,
+        mise(),
+        Some(home.join(".local").join("bin").join(exe)),
+        Some(PathBuf::from("/opt/homebrew/bin/claude")),
+        Some(PathBuf::from("/usr/local/bin/claude")),
+        Some(home.join(".npm-global").join("bin").join("claude")),
+        Some(home.join(".claude").join("local").join(exe)),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_file() && version(p).is_some())
 }
 
 fn version(program: &Path) -> Option<String> {
@@ -520,7 +534,11 @@ pub fn store_token(config: &mut Config, paths: &Paths, from_stdin: bool) -> Resu
     }
     super::store(config, paths)
         .set(TOKEN_NAME, &token)
-        .context("keeping the token in this computer's secret store")?;
+        .context(
+            "keeping the token in this computer's secret store, which this session can't \
+             reach (on Windows, an SSH session can't use the Credential Manager): run this in \
+             your own desktop session",
+        )?;
     config.coding.claude_signed_in = true;
     save(config, paths)
 }
