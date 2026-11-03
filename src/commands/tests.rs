@@ -1036,26 +1036,48 @@ mod on_windows {
 
 /// A bot allowed Claude Code here gets the sign-in in Claude Code's own
 /// variable and its `claude` first on `PATH`, and what it prints never
-/// carries the token. A person's run, and another bot's, get neither.
+/// carries the token. A person's run, and another bot's, get neither. On
+/// Linux where Bubblewrap runs, on Windows where process containers do (CI's
+/// Windows on Arm), and on macOS with `CWW_TEST_SEATBELT=1` (CI's Macs
+/// don't run commands).
 #[test]
 fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
-    if !sandbox_works() || on_landlock() {
+    let runs_here = if cfg!(windows) {
+        Sandbox::for_host().is_ok()
+    } else if cfg!(target_os = "macos") {
+        std::env::var("CWW_TEST_SEATBELT").as_deref() == Ok("1")
+    } else {
+        sandbox_works() && !on_landlock()
+    };
+    if !runs_here {
         return;
     }
     const TOKEN: &str = "sk-ant-oat01-testtokenTESTTOKEN0123456789abcdefghijklmnop_-";
     let mut fx = fixture(true);
     let install = fx._dir.path().join("claude-install");
     std::fs::create_dir_all(&install).unwrap();
-    let program = install.join("claude");
-    std::fs::write(
-        &program,
-        "#!/bin/sh\necho \"claude here with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let program = if cfg!(windows) {
+        let program = install.join("claude.cmd");
+        std::fs::write(
+            &program,
+            "@echo claude here with %CLAUDE_CODE_OAUTH_TOKEN%\r\n",
+        )
+        .unwrap();
+        program
+    } else {
+        let program = install.join("claude");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\necho \"claude here with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        program
+    };
     fx.config.secret_store = Some("file".into());
     fx.config.roots[0].network = true;
     fx.config.roots[0].bots.push(crate::config::BotLoan {
@@ -1071,8 +1093,17 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         .set(crate::coding::TOKEN_NAME, TOKEN)
         .unwrap();
 
-    let line =
-        "claude; echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"; echo \"$CLAUDE_CODE_OAUTH_TOKEN\" >&2";
+    let (line, echo) = if cfg!(windows) {
+        (
+            "claude; \"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"; [Console]::Error.WriteLine($env:CLAUDE_CODE_OAUTH_TOKEN)",
+            "\"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"",
+        )
+    } else {
+        (
+            "claude; echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"; echo \"$CLAUDE_CODE_OAUTH_TOKEN\" >&2",
+            "echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"",
+        )
+    };
     let bot = Request {
         bot: Some("42".into()),
         ..shell(line)
@@ -1082,21 +1113,20 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
     assert_eq!(done.status.exit_code, Some(0), "{done:?}");
     assert!(
         done.stdout.contains("claude here with [claude-code-token]"),
-        "{}",
-        done.stdout
+        "{done:?}"
     );
-    assert!(done.stdout.contains("env:[claude-code-token]"));
-    assert!(done.stderr.contains("[claude-code-token]"));
+    assert!(done.stdout.contains("env:[claude-code-token]"), "{done:?}");
+    assert!(done.stderr.contains("[claude-code-token]"), "{done:?}");
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
     for text in [&done.stdout, &done.stderr, &window.text] {
         assert!(!text.contains("testtokenTESTTOKEN"), "the token printed");
     }
 
     for request in [
-        shell("echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\""),
+        shell(echo),
         Request {
             bot: Some("7".into()),
-            ..shell("echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"")
+            ..shell(echo)
         },
     ] {
         let status = fx.runs.start(&fx.config, &request).unwrap();
