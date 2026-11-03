@@ -285,7 +285,33 @@ fn linked_worktree(path: &Path) -> bool {
         return false;
     }
     let text = String::from_utf8_lossy(&head).replace('\\', "/");
-    text.trim_start().starts_with("gitdir:") && text.contains("/worktrees/")
+    let Some(target) = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gitdir:"))
+        .map(str::trim)
+    else {
+        return false;
+    };
+    worktree_gitdir(target)
+}
+
+/// Whether a `gitdir:` target is a linked worktree's metadata: a Git
+/// directory (`.git`, or a bare `name.git`) followed by `worktrees`. A
+/// submodule's lives under `.git/modules`, even where a folder on its path
+/// is called `worktrees`.
+fn worktree_gitdir(target: &str) -> bool {
+    let parts: Vec<&str> = target.split('/').filter(|p| !p.is_empty()).collect();
+    let git_dir = |p: &str| p == ".git" || p.ends_with(".git");
+    let under = |next: &str| {
+        parts
+            .windows(2)
+            .rposition(|w| git_dir(w[0]) && w[1] == next)
+    };
+    match (under("worktrees"), under("modules")) {
+        (Some(worktree), Some(module)) => worktree > module,
+        (Some(_), None) => true,
+        _ => false,
+    }
 }
 
 fn relative(root: &Path, path: &Path) -> Option<Vec<String>> {
@@ -298,6 +324,18 @@ fn relative(root: &Path, path: &Path) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_worktrees_are_told_from_submodules_by_their_gitdir() {
+        assert!(worktree_gitdir("/src/app/.git/worktrees/feature"));
+        assert!(worktree_gitdir("../app/.git/worktrees/feature"));
+        assert!(worktree_gitdir("/srv/app.git/worktrees/feature"));
+        assert!(worktree_gitdir("C:/src/app/.git/worktrees/feature"));
+        assert!(!worktree_gitdir("../../.git/modules/sub"));
+        // A submodule in a folder called `worktrees`.
+        assert!(!worktree_gitdir("../../.git/modules/worktrees/plugin"));
+        assert!(!worktree_gitdir("/src/worktrees/app/.git"));
+    }
 
     fn rel(s: &str) -> RelPath {
         RelPath::parse(s).unwrap()

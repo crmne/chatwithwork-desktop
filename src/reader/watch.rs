@@ -130,6 +130,14 @@ impl Watches {
         !self.incomplete.contains(root_id)
     }
 
+    /// Count every one of `roots` as not watched in full, until the watches
+    /// are built again: events were lost, and folders made meanwhile may
+    /// have none.
+    pub fn mark_incomplete(&mut self, roots: &[Arc<RootHandle>]) {
+        self.incomplete
+            .extend(roots.iter().map(|root| root.id.clone()));
+    }
+
     /// The directories watched (or, on macOS and Windows, followed).
     pub fn dirs(&self) -> &HashSet<PathBuf> {
         &self.dirs
@@ -163,6 +171,17 @@ impl Watches {
             return;
         }
         self.add_dirs(root, dirs);
+        if self.per_directory && self.covers(&root.id) {
+            // A folder made while the first walk ran, under a parent it had
+            // already passed, was in neither the walk nor any watch's events.
+            // Its parent is watched now, so a second walk finds it.
+            let again = collect_dirs(root, deny, None, cancelled);
+            if cancelled.is_cancelled() {
+                self.incomplete.insert(root.id.clone());
+                return;
+            }
+            self.add_dirs(root, again);
+        }
     }
 
     /// Events for paths the index skips are dropped; new directories are
@@ -174,22 +193,51 @@ impl Watches {
         deny: &Arc<DenyList>,
         cancelled: &CancellationToken,
     ) -> Vec<PathBuf> {
+        let changes = paths.into_iter().map(|p| (p, false)).collect();
+        self.filter_changes(changes, roots, deny, cancelled)
+    }
+
+    /// As [`filter`](Self::filter), each path with whether its event said it
+    /// went away (removed, or renamed from there). A directory deleted and
+    /// made again at the same path before its events are read looks like
+    /// itself on disk, but its watch went with the old one: so a removal
+    /// lets go first, and what stands there now is watched afresh.
+    pub fn filter_changes(
+        &mut self,
+        changes: Vec<(PathBuf, bool)>,
+        roots: &[Arc<RootHandle>],
+        deny: &Arc<DenyList>,
+        cancelled: &CancellationToken,
+    ) -> Vec<PathBuf> {
         let mut kept = Vec::new();
-        for path in paths {
+        for (path, gone) in changes {
             let Some(root) = roots.iter().find(|r| path.starts_with(&r.path)) else {
                 continue;
             };
+            if is_ignore_file(&path) {
+                // Its rules decide which folders below are walked: watch
+                // those again, and rescan them.
+                if let Some(dir) = path.parent().filter(|d| self.dirs.contains(*d)) {
+                    let dir = dir.to_path_buf();
+                    self.reconcile(root, &dir, deny, cancelled);
+                    kept.push(dir);
+                }
+                continue;
+            }
             if never_indexed(&root.path, &path) {
                 continue;
             }
             let meta = std::fs::symlink_metadata(&path).ok();
             let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
             if self.dirs.contains(&path) {
-                if !is_dir {
+                if gone || !is_dir {
                     self.forget(&path);
                 }
-                kept.push(path);
-                continue;
+                if !(gone && is_dir) {
+                    kept.push(path);
+                    continue;
+                }
+                // Made again since: watched below as a new folder.
             }
             let parent_known = path.parent().is_some_and(|p| self.dirs.contains(p));
             if !parent_known {
@@ -197,12 +245,7 @@ impl Watches {
                 // watches report those), or left over from one let go.
                 continue;
             }
-            if is_dir && self.per_directory && self.held >= self.limit {
-                // No watch left for it: the rescan it sets off, and later ones,
-                // keep it up to date.
-                self.skipped += 1;
-                self.incomplete.insert(root.id.clone());
-            } else if is_dir {
+            if is_dir {
                 let Some(rel) = path
                     .strip_prefix(&root.path)
                     .ok()
@@ -210,6 +253,9 @@ impl Watches {
                 else {
                     continue;
                 };
+                // Whether the index walks it at all comes first: an ignored
+                // or skipped folder costs no watch and leaves coverage whole,
+                // even at the limit. `add_dirs` holds the limit for the rest.
                 let scope = Arc::new(Scope(vec![Target::Recursive(rel)]));
                 let found = collect_dirs(root, deny, Some(scope), cancelled);
                 if !found.iter().any(|d| d == &path) {
@@ -221,6 +267,43 @@ impl Watches {
             kept.push(path);
         }
         kept
+    }
+
+    /// Bring the watches under `dir` in line with what the index walks there
+    /// now: an ignore file there changed.
+    fn reconcile(
+        &mut self,
+        root: &RootHandle,
+        dir: &Path,
+        deny: &Arc<DenyList>,
+        cancelled: &CancellationToken,
+    ) {
+        let Some(rel) = dir
+            .strip_prefix(&root.path)
+            .ok()
+            .and_then(RelPath::from_relative_path)
+        else {
+            return;
+        };
+        let scope = Arc::new(Scope(vec![Target::Recursive(rel)]));
+        let found = collect_dirs(root, deny, Some(scope), cancelled);
+        if cancelled.is_cancelled() {
+            self.incomplete.insert(root.id.clone());
+            return;
+        }
+        let walked: HashSet<&PathBuf> = found.iter().collect();
+        let stale: Vec<PathBuf> = self
+            .dirs
+            .iter()
+            .filter(|d| d.starts_with(dir) && !walked.contains(d))
+            .cloned()
+            .collect();
+        for gone in stale {
+            if self.dirs.contains(&gone) {
+                self.forget(&gone);
+            }
+        }
+        self.add_dirs(root, found);
     }
 
     fn add_dirs(&mut self, root: &RootHandle, mut dirs: Vec<PathBuf>) {
@@ -303,6 +386,13 @@ fn collect_dirs(
         ControlFlow::Continue(())
     });
     dirs
+}
+
+/// Files whose rules decide what the index walks below their folder.
+fn is_ignore_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| matches!(n, ".gitignore" | ".ignore"))
 }
 
 /// A cheap first look at an event's path, by name only: a hidden file, or
@@ -529,6 +619,102 @@ mod tests {
                 .iter()
                 .all(|d| !d.starts_with(base.join("app/src")))
         );
+    }
+
+    #[test]
+    fn a_folder_removed_and_made_again_is_watched_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        write(&base, "app/src/a.rs", "x");
+        let root = Arc::new(root(&base));
+        let roots = [Arc::clone(&root)];
+        let (deny, never) = (no_deny(), CancellationToken::new());
+        let mut w = watches(1000, true);
+        w.add_root(&root, &deny, &never);
+        let before = w.held();
+
+        // Both events are read after it's back: it looks the same on disk.
+        std::fs::remove_dir_all(base.join("app/src")).unwrap();
+        write(&base, "app/src/b.rs", "x");
+        let src = base.join("app/src");
+        let kept = w.filter_changes(
+            vec![(src.clone(), true), (src.clone(), false)],
+            &roots,
+            &deny,
+            &never,
+        );
+        assert!(kept.contains(&src));
+        assert!(w.dirs().contains(&src), "watched afresh");
+        assert_eq!(w.held(), before);
+        assert!(w.covers("code"));
+    }
+
+    #[test]
+    fn an_ignore_file_that_changes_brings_the_watches_in_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        write(&base, "app/.gitignore", "/generated/\n");
+        write(&base, "app/generated/schema.rs", "x");
+        write(&base, "app/kept/a.rs", "x");
+        let root = Arc::new(root(&base));
+        let roots = [Arc::clone(&root)];
+        let (deny, never) = (no_deny(), CancellationToken::new());
+        let mut w = watches(1000, true);
+        w.add_root(&root, &deny, &never);
+        assert!(!w.dirs().contains(&base.join("app/generated")));
+
+        // No longer ignored: watched, and its folder rescanned.
+        write(&base, "app/.gitignore", "/kept/\n");
+        let kept = w.filter(vec![base.join("app/.gitignore")], &roots, &deny, &never);
+        assert_eq!(kept, [base.join("app")]);
+        assert!(w.dirs().contains(&base.join("app/generated")));
+        // Newly ignored: let go.
+        assert!(!w.dirs().contains(&base.join("app/kept")));
+    }
+
+    #[test]
+    fn a_skipped_folder_at_the_limit_leaves_coverage_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        write(&base, "app/Cargo.toml", "[package]\n");
+        write(&base, "app/src/a.rs", "x");
+        let root = Arc::new(root(&base));
+        let roots = [Arc::clone(&root)];
+        let (deny, never) = (no_deny(), CancellationToken::new());
+        let mut w = watches(3, true);
+        w.add_root(&root, &deny, &never);
+        assert_eq!(w.held(), 3);
+        assert!(w.covers("code"));
+
+        write(&base, "app/node_modules/x/index.js", "x");
+        write(&base, "app/target/debug/y", "x");
+        let kept = w.filter(
+            vec![base.join("app/node_modules"), base.join("app/target")],
+            &roots,
+            &deny,
+            &never,
+        );
+        assert!(kept.is_empty());
+        assert!(w.covers("code"), "nothing the index walks was left out");
+
+        // A folder it does walk, past the limit, is left to rescans.
+        write(&base, "app/docs/a.md", "x");
+        let kept = w.filter(vec![base.join("app/docs")], &roots, &deny, &never);
+        assert_eq!(kept, [base.join("app/docs")]);
+        assert!(!w.covers("code"));
+    }
+
+    #[test]
+    fn lost_events_count_every_folder_as_not_covered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        write(&base, "app/a.rs", "x");
+        let root = Arc::new(root(&base));
+        let mut w = watches(1000, true);
+        w.add_root(&root, &no_deny(), &CancellationToken::new());
+        assert!(w.covers("code"));
+        w.mark_incomplete(&[root]);
+        assert!(!w.covers("code"));
     }
 
     #[test]

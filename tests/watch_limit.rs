@@ -120,8 +120,14 @@ fn watches_stay_bounded_on_a_big_code_tree() {
     assert_eq!(inotify_watches(), 0);
 
     // Before: one recursive watch, as the daemon used to set, follows every
-    // folder and every link out of the shared folder.
-    let before = {
+    // folder and every link out of the shared folder. It takes over 25,000
+    // of the system's watches, more than some systems allow at all, and
+    // they're shared with every other program: measured only when asked
+    // (`CWW_WATCH_BASELINE=1`).
+    let baseline = std::env::var("CWW_WATCH_BASELINE").as_deref() == Ok("1");
+    let before = if !baseline {
+        0
+    } else {
         let mut watcher =
             notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).unwrap();
         watcher
@@ -130,7 +136,10 @@ fn watches_stay_bounded_on_a_big_code_tree() {
         inotify_watches()
     };
     settle_at(0);
-    assert!(before > 25_000, "a recursive watch took {before}");
+    assert!(
+        !baseline || before > 25_000,
+        "a recursive watch took {before}"
+    );
 
     // After: only what the index walks.
     let index = tmp.path().join("index");

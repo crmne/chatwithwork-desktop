@@ -88,7 +88,9 @@ pub struct IndexerSettings {
 
 enum Command {
     Configure(IndexerSettings, CancellationToken),
-    Changed(Vec<PathBuf>),
+    /// Paths an event named, and whether it said they went away (removed,
+    /// or renamed from there).
+    Changed(Vec<PathBuf>, bool),
     /// The watcher lost events; rescan everything.
     Rescan,
     /// A search is about to run: rescan folders that aren't watched in full,
@@ -165,6 +167,7 @@ impl Indexer {
                             settings,
                             watcher: None,
                             last_rewatch: None,
+                            rewatch_pending: false,
                             pending: HashMap::new(),
                             burst: None,
                             last_full: Instant::now(),
@@ -279,6 +282,9 @@ struct Worker {
     watcher: Option<Watches>,
     /// When lost events last rebuilt the watches.
     last_rewatch: Option<Instant>,
+    /// Events were lost too soon after the last rebuild: rebuild once
+    /// [`REWATCH_AFTER`] has passed.
+    rewatch_pending: bool,
     pending: HashMap<String, Pending>,
     burst: Option<Burst>,
     last_full: Instant,
@@ -302,16 +308,24 @@ impl Worker {
                     self.scan = scan;
                     self.apply_settings();
                 }
-                Ok(Command::Changed(paths)) => self.note_changes(paths),
+                Ok(Command::Changed(paths, gone)) => self.note_changes(paths, gone),
                 Ok(Command::Rescan) => {
                     // Directories made while events were lost aren't watched.
-                    if self.settings.watch
-                        && self
+                    if self.settings.watch {
+                        if self
                             .last_rewatch
                             .is_none_or(|at| at.elapsed() >= REWATCH_AFTER)
-                    {
-                        self.last_rewatch = Some(Instant::now());
-                        self.start_watcher();
+                        {
+                            self.rewatch();
+                        } else {
+                            // Too soon to rebuild again: until it's due, no
+                            // folder counts as covered, so searches and the
+                            // periodic rescan keep the index fresh.
+                            self.rewatch_pending = true;
+                            if let Some(watches) = &mut self.watcher {
+                                watches.mark_incomplete(&self.settings.roots);
+                            }
+                        }
                     }
                     for root in &self.settings.roots {
                         self.pending.entry(root.id.clone()).or_default().full = true;
@@ -325,6 +339,16 @@ impl Worker {
                 }
                 Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
+                    if self.rewatch_due() == Some(Duration::ZERO) {
+                        // Watch what was made while events were lost, then
+                        // rescan everything once more.
+                        self.rewatch();
+                        for root in &self.settings.roots {
+                            self.pending.entry(root.id.clone()).or_default().full = true;
+                        }
+                        self.note_burst();
+                        continue;
+                    }
                     if self.burst.take().is_some() {
                         self.flush_pending();
                     } else {
@@ -339,6 +363,30 @@ impl Worker {
 
     /// How long to wait for the next command, or `None` to wait forever.
     fn timeout(&self) -> Option<Duration> {
+        let rewatch = self.rewatch_due();
+        let other = self.timeout_without_rewatch();
+        match (rewatch, other) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// How long until a pending rebuild of the watches is due.
+    fn rewatch_due(&self) -> Option<Duration> {
+        self.rewatch_pending.then(|| {
+            self.last_rewatch.map_or(Duration::ZERO, |at| {
+                REWATCH_AFTER.saturating_sub(at.elapsed())
+            })
+        })
+    }
+
+    fn rewatch(&mut self) {
+        self.last_rewatch = Some(Instant::now());
+        self.rewatch_pending = false;
+        self.start_watcher();
+    }
+
+    fn timeout_without_rewatch(&self) -> Option<Duration> {
         if let Some(burst) = self.burst {
             let quiet = QUIET.saturating_sub(burst.last.elapsed());
             let cap = MAX_WAIT.saturating_sub(burst.first.elapsed());
@@ -370,11 +418,14 @@ impl Worker {
         self.watcher.as_ref().is_some_and(|w| w.covers(root_id))
     }
 
-    fn note_changes(&mut self, paths: Vec<PathBuf>) {
+    fn note_changes(&mut self, paths: Vec<PathBuf>, gone: bool) {
         let paths = match &mut self.watcher {
-            Some(watches) => {
-                watches.filter(paths, &self.settings.roots, &self.settings.deny, &self.scan)
-            }
+            Some(watches) => watches.filter_changes(
+                paths.into_iter().map(|p| (p, gone)).collect(),
+                &self.settings.roots,
+                &self.settings.deny,
+                &self.scan,
+            ),
             None => paths,
         };
         let mut any = false;
@@ -480,7 +531,17 @@ impl Worker {
                 let command = match event {
                     Ok(event) if event.need_rescan() => Command::Rescan,
                     Ok(event) if event.kind.is_access() => return,
-                    Ok(event) => Command::Changed(event.paths),
+                    Ok(event) => {
+                        use notify::event::{EventKind, ModifyKind, RenameMode};
+                        let gone = matches!(
+                            event.kind,
+                            EventKind::Remove(_)
+                                | EventKind::Modify(ModifyKind::Name(
+                                    RenameMode::From | RenameMode::Any
+                                ))
+                        );
+                        Command::Changed(event.paths, gone)
+                    }
                     Err(e) => {
                         watch::note_error(&e);
                         Command::Rescan
