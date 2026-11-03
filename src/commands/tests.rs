@@ -97,7 +97,15 @@ fn shell(command: &str) -> Request {
 }
 
 fn wait(runs: &Runs, id: &str) -> Finished {
-    let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 150 } else { 30 });
+    wait_for(
+        runs,
+        id,
+        Duration::from_secs(if cfg!(windows) { 150 } else { 30 }),
+    )
+}
+
+fn wait_for(runs: &Runs, id: &str, limit: Duration) -> Finished {
+    let deadline = Instant::now() + limit;
     loop {
         if !runs.status(id).unwrap().running() {
             return runs.finished(id).unwrap();
@@ -1174,7 +1182,7 @@ fn real_claude_code_answers_from_the_sandbox() {
         ..request("claude -p 'Reply with the word ready.' --max-turns 1")
     };
     let status = fx.runs.start(&fx.config, &ask).unwrap();
-    let done = wait(&fx.runs, &status.id);
+    let done = wait_for(&fx.runs, &status.id, Duration::from_secs(190));
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
     for text in [&done.stdout, &done.stderr, &window.text] {
         assert!(!text.contains(&token), "the token printed");
@@ -1190,10 +1198,11 @@ fn real_claude_code_answers_from_the_sandbox() {
 /// A run reads Claude Code's folder where it really is: Bubblewrap can't
 /// start with a link given as a folder to bind (mise's
 /// `installs/claude/latest`), which stopped every run of a bot allowed
-/// Claude Code on a NUC.
+/// Claude Code on a NUC. And never a folder that holds a shared one: then
+/// only the program.
 #[cfg(unix)]
 #[test]
-fn claude_codes_folder_is_read_where_it_really_is() {
+fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
     let dir = tempfile::tempdir().unwrap();
     let real = dir.path().join("2.1.316");
     std::fs::create_dir_all(&real).unwrap();
@@ -1201,6 +1210,9 @@ fn claude_codes_folder_is_read_where_it_really_is() {
     std::os::unix::fs::symlink(&real, dir.path().join("latest")).unwrap();
     let program = dir.path().join("latest").join("claude");
     let fx = fixture(true);
+    let real_program = program.canonicalize().unwrap();
+    let read = crate::coding::grant(&real_program, &fx.config, &fx.runs.paths).unwrap();
+    assert_eq!(read, real.canonicalize().unwrap());
     let mut plan = plan(
         &fx.config,
         &fx.runs.paths,
@@ -1209,11 +1221,21 @@ fn claude_codes_folder_is_read_where_it_really_is() {
     )
     .unwrap();
     plan.coding.claude = Some(crate::coding::Claude {
-        real: program.canonicalize().unwrap(),
+        real: real_program,
         program,
+        read,
         token: crate::coding::Secret::new("x".into()),
     });
-    let read = plan.coding_readable();
     let real = real.canonicalize().unwrap().to_string_lossy().into_owned();
-    assert_eq!(read, [real]);
+    assert_eq!(plan.coding_readable(), [real]);
+
+    // Beside the shared folder: its parent would hold the folder.
+    let beside = fx.folder.parent().unwrap().join("claude");
+    std::fs::write(&beside, "").unwrap();
+    let beside = beside.canonicalize().unwrap();
+    assert_eq!(
+        crate::coding::grant(&beside, &fx.config, &fx.runs.paths),
+        Some(beside.clone()),
+        "only the program"
+    );
 }

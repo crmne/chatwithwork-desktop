@@ -131,6 +131,9 @@ pub fn test_command(checkout: &Path) -> Option<String> {
     if has(checkout, "pyproject.toml") || has(checkout, "pytest.ini") {
         return Some(if has(checkout, "uv.lock") {
             "uv run pytest".into()
+        } else if has(checkout, "poetry.lock") {
+            // The environment `poetry install` made, not the system's python.
+            "poetry run pytest".into()
         } else {
             "python3 -m pytest".into()
         });

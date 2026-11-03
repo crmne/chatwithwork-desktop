@@ -27,6 +27,8 @@ use crate::paths::Paths;
 pub const TOKEN_NAME: &str = "claude-code-token";
 /// Claude Code's own variable for such a token.
 pub const TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+/// Most repositories a bot's `roots` names in one folder.
+pub const MAX_REPOSITORIES_LISTED: usize = 20;
 /// What a run's output says where the token was.
 pub const REDACTED: &str = "[claude-code-token]";
 
@@ -135,6 +137,9 @@ pub fn coding_for_bot(coding: &CodingConfig, root: &Root, bot: &str) -> Value {
         .iter()
         .filter(|repo| repo.root == root.id)
         .map(|repo| repo.name.as_str())
+        // Names are at most 100 characters; this keeps a folder's answer
+        // small whatever the config holds.
+        .take(MAX_REPOSITORIES_LISTED)
         .collect();
     json!({
         "claude_code": claude_state(coding, root, bot).name(),
@@ -152,22 +157,51 @@ pub struct RunCoding {
     pub claude: Option<Claude>,
 }
 
-/// Claude Code for one run: the program setup checked, the folder it really
-/// is in (the sandbox reads it), and the token.
+/// Claude Code for one run: the program setup checked, where it really is,
+/// what the sandbox reads for it, and the token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claude {
     pub program: PathBuf,
     pub real: PathBuf,
+    /// The folder the program really is in, or only the program where that
+    /// folder is too broad to read (see [`grant`]).
+    pub read: PathBuf,
     pub token: Secret,
 }
 
 impl Claude {
-    /// The folder holding the program itself, where any link leads: the
-    /// sandbox reads only it.
+    /// The folder holding the program itself, where any link leads.
     pub fn real_dir(&self) -> PathBuf {
         self.real
             .parent()
             .map_or_else(|| self.real.clone(), Path::to_path_buf)
+    }
+}
+
+/// What a run reads for Claude Code at `real`: the folder it really is in,
+/// where its installers put it with nothing else (`~/.local/share/claude/versions`,
+/// mise's install), or, where that folder is too broad (the home folder, one
+/// that holds it, a drive, a system folder, one that holds a shared folder
+/// or Desktop's own), only the program itself. Windows grants a run folders
+/// only, so there such a program gets nothing.
+pub fn grant(real: &Path, config: &Config, paths: &Paths) -> Option<PathBuf> {
+    let dir = real.parent()?;
+    let holds = |inner: &Path| {
+        inner
+            .canonicalize()
+            .is_ok_and(|inner| inner.starts_with(dir))
+    };
+    let broad = crate::roots::too_broad(dir).map_or(true, |reason| reason.is_some())
+        || config.roots.iter().any(|r| holds(&r.path))
+        || [&paths.config_dir, &paths.data_dir, &paths.state_dir]
+            .iter()
+            .any(|own| holds(own));
+    if !broad {
+        Some(dir.to_path_buf())
+    } else if cfg!(windows) {
+        None
+    } else {
+        Some(real.to_path_buf())
     }
 }
 
@@ -195,10 +229,12 @@ pub fn for_run(
         }
         let program = config.coding.claude.clone()?;
         let real = program.canonicalize().ok().filter(|p| p.is_file())?;
+        let read = grant(&real, config, paths)?;
         let token = token()?;
         Some(Claude {
             program,
             real,
+            read,
             token,
         })
     });

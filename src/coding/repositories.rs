@@ -77,6 +77,18 @@ pub fn check_url(url: &str) -> Result<()> {
         if url.starts_with("ext::") || url.starts_with("fd::") {
             bail!("that kind of address runs a program; use an SSH or https address");
         }
+        // A user with a password (`ssh://user:secret@host/`, or
+        // `user:secret@host:path` in scp's form): never kept.
+        let rest = url.strip_prefix("ssh://").unwrap_or(url);
+        let authority = rest.split('/').next().unwrap_or_default();
+        if let Some((user, _)) = authority.split_once('@')
+            && user.contains(':')
+        {
+            bail!(
+                "the address has a password or token in it. Use an SSH key instead, so no \
+                 secret is kept in Desktop's settings"
+            );
+        }
         return Ok(());
     }
     bail!("use the repository's SSH or https address, like git@github.com:acme/app.git")
@@ -147,13 +159,16 @@ fn run(mut command: Command, limit: Duration) -> Result<()> {
         .spawn()
         .context("couldn't start git; is it installed?")?;
     let stderr = child.stderr.take();
-    let reader = std::thread::spawn(move || {
+    // A helper git started can hold stderr open after git ends: wait for
+    // what it said only a moment.
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
         if let Some(mut stderr) = stderr {
             use std::io::Read;
             let _ = stderr.read_to_string(&mut text);
         }
-        text
+        let _ = said.send(text);
     });
     let deadline = Instant::now() + limit;
     let status = loop {
@@ -167,7 +182,9 @@ fn run(mut command: Command, limit: Duration) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let text = reader.join().unwrap_or_default();
+    let text = heard
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_default();
     if !status.success() {
         let last = text
             .lines()
@@ -189,6 +206,24 @@ pub fn create_mirror(paths: &Paths, repo: &Repository) -> Result<PathBuf> {
     check_url(&repo.url)?;
     let mirror = mirror_dir(paths, repo);
     if mirror.join("HEAD").is_file() {
+        let mut origin = git();
+        origin
+            .arg("--git-dir")
+            .arg(&mirror)
+            .args(["config", "--get", "remote.origin.url"]);
+        let found = origin
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if found != repo.url {
+            bail!(
+                "Desktop already mirrors another repository as {} in {}: choose another name",
+                repo.name,
+                repo.root
+            );
+        }
         return Ok(mirror);
     }
     std::fs::create_dir_all(mirror.parent().unwrap_or(&mirror))?;
@@ -215,7 +250,20 @@ pub fn create_mirror(paths: &Paths, repo: &Repository) -> Result<PathBuf> {
 /// mirror, so fetching needs no network or credentials, and a push fails.
 pub fn create_checkout(folder: &Path, name: &str, mirror: &Path) -> Result<PathBuf> {
     let checkout = folder.join(name);
-    let config = checkout.join(".git").join("config");
+    let git_dir = checkout.join(".git");
+    let config = git_dir.join("config");
+    // Each part as it is, never through a link a command could have made to
+    // send the write below somewhere else.
+    let plain = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink());
+    if [&checkout, &git_dir, &config]
+        .iter()
+        .any(|p| p.exists() && !plain(p))
+    {
+        bail!(
+            "{} is a link, or holds one where its Git settings are: choose another name",
+            checkout.display()
+        );
+    }
     if config.is_file() {
         // A checkout from before: its origin becomes the mirror. Only
         // `git config --file`, which reads and writes that one file and
@@ -228,6 +276,17 @@ pub fn create_checkout(folder: &Path, name: &str, mirror: &Path) -> Result<PathB
             .args(["remote.origin.url"])
             .arg(mirror);
         run(origin, Duration::from_secs(10)).context("pointing the checkout at the mirror")?;
+        // And nowhere else to push to.
+        let mut push = git();
+        push.arg("config")
+            .arg("--file")
+            .arg(&config)
+            .args(["--unset-all", "remote.origin.pushurl"]);
+        match push.stdout(Stdio::null()).stderr(Stdio::null()).status() {
+            // 5: there was none.
+            Ok(s) if s.success() || s.code() == Some(5) => {}
+            _ => bail!("couldn't clear the checkout's push address"),
+        }
         return Ok(checkout);
     }
     if checkout.exists() {

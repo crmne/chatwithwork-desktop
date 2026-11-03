@@ -1800,7 +1800,7 @@ impl ControlHandler for Daemon {
                     None => command.clone(),
                 });
                 self.audit.append(&entry);
-                let status = self
+                let started = self
                     .runner
                     .start(crate::commands::Request {
                         root,
@@ -1808,8 +1808,17 @@ impl ControlHandler for Daemon {
                         command,
                         bot,
                     })
-                    .await
-                    .map_err(command_refusal)?;
+                    .await;
+                let status = match started {
+                    Ok(status) => status,
+                    Err(refused) => {
+                        let mut entry = AuditEntry::event("coding_check");
+                        entry.decision = Some(crate::audit::Decision::Denied);
+                        entry.code = Some(refused.code.clone());
+                        self.audit.append(&entry);
+                        return Err(command_refusal(refused));
+                    }
+                };
                 Ok(serde_json::to_value(status)?)
             }
             ControlRequest::AuditTail { lines } => {

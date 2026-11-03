@@ -1044,7 +1044,11 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
             if json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&setup::status_json(&config, paths))?
+                    serde_json::to_string_pretty(&setup::status_json(
+                        &config,
+                        paths,
+                        bot.as_deref()
+                    ))?
                 );
             } else {
                 setup::summary(&config, paths, bot.as_deref());

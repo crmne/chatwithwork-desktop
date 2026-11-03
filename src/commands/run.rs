@@ -43,6 +43,9 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     // The folder's repositories, fresh: `git fetch origin` in the run reads
     // the mirror, which only this side fetches.
     for (mirror, repo) in &plan.coding.mirrors {
+        if lock(cell).stop {
+            return State::Stopped;
+        }
         crate::coding::repositories::fetch_if_stale(mirror, Some(repo));
     }
     if let Err(e) = make_home(plan) {

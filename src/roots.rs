@@ -348,7 +348,7 @@ fn find_root(config: &Config, which: &str) -> Result<usize> {
 
 /// Why a path is too broad to share by default, if it is.
 #[cfg(windows)]
-fn too_broad(path: &Path) -> Result<Option<String>> {
+pub(crate) fn too_broad(path: &Path) -> Result<Option<String>> {
     // Reference folders can come as 8.3 short names (`C:\Users\RUNNER~1`),
     // so compare canonical forms.
     let lower = |p: &Path| -> Vec<String> {
@@ -407,7 +407,7 @@ fn too_broad(path: &Path) -> Result<Option<String>> {
 
 /// Why a path is too broad to share by default, if it is.
 #[cfg(not(windows))]
-fn too_broad(path: &Path) -> Result<Option<String>> {
+pub(crate) fn too_broad(path: &Path) -> Result<Option<String>> {
     if path == Path::new("/") {
         return Ok(Some("it is the whole filesystem".into()));
     }

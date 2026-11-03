@@ -55,6 +55,7 @@ fn a_secret_never_prints() {
     let claude = Claude {
         program: "/x/claude".into(),
         real: "/y/claude".into(),
+        read: "/y".into(),
         token: secret,
     };
     assert!(!format!("{claude:?}").contains("oat01"));
@@ -196,6 +197,9 @@ fn repository_addresses_never_hold_a_token() {
     assert!(check_url("--upload-pack=evil").is_err());
     assert!(check_url("ext::sh -c evil").is_err());
     assert!(check_url("/home/u/app").is_err());
+    assert!(check_url("ssh://user:password@host/acme/app").is_err());
+    assert!(check_url("user:token@github.com:acme/app.git").is_err());
+    assert!(check_url("ssh://git@host:2222/acme/app").is_ok());
     assert_eq!(
         name_from_url("git@github.com:acme/app.git").as_deref(),
         Some("app")
@@ -280,4 +284,89 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
         PathBuf::from(String::from_utf8_lossy(&remote.stdout).trim()),
         mirror
     );
+}
+
+#[test]
+fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = dir.path().join("upstream");
+    std::fs::create_dir(&upstream).unwrap();
+    let git = |args: &[&str], cwd: &std::path::Path| {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+            ])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"], &upstream);
+    std::fs::write(upstream.join("a"), "1").unwrap();
+    git(&["add", "a"], &upstream);
+    git(&["commit", "-qm", "one"], &upstream);
+    let paths = crate::paths::Paths::under(&dir.path().join("cww"));
+    let repo = Repository {
+        root: "bots".into(),
+        name: "app".into(),
+        url: format!("file://{}", upstream.display()),
+        ssh_key: None,
+    };
+    let mirror = repositories::create_mirror(&paths, &repo).unwrap();
+
+    // Another address under the same name never reuses this mirror.
+    let other = Repository {
+        url: "git@github.com:acme/other.git".into(),
+        ..repo.clone()
+    };
+    assert!(repositories::create_mirror(&paths, &other).is_err());
+
+    // A checkout from before, with a push address of its own.
+    let folder = dir.path().join("bots");
+    std::fs::create_dir(&folder).unwrap();
+    git(&["clone", "-q", upstream.to_str().unwrap(), "app"], &folder);
+    let checkout = folder.join("app");
+    git(
+        &[
+            "config",
+            "remote.origin.pushurl",
+            "git@github.com:acme/app.git",
+        ],
+        &checkout,
+    );
+    repositories::create_checkout(&folder, "app", &mirror).unwrap();
+    assert_eq!(
+        PathBuf::from(git(&["remote", "get-url", "origin"], &checkout)),
+        mirror
+    );
+    assert_eq!(
+        PathBuf::from(git(&["remote", "get-url", "--push", "origin"], &checkout)),
+        mirror,
+        "no other place to push to"
+    );
+
+    // A checkout that is a link is refused.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&checkout, folder.join("linked")).unwrap();
+        assert!(repositories::create_checkout(&folder, "linked", &mirror).is_err());
+    }
 }

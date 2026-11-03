@@ -210,9 +210,19 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     let checkout = repository_step(&mut config, paths, &ask, &options, &root_id)?;
 
     // 7. The toolchain.
-    if let Some((_, path)) = &checkout {
+    if let Some((_, path, fresh)) = &checkout {
         if options.skip_install {
             Step::Skipped("--skip-install".into()).print("Toolchain");
+        } else if !fresh {
+            // Its install scripts run as you, outside the sandbox: only from
+            // a checkout this setup just made, never one a bot's commands
+            // could have changed since.
+            Step::NeedsYou(
+                "the checkout was already there, and a bot's commands may have changed its \
+                 install files; check them, then install its toolchain yourself"
+                    .into(),
+            )
+            .print("Toolchain");
         } else {
             toolchain_step(&ask, path)?;
         }
@@ -222,6 +232,7 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     if options.skip_proof {
         Step::Skipped("--skip-proof".into()).print("Proof");
     } else {
+        let checkout = checkout.map(|(name, path, _)| (name, path));
         proof_step(paths, &ask, &options, &root_id, &bot, checkout.as_ref())?;
     }
 
@@ -400,41 +411,86 @@ pub fn find_claude() -> Option<PathBuf> {
         "claude"
     };
     let mise = || {
-        Command::new("mise")
-            .args(["which", "claude"])
-            .output()
-            .ok()
-            .map(|out| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+        let mut command = Command::new("mise");
+        command.args(["which", "claude"]);
+        output_within(command, PROBE_LIMIT)
+            .map(PathBuf::from)
             .filter(|p| p.is_file())
     };
-    let on_path = which("claude").and_then(|found| {
-        let text = found.to_string_lossy();
-        if text.contains("mise") && text.contains("shims") {
-            mise()
-        } else {
-            Some(found)
-        }
-    });
-    let candidates = [
-        on_path,
-        mise(),
-        Some(home.join(".local").join("bin").join(exe)),
-        Some(PathBuf::from("/opt/homebrew/bin/claude")),
-        Some(PathBuf::from("/usr/local/bin/claude")),
-        Some(home.join(".npm-global").join("bin").join("claude")),
-        Some(home.join(".claude").join("local").join(exe)),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|p| p.is_file() && version(p).is_some())
+    let runs = |p: &PathBuf| p.is_file() && version(p).is_some();
+    // Each asked only when the one before didn't give a `claude` that runs.
+    let on_path = || {
+        which("claude").and_then(|found| {
+            let text = found.to_string_lossy();
+            if text.contains("mise") && text.contains("shims") {
+                mise()
+            } else {
+                Some(found)
+            }
+        })
+    };
+    if let Some(found) = on_path().filter(runs) {
+        return Some(found);
+    }
+    if let Some(found) = mise().filter(runs) {
+        return Some(found);
+    }
+    [
+        home.join(".local").join("bin").join(exe),
+        PathBuf::from("/opt/homebrew/bin/claude"),
+        PathBuf::from("/usr/local/bin/claude"),
+        home.join(".npm-global").join("bin").join("claude"),
+        home.join(".claude").join("local").join(exe),
+    ]
+    .into_iter()
+    .find(runs)
 }
 
 fn version(program: &Path) -> Option<String> {
-    let out = Command::new(program).arg("--version").output().ok()?;
-    out.status
+    let mut command = Command::new(program);
+    command.arg("--version");
+    output_within(command, PROBE_LIMIT)
+}
+
+/// How long a probe (`claude --version`, `mise which claude`) may take
+/// before it counts as not running.
+const PROBE_LIMIT: Duration = Duration::from_secs(15);
+
+/// What `command` prints, if it succeeds within `limit`; a probe that hangs
+/// counts as one that failed.
+fn output_within(mut command: Command, limit: Duration) -> Option<String> {
+    use std::io::Read;
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        let _ = said.send(text);
+    });
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let text = heard.recv_timeout(Duration::from_secs(2)).ok()?;
+    status
         .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .then(|| text.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 
@@ -613,7 +669,7 @@ fn repository_step(
     ask: &Asker,
     options: &Options,
     root_id: &str,
-) -> Result<Option<(String, PathBuf)>> {
+) -> Result<Option<(String, PathBuf, bool)>> {
     let root = config.root(root_id).cloned().context("the folder")?;
     let existing = config
         .coding
@@ -665,6 +721,8 @@ fn repository_step(
             return Ok(None);
         }
     };
+    // Made now, from the mirror, rather than one a bot may have changed.
+    let fresh = !root.path.join(&repo.name).exists();
     let checkout = match repositories::create_checkout(&root.path, &repo.name, &mirror) {
         Ok(c) => c,
         Err(e) => {
@@ -686,7 +744,7 @@ fn repository_step(
         repo.url, root.label, repo.name
     ))
     .print("Repository");
-    Ok(Some((repo.name, checkout)))
+    Ok(Some((repo.name, checkout, fresh)))
 }
 
 fn shell(command: &str, dir: &Path) -> std::io::Result<std::process::ExitStatus> {
@@ -982,21 +1040,24 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
 
 /// What `cww coding status --json` prints: per loan, the state the server
 /// would see, and per repository, its fetch. No token, ever.
-pub fn status_json(config: &Config, paths: &Paths) -> Value {
+pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Value {
     let stored = super::token(config, paths).is_some();
     let loans: Vec<Value> = config
         .roots
         .iter()
         .flat_map(|root| {
-            root.bots.iter().map(move |loan| {
-                serde_json::json!({
-                    "root": root.id,
-                    "bot": loan.id,
-                    "name": loan.name,
-                    "unattended": loan.unattended,
-                    "claude_code": super::claude_state(&config.coding, root, &loan.id).name(),
+            root.bots
+                .iter()
+                .filter(move |loan| only_bot.is_none_or(|bot| bot == loan.id))
+                .map(move |loan| {
+                    serde_json::json!({
+                        "root": root.id,
+                        "bot": loan.id,
+                        "name": loan.name,
+                        "unattended": loan.unattended,
+                        "claude_code": super::claude_state(&config.coding, root, &loan.id).name(),
+                    })
                 })
-            })
         })
         .collect();
     let repos: Vec<Value> = config

@@ -392,23 +392,18 @@ impl Plan {
     pub fn coding_readable(&self) -> Vec<String> {
         // Canonical, as the toolchains are: a sandbox binds a folder where
         // it is, and Bubblewrap can't start with a link (mise's
-        // `installs/claude/latest`) given as one.
+        // `installs/claude/latest`) given as one. Claude Code's is only
+        // what `coding::grant` allowed: its own folder, or the program.
         let mut dirs: Vec<PathBuf> = self.coding.mirrors.iter().map(|(m, _)| m.clone()).collect();
         if let Some(claude) = &self.coding.claude {
-            dirs.push(claude.real_dir());
-            // Windows puts the program's own folder first on PATH.
-            if cfg!(windows)
-                && let Some(dir) = claude.program.parent()
-            {
-                dirs.push(dir.to_path_buf());
-            }
+            dirs.push(claude.read.clone());
         }
         let mut read: Vec<String> = Vec::new();
         for dir in dirs {
             let Ok(real) = dir.canonicalize() else {
                 continue;
             };
-            if real.is_dir() {
+            if real.exists() {
                 let real = display(&real);
                 if !read.contains(&real) {
                     read.push(real);
