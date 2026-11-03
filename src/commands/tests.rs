@@ -1134,3 +1134,48 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         assert_eq!(done.stdout.trim(), "env:", "{request:?}");
     }
 }
+
+/// The real Claude Code, found as `cww coding setup` finds it, answers from
+/// the sandbox with a token from `claude setup-token`, as a bot's run gets
+/// it. Needs the network and `CWW_TEST_CLAUDE_TOKEN`; spends a few tokens
+/// of that subscription. Its failures never print the output, which would
+/// hold the token if it leaked.
+#[test]
+#[ignore = "needs Claude Code, the network, and CWW_TEST_CLAUDE_TOKEN"]
+fn real_claude_code_answers_from_the_sandbox() {
+    let token = std::env::var("CWW_TEST_CLAUDE_TOKEN").expect("CWW_TEST_CLAUDE_TOKEN");
+    assert!(crate::coding::valid_token(&token), "not a setup token");
+    let program = crate::coding::setup::find_claude().expect("Claude Code installed");
+    let mut fx = fixture(true);
+    fx.config.limits.command_timeout_seconds = 180;
+    fx.config.secret_store = Some("file".into());
+    fx.config.roots[0].network = true;
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: true,
+    });
+    fx.config.coding.claude = Some(program);
+    fx.config.coding.claude_signed_in = true;
+    let paths = fx.runs.paths.clone();
+    crate::coding::store(&fx.config, &paths)
+        .set(crate::coding::TOKEN_NAME, &token)
+        .unwrap();
+    let ask = Request {
+        bot: Some("42".into()),
+        ..request("claude -p 'Reply with the word ready.' --max-turns 1")
+    };
+    let status = fx.runs.start(&fx.config, &ask).unwrap();
+    let done = wait(&fx.runs, &status.id);
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    for text in [&done.stdout, &done.stderr, &window.text] {
+        assert!(!text.contains(&token), "the token printed");
+    }
+    eprintln!(
+        "state {} exit {:?}\nstdout: {}\nstderr: {}",
+        done.status.state, done.status.exit_code, done.stdout, done.stderr
+    );
+    assert_eq!(done.status.exit_code, Some(0));
+    assert!(done.stdout.to_lowercase().contains("ready"));
+}
