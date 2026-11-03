@@ -323,16 +323,17 @@ fn folder_step(
     let unattended = match options.unattended {
         Some(u) => u,
         None => {
-            loan.as_ref().is_some_and(|l| l.unattended) || {
-                println!(
-                    "Unattended lets this bot's commands in {} start without anyone approving each \
-                 one: it can work while you're away, and a compromised server, or a bot misled \
-                 by what it read, could run any command there.",
-                    root.label
-                );
-                // Asked even with --yes: only --unattended turns it on.
-                !ask.yes && ask.confirm("Let its commands start unattended?", false)?
-            }
+            // Never on with --yes alone: only --unattended or a yes here.
+            loan.as_ref().is_some_and(|l| l.unattended)
+                || (!ask.yes && ask.interactive() && {
+                    println!(
+                        "Unattended lets this bot's commands in {} start without anyone \
+                         approving each one: it can work while you're away, and a compromised \
+                         server, or a bot misled by what it read, could run any command there.",
+                        root.label
+                    );
+                    ask.confirm("Let its commands start unattended?", false)?
+                })
         }
     };
     if loan.is_none() {
@@ -848,7 +849,8 @@ fn proof_step(
             Some(command) => {
                 println!("Running `{command}` in {name}, in the sandbox a bot's command gets…");
                 let (state, code, output) =
-                    check(paths, root, name, &command, bot, Duration::from_secs(1800))?;
+                    check(paths, root, name, &command, bot, Duration::from_secs(1800))
+                        .unwrap_or_else(|e| ("failed".into(), None, format!("{e:#}")));
                 let step = if state == "exited" && code == Some(0) {
                     Step::Ok(format!("`{command}` passed in the sandbox"))
                 } else {
@@ -879,7 +881,8 @@ fn proof_step(
         "claude -p 'Reply with the word ready.' --max-turns 1",
         bot,
         Duration::from_secs(180),
-    )?;
+    )
+    .unwrap_or_else(|e| ("failed".into(), None, format!("{e:#}")));
     let step = if state == "exited" && code == Some(0) && output.to_lowercase().contains("ready") {
         Step::Ok("found, signed in, and answering from the sandbox".into())
     } else {
