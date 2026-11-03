@@ -22,6 +22,9 @@ ExclusiveArch:  x86_64 aarch64
 
 BuildRequires:  coreutils
 BuildRequires:  systemd-rpm-macros
+# Owns the icon theme's directories, which openSUSE's build checks require.
+BuildRequires:  hicolor-icon-theme
+Requires:       hicolor-icon-theme
 # The libraries the app links (WebKitGTK, GTK, ALSA, PipeWire, D-Bus) are
 # required by soname automatically; these are the programs it runs.
 Requires:       bubblewrap
@@ -84,6 +87,7 @@ install -Dm644 "$dir/LICENSE" -t %{buildroot}%{_licensedir}/%{name}/
 @POSTINSTALL@
 
 %files
+%dir %{_licensedir}/%{name}
 %license %{_licensedir}/%{name}/LICENSE
 %doc %{_docdir}/%{name}/
 %{_bindir}/cww
