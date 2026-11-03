@@ -10,8 +10,19 @@ $packageArgs = @{
   silentArgs     = "/qn /norestart /l*v `"$($env:TEMP)\$($env:ChocolateyPackageName).$($env:ChocolateyPackageVersion).MsiInstall.log`""
   validExitCodes = @(0, 3010, 1641)
 }
-if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+# The OS's architecture, even when Chocolatey runs emulated on Windows on Arm.
+$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+if ($arch -eq 'ARM64') {
   $packageArgs.url64bit = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.msi'
   $packageArgs.checksum64 = '@WINDOWS_ARM64_MSI_SHA256@'
+}
+# The app updates itself, so the installed copy can be newer than this
+# package. Windows Installer refuses a downgrade, so leave a newer copy alone.
+$installed = Get-UninstallRegistryKey -SoftwareName 'Chat with Work Desktop' |
+  Where-Object { $_.DisplayVersion } | ForEach-Object { [version]$_.DisplayVersion } |
+  Sort-Object -Descending | Select-Object -First 1
+if ($installed -and $installed -ge [version]$env:ChocolateyPackageVersion) {
+  Write-Host "Chat with Work Desktop $installed is already installed, as new as this package or newer; it updates itself."
+  return
 }
 Install-ChocolateyPackage @packageArgs
