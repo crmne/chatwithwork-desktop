@@ -157,9 +157,10 @@ pub fn set_writable(
         // Commands change files too: they stop with changes.
         root.commands = false;
         root.network = false;
-        root.bots
-            .iter_mut()
-            .for_each(|loan| loan.unattended = false);
+        root.bots.iter_mut().for_each(|loan| {
+            loan.unattended = false;
+            loan.claude_code = false;
+        });
     }
     Ok(root.clone())
 }
@@ -193,9 +194,10 @@ pub fn set_commands(
     root.network = commands && network;
     if !commands {
         // No command runs there now, so none runs unattended either.
-        root.bots
-            .iter_mut()
-            .for_each(|loan| loan.unattended = false);
+        root.bots.iter_mut().for_each(|loan| {
+            loan.unattended = false;
+            loan.claude_code = false;
+        });
     }
     Ok(root.clone())
 }
@@ -232,14 +234,45 @@ pub fn set_bot(
         .map(|n| n.chars().take(80).collect())
         .or_else(|| root.loan(bot).map(|loan| loan.name.clone()))
         .unwrap_or_default();
+    // Lending again keeps the Claude Code sign-in it was given, which only
+    // `set_bot_claude_code` changes.
+    let claude_code = root.loan(bot).is_some_and(|loan| loan.claude_code) && root.runs_commands();
     root.bots.retain(|loan| loan.id != bot);
     if lent {
         root.bots.push(BotLoan {
             id: bot.to_string(),
             name,
             unattended,
+            claude_code,
         });
     }
+    Ok(root.clone())
+}
+
+/// Let a bot's commands in a folder lent to it use this computer's Claude
+/// Code sign-in (docs/coding-computers.md), or stop. Only where commands
+/// are allowed, and only for a bot the folder is lent to. Only the user
+/// does this, here or through the control channel; the server can't.
+pub fn set_bot_claude_code(
+    config: &mut Config,
+    which: &str,
+    bot: &str,
+    claude_code: bool,
+) -> Result<Root> {
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    if claude_code && !root.runs_commands() {
+        bail!(
+            "{} doesn't allow commands. Allow them there first (`cww roots allow-commands {}`)",
+            root.label,
+            root.id
+        );
+    }
+    let label = root.label.clone();
+    let Some(loan) = root.bots.iter_mut().find(|loan| loan.id == bot) else {
+        bail!("{label} isn't shared with bot {bot}. Share it first (`cww roots share`)");
+    };
+    loan.claude_code = claude_code;
     Ok(root.clone())
 }
 
@@ -282,7 +315,14 @@ pub fn canonical(path: &Path) -> Result<PathBuf> {
 /// Remove a root by ID, label or path.
 pub fn remove_root(config: &mut Config, which: &str) -> Result<Root> {
     let index = find_root(config, which)?;
-    Ok(config.roots.remove(index))
+    let root = config.roots.remove(index);
+    // Its checkouts go with it; their mirrors stay until `cww coding`
+    // removes them.
+    config
+        .coding
+        .repositories
+        .retain(|repo| repo.root != root.id);
+    Ok(root)
 }
 
 /// The index of the root `which` names: its ID, its path, or a label only

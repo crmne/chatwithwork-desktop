@@ -214,6 +214,9 @@ struct Cell {
     out_total: u64,
     err_total: u64,
     tail_bytes: usize,
+    /// Take the run's secret, if it has one, out of each stream.
+    redact_out: crate::coding::Redactor,
+    redact_err: crate::coding::Redactor,
 }
 
 impl Cell {
@@ -241,10 +244,22 @@ impl Cell {
             err_total: 0,
             // UTF-8 takes at most 4 bytes a character.
             tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
+            redact_out: crate::coding::Redactor::new(plan.coding.claude.as_ref().map(|c| &c.token)),
+            redact_err: crate::coding::Redactor::new(plan.coding.claude.as_ref().map(|c| &c.token)),
         }
     }
 
+    /// What a stream printed, with the run's secret taken out before
+    /// anything keeps it.
     fn append(&mut self, stream: Stream, bytes: &[u8]) {
+        let bytes = match stream {
+            Stream::Out => self.redact_out.push(bytes),
+            Stream::Err => self.redact_err.push(bytes),
+        };
+        self.keep(stream, &bytes);
+    }
+
+    fn keep(&mut self, stream: Stream, bytes: &[u8]) {
         self.window.extend(bytes);
         self.total += bytes.len() as u64;
         while self.window.len() > WINDOW {
@@ -265,6 +280,10 @@ impl Cell {
     }
 
     fn finish(&mut self, state: State) {
+        let out = self.redact_out.finish();
+        let err = self.redact_err.finish();
+        self.keep(Stream::Out, &out);
+        self.keep(Stream::Err, &err);
         if self.state == State::Running {
             self.state = state;
             self.ended = Some(Instant::now());
@@ -417,7 +436,16 @@ impl Runs {
             ));
         }
         let id = new_id();
-        let plan = plan(config, &self.paths, request, &id)?;
+        let mut plan = plan(config, &self.paths, request, &id)?;
+        // Read here, by whoever starts the run, never by the worker that
+        // asked for it.
+        plan.coding = crate::coding::for_run(
+            config,
+            &self.paths,
+            &request.root,
+            request.bot.as_deref(),
+            || crate::coding::token(config, &self.paths),
+        );
         let cell = Arc::new(Mutex::new(Cell::new(
             &plan,
             request.root.clone(),

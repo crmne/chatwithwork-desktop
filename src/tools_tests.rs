@@ -62,6 +62,7 @@ fn fixture(limits: Limits, app_budget: Option<usize>) -> Fixture {
         id: "7".into(),
         name: "Fixer".into(),
         unattended: false,
+        claude_code: false,
     });
     let mut config = Config {
         roots: vec![app_root, root("docs", &docs)],

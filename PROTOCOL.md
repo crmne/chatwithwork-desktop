@@ -307,6 +307,8 @@ A Chat with Work bot (an assistant an organization sets up to work by itself) re
 For such a call the daemon:
 
 - answers `roots` with only the folders lent to that bot, each with `"unattended": true` or `false` (whether its commands may start without a person approving each one there);
+- gives each of those folders `"coding": {"claude_code": <state>, "repositories": [<names>]}`: whether Claude Code is ready for that bot there (`ready`, `not_installed`, `not_signed_in`, `not_allowed` or `no_network`) and the names of the repositories checked out there ([docs/coding-computers.md](docs/coding-computers.md)). Never a path, an address or a token;
+- gives a `run` in a folder whose loan says `claude_code`, where Claude Code is ready, this computer's Claude Code sign-in (`CLAUDE_CODE_OAUTH_TOKEN`) and its `claude` first on `PATH`, and takes the token's text out of everything the run prints;
 - refuses, with `not_lent`, any call whose `path`, `from`, `to` or `root` names a folder not lent to it (for `patch`, the `path` of any change and any key of `expected_sha256`), and a `search` without a `root` (or with `"root": null`), or a `grep` or `glob` without a `path`, when nothing is lent to it; such a call looks only in the lent folders;
 - refuses, with `not_lent`, `run_status`, `run_output` and `run_stop` for a command that isn't running in a folder lent to it;
 - refuses, with `needs_approval`, a `run` (not a dry run) that also carries `"com.chatwithwork/unattended": true` in a folder whose loan doesn't allow unattended commands. The server sends that flag when it runs the bot's command without asking anyone, which it does only where `roots` said `"unattended": true`.

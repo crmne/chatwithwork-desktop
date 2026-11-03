@@ -75,6 +75,7 @@ fn request(command: &str) -> Request {
         root: "project".into(),
         dir: String::new(),
         command: command.into(),
+        bot: None,
     }
 }
 
@@ -576,6 +577,7 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
             output_chars: 2,
         },
         home: "/".into(),
+        coding: Default::default(),
     };
     let mut cell = Cell::new(&plan, "r".into(), String::new());
     cell.append(Stream::Out, "héllo".as_bytes());
@@ -1029,5 +1031,76 @@ mod on_windows {
             .unwrap();
         let done = wait(&fx.runs, &status.id);
         assert_eq!(done.status.limit.as_deref(), Some("processes"), "{done:?}");
+    }
+}
+
+/// A bot allowed Claude Code here gets the sign-in in Claude Code's own
+/// variable and its `claude` first on `PATH`, and what it prints never
+/// carries the token. A person's run, and another bot's, get neither.
+#[test]
+fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
+    if !sandbox_works() || on_landlock() {
+        return;
+    }
+    const TOKEN: &str = "sk-ant-oat01-testtokenTESTTOKEN0123456789abcdefghijklmnop_-";
+    let mut fx = fixture(true);
+    let install = fx._dir.path().join("claude-install");
+    std::fs::create_dir_all(&install).unwrap();
+    let program = install.join("claude");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho \"claude here with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fx.config.secret_store = Some("file".into());
+    fx.config.roots[0].network = true;
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: true,
+    });
+    fx.config.coding.claude = Some(program);
+    fx.config.coding.claude_signed_in = true;
+    let paths = fx.runs.paths.clone();
+    crate::coding::store(&fx.config, &paths)
+        .set(crate::coding::TOKEN_NAME, TOKEN)
+        .unwrap();
+
+    let line =
+        "claude; echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"; echo \"$CLAUDE_CODE_OAUTH_TOKEN\" >&2";
+    let bot = Request {
+        bot: Some("42".into()),
+        ..shell(line)
+    };
+    let status = fx.runs.start(&fx.config, &bot).unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(
+        done.stdout.contains("claude here with [claude-code-token]"),
+        "{}",
+        done.stdout
+    );
+    assert!(done.stdout.contains("env:[claude-code-token]"));
+    assert!(done.stderr.contains("[claude-code-token]"));
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    for text in [&done.stdout, &done.stderr, &window.text] {
+        assert!(!text.contains("testtokenTESTTOKEN"), "the token printed");
+    }
+
+    for request in [
+        shell("echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\""),
+        Request {
+            bot: Some("7".into()),
+            ..shell("echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"")
+        },
+    ] {
+        let status = fx.runs.start(&fx.config, &request).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.stdout.trim(), "env:", "{request:?}");
     }
 }

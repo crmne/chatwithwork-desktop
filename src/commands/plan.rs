@@ -12,13 +12,18 @@ use crate::paths::Paths;
 
 /// What the worker asks for: a command, in a folder that allows commands,
 /// named by its ID, and a folder inside it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     pub root: String,
     /// Relative to the folder, `""` for the folder itself.
     #[serde(default)]
     pub dir: String,
     pub command: String,
+    /// The Chat with Work bot whose chat runs it, if a bot's: whoever starts
+    /// it checks the bot's loan in the config itself before giving it
+    /// anything a person's run doesn't get (docs/coding-computers.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
 }
 
 /// The sandbox MXC runs a command in on this computer.
@@ -130,6 +135,9 @@ pub struct Plan {
     pub limits: Limits,
     /// Its own home and temporary folder, made for it and removed after.
     pub home: PathBuf,
+    /// The folder's repository mirrors, and Claude Code for a bot allowed
+    /// it. Set by whoever starts the run, after [`plan`].
+    pub coding: crate::coding::RunCoding,
 }
 
 /// Check `request` against `config`: the folder allows commands, the
@@ -190,6 +198,7 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
         network: root.network,
         limits: Limits::from_config(&config.limits),
         home: paths.runs_dir().join(id),
+        coding: Default::default(),
     })
 }
 
@@ -349,12 +358,58 @@ fn display(path: &Path) -> String {
 }
 
 impl Plan {
+    /// The folder in the run's home that holds only a link named `claude`
+    /// to the program setup checked (Linux and macOS).
+    pub fn claude_bin(&self) -> PathBuf {
+        self.home.join(".cww-bin")
+    }
+
+    /// What a bot's run allowed Claude Code gets: its token, in Claude
+    /// Code's own variable, and no self-updates, whose folder it can't
+    /// write.
+    pub fn coding_environment(&self) -> Vec<(String, String)> {
+        match &self.coding.claude {
+            Some(claude) => vec![
+                (
+                    crate::coding::TOKEN_ENV.to_string(),
+                    claude.token.expose().to_string(),
+                ),
+                ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
+            ],
+            None => Vec::new(),
+        }
+    }
+
+    /// Folders a run reads beyond the toolchains: the folder's mirrors, and
+    /// the folder Claude Code's program really is in.
+    pub fn coding_readable(&self) -> Vec<String> {
+        let mut read: Vec<String> = self
+            .coding
+            .mirrors
+            .iter()
+            .map(|(m, _)| display(m))
+            .collect();
+        if let Some(claude) = &self.coding.claude {
+            read.push(display(&claude.real_dir()));
+            if let Some(dir) = claude.program.parent() {
+                read.push(display(dir));
+            }
+        }
+        read
+    }
+
     /// The environment the command gets: nothing of the daemon's, a home
     /// and temporary folder of its own, and where the toolchains are.
     pub fn environment(&self, home: Option<&Path>) -> Vec<(String, String)> {
         let found = toolchains(home);
         let own = display(&self.home);
-        let mut path = found.path;
+        let mut path = Vec::new();
+        if self.coding.claude.is_some() {
+            // Its own `claude` first, so no other program of that name
+            // (mise's, npm's) shadows the one setup checked.
+            path.push(display(&self.claude_bin()));
+        }
+        path.extend(found.path);
         path.extend(["/usr/local/bin", "/usr/bin", "/bin"].map(String::from));
         path.dedup();
         let mut env = vec![
@@ -383,6 +438,7 @@ impl Plan {
                 format!("{own}/.local/state/mise"),
             ),
         ];
+        env.extend(self.coding_environment());
         for (name, value) in found.env {
             if name == "MISE_DATA_DIR" {
                 // mise writes command-wrapper shims and their lock in its
@@ -418,6 +474,11 @@ impl Plan {
                 .to_string();
         }
         let mut found = toolchains(home);
+        for dir in self.coding_readable() {
+            if !found.read.contains(&dir) {
+                found.read.push(dir);
+            }
+        }
         if sandbox == Sandbox::Landlock {
             // Landlock can't take write access back below a folder it
             // grants, so it refuses a read-only path there. The run may

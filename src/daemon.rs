@@ -1787,6 +1787,31 @@ impl ControlHandler for Daemon {
                 self.audit.append(&entry);
                 Ok(serde_json::to_value(status)?)
             }
+            ControlRequest::CodingCheck {
+                root,
+                dir,
+                command,
+                bot,
+            } => {
+                let mut entry = AuditEntry::event("coding_check");
+                entry.path = Some(format!("{root}:{dir}"));
+                entry.detail = Some(match &bot {
+                    Some(bot) => format!("{command}, for bot {bot}"),
+                    None => command.clone(),
+                });
+                self.audit.append(&entry);
+                let status = self
+                    .runner
+                    .start(crate::commands::Request {
+                        root,
+                        dir,
+                        command,
+                        bot,
+                    })
+                    .await
+                    .map_err(command_refusal)?;
+                Ok(serde_json::to_value(status)?)
+            }
             ControlRequest::AuditTail { lines } => {
                 let path = self.audit.path().to_path_buf();
                 let n = lines.unwrap_or(50).min(1000);

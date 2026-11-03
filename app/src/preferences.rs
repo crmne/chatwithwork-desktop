@@ -1416,6 +1416,7 @@ mod tests {
             id: "42".into(),
             name: "Old name".into(),
             unattended: false,
+            claude_code: false,
         });
         assert!(
             question(&grant("42", false), &status, &context)

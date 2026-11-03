@@ -13,6 +13,7 @@ pub mod bots;
 pub mod browser;
 pub mod browsing;
 pub mod chats;
+pub mod coding;
 pub mod commands;
 pub mod config;
 pub mod control;

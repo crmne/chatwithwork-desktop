@@ -40,6 +40,11 @@ pub(super) fn spawn(
 }
 
 fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
+    // The folder's repositories, fresh: `git fetch origin` in the run reads
+    // the mirror, which only this side fetches.
+    for (mirror, repo) in &plan.coding.mirrors {
+        crate::coding::repositories::fetch_if_stale(mirror, Some(repo));
+    }
     if let Err(e) = make_home(plan) {
         return State::Failed(format!("couldn't make its home folder: {e}"));
     }
@@ -272,6 +277,14 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
     }
     if cfg!(windows) {
         std::fs::write(plan.script_path(), super::windows::script(&plan.command))?;
+    }
+    #[cfg(unix)]
+    if let Some(claude) = &plan.coding.claude {
+        // The one `claude` first on its PATH: a link to the program setup
+        // checked, where it really is, which the sandbox reads.
+        let bin = plan.claude_bin();
+        std::fs::create_dir_all(&bin)?;
+        std::os::unix::fs::symlink(&claude.real, bin.join("claude"))?;
     }
     Ok(())
 }

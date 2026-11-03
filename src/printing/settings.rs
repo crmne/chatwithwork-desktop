@@ -123,6 +123,7 @@ pub fn set_bot(
             id: bot.to_string(),
             name,
             unattended,
+            claude_code: false,
         });
     }
     Ok(printer.clone())

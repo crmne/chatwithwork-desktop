@@ -178,6 +178,19 @@ pub enum ControlRequest {
     CommandStop {
         run: String,
     },
+    /// `cww coding setup`'s proof: start one command in a shared folder
+    /// that allows commands, as the bot `bot`'s run would start there (with
+    /// its Claude Code sign-in where its loan allows it), and answer its
+    /// status at once. Follow it with `commands` and `command_output`. Only
+    /// a same-user client reaches it, who could run the command anyway.
+    CodingCheck {
+        root: String,
+        #[serde(default)]
+        dir: String,
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot: Option<String>,
+    },
     /// Stop sharing a folder, by ID, label or path.
     RootsRemove {
         root: String,

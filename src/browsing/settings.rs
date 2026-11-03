@@ -87,6 +87,7 @@ pub fn set_bot(config: &mut Config, bot: &str, name: Option<&str>, lent: bool) -
             id: bot.to_string(),
             name,
             unattended: false,
+            claude_code: false,
         });
     }
     Ok(())

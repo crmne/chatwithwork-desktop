@@ -116,6 +116,7 @@ impl CommandTools {
         name: &str,
         args: Value,
         progress: Option<Progress>,
+        bot: Option<String>,
     ) -> Result<(Value, Option<String>), ToolError> {
         match name {
             "run" => {
@@ -154,6 +155,7 @@ impl CommandTools {
                     root: root.id.clone(),
                     dir: path.rel.as_string(),
                     command: command.clone(),
+                    bot,
                 };
                 let status = self.runner.start(request).await.map_err(tool_error)?;
                 let wait = if args.background {
@@ -466,6 +468,7 @@ mod tests {
                 "run",
                 json!({ "command": "bin/rails test", "path": "app:api", "dry_run": true }),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -475,22 +478,37 @@ mod tests {
         assert_eq!(preview["limits"]["timeout_seconds"], 1800);
         assert_eq!(detail.as_deref(), Some("bin/rails test"));
         let err = tools
-            .call("run", json!({ "command": "ls", "path": "docs:" }), None)
+            .call(
+                "run",
+                json!({ "command": "ls", "path": "docs:" }),
+                None,
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::NotWritable);
         let err = tools
-            .call("run", json!({ "command": "ls", "path": "/etc" }), None)
+            .call(
+                "run",
+                json!({ "command": "ls", "path": "/etc" }),
+                None,
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidPath);
         let err = tools
-            .call("run_stop", json!({ "run": "../x" }), None)
+            .call("run_stop", json!({ "run": "../x" }), None, None)
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidArgument);
         let err = tools
-            .call("run", json!({ "command": "ls", "path": "app:" }), None)
+            .call(
+                "run",
+                json!({ "command": "ls", "path": "app:" }),
+                None,
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::Internal, "the runner is off");

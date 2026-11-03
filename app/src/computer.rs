@@ -312,6 +312,7 @@ mod tests {
                         id: "42".into(),
                         name: "Fixer".into(),
                         unattended: true,
+                        claude_code: false,
                     }],
                     ..Default::default()
                 },

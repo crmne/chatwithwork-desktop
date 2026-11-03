@@ -563,6 +563,7 @@ impl LocalFiles {
                     .filter_map(|mut root| {
                         let loan = reader.loan(&root.id, id)?;
                         root.unattended = Some(loan.unattended && root.allows_commands);
+                        root.coding = reader.coding_for_bot(&root.id, id);
                         Some(root)
                     })
                     .collect();
@@ -745,7 +746,11 @@ impl LocalFiles {
                 let Some(commands) = self.commands() else {
                     unreachable!("checked against the tool names")
                 };
-                let (value, detail) = commands.call(command, args, progress).await?;
+                let bot = match caller {
+                    Caller::Bot { id, .. } => Some(id.clone()),
+                    _ => None,
+                };
+                let (value, detail) = commands.call(command, args, progress, bot).await?;
                 Ok(Output::Command(value, detail))
             }
             print if PRINT_TOOLS.contains(&print) => {

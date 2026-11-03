@@ -19,6 +19,7 @@ fn command(runs: &Runs, config: &Config, script: String) -> Finished {
                 root: "shared".into(),
                 dir: String::new(),
                 command: script,
+                bot: None,
             },
         )
         .unwrap();

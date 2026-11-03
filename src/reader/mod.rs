@@ -61,6 +61,10 @@ pub struct RootInfo {
     /// there start without anyone approving each one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattended: Option<bool>,
+    /// For a bot's own list: whether Claude Code is ready for it there,
+    /// and the repositories' names (docs/coding-computers.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding: Option<serde_json::Value>,
     /// Characters a chat may read from this folder per rolling hour, when
     /// the person gave it a budget of its own on this computer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +181,8 @@ pub struct ReadResponse {
 struct State {
     roots: Vec<Arc<RootHandle>>,
     configured: Vec<crate::config::Root>,
+    /// Coding bots' setup, for what a bot's `roots` says is ready.
+    coding: crate::config::CodingConfig,
     deny: Arc<DenyList>,
     write_deny: Arc<DenyList>,
     allow_hardlinks: bool,
@@ -235,6 +241,18 @@ impl Reader {
             .cloned()
     }
 
+    /// Whether Claude Code is ready for bot `bot` in folder `root`, and the
+    /// repositories checked out there (docs/coding-computers.md).
+    pub fn coding_for_bot(&self, root: &str, bot: &str) -> Option<serde_json::Value> {
+        let state = self.state.read().expect("reader state");
+        let configured = state.configured.iter().find(|r| r.id == root)?;
+        Some(crate::coding::coding_for_bot(
+            &state.coding,
+            configured,
+            bot,
+        ))
+    }
+
     /// The IDs of the folders lent to the bot with ID `bot`.
     pub fn lent_to(&self, bot: &str) -> Vec<String> {
         let state = self.state.read().expect("reader state");
@@ -275,6 +293,7 @@ impl Reader {
                     },
                     indexed_files: s.map(|s| s.files),
                     unattended: None,
+                    coding: None,
                     read_budget: root.read_budget(&state.limits),
                 }
             })
@@ -689,6 +708,7 @@ fn build_state(config: &Config, paths: &Paths) -> Result<State> {
     Ok(State {
         roots,
         configured: config.roots.clone(),
+        coding: config.coding.clone(),
         deny,
         write_deny: Arc::new(DenyList::write_from_config(
             &config.deny,

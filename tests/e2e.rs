@@ -4972,6 +4972,116 @@ async fn a_bot_reaches_only_the_folders_lent_to_it() {
         .unwrap();
 }
 
+/// A bot allowed this computer's Claude Code sign-in sees it's ready in
+/// `roots`, and its commands get it, with the token's text taken out of
+/// what they print; a person's commands and another bot's get nothing.
+/// The setup's check over the control socket starts a run as the bot does.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
+    if !command_sandbox_works() {
+        return;
+    }
+    const TOKEN: &str = "sk-ant-oat01-e2eTOKENe2etoken0123456789abcdefghijklmnopqrs";
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let install = fx.base.join("claude-install");
+    std::fs::create_dir_all(&install).unwrap();
+    let program = install.join("claude");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho \"claude with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.roots[0].network = true;
+    config.roots[0].bots.push(cww::config::BotLoan {
+        id: "42".into(),
+        name: "Issue fixer".into(),
+        unattended: false,
+        claude_code: true,
+    });
+    config.coding.claude = Some(program);
+    config.coding.claude_signed_in = true;
+    config.save(&fx.paths).unwrap();
+    cww::coding::store(&config, &fx.paths)
+        .set(cww::coding::TOKEN_NAME, TOKEN)
+        .unwrap();
+
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let roots = s.bot_call("roots", json!({}), "42").await;
+    let coding = &roots["structuredContent"]["roots"][0]["coding"];
+    assert_eq!(coding["claude_code"], "ready", "{roots}");
+    assert!(!roots.to_string().contains("e2eTOKEN"));
+
+    let ran = s
+        .bot_call("run", json!({ "command": "claude", "path": "docs:" }), "42")
+        .await;
+    let out = ran["structuredContent"]["stdout"]
+        .as_str()
+        .unwrap_or_default();
+    assert_eq!(out.trim(), "claude with [claude-code-token]", "{ran}");
+    assert!(!ran.to_string().contains("e2eTOKEN"), "{ran}");
+
+    let mine = s
+        .call(
+            "run",
+            json!({ "command": "echo \"x$CLAUDE_CODE_OAUTH_TOKEN\"", "path": "docs:" }),
+        )
+        .await;
+    assert_eq!(
+        mine["structuredContent"]["stdout"].as_str().unwrap().trim(),
+        "x",
+        "{mine}"
+    );
+
+    let started = control(
+        &fx.paths,
+        ControlRequest::CodingCheck {
+            root: "docs".into(),
+            dir: String::new(),
+            command: "claude".into(),
+            bot: Some("42".into()),
+        },
+    )
+    .await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let text = loop {
+        let output = control(
+            &fx.paths,
+            ControlRequest::CommandOutput {
+                run: id.clone(),
+                offset: 0,
+                max: None,
+            },
+        )
+        .await;
+        if output["done"] == true {
+            break output["text"].as_str().unwrap().to_string();
+        }
+        assert!(Instant::now() < deadline, "the check didn't end");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(text.trim(), "claude with [claude-code-token]");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
 /// A bot's command starts without anyone approving it only where this
 /// computer said so for that bot and folder.
 #[cfg(target_os = "linux")]
