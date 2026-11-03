@@ -1186,3 +1186,34 @@ fn real_claude_code_answers_from_the_sandbox() {
     assert_eq!(done.status.exit_code, Some(0));
     assert!(done.stdout.to_lowercase().contains("ready"));
 }
+
+/// A run reads Claude Code's folder where it really is: Bubblewrap can't
+/// start with a link given as a folder to bind (mise's
+/// `installs/claude/latest`), which stopped every run of a bot allowed
+/// Claude Code on a NUC.
+#[cfg(unix)]
+#[test]
+fn claude_codes_folder_is_read_where_it_really_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("2.1.316");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("claude"), "").unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("latest")).unwrap();
+    let program = dir.path().join("latest").join("claude");
+    let fx = fixture(true);
+    let mut plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("claude"),
+        "000000000000",
+    )
+    .unwrap();
+    plan.coding.claude = Some(crate::coding::Claude {
+        real: program.canonicalize().unwrap(),
+        program,
+        token: crate::coding::Secret::new("x".into()),
+    });
+    let read = plan.coding_readable();
+    let real = real.canonicalize().unwrap().to_string_lossy().into_owned();
+    assert_eq!(read, [real]);
+}
