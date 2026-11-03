@@ -69,8 +69,12 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
         }
     };
     // Nothing to read: a program that waits for input (Claude Code waits
-    // three seconds) sees its end at once.
-    drop(process.take_stdin());
+    // three seconds) sees its end at once. Not under Bubblewrap, whose
+    // network setup failed to start the workload once its stdin was closed
+    // this early (a NUC, 2026-11-03).
+    if sandbox != Sandbox::Bubblewrap {
+        drop(process.take_stdin());
+    }
     let readers: Vec<_> = [
         (process.take_stdout(), Stream::Out),
         (process.take_stderr(), Stream::Err),
