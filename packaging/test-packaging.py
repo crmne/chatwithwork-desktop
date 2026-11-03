@@ -140,6 +140,48 @@ exit "${TEST_DAEMON_EXIT:-0}"
                              "usr/share/icons/hicolor/scalable/apps/cww-app.svg"):
                     self.assertTrue((package / name).is_file(), name)
 
+    def test_copr_spec_installs_what_the_arch_package_installs(self):
+        # The spec's %install, with RPM's macros expanded as Fedora does, run
+        # over the release archive: the same files, every one listed in %files.
+        archive = self.archive()
+        build = self.work / "rpm-build"
+        build.mkdir()
+        with tarfile.open(archive) as tar:
+            tar.extractall(build, filter="data")
+        spec = (ROOT / "packaging/copr/chatwithwork-desktop.spec.in").read_text()
+        # submit.sh fills exactly these placeholders.
+        self.assertEqual(set(re.findall(r"@[A-Z0-9_]+@", spec)),
+                         {"@VERSION@", "@PKGREL@", "@LINUX_APP_AMD64_SHA256@", "@LINUX_APP_ARM64_SHA256@",
+                          "@POSTINSTALL@", "@CHANGELOG_DATE@"})
+        macros = {"%{buildroot}": str(self.work / "root"), "%{_bindir}": "/usr/bin",
+                  "%{_datadir}": "/usr/share", "%{_userunitdir}": "/usr/lib/systemd/user",
+                  "%{_docdir}": "/usr/share/doc", "%{_licensedir}": "/usr/share/licenses",
+                  "%{name}": "chatwithwork-desktop", "%{version}": "9.8.7",
+                  "%{target}": "x86_64-unknown-linux-gnu"}
+
+        def expand(text):
+            for macro, value in macros.items():
+                text = text.replace(macro, value)
+            return text
+
+        install = expand(spec.split("%install\n", 1)[1].split("\n%post", 1)[0])
+        result = run("bash", "-ec", install, cwd=build)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        root = self.work / "root"
+        installed = {"/" + str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+        for name in ("/usr/bin/cww", "/usr/bin/cww-app", "/usr/lib/systemd/user/cww.service",
+                     "/usr/lib/chatwithwork/browser-engine/current.json",
+                     "/usr/share/applications/cww-app.desktop",
+                     "/usr/share/icons/hicolor/scalable/apps/cww-app.svg",
+                     "/usr/share/licenses/chatwithwork-desktop/LICENSE"):
+            self.assertIn(name, installed)
+        listed = [expand(line.split()[-1]) for line in
+                  spec.split("%files\n", 1)[1].split("\n%changelog", 1)[0].splitlines() if line.strip()]
+        for path in installed:
+            self.assertTrue(any(path == entry or path.startswith(entry.rstrip("/") + "/") for entry in listed), path)
+        # Nothing may rewrite the sealed browser engine after %install.
+        self.assertIn("%global __os_install_post %{nil}", spec)
+
     def installer(self, *, daemon_exit=0, uid="1000", corrupt=False, unusual_path=False):
         archive = self.archive()
         checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
