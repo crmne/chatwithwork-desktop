@@ -554,9 +554,13 @@ pub fn run(
             crate::preferences::watch(handle.clone());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            match Tray::new(&handle, &TrayView::new(None)) {
-                Ok(tray) => *desktop.tray.lock().expect("tray lock") = Some(tray),
-                Err(e) => log::warn!("no tray item: {e}"),
+            if !tray_library_loads() {
+                log::warn!("no tray item: no AppIndicator library");
+            } else {
+                match Tray::new(&handle, &TrayView::new(None)) {
+                    Ok(tray) => *desktop.tray.lock().expect("tray lock") = Some(tray),
+                    Err(e) => log::warn!("no tray item: {e}"),
+                }
             }
             let watcher = desktop.clone();
             desktop
@@ -621,4 +625,27 @@ pub fn run(
     #[cfg(feature = "demo")]
     drop(demo);
     Ok(())
+}
+
+/// Whether the tray can start. On Linux the tray loads AppIndicator at run
+/// time and libappindicator-sys panics when it can't, which the packages
+/// prevent by depending on it but an AppImage or a bare build can't: try the
+/// names it tries, so a system without it gets the app without a tray.
+#[cfg(target_os = "linux")]
+fn tray_library_loads() -> bool {
+    [
+        "libayatana-appindicator3.so.1",
+        "libappindicator3.so.1",
+        "libayatana-appindicator3.so",
+        "libappindicator3.so",
+    ]
+    .iter()
+    // SAFETY: these libraries run no initialization code beyond what loading
+    // them for the tray already would.
+    .any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tray_library_loads() -> bool {
+    true
 }

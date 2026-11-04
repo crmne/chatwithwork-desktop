@@ -8,7 +8,7 @@ Every package installs the desktop app, terminal interface and daemon together. 
 |---|---|---|
 | macOS | App disk image (`.dmg`), `.pkg` installer, Homebrew cask or formula, or one-line installer. The cask depends on the formula to expose `cww` on PATH without conflicting with existing formula installs. | `release.yml`, job `macos` |
 | Windows | Per-user MSI, directly or through WinGet or the PowerShell installer, with `cww.exe`, `cww-app.exe`, `cww-agent.exe` and the scanner helper. | `release.yml`, job `build` |
-| Linux | `.deb`, `.rpm`, Fedora COPR, openSUSE's Open Build Service, all three AUR variants, Homebrew, Nix, the one-line installer, or the complete desktop archive. | `release.yml` (jobs `build` and `linux-app`), `packaging.yml`, and `packaging/copr/submit.sh` |
+| Linux | `.deb`, `.rpm`, the Flatpak bundle, the AppImage, Fedora COPR, openSUSE's Open Build Service, all three AUR variants, Homebrew, Nix, the one-line installer, or the complete desktop archive. | `release.yml` (jobs `build` and `linux-app`), `packaging.yml`, and `packaging/copr/submit.sh` |
 
 The Linux archive `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` is the single input for native packages and binary AUR recipes. `packaging/linux/archive.sh` creates it with both executables, the systemd unit, launcher, icon, docs and licenses. `cww` itself remains static (musl); the GUI requires glibc 2.39 or newer, WebKitGTK 4.1 and GTK 3 for its windows (Tauri), the AppIndicator library for its tray item (loaded at run time), D-Bus, and ALSA (`libasound.so.2`) and PipeWire's client library (`libpipewire-0.3.so.0`) for the terminal's dictation helper, which records through PipeWire, then PulseAudio, then ALSA. Linux source builds need those development packages, clang and pkg-config (`libasound2-dev libpipewire-0.3-dev clang libclang-dev pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev libdbus-1-dev` on Debian and Ubuntu, `alsa-lib libpipewire clang pkgconf webkit2gtk-4.1 gtk3 libayatana-appindicator` on Arch); the terminal-only musl binary has no audio or graphics library dependency. Release and packaging-test workflows build the GUI on Ubuntu 24.04: older releases ship a PipeWire too old for the bindings fastframe-audio builds. ELF inspection adds libc and libgcc dependencies; `native-packages.yaml` and the AUR recipes also declare WebKitGTK, GTK and the AppIndicator library loaded at run time. On Windows the window needs the WebView2 runtime, which Windows 11 and current Windows 10 include; the WinGet manifest depends on `Microsoft.EdgeWebView2Runtime` for the rest. Debian 12's glibc 2.36 and Rocky/RHEL 9's 2.34 are too old for this GUI, and Rocky/RHEL 10 ship no WebKitGTK 4.1, so the desktop package installs on neither; the terminal-only archive works there.
 
@@ -94,13 +94,15 @@ A release carries only what people download or something reads; anything else st
 | `cww-vX.Y.Z-x86_64-pc-windows-msvc.msi` | Windows users (x64). WinGet, `cww-installer.ps1` and `test-windows-installer.yml` use it too. |
 | `cww-vX.Y.Z-aarch64-pc-windows-msvc.msi` | Windows on Arm users. |
 | `chatwithwork-desktop_X.Y.Z_amd64.deb`, `_arm64.deb` | Debian and Ubuntu users. Attached by `packaging.yml`. |
+| `chatwithwork-desktop-X.Y.Z-x86_64.flatpak`, `-aarch64.flatpak` | Flatpak users: `flatpak install --user FILE`. Attached by `packaging.yml`. The agent can't start at login or run commands there (README, "Install"). |
+| `chatwithwork-desktop-X.Y.Z-x86_64.AppImage`, `-aarch64.AppImage`, and their `.zsync` files | Any Linux with WebKitGTK 4.1, GTK 3 and AppIndicator. The `.zsync` files are for AppImageUpdate and similar updaters, which the AppImage's embedded update information points at. Attached by `packaging.yml`. |
 | `chatwithwork-desktop-X.Y.Z-1.x86_64.rpm`, `.aarch64.rpm` | Fedora users (its dependencies are Fedora's package names; openSUSE's zypper refuses it). Attached by `packaging.yml`. |
 | `cww-installer.sh` | The README's one-line installer for macOS and Linux, at `releases/latest/download/`. |
 | `cww-installer.ps1` | The README's one-line installer for Windows. |
 | `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` | Terminal-only `cww` and `cww-notify`, for servers and distributions older than glibc 2.39. |
 | `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` | The portable Linux app and `cww`. The input for the `.deb` and `.rpm` builds; the Homebrew formula on Linux, AUR `-bin` and `cww-installer.sh` download it. |
 | `cww-vX.Y.Z-macos-universal.tar.gz` | The app and a signed `cww`, for the Homebrew formula and `cww-installer.sh`. |
-| `checksums.txt` | SHA-256 of every file above but the `.deb` and `.rpm` files (GitHub shows theirs on the release). Both installers and native-packages check downloads against it. |
+| `checksums.txt` | SHA-256 of every file above but the `.deb`, `.rpm`, `.flatpak`, `.AppImage` and `.zsync` files, which `packaging.yml` attaches after it is signed (GitHub shows their SHA-256 on the release). Both installers and native-packages check downloads against it. |
 | `checksums.txt.sig` | Ed25519 signature of `checksums.txt` with the key in `app/assets/update-public-key.hex`. The desktop app's updater (`app/src/update.rs`, fastframe-update) refuses a release without a valid one, then checks its download against `checksums.txt`: the `.dmg` on macOS, the `.msi` on Windows. |
 
 Release-note screenshots (`settings-light.png`, `settings-dark.png` and `settings-exclusions.png` in 0.9.0) are synthetic app captures, uploaded immediately after publication and verified before announcing the release. They are documentation media, not updater inputs or entries in `checksums.txt`.
@@ -132,6 +134,7 @@ native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-
 | `packaging/test-packaging.py` | Installer, archive and AUR package-layout regression tests, isolated from the user's account. |
 | `.github/workflows/desktop-preview.yml` | By hand: the desktop app for macOS and Windows as a `desktop-preview-<run>` prerelease, to try a change between releases. |
 | `packaging/windows/` | `cww.wxs` (WiX 5 MSI), `build-msi.ps1`, and `sign.ps1` for certificate signing. |
+| `packaging/flatpak/` | The Flatpak's AppStream metadata and `appindicator.sh`, which stages its tray libraries. |
 | `packaging/copr/` | The COPR (and openSUSE) spec template, and `submit.sh`, which builds the source RPM from a release and submits it. |
 | `packaging/chocolatey/` | The Chocolatey package's templates and `render.sh`. |
 | `packaging/winget/` | WinGet manifest templates. |
@@ -153,19 +156,19 @@ The background agent's opt-in crash reports (README, "Crash reports") go to the 
 ## Releasing
 
 1. Bump `version` in `Cargo.toml`, `app/Cargo.toml`, `notification-broker/Cargo.toml` and `scan/Cargo.toml` (they move together) and run `mbx build` so `Cargo.lock` follows.
-2. Write `packaging/release-notes/vX.Y.Z.md`, starting from `TEMPLATE.md`.
+2. Write `packaging/release-notes/vX.Y.Z.md`, starting from `TEMPLATE.md`, and add the version and date to the `<releases>` of `packaging/flatpak/com.chatwithwork.desktop.metainfo.xml`, which software centers show for the Flatpak.
 3. Push `main`, wait for CI, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 4. Once the release is published, `packaging/copr/submit.sh X.Y.Z --submit` for COPR, upload the same spec and archives to OBS, and update WinGet (below).
 
 `release.yml` checks the tag matches `Cargo.toml` and is on `main`, builds every target and the desktop app, signs what it has credentials for (the app bundle and its disk image are notarized and stapled too), attests the archives (`gh attestation verify <file> --repo crmne/chatwithwork-desktop`), and publishes the release with `checksums.txt` and the installers (see [Release assets](#release-assets)). Tags with a `-` (`v1.2.0-beta.1`) become draft prereleases and skip the package managers.
 
-For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.11.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. It attaches the rendered recipes too, as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`; `tidy-release` takes them off the release again, and they stay in the run's `native-packages` artifact.
+For a stable tag, `packaging.yml` then runs the shared [native-packages](https://github.com/crmne/native-packages/tree/v0.12.0) workflow: it downloads the Linux archives, verifies them against `checksums.txt`, builds and attaches the `.deb` and `.rpm` files, renders every recipe with the published checksums, and pushes the AUR and Homebrew ones when enabled. It attaches the rendered recipes too, as `chatwithwork-desktop-X.Y.Z-packaging.tar.xz`; `tidy-release` takes them off the release again, and they stay in the run's `native-packages` artifact.
 
 ### Trying changes before a tag
 
 - `gh workflow run release.yml` builds and signs everything, uploading the files as workflow artifacts without publishing.
 - Any push or PR that touches packaging runs `packaging.yml` against the commit: static daemon and glibc GUI builds, `.deb`/`.rpm`, all recipes (with stand-ins for the macOS and Windows assets), and install tests on Ubuntu 24.04, Debian 13, and Fedora 41 and latest, on amd64 and arm64.
-- Locally, with `gem install native-packages --version 0.11.0`, nFPM 2.47.0 and `bsdtar`:
+- Locally, with `gem install native-packages --version 0.12.0`, nFPM 2.47.0 and `bsdtar`:
 
   ```sh
   python3 packaging/test-packaging.py
@@ -231,7 +234,7 @@ Unsigned Windows binaries that register a logon task are what Microsoft Defender
 This is the one in use. The signatures name the publisher **PlentyLabs UG (haftungsbeschränkt) & Co. KG**. PlentyLabs' Basic account, `plentylabs` in West Europe (`https://weu.codesigning.azure.net/`), signs Carmine's other Windows apps too, and is managed in `crmne/terraform` (`azure/signing.tf`, its README's "Code signing"). There is no client secret anywhere:
 
 - A tag's Windows build jobs run in this repository's `windows-signing` environment, which deploys only from `v*` tags. An Entra app registration, `GitHub chatwithwork-desktop Windows signing`, trusts GitHub's OIDC tokens for exactly `repo:crmne@106617/chatwithwork-desktop@1386440334:environment:windows-signing` (GitHub's immutable subject, with the owner's and repository's ids; the plain `repo:crmne/chatwithwork-desktop:...` form fails with `AADSTS700213`), and holds the **Artifact Signing Certificate Profile Signer** role on the account.
-- The jobs sign in with `azure/login`, then native-packages signs (`windows.signing` in `native-packages.yaml`): `native-packages sign-windows` signs `cww.exe`, `cww-agent.exe`, `cww-app.exe` and `cww-scan-helper.exe` before the MSI is built, then the MSI, with SHA-256 and Microsoft's RFC 3161 timestamp, and checks that every signature is `Valid`, timestamped and PlentyLabs'. See native-packages' [Windows code signing](https://github.com/crmne/native-packages/blob/v0.11.0/docs/_guides/windows-signing.md).
+- The jobs sign in with `azure/login`, then native-packages signs (`windows.signing` in `native-packages.yaml`): `native-packages sign-windows` signs `cww.exe`, `cww-agent.exe`, `cww-app.exe` and `cww-scan-helper.exe` before the MSI is built, then the MSI, with SHA-256 and Microsoft's RFC 3161 timestamp, and checks that every signature is `Valid`, timestamped and PlentyLabs'. See native-packages' [Windows code signing](https://github.com/crmne/native-packages/blob/v0.12.0/docs/_guides/windows-signing.md).
 - The environment's variables (none secret): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT` and `AZURE_SIGNING_PROFILE`. Signing turns on when `AZURE_SIGNING_PROFILE` is set; without it, releases stay unsigned (or use Option B's certificate).
 
 `AZURE_SIGNING_PROFILE` names the Public Trust certificate profile `plentylabs`, created once PlentyLabs' identity validation completed (2026-10-26), so every tag release signs.
@@ -245,6 +248,17 @@ If Option A's validation fails, buy an **OV** code signing certificate for the o
 #### Option C: the Microsoft Store
 
 Individual developer accounts are free. Microsoft signs Store packages itself, so they never hit SmartScreen, and `winget install` can install from the Store. It needs an MSIX package with a full-trust startup task for the agent, which `cww.wxs` doesn't produce yet.
+
+## Flatpak bundle and AppImage
+
+native-packages builds both from the same Linux archive as the `.deb` and `.rpm` (`formats: [deb, rpm, flatpak, appimage]` in `native-packages.yaml`), and `packaging.yml` attaches them to the release. Neither is compiled again.
+
+- **Flatpak** (`com.chatwithwork.desktop`, the Tauri identifier): the package's files under `/app`, on `org.gnome.Platform` 51, which carries WebKitGTK 4.1 and PipeWire, with the permissions in `flatpak.finish_args` (network, display, GPU, audio for dictation, the home folder for shared folders, notifications, the keyring and the tray). The runtime has no AppIndicator library, and the desktop app stops without it, so `packaging/flatpak/appindicator.sh` stages Ubuntu 24.04's builds of it and its four dependencies, pinned by the SHA-256 apt verified against Ubuntu's signed index, and `native-packages.yaml` adds them to the Flatpak only (`packager: flatpak`), with their copyright files. `flatpak build-finish` rejects a non-square icon, which is why `app/assets/mark.svg` has a square view box.
+- **AppImage**: one file, using the system's libraries like the `.deb`, with update information for `chatwithwork-desktop-*-ARCH.AppImage.zsync` on the latest release.
+
+Tested on 0.11.0 (x86_64, Arch Linux with Hyprland, 2026-11-04): the Flatpak installs, `cww --version` and `cww status` work, `cww daemon run` starts with Landlock enforced, and the desktop app opens its window with the bundled tray libraries. `cww daemon install` fails (`running systemctl: No such file or directory`; its unit would also name `/app/bin/cww`), so **Start Background Agent** can't work, and nested `bwrap` is refused (`No permissions to create a new namespace`), so commands can't run. The AppImage opens on the system's WebKitGTK; its window class is the AppImage's file name rather than `cww-app`. Its **Start Background Agent** registers `cww` inside the AppImage's mount (`/tmp/.mount_*`), which the service's `PrivateTmp=yes` hides and which disappears when the AppImage exits, so the agent can't start from it. The app checks that an AppIndicator library loads before it creates the tray (`tray_library_loads` in `app/src/desktop.rs`), since `libappindicator-sys` panics without one and an AppImage can't depend on it. Not yet tested: either on aarch64, or pairing and sharing a folder from the Flatpak. Making the agent start at login in a sandbox is [#138](https://github.com/crmne/chatwithwork-desktop/issues/138).
+
+FlatPark, the community Flatpak remote, packages releases from their download (extra-data); its packaging is prepared from this bundle's description, and its pull request needs Carmine's OK under FlatPark's own rules.
 
 ## Package managers
 

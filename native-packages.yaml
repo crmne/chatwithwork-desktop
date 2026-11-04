@@ -3,7 +3,7 @@
 ---
 schema: 1
 tool:
-  version: 0.11.0
+  version: 0.12.0
   nfpm: 2.47.0
 nfpm:
   name: chatwithwork-desktop
@@ -57,6 +57,16 @@ nfpm:
     dst: /usr/share/icons/hicolor/scalable/apps/cww-app.svg
     file_info:
       mode: 420
+  # The Flatpak only: the tray's AppIndicator libraries, which the GNOME
+  # runtime lacks (packaging/flatpak/appindicator.sh stages them).
+  - src: "dist/flatpak-libs/@TARGET@/lib/"
+    dst: /usr/lib
+    type: tree
+    packager: flatpak
+  - src: "dist/flatpak-libs/@TARGET@/doc/"
+    dst: /usr/share/doc/chatwithwork-desktop/appindicator
+    type: tree
+    packager: flatpak
   scripts:
     postinstall: packaging/linux/postinstall.sh
   # ELF inspection adds libc/libgcc. The app's window is a WebKitGTK web
@@ -101,6 +111,39 @@ windows:
     provider: azure-artifact-signing
     description: Chat with Work Desktop
     publisher: PlentyLabs UG (haftungsbeschränkt) & Co. KG
+# The Flatpak bundle and its self-hosted repository (PACKAGING.md, "Flatpak"):
+# the same files as the .deb and .rpm, under /app, on the GNOME runtime,
+# which carries WebKitGTK 4.1 and PipeWire.
+flatpak:
+  id: com.chatwithwork.desktop
+  runtime: org.gnome.Platform
+  runtime_version: '51'
+  sdk: org.gnome.Sdk
+  command: cww-app
+  metainfo: packaging/flatpak/com.chatwithwork.desktop.metainfo.xml
+  runtime_repo: https://dl.flathub.org/repo/flathub.flatpakrepo
+  finish_args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Dictation records through PipeWire or PulseAudio.
+  - --socket=pulseaudio
+  # The agent reads, and with approval changes, the folders people share,
+  # anywhere in their home folder.
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # The tray item's icon files, which the host's tray reads.
+  - --filesystem=xdg-run/tray-icon:create
+  # tauri-plugin-single-instance owns this name, so a second launch (a
+  # chatwithwork:// link) hands over to the running app.
+  - --own-name=com.chatwithwork.desktop.SingleInstance
+  # WebKitGTK's DMABUF renderer paints a blank window with many drivers
+  # inside the sandbox; flatpak override can turn it back on.
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
 targets:
   linux-amd64:
     platform: linux
@@ -110,6 +153,10 @@ targets:
     formats:
     - deb
     - rpm
+    - flatpak
+    - appimage
+    appimage:
+      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|chatwithwork-desktop-*-x86_64.AppImage.zsync
     input:
       local: dist/cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
       release_asset: cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
@@ -121,6 +168,10 @@ targets:
     formats:
     - deb
     - rpm
+    - flatpak
+    - appimage
+    appimage:
+      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|chatwithwork-desktop-*-aarch64.AppImage.zsync
     input:
       local: dist/cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
       release_asset: cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
