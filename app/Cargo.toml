@@ -106,7 +106,7 @@ cairo-rs = { version = "0.18", features = ["png"], optional = true }
 # Checks that the tray's AppIndicator library loads before the tray asks for
 # it (desktop.rs): libappindicator-sys panics without it, and an AppImage
 # can't require it. The version already in the tree.
-libloading = "0.8"
+libloading = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Pictures of the windows in --demo builds (snapshot.rs): WKWebView draws its
