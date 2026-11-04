@@ -69,17 +69,18 @@ VERSION="$version" PKGREL="$pkgrel" AMD64="$(sha256 x86_64)" ARM64="$(sha256 aar
     print text
   ' < "$spec_in" > "$spec"
 
-# Rootful Docker writes the output as root, so hand it back to the invoking
-# user; rootless Podman's root already is that user, and a chown there would
-# hand it to a subordinate UID instead.
-owner=""
-case "$engine" in *docker) owner="$(id -u):$(id -g)" ;; esac
-"$engine" run --rm --platform "$platform" -e OWNER="$owner" -v "$out:/root/rpmbuild:Z" registry.fedoraproject.org/fedora:latest bash -euc '
+"$engine" run --rm --platform "$platform" -v "$out:/root/rpmbuild:Z" registry.fedoraproject.org/fedora:latest bash -euc '
   dnf -q -y install rpm-build rpmlint systemd-rpm-macros >/dev/null 2>&1
   rpmlint /root/rpmbuild/SPECS/chatwithwork-desktop.spec || true
   rpmbuild -bs /root/rpmbuild/SPECS/chatwithwork-desktop.spec
-  if [ -n "$OWNER" ]; then chown -R "$OWNER" /root/rpmbuild; fi
 '
+# A rootful engine leaves the output owned by the host's root; hand it back.
+# Rootless Docker or Podman already wrote it as the invoking user, and a
+# chown inside would give it to a subordinate UID instead.
+if [ "$(stat -c %u "$out/SRPMS")" = 0 ] && [ "$(id -u)" != 0 ]; then
+  "$engine" run --rm --platform "$platform" -v "$out:/out:Z" registry.fedoraproject.org/fedora:latest \
+    chown -R "$(id -u):$(id -g)" /out
+fi
 srpm="$(ls "$out"/SRPMS/chatwithwork-desktop-"$version"-"$pkgrel".*.src.rpm)"
 echo "Built $srpm"
 
