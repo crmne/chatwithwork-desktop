@@ -30,7 +30,7 @@ use notify::{RecursiveMode, Watcher};
 use tokio_util::sync::CancellationToken;
 
 use super::safe_fs::{RelPath, RootHandle};
-use super::walk::{ALWAYS_SKIPPED, Scope, Target, walk_dirs_until};
+use super::walk::{ALWAYS_SKIPPED, PROJECT_MARKERS, Scope, Target, walk_dirs_until};
 use crate::policy::DenyList;
 
 /// The most OS watches the daemon holds, whatever the system allows.
@@ -48,10 +48,15 @@ pub const PER_DIRECTORY: bool = !cfg!(any(target_os = "macos", target_os = "wind
 pub fn default_limit() -> usize {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        let system = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
-            .ok()
-            .and_then(|s| s.trim().parse::<usize>().ok());
-        limit_for(system)
+        // Read once, before the daemon confines itself (`sandbox::confine`
+        // asks first): Landlock leaves /proc/sys unreadable after.
+        static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *LIMIT.get_or_init(|| {
+            let system = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok());
+            limit_for(system)
+        })
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
@@ -214,7 +219,7 @@ impl Watches {
             let Some(root) = roots.iter().find(|r| path.starts_with(&r.path)) else {
                 continue;
             };
-            if is_ignore_file(&path) {
+            if is_ignore_file(&path) || is_project_marker(&path) {
                 // Its rules decide which folders below are walked: watch
                 // those again, and rescan them.
                 if let Some(dir) = path.parent().filter(|d| self.dirs.contains(*d)) {
@@ -257,12 +262,18 @@ impl Watches {
                 // or skipped folder costs no watch and leaves coverage whole,
                 // even at the limit. `add_dirs` holds the limit for the rest.
                 let scope = Arc::new(Scope(vec![Target::Recursive(rel)]));
-                let found = collect_dirs(root, deny, Some(scope), cancelled);
+                let found = collect_dirs(root, deny, Some(Arc::clone(&scope)), cancelled);
                 if !found.iter().any(|d| d == &path) {
                     // Ignored, denied or skipped.
                     continue;
                 }
                 self.add_dirs(root, found);
+                if self.per_directory && self.covers(&root.id) {
+                    // A folder made inside it between that walk and its
+                    // watch: its watch is in place now, so walk once more.
+                    let again = collect_dirs(root, deny, Some(scope), cancelled);
+                    self.add_dirs(root, again);
+                }
             }
             kept.push(path);
         }
@@ -386,6 +397,14 @@ fn collect_dirs(
         ControlFlow::Continue(())
     });
     dirs
+}
+
+/// Files that make their folder a software project, whose build output the
+/// index then skips: one coming or going changes what is walked below.
+fn is_project_marker(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| PROJECT_MARKERS.contains(&n))
 }
 
 /// Files whose rules decide what the index walks below their folder.
@@ -670,6 +689,34 @@ mod tests {
         assert!(w.dirs().contains(&base.join("app/generated")));
         // Newly ignored: let go.
         assert!(!w.dirs().contains(&base.join("app/kept")));
+    }
+
+    #[test]
+    fn a_project_marker_that_goes_brings_its_build_folder_into_the_watches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        write(&base, "app/Cargo.toml", "[package]\n");
+        write(&base, "app/build/notes.md", "x");
+        let root = Arc::new(root(&base));
+        let roots = [Arc::clone(&root)];
+        let (deny, never) = (no_deny(), CancellationToken::new());
+        let mut w = watches(1000, true);
+        w.add_root(&root, &deny, &never);
+        assert!(!w.dirs().contains(&base.join("app/build")), "build output");
+
+        std::fs::remove_file(base.join("app/Cargo.toml")).unwrap();
+        let kept = w.filter_changes(
+            vec![(base.join("app/Cargo.toml"), true)],
+            &roots,
+            &deny,
+            &never,
+        );
+        assert_eq!(kept, [base.join("app")], "the folder is rescanned");
+        assert!(
+            w.dirs().contains(&base.join("app/build")),
+            "now a folder of notes"
+        );
+        assert!(w.covers("code"));
     }
 
     #[test]

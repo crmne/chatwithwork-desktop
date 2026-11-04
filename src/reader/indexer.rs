@@ -373,7 +373,7 @@ impl Worker {
 
     /// How long until a pending rebuild of the watches is due.
     fn rewatch_due(&self) -> Option<Duration> {
-        self.rewatch_pending.then(|| {
+        (self.rewatch_pending && self.settings.watch).then(|| {
             self.last_rewatch.map_or(Duration::ZERO, |at| {
                 REWATCH_AFTER.saturating_sub(at.elapsed())
             })
@@ -481,6 +481,9 @@ impl Worker {
     }
 
     fn apply_settings(&mut self) {
+        // A rebuild deferred under the old settings is theirs: the new ones
+        // rebuild the watches themselves, or turn them off.
+        self.rewatch_pending = false;
         if self.scan.is_cancelled() {
             return;
         }

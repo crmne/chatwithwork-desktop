@@ -224,7 +224,7 @@ const PROJECT_OUTPUT: &[&str] = &[
 ];
 
 /// Files that make a folder a software project.
-const PROJECT_MARKERS: &[&str] = &[
+pub(crate) const PROJECT_MARKERS: &[&str] = &[
     ".git",
     "Cargo.toml",
     "package.json",
