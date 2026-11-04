@@ -1,7 +1,7 @@
 // Start at login, pausing, crash reports, dictation for `cww tui`, the
 // background agent and where its files are, and about.
 
-import { agentMissing, append, button, call, control, group, h, notice, pageHeader, row, section, switchInput } from "../app.js";
+import { agentMissing, append, button, call, control, group, h, icon as glyph, notice, pageHeader, row, section, switchInput } from "../app.js";
 import { displayPath } from "./folders.js";
 
 export const title = "General";
@@ -180,18 +180,66 @@ function updateText(u) {
       const percent = u.total ? Math.round((100 * u.received) / u.total) : 0;
       return `Downloading version ${release}: ${percent}%`;
     }
-    case "ready": return `Version ${release} is downloaded and checked. Restart to use it; your windows come back.`;
+    case "ready": return u.installs_next_start
+      ? `Version ${release} is downloaded and checked. It installs the next time Chat with Work starts, or restart now; your windows come back.`
+      : `Version ${release} is downloaded and checked. Restart to use it; your windows come back.`;
     case "installing": return `Installing version ${release}…`;
     case "unsupported": return `Version ${release} is out. ${u.advice}`;
     case "failed": return u.error;
-    default: return "Checked once a day. Updates download in the background, signed and verified, and install when you restart.";
+    default: return u.installs_updates
+      ? "Checked once a day. Updates download in the background, signed and verified, and install the next time Chat with Work starts."
+      : "Checked once a day. Updates download in the background, signed and verified, and install when you restart.";
   }
 }
 
-function updatesSection(app) {
+// A newer release a package manager installs, until it's dismissed: how
+// this copy was installed, the command that updates it (copied, never run
+// here), the file to download when it needs one, and the release notes.
+export function updateNotice(app, u) {
+  const view = app.view("general");
+  const release = u.release?.version;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(u.command);
+      view.copied = u.command;
+      app.render();
+      setTimeout(() => {
+        view.copied = null;
+        app.render();
+      }, 1500);
+    } catch {}
+  };
+  return h("div", { class: "row row--stack update-notice", role: "status", "data-key": "update-notice" },
+    h("div", { class: "row__head" },
+      h("div", { class: "row__body" },
+        h("h3", {}, `Version ${release} is available`),
+        h("p", {}, `You have ${u.version}. ${u.advice}`)),
+      h("button", { type: "button", class: "btn btn-ghost btn-icon", "aria-label": "Dismiss", title: "Dismiss", "data-key": "update-dismiss",
+        onclick: async () => {
+          try {
+            view.update = await call("update_dismiss", { version: release });
+          } catch (error) {
+            view.updateError = error.message;
+          }
+          app.render();
+        } }, glyph("x"))),
+    u.command ? h("div", { class: "command" },
+      h("code", { "aria-label": "Command" }, u.command),
+      button([glyph(view.copied === u.command ? "check" : "copy"), view.copied === u.command ? "Copied" : "Copy"], copy, { key: "update-copy" })) : null,
+    h("div", { class: "inline" },
+      u.download ? button([glyph("download-simple"), "Download"], () => call("open_url", { url: u.download }), { key: "update-download" }) : null,
+      button("Release Notes", () => call("open_url", { url: u.release?.url || u.releases }), { key: "update-notes" })));
+}
+
+export function updatesSection(app) {
   const view = app.view("general");
   const u = view.update;
   if (!u) return null;
+  if (u.phase === "unsupported" && !u.dismissed) {
+    return section("Updates", null,
+      group(updateNotice(app, u)),
+      view.updateError ? notice(view.updateError) : null);
+  }
   const busy = ["checking", "downloading", "installing"].includes(u.phase);
   const action = u.phase === "ready"
     ? button("Restart to Update", async () => {
@@ -216,6 +264,18 @@ function updatesSection(app) {
   return section("Updates", null,
     group(
       row({ title: "Version", text: updateText(u), actions: action }),
+      u.phase === "unsupported" ? null : row({
+        title: "Install updates automatically",
+        text: "A new version on this major version installs the next time Chat with Work starts, never while a command runs. Off, you restart to update.",
+        actions: switchInput(u.installs_updates !== false, async (on) => {
+          try {
+            view.update = await call("set_automatic_updates", { enabled: on });
+          } catch (error) {
+            view.updateError = error.message;
+          }
+          app.render();
+        }, { label: "Install updates automatically", key: "automatic-updates" }),
+      }),
       u.phase === "downloading" && u.total ? h("div", { class: "row row--stack" },
         h("div", { class: "meter", role: "progressbar", "aria-label": "Update download", "aria-valuemin": "0", "aria-valuemax": String(u.total), "aria-valuenow": String(u.received) },
           h("span", { style: `inline-size: ${Math.min(100, (100 * u.received) / u.total).toFixed(1)}%` }))) : null),

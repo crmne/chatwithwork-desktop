@@ -10,8 +10,11 @@
 //! starts the new version and puts the old one back if that doesn't start.
 //!
 //! A copy a package manager owns never replaces itself (Homebrew, the AUR,
-//! .deb and .rpm, Nix, the Mac's .pkg); the settings say which tool updates
-//! it. WinGet installs the Windows installer's own package, so that copy
+//! .deb and .rpm, Nix, Flatpak, the Mac's .pkg), nor does an AppImage whose
+//! release doesn't sign it. It still hears of each release once its signed
+//! `checksums.txt` verifies (`Updater::verify`): General and the tray show
+//! one notice per version, with the command for how it was installed
+//! (update_notice.rs). WinGet installs the Windows installer's own package, so that copy
 //! updates itself like any other, and `winget upgrade` still works. The Linux archive carries `cww`
 //! beside the app and the updater replaces one program, so a copy from the
 //! one-line installer is told to run it again instead.
@@ -30,6 +33,8 @@ use fastframe_update::{
     Source, Transport, Unsupported, UpdateConfig, Updater,
 };
 use serde_json::{Value, json};
+
+use crate::update_notice::Notice;
 
 /// The version this binary was built as.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,6 +74,11 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
         legacy_bundle_names: &[],
     },
     publisher_key: Some(PUBLIC_KEY.trim_ascii()),
+    // native-packages names the AppImage after the package:
+    // chatwithwork-desktop-X.Y.Z-<arch>.AppImage. AppImages update
+    // themselves once a release lists it in the signed checksums.txt;
+    // until then they get the notice (update_notice.rs).
+    appimage_name: Some("chatwithwork-desktop"),
     ..UpdateConfig::new(
         "crmne/chatwithwork-desktop",
         "Chat with Work",
@@ -96,16 +106,39 @@ pub fn version_line() -> String {
 /// only). The signature is required either way.
 fn updater() -> Updater {
     let updater = Updater::new(CONFIG, UreqTransport);
-    match std::env::var("CWW_UPDATE_FEED") {
-        Ok(feed) => match Source::local(&feed) {
-            Ok(source) => updater.with_source(source),
-            Err(e) => {
-                log::warn!("ignoring CWW_UPDATE_FEED: {e:#}");
-                updater
-            }
-        },
-        Err(_) => updater,
+    match local_feed() {
+        Some(source) => updater.with_source(source),
+        None => updater,
     }
+}
+
+fn local_feed() -> Option<Source> {
+    let feed = std::env::var("CWW_UPDATE_FEED").ok()?;
+    Source::local(&feed)
+        .inspect_err(|e| log::warn!("ignoring CWW_UPDATE_FEED: {e:#}"))
+        .ok()
+}
+
+/// The release's page, for its notes: the tag's page on GitHub, which the
+/// app builds from the version rather than taking from the listing.
+fn notes(release: &Release) -> String {
+    if local_feed().is_some() {
+        release.url.clone()
+    } else {
+        format!(
+            "https://github.com/{}/releases/tag/v{}",
+            CONFIG.repository, release.version
+        )
+    }
+}
+
+/// Only `X.Y.Z`: the notice puts the version into file names and commands.
+fn plain_version(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.len() <= 9 && part.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// fastframe-update's transport over ureq, with the TLS roots and proxy the
@@ -198,13 +231,9 @@ pub fn advice(reason: &Unsupported) -> String {
 /// The Mac's .pkg installs `cww` into /usr/local/bin as root, beside the
 /// app; replacing only the app would leave that one behind, so a Mac with
 /// the package's receipt updates with the next package instead.
-fn installed_by_pkg() -> Option<String> {
-    (cfg!(target_os = "macos")
-        && std::path::Path::new("/var/db/receipts/com.chatwithwork.cww.plist").exists())
-    .then(|| {
-        "Installed with the .pkg installer: install the new version's .pkg from the release page."
-            .into()
-    })
+fn installed_by_pkg() -> bool {
+    cfg!(target_os = "macos")
+        && std::path::Path::new("/var/db/receipts/com.chatwithwork.cww.plist").exists()
 }
 
 /// Where updating stands, for the settings page and the tray.
@@ -215,10 +244,10 @@ enum Phase {
     Checking,
     /// The latest release is this one.
     Current,
-    /// A newer release this copy can't install itself.
+    /// A newer, verified release this copy can't install itself.
     Unsupported {
         release: Release,
-        advice: String,
+        notice: Notice,
     },
     Downloading {
         release: Release,
@@ -255,9 +284,13 @@ impl Phase {
             Self::Idle => json!({ "phase": "idle" }),
             Self::Checking => json!({ "phase": "checking" }),
             Self::Current => json!({ "phase": "current" }),
-            Self::Unsupported { advice, .. } => {
-                json!({ "phase": "unsupported", "release": release, "advice": advice })
-            }
+            Self::Unsupported { notice, .. } => json!({
+                "phase": "unsupported",
+                "release": release,
+                "advice": notice.how,
+                "command": notice.command,
+                "download": notice.download,
+            }),
             Self::Downloading {
                 received, total, ..
             } => {
@@ -280,25 +313,61 @@ pub struct Updates {
     /// This launch is the previous version, put back after an update
     /// didn't start.
     rolled_back: bool,
+    /// The version whose notice was dismissed (app.json), so a copy that
+    /// can't update itself is told once per release.
+    dismissed: Mutex<Option<String>>,
+    /// Install updates automatically (app.json's `automatic_updates`).
+    automatic: std::sync::atomic::AtomicBool,
     wake: Mutex<Option<Sender<()>>>,
 }
 
 impl Updates {
-    pub fn new(problem: Option<String>) -> Self {
+    pub fn new(problem: Option<String>, dismissed: Option<String>, automatic: bool) -> Self {
         Self {
+            automatic: std::sync::atomic::AtomicBool::new(automatic),
             phase: Mutex::new(Phase::Idle),
             checked_at: Mutex::new(None),
             rolled_back: problem.is_some(),
             problem: Mutex::new(problem),
+            dismissed: Mutex::new(dismissed),
             wake: Mutex::new(None),
         }
+    }
+
+    /// Whether updates install themselves.
+    pub fn installs_updates(&self) -> bool {
+        self.automatic.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_installs_updates(&self, on: bool) {
+        self.automatic
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// This launch is the version an update was rolled back to.
+    pub fn rolled_back(&self) -> bool {
+        self.rolled_back
     }
 
     /// What the settings show.
     pub fn view(&self) -> Value {
         let mut view = self.phase.lock().expect("update lock").view();
+        if view["phase"] == "unsupported" {
+            view["dismissed"] = json!(self.available().is_none());
+        }
         view["version"] = json!(VERSION);
         view["automatic"] = json!(true);
+        let installs = self.installs_updates();
+        view["installs_updates"] = json!(installs);
+        // A downloaded update that installs at the next start on its own.
+        if let Some(version) = view["release"]["version"].as_str()
+            && view["phase"] == "ready"
+        {
+            view["installs_next_start"] = json!(
+                fastframe_update::policy::offer(VERSION, version, installs, Ok(()), None)
+                    == fastframe_update::policy::Offer::Automatic
+            );
+        }
         view["checked_at"] = json!(
             self.checked_at
                 .lock()
@@ -314,6 +383,65 @@ impl Updates {
     pub fn ready(&self) -> Option<String> {
         match &*self.phase.lock().expect("update lock") {
             Phase::Ready { release, .. } => Some(release.version.clone()),
+            _ => None,
+        }
+    }
+
+    /// A newer release this copy can't install, until its notice is
+    /// dismissed: the tray offers it.
+    pub fn available(&self) -> Option<String> {
+        let dismissed = self.dismissed.lock().expect("update lock").clone();
+        match &*self.phase.lock().expect("update lock") {
+            Phase::Unsupported { release, .. } if dismissed.as_ref() != Some(&release.version) => {
+                Some(release.version.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Dismisses the notice of the release it's showing (and its banner),
+    /// and returns that version, for app.json. A downloaded update's banner
+    /// goes too; the tray and General still offer Restart to Update.
+    pub fn dismiss(&self, version: &str) -> Option<String> {
+        (self.banner_version()? == version).then(|| {
+            *self.dismissed.lock().expect("update lock") = Some(version.to_owned());
+            version.to_owned()
+        })
+    }
+
+    /// The release the banner shows: one waiting for Restart to Update or
+    /// for a package manager, until it's dismissed.
+    pub fn banner_version(&self) -> Option<String> {
+        let dismissed = self.dismissed.lock().expect("update lock").clone();
+        match &*self.phase.lock().expect("update lock") {
+            Phase::Ready { release, .. } | Phase::Unsupported { release, .. }
+                if dismissed.as_ref() != Some(&release.version) =>
+            {
+                Some(release.version.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// What the banner in the Chat with Work window shows, or `None` to
+    /// hide it.
+    pub fn banner(&self) -> Option<Value> {
+        self.banner_version()?;
+        let mut view = self.view();
+        view["kind"] = json!(if view["phase"] == "ready" {
+            "restart"
+        } else {
+            "notice"
+        });
+        Some(view)
+    }
+
+    /// A link the banner may open: the release notes, or the file a
+    /// package install downloads. Never a link the page names.
+    pub fn banner_link(&self, which: &str) -> Option<String> {
+        match (&*self.phase.lock().expect("update lock"), which) {
+            (Phase::Unsupported { notice, .. }, "download") => notice.download.clone(),
+            (phase, "notes") => phase.release().map(|release| release.url.clone()),
             _ => None,
         }
     }
@@ -334,6 +462,42 @@ impl Updates {
         tell();
     }
 
+    /// A verified release this copy can't install: the notice, with the
+    /// command for how it was installed.
+    fn announce(
+        &self,
+        updater: &Updater,
+        release: Release,
+        reason: &Unsupported,
+        pkg: bool,
+        tell: &dyn Fn(),
+    ) {
+        let installed = crate::update_notice::detect(reason, pkg, updater.managed_update());
+        // A local test feed serves its own files; otherwise the release's.
+        let files = std::env::var("CWW_UPDATE_FEED")
+            .ok()
+            .filter(|_| local_feed().is_some())
+            .map(|feed| feed.trim_end_matches('/').to_owned())
+            .unwrap_or_else(|| {
+                format!(
+                    "https://github.com/{}/releases/download/v{}",
+                    CONFIG.repository, release.version
+                )
+            });
+        let notice = crate::update_notice::notice_from(
+            &installed,
+            &release.version,
+            std::env::consts::ARCH,
+            dirs::download_dir().as_deref(),
+            &files,
+        );
+        let release = Release {
+            url: notes(&release),
+            ..release
+        };
+        self.set(Phase::Unsupported { release, notice }, tell);
+    }
+
     /// One check, and the download when this copy may install it.
     fn run_once(&self, updater: &Updater, tell: &dyn Fn()) {
         // A downloaded update stays ready; checking again would only fetch
@@ -346,6 +510,28 @@ impl Updates {
         }
         self.set(Phase::Checking, tell);
         let checked = updater.check();
+        // Pictures of a downloaded update in --demo builds, which can't
+        // download a real one (`CWW_DEMO_UPDATE=ready`): the release the
+        // feed names, as if downloaded.
+        #[cfg(feature = "demo")]
+        if std::env::var("CWW_DEMO_UPDATE").as_deref() == Ok("ready")
+            && let Ok(Some(release)) = &checked
+        {
+            let prepared = Prepared::sample(
+                fastframe_update::Installation {
+                    executable: std::env::current_exe().unwrap_or_default(),
+                    kind: fastframe_update::Kind::Portable,
+                },
+                &release.version,
+            );
+            return self.set(
+                Phase::Ready {
+                    release: release.clone(),
+                    prepared: Box::new(prepared),
+                },
+                tell,
+            );
+        }
         *self.checked_at.lock().expect("update lock") = Some(jiff::Timestamp::now());
         let release = match checked {
             Ok(Some(release)) => release,
@@ -361,16 +547,35 @@ impl Updates {
                 );
             }
         };
-        if let Some(advice) = installed_by_pkg() {
-            return self.set(Phase::Unsupported { release, advice }, tell);
-        }
-        if let Err(reason) = updater.installation() {
+        // Only a release whose checksums.txt verifies with the key compiled
+        // in, and lists a download of that version for this computer, is
+        // announced or downloaded.
+        let verified = match updater.verify(&release) {
+            Ok(verified) if plain_version(&release.version) => verified,
+            Ok(_) => {
+                log::warn!("not announcing {}: not a plain version", release.version);
+                return self.set(Phase::Current, tell);
+            }
+            Err(e) => {
+                log::warn!("not announcing {}: {e:#}", release.version);
+                return self.set(
+                    Phase::Failed(format!("Couldn't verify version {}.", release.version)),
+                    tell,
+                );
+            }
+        };
+        let pkg = installed_by_pkg();
+        let installable = if pkg {
+            Err(Unsupported::NotPortable)
+        } else {
+            updater.installable(&verified)
+        };
+        if let Err(reason) = installable {
             log::info!(
                 "update {} available; this copy can't install it: {reason:?}",
                 release.version
             );
-            let advice = advice(&reason);
-            return self.set(Phase::Unsupported { release, advice }, tell);
+            return self.announce(updater, release, &reason, pkg, tell);
         }
         log::info!("downloading update {}", release.version);
         self.set(
@@ -407,6 +612,14 @@ impl Updates {
                 },
                 tell,
             ),
+            Err(e) if e.downcast_ref::<Unsupported>().is_some() => {
+                let reason = e.downcast_ref::<Unsupported>().cloned().expect("checked");
+                log::info!(
+                    "update {} can't be installed here: {reason:?}",
+                    release.version
+                );
+                self.announce(updater, release, &reason, false, tell);
+            }
             Err(e) => {
                 log::warn!("update download failed: {e:#}");
                 self.set(
@@ -479,6 +692,70 @@ impl Updates {
     }
 }
 
+/// Whether the background agent is running a command: nothing installs or
+/// restarts it while one runs. An agent that isn't running runs nothing.
+pub fn commands_running(client: &crate::control::Client) -> bool {
+    client
+        .request(&cww::control::ControlRequest::Commands)
+        .ok()
+        .and_then(|answer| answer["commands"].as_array().cloned())
+        .is_some_and(|commands| commands.iter().any(|run| run["state"] == "running"))
+}
+
+/// At start, before any window opens: installs the update an earlier run
+/// downloaded, when it installs on its own (fastframe-update's policy: a
+/// newer release on this major version, automatic updates on, not one the
+/// person went back from) and the background agent runs no command. Hands
+/// it to the helper, which waits for this app to quit, installs it and
+/// starts the new version (rolled back if it doesn't start); the caller
+/// quits when this answers true. Also remembers the newest version that ran.
+pub fn install_kept(
+    paths: &crate::paths::Paths,
+    client: &crate::control::Client,
+    window: bool,
+) -> bool {
+    let state = crate::state::AppState::load(paths);
+    let before = state.newest_run.clone();
+    let newest = fastframe_update::policy::newest_run(VERSION, before.as_deref());
+    if before.as_deref() != Some(newest.as_str())
+        && let Err(e) =
+            crate::state::AppState::update(paths, |state| state.newest_run = Some(newest))
+    {
+        log::warn!("couldn't remember the newest version: {e}");
+    }
+    let updater = updater();
+    let kept = match updater.kept() {
+        Ok(Some(kept)) => kept,
+        Ok(None) => return false,
+        Err(e) => {
+            log::warn!("the kept update didn't check out: {e:#}");
+            return false;
+        }
+    };
+    let installs = fastframe_update::policy::installs_at_start(
+        VERSION,
+        kept.version(),
+        state.installs_updates(),
+        before.as_deref(),
+        !commands_running(client),
+    );
+    if !installs {
+        log::info!(
+            "update {} waits: not installed at this start",
+            kept.version()
+        );
+        return false;
+    }
+    log::info!("installing update {} at start", kept.version());
+    match updater.handoff(kept, relaunch_arguments(window)) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("couldn't install the kept update: {e:#}");
+            false
+        }
+    }
+}
+
 /// What the app relaunches with after an update: its window if one was
 /// open, else just the tray.
 pub fn relaunch_arguments(window_open: bool) -> Vec<String> {
@@ -493,19 +770,31 @@ pub fn relaunch_arguments(window_open: bool) -> Vec<String> {
 /// started, then restarts the background agent if it still runs the old
 /// `cww`. `agent_version` waits for the agent's status (None while it
 /// isn't running, when there's nothing to restart).
-pub fn finish(receipt: Receipt, agent_version: impl FnOnce() -> Option<String>) {
+pub fn finish(
+    receipt: Receipt,
+    agent_version: impl FnOnce() -> Option<String>,
+    client: &crate::control::Client,
+) {
     if let Err(e) = receipt.acknowledge() {
         log::warn!("couldn't acknowledge the update: {e:#}");
         return;
     }
     log::info!("updated to {VERSION}");
-    reconcile_agent(agent_version());
+    reconcile_agent(agent_version(), client);
 }
 
 /// Package-manager upgrades have no updater receipt. Reconcile those too,
 /// without starting an agent the person stopped or restarting the same old
 /// executable repeatedly when only one member of the app/CLI pair changed.
-pub fn reconcile_agent(running: Option<String>) {
+pub fn reconcile_agent(running: Option<String>, client: &crate::control::Client) {
+    // Never mid-command: an agent running one is restarted once it's done.
+    if running.as_deref().is_some_and(|version| version != VERSION) {
+        let mut waited = Duration::ZERO;
+        while commands_running(client) && waited < Duration::from_secs(24 * 60 * 60) {
+            std::thread::sleep(Duration::from_secs(30));
+            waited += Duration::from_secs(30);
+        }
+    }
     let _ = reconcile_agent_with(
         running.as_deref(),
         || {
@@ -637,7 +926,7 @@ mod tests {
 
     #[test]
     fn the_view_says_where_updating_stands() {
-        let updates = Updates::new(Some("restored".into()));
+        let updates = Updates::new(Some("restored".into()), None, true);
         let view = updates.view();
         assert_eq!(view["phase"], "idle");
         assert_eq!(view["version"], VERSION);
@@ -649,5 +938,136 @@ mod tests {
         assert!(updates.restart(Vec::new()).is_err());
         *updates.phase.lock().unwrap() = Phase::Failed("offline".into());
         assert_eq!(updates.view()["error"], "offline");
+    }
+
+    fn unsupported(version: &str) -> Phase {
+        Phase::Unsupported {
+            release: Release {
+                version: version.into(),
+                url: format!(
+                    "https://github.com/crmne/chatwithwork-desktop/releases/tag/v{version}"
+                ),
+            },
+            notice: Notice {
+                how: "Installed from the AUR. Update it with your AUR helper.".into(),
+                command: Some("yay -Syu chatwithwork-desktop-bin".into()),
+                download: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_package_managers_release_is_announced_until_dismissed_once_per_version() {
+        let updates = Updates::new(None, Some("0.12.0".into()), true);
+        *updates.phase.lock().unwrap() = unsupported("0.12.0");
+        // Dismissed at an earlier launch.
+        assert_eq!(updates.available(), None);
+        assert_eq!(updates.view()["dismissed"], true);
+        assert_eq!(updates.dismiss("0.12.0"), None);
+        // The next release is announced again.
+        *updates.phase.lock().unwrap() = unsupported("0.13.0");
+        assert_eq!(updates.available().as_deref(), Some("0.13.0"));
+        let view = updates.view();
+        assert_eq!(view["phase"], "unsupported");
+        assert_eq!(view["dismissed"], false);
+        assert_eq!(view["release"]["version"], "0.13.0");
+        assert_eq!(view["command"], "yay -Syu chatwithwork-desktop-bin");
+        assert!(view["download"].is_null());
+        assert!(view["advice"].as_str().unwrap().contains("AUR"));
+        // Never Restart to Update for it.
+        assert!(updates.ready().is_none());
+        assert!(updates.restart(Vec::new()).is_err());
+        assert_eq!(updates.dismiss("0.12.0"), None);
+        assert_eq!(updates.dismiss("0.13.0").as_deref(), Some("0.13.0"));
+        assert_eq!(updates.available(), None);
+        assert_eq!(updates.view()["dismissed"], true);
+    }
+
+    #[test]
+    fn the_banner_offers_restart_or_the_notice_until_dismissed() {
+        let updates = Updates::new(None, None, true);
+        assert!(updates.banner().is_none());
+        *updates.phase.lock().unwrap() = unsupported("0.13.0");
+        let banner = updates.banner().unwrap();
+        assert_eq!(banner["kind"], "notice");
+        assert_eq!(banner["command"], "yay -Syu chatwithwork-desktop-bin");
+        assert_eq!(
+            updates.banner_link("notes").as_deref(),
+            Some("https://github.com/crmne/chatwithwork-desktop/releases/tag/v0.13.0")
+        );
+        assert_eq!(updates.banner_link("download"), None);
+        assert_eq!(updates.banner_link("https://example.com"), None);
+        assert_eq!(updates.dismiss("0.12.0"), None);
+        assert_eq!(updates.dismiss("0.13.0").as_deref(), Some("0.13.0"));
+        assert!(updates.banner().is_none());
+        assert!(updates.available().is_none());
+    }
+
+    fn ready(version: &str) -> Phase {
+        Phase::Ready {
+            release: Release {
+                version: version.into(),
+                url: String::new(),
+            },
+            prepared: Box::new(Prepared::sample(
+                fastframe_update::Installation {
+                    executable: "/Applications/Chat with Work.app/Contents/MacOS/cww-app".into(),
+                    kind: fastframe_update::Kind::MacBundle,
+                },
+                version,
+            )),
+        }
+    }
+
+    #[test]
+    fn a_download_on_this_major_installs_at_the_next_start_unless_turned_off() {
+        let major: u64 = VERSION.split('.').next().unwrap().parse().unwrap();
+        let next = format!("{major}.999.0");
+        let updates = Updates::new(None, None, true);
+        *updates.phase.lock().unwrap() = ready(&next);
+        let view = updates.view();
+        assert_eq!(view["phase"], "ready");
+        assert_eq!(view["installs_next_start"], true);
+        assert_eq!(updates.ready().as_deref(), Some(next.as_str()));
+        assert_eq!(updates.banner().unwrap()["kind"], "restart");
+        updates.set_installs_updates(false);
+        assert_eq!(updates.view()["installs_next_start"], false);
+        assert_eq!(updates.view()["installs_updates"], false);
+        // A new major version asks.
+        let updates = Updates::new(None, None, true);
+        *updates.phase.lock().unwrap() = ready(&format!("{}.0.0", major + 1));
+        assert_eq!(updates.view()["installs_next_start"], false);
+    }
+
+    #[test]
+    fn a_downloaded_update_is_still_restart_to_update() {
+        // macOS and Windows: what the tray and General offer is unchanged.
+        let updates = Updates::new(None, None, true);
+        *updates.phase.lock().unwrap() = Phase::Installing {
+            release: Release {
+                version: "0.12.0".into(),
+                url: String::new(),
+            },
+        };
+        assert_eq!(updates.available(), None);
+        assert!(updates.view()["dismissed"].is_null());
+        assert_eq!(updates.dismiss("0.12.0"), None);
+    }
+
+    #[test]
+    fn only_plain_versions_reach_a_command() {
+        assert!(plain_version("0.12.0"));
+        assert!(plain_version("10.0.123"));
+        for bad in [
+            "0.12",
+            "0.12.0-beta.1",
+            "0.12.0;rm",
+            "v0.12.0",
+            "",
+            "0..1",
+            "1.2.3.4",
+        ] {
+            assert!(!plain_version(bad), "{bad}");
+        }
     }
 }

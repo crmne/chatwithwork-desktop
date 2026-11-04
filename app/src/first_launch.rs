@@ -108,9 +108,7 @@ pub fn ask_once(paths: Paths) {
 }
 
 fn remember(paths: &Paths) {
-    let mut state = AppState::load(paths);
-    state.notifications_asked = true;
-    if let Err(e) = state.save(paths) {
+    if let Err(e) = AppState::update(paths, |state| state.notifications_asked = true) {
         log::warn!("couldn't remember asking for notifications: {e}");
     }
 }

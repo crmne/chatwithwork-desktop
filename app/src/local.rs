@@ -262,10 +262,7 @@ pub fn set_onboarded(
     onboarded: bool,
 ) -> Answer {
     local_page(&webview)?;
-    let mut state = crate::state::AppState::load(&desktop.paths);
-    state.onboarded = onboarded;
-    state
-        .save(&desktop.paths)
+    crate::state::AppState::update(&desktop.paths, |state| state.onboarded = onboarded)
         .map(|()| json!({}))
         .map_err(|e| refusal("failed", format!("Couldn't save: {e}")))
 }
@@ -766,6 +763,33 @@ pub fn update_status(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answ
 pub fn update_check(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
     local_page(&webview)?;
     desktop.updates.check_now();
+    Ok(desktop.updates.view())
+}
+
+/// Hides the notice of the release a package manager has for this copy,
+/// in General and the tray, until a newer one is out.
+#[tauri::command]
+pub fn update_dismiss(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    version: String,
+) -> Answer {
+    local_page(&webview)?;
+    desktop.dismiss_update(&version);
+    Ok(desktop.updates.view())
+}
+
+/// Install updates automatically, or offer them: on by default.
+#[tauri::command]
+pub fn set_automatic_updates(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    enabled: bool,
+) -> Answer {
+    local_page(&webview)?;
+    desktop
+        .set_installs_updates(enabled)
+        .map_err(|e| refusal("failed", format!("Couldn't save: {e}")))?;
     Ok(desktop.updates.view())
 }
 

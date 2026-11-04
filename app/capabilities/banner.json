@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "banner",
+  "description": "The update banner, a bundled page in an app-owned child web view of the Chat with Work window (banner.rs): what the updater shows, Restart to Update, dismissing it, and the release's own links. Pages from the network never get this: it names no remote URL.",
+  "webviews": ["update-banner"],
+  "local": true,
+  "permissions": [
+    "allow-banner-state",
+    "allow-banner-restart",
+    "allow-banner-dismiss",
+    "allow-banner-open",
+    "allow-banner-fit"
+  ]
+}

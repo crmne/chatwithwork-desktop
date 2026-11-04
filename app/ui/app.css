@@ -794,6 +794,44 @@ code,
   max-inline-size: 30rem;
 }
 
+/* A newer release a package manager installs: the command to run there,
+   copied with its button */
+
+.btn-icon {
+  inline-size: 2rem;
+  padding: 0;
+  color: var(--ink-muted);
+}
+
+.btn-icon:hover {
+  color: var(--ink);
+}
+
+.btn svg {
+  inline-size: 1rem;
+  block-size: 1rem;
+  flex-shrink: 0;
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.command code {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0.4375rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background-color: var(--canvas-sunken);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* The pairing code */
 
 .code {
@@ -994,3 +1032,48 @@ body.offline {
 /* Links inside local explanatory text behave like the web Settings links. */
 .text-link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .embedded .page { gap: 1.25rem; }
+
+/* The update banner: a card in the Chat with Work window's top right
+   (banner.html, banner.rs). The web view is the card. */
+
+.banner {
+  margin: 0;
+  background-color: var(--surface);
+  overflow: hidden;
+}
+
+.banner__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.75rem 0.75rem 0.75rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+}
+
+.banner__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.banner__body {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.banner__body h1,
+.banner__body p {
+  margin: 0;
+}
+
+.banner__body h1 {
+  font-size: 0.875rem;
+  font-weight: 550;
+  letter-spacing: -0.005em;
+}
+
+.banner__body p {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}

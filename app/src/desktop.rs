@@ -118,7 +118,8 @@ impl Desktop {
     }
 
     /// An update's state changed: the settings hear it, and the tray
-    /// offers Restart to Update while one is ready.
+    /// offers Restart to Update while one is ready, or Update to X.Y.Z…
+    /// while a package manager has one this copy hasn't dismissed.
     pub fn update_changed(&self) {
         let app = self.app();
         crate::windows::tell_settings(&app, "update", self.updates.view());
@@ -129,13 +130,54 @@ impl Desktop {
             let desktop = app.state::<Arc<Desktop>>().inner().clone();
             std::thread::spawn(move || desktop.restart_to_update());
         }
+        let banner_app = app.clone();
+        std::thread::spawn(move || crate::banner::sync(&banner_app));
         let tray_app = app.clone();
         let _ = app.run_on_main_thread(move || {
             let desktop = tray_app.state::<Arc<Desktop>>();
+            // Read here, on the main thread, so a later change always wins.
+            let entry = desktop
+                .updates
+                .ready()
+                .map(crate::tray::UpdateEntry::Restart)
+                .or_else(|| {
+                    desktop
+                        .updates
+                        .available()
+                        .map(crate::tray::UpdateEntry::Available)
+                });
             if let Some(tray) = desktop.tray.lock().expect("tray lock").as_mut() {
-                tray.set_update(&tray_app, ready.as_deref());
+                tray.set_update(&tray_app, entry);
             }
         });
+    }
+
+    /// Turns installing updates by themselves on or off (app.json).
+    pub fn set_installs_updates(&self, on: bool) -> std::io::Result<()> {
+        crate::state::AppState::update(&self.paths, |state| state.automatic_updates = Some(on))?;
+        self.updates.set_installs_updates(on);
+        self.update_changed();
+        Ok(())
+    }
+
+    /// Hides the notice and banner of the release they show until the next
+    /// version, remembered in app.json.
+    pub fn dismiss_update(&self, shown: &str) {
+        // The version on the card, and only while it's still the one shown;
+        // saved first, so a failed save doesn't hide it for this session only.
+        if self.updates.banner_version().as_deref() != Some(shown) {
+            return;
+        }
+        let shown = shown.to_owned();
+        let saved = crate::state::AppState::update(&self.paths, |state| {
+            state.dismissed_update = Some(shown.clone());
+        });
+        if let Err(e) = saved {
+            log::warn!("couldn't save the dismissed update: {e}");
+            return;
+        }
+        self.updates.dismiss(&shown);
+        self.update_changed();
     }
 
     /// Installs the downloaded update: its helper waits for the app to
@@ -287,6 +329,12 @@ pub fn tray_action(app: &AppHandle, id: &str) {
             let desktop = desktop.clone();
             std::thread::spawn(move || desktop.restart_to_update());
         }
+        Some(Action::ShowUpdate) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = windows::show_settings(&app, Some("general"));
+            });
+        }
         Some(Action::Quit) => desktop.quit(),
         None => {}
     }
@@ -323,8 +371,8 @@ fn start_updates(desktop: &Arc<Desktop>, receipt: Option<fastframe_update::Recei
                 waiting.status().map(|status| status.version)
             };
             match receipt {
-                Some(receipt) => crate::update::finish(receipt, agent_version),
-                None => crate::update::reconcile_agent(agent_version()),
+                Some(receipt) => crate::update::finish(receipt, agent_version, &waiting.client),
+                None => crate::update::reconcile_agent(agent_version(), &waiting.client),
             }
         });
 }
@@ -406,6 +454,10 @@ pub fn run(
         }
         other => other.clone(),
     };
+    // A newer release's notice, dismissed once per version.
+    let app_state = crate::state::AppState::load(&paths);
+    let dismissed_update = app_state.dismissed_update.clone();
+    let installs_updates = app_state.installs_updates();
     let desktop = Arc::new(Desktop {
         app: OnceLock::new(),
         client: Client::new(paths.socket_path()),
@@ -425,7 +477,11 @@ pub fn run(
         preferences: Default::default(),
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
-        updates: Arc::new(crate::update::Updates::new(update_error)),
+        updates: Arc::new(crate::update::Updates::new(
+            update_error,
+            dismissed_update,
+            installs_updates,
+        )),
     });
 
     let mut builder = tauri::Builder::default();
@@ -516,6 +572,13 @@ pub fn run(
             crate::local::update_status,
             crate::local::update_check,
             crate::local::update_restart,
+            crate::local::update_dismiss,
+            crate::local::set_automatic_updates,
+            crate::banner::banner_state,
+            crate::banner::banner_restart,
+            crate::banner::banner_dismiss,
+            crate::banner::banner_open,
+            crate::banner::banner_fit,
             crate::scan::scan_info,
             crate::scan::scan_devices,
             crate::scan::scan_capabilities,
@@ -548,6 +611,20 @@ pub fn run(
             // here, where only the instance that keeps running gets: a second
             // launch hands its arguments over without touching them.
             startup_scans.close(&desktop.paths);
+            // An update an earlier run downloaded installs now, before any
+            // window opens (update.rs, fastframe-update's policy), and the
+            // new version starts in its place. Only this instance gets here,
+            // and never right after an update was installed or rolled back.
+            if receipt.is_none()
+                && !desktop.updates.rolled_back()
+                && crate::update::install_kept(
+                    &desktop.paths,
+                    &desktop.client,
+                    !matches!(first_open, Open::Nothing),
+                )
+            {
+                std::process::exit(0);
+            }
             let handle = app.handle().clone();
             let _ = desktop.app.set(handle.clone());
             add_remote_capability(&handle, &desktop.server())?;

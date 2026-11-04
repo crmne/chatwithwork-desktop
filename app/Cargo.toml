@@ -48,7 +48,7 @@ tauri-plugin-dialog = "2"
 # fastframe-audio: on Linux it goes to PipeWire, then PulseAudio, then ALSA,
 # so building needs libpipewire's headers and clang, and the binary links
 # libpipewire-0.3.so.0.
-fastframe-audio = { version = "0.15.4", git = "https://github.com/crmne/fastframe", tag = "v0.15.4" }
+fastframe-audio = { version = "0.16.1", git = "https://github.com/crmne/fastframe", tag = "v0.16.1" }
 # The recorder's lock-free queue from the capture callback, which must not
 # wait.
 crossbeam-channel = "0.5"
@@ -59,11 +59,12 @@ jiff = "0.2"
 # Start at login in the tray: the XDG autostart entry on Linux, a login
 # item with the bundle's launch agent on macOS, the Run key on Windows. Same
 # release as fastframe-audio.
-fastframe-autostart = { version = "0.15.4", git = "https://github.com/crmne/fastframe", tag = "v0.15.4" }
+fastframe-autostart = { version = "0.16.1", git = "https://github.com/crmne/fastframe", tag = "v0.16.1" }
 # Updating the app by itself (update.rs): the daily check, refusing copies a
-# package manager owns, the signed download, and the helper that installs,
-# relaunches and rolls back. Same release as the other fastframe crates.
-fastframe-update = { version = "0.15.4", git = "https://github.com/crmne/fastframe", tag = "v0.15.4" }
+# package manager owns (and the command that updates them there), the signed
+# download, and the helper that installs, relaunches and rolls back. Same
+# release as the other fastframe crates.
+fastframe-update = { version = "0.16.1", git = "https://github.com/crmne/fastframe", tag = "v0.16.1" }
 # fastframe-update's transport, through the TLS roots and proxy cww uses.
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 # Native delivery for the supervisor's pipe-only notification broker.

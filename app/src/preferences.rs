@@ -664,6 +664,11 @@ pub fn close(app: &AppHandle, owner: &str) {
 /// Tauri currently packs Linux child webviews into GtkBox, where Wry ignores
 /// overlay bounds. Keep the managed webview/IPC isolation, but use GTK's own
 /// overlay layout for this one view. Other platforms use native child bounds.
+/// Places an app-owned child web view in its window (the update banner).
+pub fn place(child: &Webview, bounds: Rect) -> Result<(), String> {
+    place_child(child, bounds)
+}
+
 fn place_child(child: &Webview, bounds: Rect) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -711,6 +716,13 @@ fn place_child(child: &Webview, bounds: Rect) -> Result<(), String> {
                     view.set_margin_top(position.y);
                     view.set_size_request(size.width, size.height);
                     view.show();
+                    // Lay the overlay out now: a child placed after the
+                    // window last laid out gets no allocation until its next
+                    // frame, which a window on a hidden workspace never draws.
+                    view.queue_resize();
+                    if let Some(parent) = view.parent() {
+                        parent.size_allocate(&parent.allocation());
+                    }
                     Ok(())
                 })();
                 let _ = tx.send(result.map_err(str::to_string));
@@ -999,6 +1011,8 @@ fn standalone_now(app: &AppHandle, page: &str) -> tauri::Result<()> {
         view.set_vexpand(true);
         view.set_size_request(-1, -1);
     })?;
+    // The pane went over everything; the update banner goes back on top.
+    crate::banner::raise(app);
     window.show()?;
     window.set_focus()
 }

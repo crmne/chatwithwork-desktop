@@ -11,6 +11,21 @@ pub struct AppState {
     pub onboarded: bool,
     /// The first launch asked for notification permission (first_launch.rs).
     pub notifications_asked: bool,
+    /// The release whose update notice was dismissed (update.rs), for a
+    /// copy a package manager updates.
+    pub dismissed_update: Option<String>,
+    /// Install updates automatically: `None` is on, the default.
+    pub automatic_updates: Option<bool>,
+    /// The newest version that ever ran here: a person who went back to an
+    /// older one isn't updated past it on their behalf (update.rs).
+    pub newest_run: Option<String>,
+}
+
+impl AppState {
+    /// Whether updates install themselves, on unless turned off.
+    pub fn installs_updates(&self) -> bool {
+        self.automatic_updates.unwrap_or(true)
+    }
 }
 
 impl AppState {
@@ -19,6 +34,18 @@ impl AppState {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
+    }
+
+    /// Changes app.json under one lock, so two changes at once can't drop
+    /// either: loads it, applies `change`, and saves it.
+    pub fn update(paths: &Paths, change: impl FnOnce(&mut Self)) -> std::io::Result<()> {
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _writing = WRITING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = Self::load(paths);
+        change(&mut state);
+        state.save(paths)
     }
 
     pub fn save(&self, paths: &Paths) -> std::io::Result<()> {

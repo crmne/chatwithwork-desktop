@@ -25,6 +25,7 @@ mod agent;
 mod args;
 mod audio;
 mod autostart;
+mod banner;
 mod bridge;
 mod computer;
 mod control;
@@ -56,6 +57,7 @@ mod state;
 mod time;
 mod tray;
 mod update;
+mod update_notice;
 mod user_agent;
 mod windows;
 
