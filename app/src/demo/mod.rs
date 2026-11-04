@@ -430,7 +430,11 @@ fn sample() -> State {
             json!({"enabled":true,"changes":false,"stopped":false,
                 "ask_before_actions":true,"sites":["github.com","example.com"],"all_sites":false,"blocked_sites":[],"bots":[],
                 "extension":{"browser":"Chromium","version":"0.1.2","site_policy_version":2,"stopped":false}})
-        } else { Value::Null },
+        } else {
+            // The browser off, as a real daemon says it (null isn't a status).
+            json!({"enabled":false,"changes":false,"stopped":false,"ask_before_actions":true,
+                "sites":[],"all_sites":false,"blocked_sites":[],"bots":[],"extension":null})
+        },
         "paused": false,
         // A bot waiting for this computer's yes to run commands unattended
         // (`CWW_DEMO_UNATTENDED=1`), for pictures of the app's dialog.
