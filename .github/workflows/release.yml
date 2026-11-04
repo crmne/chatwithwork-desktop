@@ -669,8 +669,8 @@ jobs:
           set -euo pipefail
           gem install native-packages --version 0.12.0 --no-document
           mkdir -p appimages
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir appimages \
-            --pattern checksums.txt --pattern checksums.txt.sig --pattern '*.AppImage'
+          # Every file checksums.txt lists: signing it hashes each of them.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir appimages
           cd appimages
           if ! bash ../packaging/verify-checksums.sh .; then
             # A run that stopped between uploading checksums.txt and its
