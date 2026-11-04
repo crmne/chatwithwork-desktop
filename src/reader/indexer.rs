@@ -173,6 +173,7 @@ impl Indexer {
                             watcher: None,
                             last_rewatch: None,
                             rewatch_pending: false,
+                            last_recheck: Instant::now(),
                             pending: HashMap::new(),
                             burst: None,
                             last_full: Instant::now(),
@@ -287,6 +288,9 @@ struct Worker {
     watcher: Option<Watches>,
     /// When lost events last rebuilt the watches.
     last_rewatch: Option<Instant>,
+    /// When the watches were last rebuilt and everything rescanned for
+    /// [`RECHECK_EVERY`]: its own clock, which searches don't reset.
+    last_recheck: Instant,
     /// Events were lost too soon after the last rebuild: rebuild once
     /// [`REWATCH_AFTER`] has passed.
     rewatch_pending: bool,
@@ -354,7 +358,8 @@ impl Worker {
                         self.note_burst();
                         continue;
                     }
-                    if self.burst.is_none() && self.last_full.elapsed() >= RECHECK_EVERY {
+                    if self.burst.is_none() && self.last_recheck.elapsed() >= RECHECK_EVERY {
+                        self.last_recheck = Instant::now();
                         if self.settings.watch {
                             self.rewatch();
                         }
@@ -405,7 +410,7 @@ impl Worker {
             return Some(quiet.min(cap));
         }
         if self.settings.roots.iter().all(|r| self.watched(&r.id)) {
-            return Some(RECHECK_EVERY.saturating_sub(self.last_full.elapsed()));
+            return Some(RECHECK_EVERY.saturating_sub(self.last_recheck.elapsed()));
         }
         Some(
             self.settings
