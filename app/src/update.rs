@@ -10,8 +10,11 @@
 //! starts the new version and puts the old one back if that doesn't start.
 //!
 //! A copy a package manager owns never replaces itself (Homebrew, the AUR,
-//! .deb and .rpm, Nix, the Mac's .pkg); the settings say which tool updates
-//! it. WinGet installs the Windows installer's own package, so that copy
+//! .deb and .rpm, Nix, Flatpak, the Mac's .pkg), nor does an AppImage whose
+//! release doesn't sign it. It still hears of each release once its signed
+//! `checksums.txt` verifies (`Updater::verify`): General and the tray show
+//! one notice per version, with the command for how it was installed
+//! (update_notice.rs). WinGet installs the Windows installer's own package, so that copy
 //! updates itself like any other, and `winget upgrade` still works. The Linux archive carries `cww`
 //! beside the app and the updater replaces one program, so a copy from the
 //! one-line installer is told to run it again instead.
@@ -30,6 +33,8 @@ use fastframe_update::{
     Source, Transport, Unsupported, UpdateConfig, Updater,
 };
 use serde_json::{Value, json};
+
+use crate::update_notice::Notice;
 
 /// The version this binary was built as.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,6 +74,11 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
         legacy_bundle_names: &[],
     },
     publisher_key: Some(PUBLIC_KEY.trim_ascii()),
+    // native-packages names the AppImage after the package:
+    // chatwithwork-desktop-X.Y.Z-<arch>.AppImage. AppImages update
+    // themselves once a release lists it in the signed checksums.txt;
+    // until then they get the notice (update_notice.rs).
+    appimage_name: Some("chatwithwork-desktop"),
     ..UpdateConfig::new(
         "crmne/chatwithwork-desktop",
         "Chat with Work",
@@ -96,16 +106,39 @@ pub fn version_line() -> String {
 /// only). The signature is required either way.
 fn updater() -> Updater {
     let updater = Updater::new(CONFIG, UreqTransport);
-    match std::env::var("CWW_UPDATE_FEED") {
-        Ok(feed) => match Source::local(&feed) {
-            Ok(source) => updater.with_source(source),
-            Err(e) => {
-                log::warn!("ignoring CWW_UPDATE_FEED: {e:#}");
-                updater
-            }
-        },
-        Err(_) => updater,
+    match local_feed() {
+        Some(source) => updater.with_source(source),
+        None => updater,
     }
+}
+
+fn local_feed() -> Option<Source> {
+    let feed = std::env::var("CWW_UPDATE_FEED").ok()?;
+    Source::local(&feed)
+        .inspect_err(|e| log::warn!("ignoring CWW_UPDATE_FEED: {e:#}"))
+        .ok()
+}
+
+/// The release's page, for its notes: the tag's page on GitHub, which the
+/// app builds from the version rather than taking from the listing.
+fn notes(release: &Release) -> String {
+    if local_feed().is_some() {
+        release.url.clone()
+    } else {
+        format!(
+            "https://github.com/{}/releases/tag/v{}",
+            CONFIG.repository, release.version
+        )
+    }
+}
+
+/// Only `X.Y.Z`: the notice puts the version into file names and commands.
+fn plain_version(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.len() <= 9 && part.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// fastframe-update's transport over ureq, with the TLS roots and proxy the
@@ -198,13 +231,9 @@ pub fn advice(reason: &Unsupported) -> String {
 /// The Mac's .pkg installs `cww` into /usr/local/bin as root, beside the
 /// app; replacing only the app would leave that one behind, so a Mac with
 /// the package's receipt updates with the next package instead.
-fn installed_by_pkg() -> Option<String> {
-    (cfg!(target_os = "macos")
-        && std::path::Path::new("/var/db/receipts/com.chatwithwork.cww.plist").exists())
-    .then(|| {
-        "Installed with the .pkg installer: install the new version's .pkg from the release page."
-            .into()
-    })
+fn installed_by_pkg() -> bool {
+    cfg!(target_os = "macos")
+        && std::path::Path::new("/var/db/receipts/com.chatwithwork.cww.plist").exists()
 }
 
 /// Where updating stands, for the settings page and the tray.
@@ -215,10 +244,10 @@ enum Phase {
     Checking,
     /// The latest release is this one.
     Current,
-    /// A newer release this copy can't install itself.
+    /// A newer, verified release this copy can't install itself.
     Unsupported {
         release: Release,
-        advice: String,
+        notice: Notice,
     },
     Downloading {
         release: Release,
@@ -255,9 +284,13 @@ impl Phase {
             Self::Idle => json!({ "phase": "idle" }),
             Self::Checking => json!({ "phase": "checking" }),
             Self::Current => json!({ "phase": "current" }),
-            Self::Unsupported { advice, .. } => {
-                json!({ "phase": "unsupported", "release": release, "advice": advice })
-            }
+            Self::Unsupported { notice, .. } => json!({
+                "phase": "unsupported",
+                "release": release,
+                "advice": notice.how,
+                "command": notice.command,
+                "download": notice.download,
+            }),
             Self::Downloading {
                 received, total, ..
             } => {
@@ -280,16 +313,20 @@ pub struct Updates {
     /// This launch is the previous version, put back after an update
     /// didn't start.
     rolled_back: bool,
+    /// The version whose notice was dismissed (app.json), so a copy that
+    /// can't update itself is told once per release.
+    dismissed: Mutex<Option<String>>,
     wake: Mutex<Option<Sender<()>>>,
 }
 
 impl Updates {
-    pub fn new(problem: Option<String>) -> Self {
+    pub fn new(problem: Option<String>, dismissed: Option<String>) -> Self {
         Self {
             phase: Mutex::new(Phase::Idle),
             checked_at: Mutex::new(None),
             rolled_back: problem.is_some(),
             problem: Mutex::new(problem),
+            dismissed: Mutex::new(dismissed),
             wake: Mutex::new(None),
         }
     }
@@ -297,6 +334,9 @@ impl Updates {
     /// What the settings show.
     pub fn view(&self) -> Value {
         let mut view = self.phase.lock().expect("update lock").view();
+        if view["phase"] == "unsupported" {
+            view["dismissed"] = json!(self.available().is_none());
+        }
         view["version"] = json!(VERSION);
         view["automatic"] = json!(true);
         view["checked_at"] = json!(
@@ -318,6 +358,26 @@ impl Updates {
         }
     }
 
+    /// A newer release this copy can't install, until its notice is
+    /// dismissed: the tray offers it.
+    pub fn available(&self) -> Option<String> {
+        let dismissed = self.dismissed.lock().expect("update lock").clone();
+        match &*self.phase.lock().expect("update lock") {
+            Phase::Unsupported { release, .. } if dismissed.as_ref() != Some(&release.version) => {
+                Some(release.version.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Dismisses the notice of the release it's showing, and returns that
+    /// version, for app.json.
+    pub fn dismiss(&self) -> Option<String> {
+        let version = self.available()?;
+        *self.dismissed.lock().expect("update lock") = Some(version.clone());
+        Some(version)
+    }
+
     /// Checks now, whatever the schedule.
     pub fn check_now(&self) {
         if let Some(wake) = &*self.wake.lock().expect("update lock") {
@@ -332,6 +392,30 @@ impl Updates {
     fn set(&self, phase: Phase, tell: &dyn Fn()) {
         *self.phase.lock().expect("update lock") = phase;
         tell();
+    }
+
+    /// A verified release this copy can't install: the notice, with the
+    /// command for how it was installed.
+    fn announce(
+        &self,
+        updater: &Updater,
+        release: Release,
+        reason: &Unsupported,
+        pkg: bool,
+        tell: &dyn Fn(),
+    ) {
+        let installed = crate::update_notice::detect(reason, pkg, updater.managed_update());
+        let notice = crate::update_notice::notice(
+            &installed,
+            &release.version,
+            std::env::consts::ARCH,
+            dirs::download_dir().as_deref(),
+        );
+        let release = Release {
+            url: notes(&release),
+            ..release
+        };
+        self.set(Phase::Unsupported { release, notice }, tell);
     }
 
     /// One check, and the download when this copy may install it.
@@ -361,16 +445,35 @@ impl Updates {
                 );
             }
         };
-        if let Some(advice) = installed_by_pkg() {
-            return self.set(Phase::Unsupported { release, advice }, tell);
-        }
-        if let Err(reason) = updater.installation() {
+        // Only a release whose checksums.txt verifies with the key compiled
+        // in, and lists a download of that version for this computer, is
+        // announced or downloaded.
+        let verified = match updater.verify(&release) {
+            Ok(verified) if plain_version(&release.version) => verified,
+            Ok(_) => {
+                log::warn!("not announcing {}: not a plain version", release.version);
+                return self.set(Phase::Current, tell);
+            }
+            Err(e) => {
+                log::warn!("not announcing {}: {e:#}", release.version);
+                return self.set(
+                    Phase::Failed(format!("Couldn't verify version {}.", release.version)),
+                    tell,
+                );
+            }
+        };
+        let pkg = installed_by_pkg();
+        let installable = if pkg {
+            Err(Unsupported::NotPortable)
+        } else {
+            updater.installable(&verified)
+        };
+        if let Err(reason) = installable {
             log::info!(
                 "update {} available; this copy can't install it: {reason:?}",
                 release.version
             );
-            let advice = advice(&reason);
-            return self.set(Phase::Unsupported { release, advice }, tell);
+            return self.announce(updater, release, &reason, pkg, tell);
         }
         log::info!("downloading update {}", release.version);
         self.set(
@@ -407,6 +510,14 @@ impl Updates {
                 },
                 tell,
             ),
+            Err(e) if e.downcast_ref::<Unsupported>().is_some() => {
+                let reason = e.downcast_ref::<Unsupported>().cloned().expect("checked");
+                log::info!(
+                    "update {} can't be installed here: {reason:?}",
+                    release.version
+                );
+                self.announce(updater, release, &reason, false, tell);
+            }
             Err(e) => {
                 log::warn!("update download failed: {e:#}");
                 self.set(
@@ -637,7 +748,7 @@ mod tests {
 
     #[test]
     fn the_view_says_where_updating_stands() {
-        let updates = Updates::new(Some("restored".into()));
+        let updates = Updates::new(Some("restored".into()), None);
         let view = updates.view();
         assert_eq!(view["phase"], "idle");
         assert_eq!(view["version"], VERSION);
@@ -649,5 +760,79 @@ mod tests {
         assert!(updates.restart(Vec::new()).is_err());
         *updates.phase.lock().unwrap() = Phase::Failed("offline".into());
         assert_eq!(updates.view()["error"], "offline");
+    }
+
+    fn unsupported(version: &str) -> Phase {
+        Phase::Unsupported {
+            release: Release {
+                version: version.into(),
+                url: format!(
+                    "https://github.com/crmne/chatwithwork-desktop/releases/tag/v{version}"
+                ),
+            },
+            notice: Notice {
+                how: "Installed from the AUR. Update it with your AUR helper.".into(),
+                command: Some("yay -Syu chatwithwork-desktop-bin".into()),
+                download: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_package_managers_release_is_announced_until_dismissed_once_per_version() {
+        let updates = Updates::new(None, Some("0.12.0".into()));
+        *updates.phase.lock().unwrap() = unsupported("0.12.0");
+        // Dismissed at an earlier launch.
+        assert_eq!(updates.available(), None);
+        assert_eq!(updates.view()["dismissed"], true);
+        assert_eq!(updates.dismiss(), None);
+        // The next release is announced again.
+        *updates.phase.lock().unwrap() = unsupported("0.13.0");
+        assert_eq!(updates.available().as_deref(), Some("0.13.0"));
+        let view = updates.view();
+        assert_eq!(view["phase"], "unsupported");
+        assert_eq!(view["dismissed"], false);
+        assert_eq!(view["release"]["version"], "0.13.0");
+        assert_eq!(view["command"], "yay -Syu chatwithwork-desktop-bin");
+        assert!(view["download"].is_null());
+        assert!(view["advice"].as_str().unwrap().contains("AUR"));
+        // Never Restart to Update for it.
+        assert!(updates.ready().is_none());
+        assert!(updates.restart(Vec::new()).is_err());
+        assert_eq!(updates.dismiss().as_deref(), Some("0.13.0"));
+        assert_eq!(updates.available(), None);
+        assert_eq!(updates.view()["dismissed"], true);
+    }
+
+    #[test]
+    fn a_downloaded_update_is_still_restart_to_update() {
+        // macOS and Windows: what the tray and General offer is unchanged.
+        let updates = Updates::new(None, None);
+        *updates.phase.lock().unwrap() = Phase::Installing {
+            release: Release {
+                version: "0.12.0".into(),
+                url: String::new(),
+            },
+        };
+        assert_eq!(updates.available(), None);
+        assert!(updates.view()["dismissed"].is_null());
+        assert_eq!(updates.dismiss(), None);
+    }
+
+    #[test]
+    fn only_plain_versions_reach_a_command() {
+        assert!(plain_version("0.12.0"));
+        assert!(plain_version("10.0.123"));
+        for bad in [
+            "0.12",
+            "0.12.0-beta.1",
+            "0.12.0;rm",
+            "v0.12.0",
+            "",
+            "0..1",
+            "1.2.3.4",
+        ] {
+            assert!(!plain_version(bad), "{bad}");
+        }
     }
 }

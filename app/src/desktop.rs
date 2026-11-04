@@ -118,11 +118,20 @@ impl Desktop {
     }
 
     /// An update's state changed: the settings hear it, and the tray
-    /// offers Restart to Update while one is ready.
+    /// offers Restart to Update while one is ready, or Update to X.Y.Z…
+    /// while a package manager has one this copy hasn't dismissed.
     pub fn update_changed(&self) {
         let app = self.app();
         crate::windows::tell_settings(&app, "update", self.updates.view());
         let ready = self.updates.ready();
+        let entry = ready
+            .clone()
+            .map(crate::tray::UpdateEntry::Restart)
+            .or_else(|| {
+                self.updates
+                    .available()
+                    .map(crate::tray::UpdateEntry::Available)
+            });
         // For end-to-end tests on machines driven over SSH, where nobody
         // clicks: install a downloaded, verified update at once.
         if ready.is_some() && std::env::var_os("CWW_UPDATE_INSTALL_WHEN_READY").is_some() {
@@ -133,7 +142,7 @@ impl Desktop {
         let _ = app.run_on_main_thread(move || {
             let desktop = tray_app.state::<Arc<Desktop>>();
             if let Some(tray) = desktop.tray.lock().expect("tray lock").as_mut() {
-                tray.set_update(&tray_app, ready.as_deref());
+                tray.set_update(&tray_app, entry);
             }
         });
     }
@@ -287,6 +296,12 @@ pub fn tray_action(app: &AppHandle, id: &str) {
             let desktop = desktop.clone();
             std::thread::spawn(move || desktop.restart_to_update());
         }
+        Some(Action::ShowUpdate) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = windows::show_settings(&app, Some("general"));
+            });
+        }
         Some(Action::Quit) => desktop.quit(),
         None => {}
     }
@@ -406,6 +421,8 @@ pub fn run(
         }
         other => other.clone(),
     };
+    // A newer release's notice, dismissed once per version.
+    let dismissed_update = crate::state::AppState::load(&paths).dismissed_update;
     let desktop = Arc::new(Desktop {
         app: OnceLock::new(),
         client: Client::new(paths.socket_path()),
@@ -425,7 +442,7 @@ pub fn run(
         preferences: Default::default(),
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
-        updates: Arc::new(crate::update::Updates::new(update_error)),
+        updates: Arc::new(crate::update::Updates::new(update_error, dismissed_update)),
     });
 
     let mut builder = tauri::Builder::default();
@@ -516,6 +533,7 @@ pub fn run(
             crate::local::update_status,
             crate::local::update_check,
             crate::local::update_restart,
+            crate::local::update_dismiss,
             crate::scan::scan_info,
             crate::scan::scan_devices,
             crate::scan::scan_capabilities,

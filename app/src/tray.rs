@@ -24,6 +24,7 @@ mod ids {
     pub const SCAN: &str = "scan";
     pub const QUIT: &str = "quit";
     pub const UPDATE: &str = "update";
+    pub const UPDATE_AVAILABLE: &str = "update-available";
 }
 
 /// The first line, as an action, while this computer has to sign in again.
@@ -32,6 +33,37 @@ pub const RECONNECT_LABEL: &str = "Reconnect…";
 /// The entry while an update waits for a restart.
 pub fn update_label(version: &str) -> String {
     format!("Restart to Update to {version}")
+}
+
+/// The entry while a newer release waits for a package manager: it opens
+/// General, which says how to update this copy.
+pub fn available_label(version: &str) -> String {
+    format!("Update to {version}…")
+}
+
+/// What the update entry above Quit offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateEntry {
+    /// Restart to Update: the app installs it.
+    Restart(String),
+    /// A package manager installs it: shows how.
+    Available(String),
+}
+
+impl UpdateEntry {
+    fn id(&self) -> &'static str {
+        match self {
+            Self::Restart(_) => ids::UPDATE,
+            Self::Available(_) => ids::UPDATE_AVAILABLE,
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Restart(version) => update_label(version),
+            Self::Available(version) => available_label(version),
+        }
+    }
 }
 
 pub const SCAN_LABEL: &str = "Scan…";
@@ -75,6 +107,7 @@ pub enum Action {
     Settings,
     Scan,
     RestartToUpdate,
+    ShowUpdate,
     Quit,
 }
 
@@ -87,6 +120,7 @@ pub fn action(id: &str) -> Option<Action> {
         ids::SETTINGS => Action::Settings,
         ids::SCAN => Action::Scan,
         ids::UPDATE => Action::RestartToUpdate,
+        ids::UPDATE_AVAILABLE => Action::ShowUpdate,
         ids::QUIT => Action::Quit,
         _ => return None,
     })
@@ -102,8 +136,9 @@ pub struct Tray {
     pause: MenuItem<tauri::Wry>,
     /// In the menu only while the browser is on, after Pause Sharing.
     browser: MenuItem<tauri::Wry>,
-    /// Restart to Update, just above Quit while an update is ready.
-    update: Option<(String, MenuItem<tauri::Wry>)>,
+    /// Restart to Update, or Update to X.Y.Z…, just above Quit while there
+    /// is one.
+    update: Option<(UpdateEntry, MenuItem<tauri::Wry>)>,
     view: TrayView,
 }
 
@@ -236,20 +271,18 @@ impl Tray {
         })
     }
 
-    /// Offers Restart to Update for `version`, or takes the entry away.
-    pub fn set_update(&mut self, app: &AppHandle, version: Option<&str>) {
-        if self.update.as_ref().map(|(v, _)| v.as_str()) == version {
+    /// Offers `entry` above Quit, or takes the entry away.
+    pub fn set_update(&mut self, app: &AppHandle, entry: Option<UpdateEntry>) {
+        if self.update.as_ref().map(|(e, _)| e) == entry.as_ref() {
             return;
         }
         if let Some((_, item)) = self.update.take() {
             let _ = self.menu.remove(&item);
         }
-        let Some(version) = version else {
+        let Some(entry) = entry else {
             return;
         };
-        let Ok(item) =
-            MenuItem::with_id(app, ids::UPDATE, update_label(version), true, None::<&str>)
-        else {
+        let Ok(item) = MenuItem::with_id(app, entry.id(), entry.label(), true, None::<&str>) else {
             return;
         };
         // Just above Quit, the last entry.
@@ -258,7 +291,7 @@ impl Tray {
             .items()
             .map_or(0, |items| items.len().saturating_sub(1));
         if self.menu.insert(&item, position).is_ok() {
-            self.update = Some((version.to_owned(), item));
+            self.update = Some((entry, item));
         }
     }
 
@@ -353,6 +386,14 @@ mod tests {
         assert_eq!(action("quit"), Some(Action::Quit));
         assert_eq!(action("update"), Some(Action::RestartToUpdate));
         assert_eq!(update_label("0.7.0"), "Restart to Update to 0.7.0");
+        assert_eq!(action("update-available"), Some(Action::ShowUpdate));
+        assert_eq!(available_label("0.7.0"), "Update to 0.7.0…");
+        let available = UpdateEntry::Available("0.7.0".into());
+        assert_eq!(action(available.id()), Some(Action::ShowUpdate));
+        assert_eq!(available.label(), "Update to 0.7.0…");
+        let restart = UpdateEntry::Restart("0.7.0".into());
+        assert_eq!(action(restart.id()), Some(Action::RestartToUpdate));
+        assert_eq!(restart.label(), "Restart to Update to 0.7.0");
         assert_eq!(action("headline"), Some(Action::Reconnect));
         assert_eq!(action("detail"), None);
         assert_eq!(pause_label(true), "Resume Sharing");

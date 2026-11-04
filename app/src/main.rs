@@ -56,6 +56,7 @@ mod state;
 mod time;
 mod tray;
 mod update;
+mod update_notice;
 mod user_agent;
 mod windows;
 

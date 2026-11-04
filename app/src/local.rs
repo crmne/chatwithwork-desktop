@@ -769,6 +769,22 @@ pub fn update_check(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answe
     Ok(desktop.updates.view())
 }
 
+/// Hides the notice of the release a package manager has for this copy,
+/// in General and the tray, until a newer one is out.
+#[tauri::command]
+pub fn update_dismiss(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+    local_page(&webview)?;
+    if let Some(version) = desktop.updates.dismiss() {
+        let mut state = crate::state::AppState::load(&desktop.paths);
+        state.dismissed_update = Some(version);
+        if let Err(e) = state.save(&desktop.paths) {
+            log::warn!("couldn't save the dismissed update: {e}");
+        }
+        desktop.update_changed();
+    }
+    Ok(desktop.updates.view())
+}
+
 /// Hands the downloaded update to its helper and quits.
 #[tauri::command]
 pub fn update_restart(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {

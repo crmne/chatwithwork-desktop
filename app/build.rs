@@ -50,6 +50,7 @@ const COMMANDS: &[&str] = &[
     "update_status",
     "update_check",
     "update_restart",
+    "update_dismiss",
     // The scan window (scan.rs).
     "scan_info",
     "scan_devices",

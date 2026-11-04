@@ -11,6 +11,9 @@ pub struct AppState {
     pub onboarded: bool,
     /// The first launch asked for notification permission (first_launch.rs).
     pub notifications_asked: bool,
+    /// The release whose update notice was dismissed (update.rs), for a
+    /// copy a package manager updates.
+    pub dismissed_update: Option<String>,
 }
 
 impl AppState {

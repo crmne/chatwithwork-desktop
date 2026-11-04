@@ -33,6 +33,7 @@
     "allow-update-status",
     "allow-update-check",
     "allow-update-restart",
+    "allow-update-dismiss",
     "allow-remove-model"
   ]
 }

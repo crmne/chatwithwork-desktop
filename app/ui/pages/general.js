@@ -1,7 +1,7 @@
 // Start at login, pausing, crash reports, dictation for `cww tui`, the
 // background agent and where its files are, and about.
 
-import { agentMissing, append, button, call, control, group, h, notice, pageHeader, row, section, switchInput } from "../app.js";
+import { agentMissing, append, button, call, control, group, h, icon as glyph, notice, pageHeader, row, section, switchInput } from "../app.js";
 import { displayPath } from "./folders.js";
 
 export const title = "General";
@@ -188,10 +188,54 @@ function updateText(u) {
   }
 }
 
-function updatesSection(app) {
+// A newer release a package manager installs, until it's dismissed: how
+// this copy was installed, the command that updates it (copied, never run
+// here), the file to download when it needs one, and the release notes.
+export function updateNotice(app, u) {
+  const view = app.view("general");
+  const release = u.release?.version;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(u.command);
+      view.copied = u.command;
+      app.render();
+      setTimeout(() => {
+        view.copied = null;
+        app.render();
+      }, 1500);
+    } catch {}
+  };
+  return h("div", { class: "row row--stack update-notice", role: "status", "data-key": "update-notice" },
+    h("div", { class: "row__head" },
+      h("div", { class: "row__body" },
+        h("h3", {}, `Version ${release} is available`),
+        h("p", {}, `You have ${u.version}. ${u.advice}`)),
+      h("button", { type: "button", class: "btn btn-ghost btn-icon", "aria-label": "Dismiss", title: "Dismiss", "data-key": "update-dismiss",
+        onclick: async () => {
+          try {
+            view.update = await call("update_dismiss");
+          } catch (error) {
+            view.updateError = error.message;
+          }
+          app.render();
+        } }, glyph("x"))),
+    u.command ? h("div", { class: "command" },
+      h("code", { "aria-label": "Command" }, u.command),
+      button([glyph(view.copied === u.command ? "check" : "copy"), view.copied === u.command ? "Copied" : "Copy"], copy, { key: "update-copy" })) : null,
+    h("div", { class: "inline" },
+      u.download ? button([glyph("download-simple"), "Download"], () => call("open_url", { url: u.download }), { key: "update-download" }) : null,
+      button("Release Notes", () => call("open_url", { url: u.release?.url || u.releases }), { key: "update-notes" })));
+}
+
+export function updatesSection(app) {
   const view = app.view("general");
   const u = view.update;
   if (!u) return null;
+  if (u.phase === "unsupported" && !u.dismissed) {
+    return section("Updates", null,
+      group(updateNotice(app, u)),
+      view.updateError ? notice(view.updateError) : null);
+  }
   const busy = ["checking", "downloading", "installing"].includes(u.phase);
   const action = u.phase === "ready"
     ? button("Restart to Update", async () => {

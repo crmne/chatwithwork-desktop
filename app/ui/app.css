@@ -794,6 +794,44 @@ code,
   max-inline-size: 30rem;
 }
 
+/* A newer release a package manager installs: the command to run there,
+   copied with its button */
+
+.btn-icon {
+  inline-size: 2rem;
+  padding: 0;
+  color: var(--ink-muted);
+}
+
+.btn-icon:hover {
+  color: var(--ink);
+}
+
+.btn svg {
+  inline-size: 1rem;
+  block-size: 1rem;
+  flex-shrink: 0;
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.command code {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0.4375rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background-color: var(--canvas-sunken);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* The pairing code */
 
 .code {
