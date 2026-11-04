@@ -115,27 +115,30 @@ impl Asker {
     }
 }
 
-/// The config as setup last read or wrote it. Setup waits on people,
-/// browsers and clones; if the file changed meanwhile (a folder unshared,
-/// commands turned off), saving its older copy would put back what was
-/// taken away, so it stops instead.
-static LAST_SEEN: std::sync::Mutex<Option<Config>> = std::sync::Mutex::new(None);
+thread_local! {
+    /// The config as this setup last read or wrote it. Setup waits on
+    /// people, browsers and clones; if the file changed meanwhile (a folder
+    /// unshared, commands turned off), saving its older copy would put back
+    /// what was taken away, so it stops instead. One per thread, so two
+    /// setups never share a snapshot.
+    static LAST_SEEN: std::cell::RefCell<Option<Config>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Forget the snapshot when setup ends, however it ends.
 struct Reset;
 
 impl Drop for Reset {
     fn drop(&mut self) {
-        *LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        LAST_SEEN.with(|last| *last.borrow_mut() = None);
     }
 }
 
 fn seen(config: &Config) {
-    *LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(config.clone());
+    LAST_SEEN.with(|last| *last.borrow_mut() = Some(config.clone()));
 }
 
 fn save(config: &Config, paths: &Paths) -> Result<()> {
-    let last = LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let last = LAST_SEEN.with(|last| last.borrow().clone());
     if let Some(last) = last
         && Config::load(paths)? != last
     {
@@ -906,64 +909,34 @@ fn check(
     let deadline = Instant::now() + limit;
     let mut output = String::new();
     let mut offset = 0u64;
+    // Follow its output until it says it's done (the run ended and all it
+    // printed was read), then ask how it ended, once.
     loop {
-        if let Some(chunk) = control::request(
-            &paths.socket_path(),
-            ControlRequest::CommandOutput {
-                run: id.clone(),
-                offset,
-                max: None,
-            },
-        )? {
-            offset = chunk["next_offset"].as_u64().unwrap_or(offset);
+        let mut done = false;
+        // Everything printed so far, a chunk at a time.
+        for _ in 0..4096 {
+            let Some(chunk) = control::request(
+                &paths.socket_path(),
+                ControlRequest::CommandOutput {
+                    run: id.clone(),
+                    offset,
+                    max: None,
+                },
+            )?
+            else {
+                break;
+            };
+            let next = chunk["next_offset"].as_u64().unwrap_or(offset);
             output.push_str(chunk["text"].as_str().unwrap_or_default());
             keep_tail(&mut output);
-        }
-        let list =
-            control::request(&paths.socket_path(), ControlRequest::Commands)?.unwrap_or_default();
-        let runs = list
-            .get("commands")
-            .cloned()
-            .unwrap_or(list)
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let status = runs.iter().find(|r| r["id"] == Value::String(id.clone()));
-        let state = status
-            .and_then(|s| s["state"].as_str())
-            .unwrap_or("running")
-            .to_string();
-        if state != "running" {
-            // Everything it printed since, a chunk at a time, to its end:
-            // the failure is usually last.
-            for _ in 0..4096 {
-                let Some(chunk) = control::request(
-                    &paths.socket_path(),
-                    ControlRequest::CommandOutput {
-                        run: id.clone(),
-                        offset,
-                        max: None,
-                    },
-                )?
-                else {
-                    break;
-                };
-                let next = chunk["next_offset"].as_u64().unwrap_or(offset);
-                output.push_str(chunk["text"].as_str().unwrap_or_default());
-                if chunk["done"] == true || next <= offset {
-                    break;
-                }
-                offset = next;
+            done = chunk["done"] == true;
+            if done || next <= offset {
+                break;
             }
-            let error = status
-                .and_then(|s| s["error"].as_str())
-                .map(|e| format!("\n{e}"))
-                .unwrap_or_default();
-            return Ok((
-                state,
-                status.and_then(|s| s["exit_code"].as_i64()),
-                output + &error,
-            ));
+            offset = next;
+        }
+        if done {
+            break;
         }
         if Instant::now() >= deadline {
             let _ = control::request(
@@ -974,6 +947,29 @@ fn check(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    let list =
+        control::request(&paths.socket_path(), ControlRequest::Commands)?.unwrap_or_default();
+    let runs = list
+        .get("commands")
+        .cloned()
+        .unwrap_or(list)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let status = runs.iter().find(|r| r["id"] == Value::String(id.clone()));
+    let state = status
+        .and_then(|s| s["state"].as_str())
+        .unwrap_or("exited")
+        .to_string();
+    let error = status
+        .and_then(|s| s["error"].as_str())
+        .map(|e| format!("\n{e}"))
+        .unwrap_or_default();
+    Ok((
+        state,
+        status.and_then(|s| s["exit_code"].as_i64()),
+        output + &error,
+    ))
 }
 
 /// Keep only the last 256 KiB of what a check printed: only its end shows.
@@ -1091,12 +1087,7 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
             if only_bot.is_some_and(|b| b != loan.id) {
                 continue;
             }
-            let state = super::claude_state(&config.coding, root, &loan.id);
-            let state = if state == ClaudeState::Ready && !stored {
-                ClaudeState::NotSignedIn
-            } else {
-                state
-            };
+            let state = effective_state(&config.coding, root, &loan.id, stored);
             println!(
                 "Bot {}{} in {}: {}{}",
                 loan.id,
@@ -1133,6 +1124,20 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     }
 }
 
+/// The state as a run would find it: ready only when the token can be read
+/// from the store, whatever the config says.
+fn effective_state(
+    coding: &crate::config::CodingConfig,
+    root: &crate::config::Root,
+    bot: &str,
+    stored: bool,
+) -> ClaudeState {
+    match super::claude_state(coding, root, bot) {
+        ClaudeState::Ready if !stored => ClaudeState::NotSignedIn,
+        state => state,
+    }
+}
+
 /// What `cww coding status --json` prints: per loan, the state the server
 /// would see, and per repository, its fetch. No token, ever.
 pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Value {
@@ -1150,7 +1155,7 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
                         "bot": loan.id,
                         "name": loan.name,
                         "unattended": loan.unattended,
-                        "claude_code": super::claude_state(&config.coding, root, &loan.id).name(),
+                        "claude_code": effective_state(&config.coding, root, &loan.id, stored).name(),
                     })
                 })
         })
