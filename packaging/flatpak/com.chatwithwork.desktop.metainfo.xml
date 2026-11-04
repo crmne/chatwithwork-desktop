@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.chatwithwork.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Chat with Work</name>
+  <summary>Chat with Work in a window, and share the folders you choose</summary>
+  <developer id="is.plenty">
+    <name>Plenty</name>
+  </developer>
+  <description>
+    <p>Chat with Work Desktop is the open-source desktop app for Chat with Work: Chat with Work in a window of its own, and a background agent (cww) that lets your chats and bots read, and with your approval change, files in the folders you share on this computer, and nothing else.</p>
+    <p>Only the folders you share are readable, and secrets such as SSH keys and .env files stay private even inside them. The agent opens one outbound connection, keeps its search index on this computer, and writes every request to a local log.</p>
+  </description>
+  <launchable type="desktop-id">com.chatwithwork.desktop.desktop</launchable>
+  <url type="homepage">https://chatwithwork.com</url>
+  <url type="bugtracker">https://github.com/crmne/chatwithwork-desktop/issues</url>
+  <url type="vcs-browser">https://github.com/crmne/chatwithwork-desktop</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.11.0" date="2026-11-02"/>
+  </releases>
+</component>

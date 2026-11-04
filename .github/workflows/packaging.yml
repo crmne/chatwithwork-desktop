@@ -124,6 +124,7 @@ jobs:
           bash packaging/linux/archive.sh "target/${{ matrix.target }}/release/cww" \
             "target/${{ matrix.app-target }}/release/cww-app" "$VERSION" "${{ matrix.app-target }}" dist \
             "target/${{ matrix.app-target }}/release/browser-engine"
+          bash packaging/flatpak/appindicator.sh "${{ matrix.app-target }}" "dist/flatpak-libs/${{ matrix.app-target }}"
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             git archive --format=tar.gz --prefix="chatwithwork-desktop-${VERSION}/" \
               -o "dist/chatwithwork-desktop-${VERSION}.tar.gz" HEAD
@@ -138,6 +139,49 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # A release's inputs: its published files, checked against checksums.txt
+  # and that file's signature, plus the Flatpak's tray libraries, which
+  # aren't release assets (packaging/flatpak/appindicator.sh). The shared
+  # workflow then builds from these as it does for a commit.
+  release-inputs:
+    if: inputs.version != ''
+    name: release inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download and verify the release's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="${VERSION#v}"
+          mkdir -p dist
+          gh release download "v$version" --repo "${{ github.repository }}" --dir dist \
+            --pattern checksums.txt --pattern checksums.txt.sig \
+            --pattern "cww-app-v$version-*-unknown-linux-gnu.tar.gz" \
+            --pattern "cww-v$version-*-unknown-linux-musl.tar.gz" \
+            --pattern "cww-v$version-macos-universal.tar.gz" \
+            --pattern "chat-with-work-v$version-macos-universal.dmg" \
+            --pattern "cww-v$version-*-pc-windows-msvc.msi"
+          bash packaging/verify-checksums.sh dist
+          (cd dist && grep -v -E '\.(deb|rpm)$' checksums.txt | sha256sum -c --ignore-missing -)
+          for file in dist/cww-* dist/chat-with-work-*; do
+            grep -q " $(basename "$file")$" dist/checksums.txt || { echo "::error::$file isn't in checksums.txt"; exit 1; }
+          done
+          curl -fsSL -o "dist/chatwithwork-desktop-$version.tar.gz" \
+            "https://github.com/${{ github.repository }}/archive/refs/tags/v$version.tar.gz"
+      - name: Stage the Flatpak's tray libraries
+        run: |
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            bash packaging/flatpak/appindicator.sh "$target" "dist/flatpak-libs/$target"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packaging-inputs
+          path: dist/
+          if-no-files-found: error
+
   # The shared workflow downloads one artifact, so merge the two.
   merge-inputs:
     if: inputs.version == ''
@@ -150,15 +194,15 @@ jobs:
           pattern: packaging-inputs-*
 
   packaging:
-    if: always() && (inputs.version != '' || needs.merge-inputs.result == 'success')
-    needs: [inputs, merge-inputs]
+    if: always() && (needs.release-inputs.result == 'success' || needs.merge-inputs.result == 'success')
+    needs: [inputs, merge-inputs, release-inputs]
     permissions:
       contents: write
-    uses: crmne/native-packages/.github/workflows/package.yml@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
+    uses: crmne/native-packages/.github/workflows/package.yml@51500464793687a52be65abb1b4dfc23639e3f48 # v0.12.0
     with:
       targets: linux-amd64,linux-arm64
       version: ${{ inputs.version || needs.inputs.outputs.version }}
-      source-artifact: ${{ inputs.version == '' && 'packaging-inputs' || '' }}
+      source-artifact: packaging-inputs
       publish: ${{ inputs.publish == true && inputs.version != '' }}
     secrets: inherit
 
