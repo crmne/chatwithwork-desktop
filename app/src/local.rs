@@ -774,14 +774,7 @@ pub fn update_check(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answe
 #[tauri::command]
 pub fn update_dismiss(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
     local_page(&webview)?;
-    if let Some(version) = desktop.updates.dismiss() {
-        let mut state = crate::state::AppState::load(&desktop.paths);
-        state.dismissed_update = Some(version);
-        if let Err(e) = state.save(&desktop.paths) {
-            log::warn!("couldn't save the dismissed update: {e}");
-        }
-        desktop.update_changed();
-    }
+    desktop.dismiss_update();
     Ok(desktop.updates.view())
 }
 

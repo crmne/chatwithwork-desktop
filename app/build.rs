@@ -51,6 +51,12 @@ const COMMANDS: &[&str] = &[
     "update_check",
     "update_restart",
     "update_dismiss",
+    // The update banner in the Chat with Work window (banner.rs).
+    "banner_state",
+    "banner_restart",
+    "banner_dismiss",
+    "banner_open",
+    "banner_fit",
     // The scan window (scan.rs).
     "scan_info",
     "scan_devices",

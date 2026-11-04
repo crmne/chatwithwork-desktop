@@ -214,6 +214,37 @@ pub fn run(app: AppHandle, dir: PathBuf) {
             }
             continue;
         }
+        // `banner`: the update banner over the window, as it is now.
+        if page == "banner" {
+            match app.get_webview(crate::banner::LABEL) {
+                Some(banner) => {
+                    // Drawn again in the theme: a hidden window runs no
+                    // transitions, so restyled elements would keep the old one.
+                    let _ = banner.eval(format!(
+                        "document.documentElement.style.colorScheme = {}; window.cwwEvent('update')",
+                        serde_json::json!(theme)
+                    ));
+                    std::thread::sleep(Duration::from_millis(1500));
+                    #[cfg(target_os = "linux")]
+                    let _ = banner.with_webview(|handle| {
+                        use gtk::prelude::*;
+                        let view = handle.inner();
+                        println!(
+                            "banner GTK: allocation={:?}, request={:?}",
+                            view.allocation(),
+                            view.size_request()
+                        );
+                    });
+                    let path = dir.join(format!("banner-{theme}.png"));
+                    match capture(&banner, &path) {
+                        Ok(()) => println!("{}", path.display()),
+                        Err(e) => log::error!("snapshot of the banner: {e}"),
+                    }
+                }
+                None => println!("banner: absent"),
+            }
+            continue;
+        }
         // `scan`, then `scan:<step>`: the scan window, with each step played
         // in the page itself (no input reaches the system).
         if let Some(step) = page.strip_prefix("scan") {

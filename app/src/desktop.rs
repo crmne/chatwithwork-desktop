@@ -138,6 +138,9 @@ impl Desktop {
             let desktop = app.state::<Arc<Desktop>>().inner().clone();
             std::thread::spawn(move || desktop.restart_to_update());
         }
+        let banner_app = app.clone();
+        let banner = self.updates.banner();
+        std::thread::spawn(move || crate::banner::sync(&banner_app, banner));
         let tray_app = app.clone();
         let _ = app.run_on_main_thread(move || {
             let desktop = tray_app.state::<Arc<Desktop>>();
@@ -145,6 +148,19 @@ impl Desktop {
                 tray.set_update(&tray_app, entry);
             }
         });
+    }
+
+    /// Hides the notice and banner of the release they show until the next
+    /// version, remembered in app.json.
+    pub fn dismiss_update(&self) {
+        if let Some(version) = self.updates.dismiss() {
+            let mut state = crate::state::AppState::load(&self.paths);
+            state.dismissed_update = Some(version);
+            if let Err(e) = state.save(&self.paths) {
+                log::warn!("couldn't save the dismissed update: {e}");
+            }
+            self.update_changed();
+        }
     }
 
     /// Installs the downloaded update: its helper waits for the app to
@@ -534,6 +550,11 @@ pub fn run(
             crate::local::update_check,
             crate::local::update_restart,
             crate::local::update_dismiss,
+            crate::banner::banner_state,
+            crate::banner::banner_restart,
+            crate::banner::banner_dismiss,
+            crate::banner::banner_open,
+            crate::banner::banner_fit,
             crate::scan::scan_info,
             crate::scan::scan_devices,
             crate::scan::scan_capabilities,

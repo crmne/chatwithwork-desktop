@@ -370,12 +370,56 @@ impl Updates {
         }
     }
 
-    /// Dismisses the notice of the release it's showing, and returns that
-    /// version, for app.json.
+    /// Dismisses the notice of the release it's showing (and its banner),
+    /// and returns that version, for app.json. A downloaded update's banner
+    /// goes too; the tray and General still offer Restart to Update.
     pub fn dismiss(&self) -> Option<String> {
-        let version = self.available()?;
+        let version = self.banner_version()?;
         *self.dismissed.lock().expect("update lock") = Some(version.clone());
         Some(version)
+    }
+
+    /// The release the banner shows: one waiting for Restart to Update or
+    /// for a package manager, until it's dismissed.
+    fn banner_version(&self) -> Option<String> {
+        let dismissed = self.dismissed.lock().expect("update lock").clone();
+        match &*self.phase.lock().expect("update lock") {
+            Phase::Ready { release, .. } | Phase::Unsupported { release, .. }
+                if dismissed.as_ref() != Some(&release.version) =>
+            {
+                Some(release.version.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// What the banner in the Chat with Work window shows, or `None` to
+    /// hide it.
+    pub fn banner(&self) -> Option<Value> {
+        self.banner_version()?;
+        let mut view = self.view();
+        view["kind"] = json!(if view["phase"] == "ready" {
+            "restart"
+        } else {
+            "notice"
+        });
+        // A picture of the Restart to Update card in --demo builds, which
+        // can't download a real update (`CWW_DEMO_BANNER=restart`).
+        #[cfg(feature = "demo")]
+        if std::env::var("CWW_DEMO_BANNER").as_deref() == Ok("restart") {
+            view["kind"] = json!("restart");
+        }
+        Some(view)
+    }
+
+    /// A link the banner may open: the release notes, or the file a
+    /// package install downloads. Never a link the page names.
+    pub fn banner_link(&self, which: &str) -> Option<String> {
+        match (&*self.phase.lock().expect("update lock"), which) {
+            (Phase::Unsupported { notice, .. }, "download") => notice.download.clone(),
+            (phase, "notes") => phase.release().map(|release| release.url.clone()),
+            _ => None,
+        }
     }
 
     /// Checks now, whatever the schedule.
@@ -802,6 +846,25 @@ mod tests {
         assert_eq!(updates.dismiss().as_deref(), Some("0.13.0"));
         assert_eq!(updates.available(), None);
         assert_eq!(updates.view()["dismissed"], true);
+    }
+
+    #[test]
+    fn the_banner_offers_restart_or_the_notice_until_dismissed() {
+        let updates = Updates::new(None, None);
+        assert!(updates.banner().is_none());
+        *updates.phase.lock().unwrap() = unsupported("0.13.0");
+        let banner = updates.banner().unwrap();
+        assert_eq!(banner["kind"], "notice");
+        assert_eq!(banner["command"], "yay -Syu chatwithwork-desktop-bin");
+        assert_eq!(
+            updates.banner_link("notes").as_deref(),
+            Some("https://github.com/crmne/chatwithwork-desktop/releases/tag/v0.13.0")
+        );
+        assert_eq!(updates.banner_link("download"), None);
+        assert_eq!(updates.banner_link("https://example.com"), None);
+        assert_eq!(updates.dismiss().as_deref(), Some("0.13.0"));
+        assert!(updates.banner().is_none());
+        assert!(updates.available().is_none());
     }
 
     #[test]

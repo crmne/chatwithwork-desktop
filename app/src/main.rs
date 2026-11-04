@@ -25,6 +25,7 @@ mod agent;
 mod args;
 mod audio;
 mod autostart;
+mod banner;
 mod bridge;
 mod computer;
 mod control;
