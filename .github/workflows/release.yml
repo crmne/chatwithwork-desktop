@@ -630,3 +630,61 @@ jobs:
     with:
       version: ${{ github.ref_name }}
     secrets: inherit
+
+  # packaging.yml builds the AppImages from the published archives, after
+  # checksums.txt was signed. Add them to the signed checksums.txt, so the
+  # desktop app's AppImage updates itself (fastframe-update refuses an
+  # AppImage its release doesn't sign, and tells people to update by hand).
+  # The rest of checksums.txt is kept as published: its signature is checked
+  # first, and only the AppImage lines are added before signing it again.
+  sign-appimages:
+    name: Sign the AppImages
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    needs: packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only this job and publish can read the release signing key.
+    environment: release-signing
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - name: Add the AppImages to checksums.txt and sign it again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          CWW_UPDATE_SIGNING_KEY: ${{ secrets.CWW_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          gem install native-packages --version 0.12.0 --no-document
+          mkdir -p appimages
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir appimages \
+            --pattern checksums.txt --pattern checksums.txt.sig --pattern '*.AppImage'
+          bash packaging/verify-checksums.sh appimages
+          cd appimages
+          shopt -s nullglob
+          images=(*.AppImage)
+          [ "${#images[@]}" -gt 0 ] || { echo "::error::The release has no AppImage to sign"; exit 1; }
+          for image in "${images[@]}"; do
+            if grep -q "  ${image}$" checksums.txt; then
+              echo "$image is already signed"
+            else
+              sha256sum -- "$image" >> checksums.txt
+            fi
+          done
+          cat checksums.txt
+          native-packages sign-checksums checksums.txt \
+            --public-key ../app/assets/update-public-key.hex \
+            --key-env CWW_UPDATE_SIGNING_KEY
+          cd ..
+          bash packaging/verify-checksums.sh appimages
+          (cd appimages && grep -E '\.AppImage$' checksums.txt | sha256sum -c -)
+          # The signature last: a client between the two uploads sees a
+          # signature that doesn't match yet and tries again the next day.
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber appimages/checksums.txt
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber appimages/checksums.txt.sig
