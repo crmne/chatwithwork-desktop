@@ -454,6 +454,13 @@ fn which(name: &str) -> Option<PathBuf> {
 /// program it runs. A leftover that doesn't run (an old `~/.claude/local`
 /// install, say) is passed over.
 pub fn find_claude() -> Option<PathBuf> {
+    find_claude_outside(&[])
+}
+
+/// As [`find_claude`], passing over any candidate a command could change:
+/// one inside a shared folder that allows changes. Probing it would run what
+/// a bot wrote, as the person, outside the sandbox.
+pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
     let home = crate::paths::home_dir().ok()?;
     let exe = if cfg!(windows) {
         "claude.exe"
@@ -467,7 +474,14 @@ pub fn find_claude() -> Option<PathBuf> {
             .map(PathBuf::from)
             .filter(|p| p.is_file())
     };
-    let runs = |p: &PathBuf| p.is_file() && version(p).is_some();
+    let writable = |p: &PathBuf| {
+        let real = crate::roots::canonical(p).unwrap_or_else(|_| p.clone());
+        roots.iter().any(|root| {
+            root.writable
+                && crate::roots::canonical(&root.path).is_ok_and(|path| real.starts_with(path))
+        })
+    };
+    let runs = |p: &PathBuf| p.is_file() && !writable(p) && version(p).is_some();
     // Each asked only when the one before didn't give a `claude` that runs.
     let on_path = || {
         which("claude").and_then(|found| {
@@ -565,7 +579,7 @@ fn install_command() -> (&'static str, Vec<&'static str>, &'static str) {
 }
 
 fn claude_step(config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> {
-    let mut found = find_claude();
+    let mut found = find_claude_outside(&config.roots);
     if found.is_none() {
         let (program, args, shown) = install_command();
         println!("Claude Code isn't installed. Anthropic's installer is:\n  {shown}");
@@ -576,7 +590,7 @@ fn claude_step(config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> 
                     .print("Claude Code");
                 return Ok(false);
             }
-            found = find_claude();
+            found = find_claude_outside(&config.roots);
         }
     }
     let Some(program) = found else {
@@ -628,6 +642,12 @@ fn read_hidden(prompt: &str) -> Result<String> {
 
 /// Store a token, never shown. From standard input, or pasted.
 pub fn store_token(config: &mut Config, paths: &Paths, from_stdin: bool) -> Result<()> {
+    // On its own (`cww coding sign-in`), it guards its save as setup does:
+    // the settings as read before the prompt, never written back over newer.
+    let _own = LAST_SEEN.with(|last| last.borrow().is_none()).then(|| {
+        seen(config);
+        Reset
+    });
     let token = if from_stdin {
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;

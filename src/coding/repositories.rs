@@ -245,6 +245,15 @@ fn end_all(child: &mut std::process::Child) {
         let pid = rustix::process::Pid::from_child(child);
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
+    // Windows has no process groups to signal: end the tree by its root.
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -385,6 +394,29 @@ pub fn fetch_until(
     limit: Duration,
     stop: &dyn Fn() -> bool,
 ) -> Result<()> {
+    let _held = lock_mirror(mirror)?;
+    fetch_locked(mirror, repo, limit, stop)
+}
+
+/// One fetch of a mirror at a time, across every process that fetches it
+/// (the daemon's runs, `cww coding fetch`): a lock file in the mirror, held
+/// until the returned file is dropped.
+fn lock_mirror(mirror: &Path) -> Result<std::fs::File> {
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(mirror.join("cww-fetch.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn fetch_locked(
+    mirror: &Path,
+    repo: Option<&Repository>,
+    limit: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<()> {
     let mut fetch = git_for(repo, mirror);
     fetch
         .arg("--git-dir")
@@ -418,10 +450,21 @@ pub fn fetch_if_stale(
     limit: Duration,
     stop: &dyn Fn() -> bool,
 ) {
-    let fresh = fetched_at(mirror)
-        .and_then(|at| at.elapsed().ok())
-        .is_some_and(|age| age < FRESH);
-    if !fresh && let Err(e) = fetch_until(mirror, repo, limit, stop) {
+    let fresh = || {
+        fetched_at(mirror)
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age < FRESH)
+    };
+    if fresh() {
+        return;
+    }
+    // Another run may be fetching it now: wait for it, then look again.
+    let Ok(_held) = lock_mirror(mirror) else {
+        return;
+    };
+    if !fresh()
+        && let Err(e) = fetch_locked(mirror, repo, limit, stop)
+    {
         tracing::info!(error = %e, "fetching a repository's mirror failed");
     }
 }
