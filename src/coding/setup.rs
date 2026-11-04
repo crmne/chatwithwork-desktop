@@ -150,13 +150,38 @@ fn save(config: &Config, paths: &Paths) -> Result<()> {
     config.save(paths)?;
     // As it reads back, which is what the next save compares.
     seen(&Config::load(paths)?);
-    match control::request(&paths.socket_path(), ControlRequest::Reload) {
+    let socket = paths.socket_path();
+    let before = control::request(&socket, ControlRequest::Status)
+        .ok()
+        .flatten()
+        .and_then(|status| status["pid"].as_u64());
+    match control::request(&socket, ControlRequest::Reload) {
+        Ok(Some(answer)) if answer["restarting"] == true => wait_for_worker(paths, before),
         Ok(_) => Ok(()),
         Err(e) => {
             eprintln!("warning: couldn't reach the daemon: {e:#}");
             Ok(())
         }
     }
+}
+
+/// The daemon restarts its worker under a sandbox that fits a folder just
+/// allowed more: wait, a bounded while, for the new one to answer, so a
+/// check isn't sent to a worker on its way out.
+fn wait_for_worker(paths: &Paths, before: Option<u64>) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+        let pid = control::request(&paths.socket_path(), ControlRequest::Status)
+            .ok()
+            .flatten()
+            .and_then(|status| status["pid"].as_u64());
+        if pid.is_some() && pid != before {
+            return Ok(());
+        }
+    }
+    eprintln!("warning: the background service is taking long to restart");
+    Ok(())
 }
 
 /// `cww coding setup`.

@@ -134,7 +134,7 @@ While paused, every tool call from Chat with Work is refused with the `paused` e
 {"cmd": "reload"}
 ```
 
-Re-reads `config.toml`: roots, deny list, limits and pairing. Answers `{"ok": true}`. Use it after editing the file by hand; the other requests reload on their own.
+Re-reads `config.toml`: roots, deny list, limits and pairing. Answers `{"ok": true, "restarting": false}`. Use it after editing the file by hand; the other requests reload on their own. `restarting: true` says the worker is restarting under a sandbox that fits the new folders: it stops the commands it runs, and the next one answers `status` with another `pid` once it's ready, usually within a second.
 
 ### Pairing
 

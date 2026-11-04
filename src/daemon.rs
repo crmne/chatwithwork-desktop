@@ -1564,7 +1564,10 @@ impl ControlHandler for Daemon {
             }
             ControlRequest::Reload => {
                 self.reload().await?;
-                Ok(json!({}))
+                // A worker restarting for a new sandbox stops what it runs,
+                // and answers nothing until the next one is up: say so, so a
+                // client waits for it (`cww coding setup` does).
+                Ok(json!({ "restarting": RESTART_FOR_SANDBOX.load(Ordering::SeqCst) }))
             }
             ControlRequest::Shutdown => {
                 let mut entry = AuditEntry::event("shutdown_requested");
