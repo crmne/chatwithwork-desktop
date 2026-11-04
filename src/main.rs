@@ -588,6 +588,9 @@ enum DaemonCommand {
 }
 
 fn main() {
+    // `cww status | head` closes the pipe early: end quietly, never a
+    // crash report (crash_reports::install keeps this hook first).
+    crash_reports::exit_quietly_on_broken_pipe();
     // Started by the browser as the extension's native messaging host.
     cww::browsing::host_if_invoked();
     if let Err(e) = run(Cli::parse()) {
