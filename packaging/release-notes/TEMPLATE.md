@@ -12,6 +12,7 @@ Pick one file for your computer. The other files on this page are for package ma
 | Debian, Ubuntu | [`.deb` package](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop_X.Y.Z_amd64.deb), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop_X.Y.Z_arm64.deb) |
 | Fedora | `sudo dnf copr enable paolino/chatwithwork-desktop && sudo dnf install chatwithwork-desktop`, or the [`.rpm` package](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-1.x86_64.rpm), [for Arm](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-1.aarch64.rpm) |
 | Arch | `yay -S chatwithwork-desktop-bin` |
+| Any Linux | [AppImage](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-x86_64.AppImage) or [Flatpak bundle](https://github.com/crmne/chatwithwork-desktop/releases/download/vX.Y.Z/chatwithwork-desktop-X.Y.Z-x86_64.flatpak), each also for Arm (`aarch64`); the agent can't start at login from either yet |
 | A server, terminal only | `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` below |
 
 Already installed? Upgrade through the package manager you used (`brew upgrade`, `apt`, `dnf`, `pacman`). GitHub shows each file's SHA-256 beside it, and the signed `checksums.txt` lists all but the Linux packages; [PACKAGING.md](https://github.com/crmne/chatwithwork-desktop/blob/main/PACKAGING.md#release-assets) says what each one is for.

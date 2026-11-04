@@ -140,6 +140,86 @@ exit "${TEST_DAEMON_EXIT:-0}"
                              "usr/share/icons/hicolor/scalable/apps/cww-app.svg"):
                     self.assertTrue((package / name).is_file(), name)
 
+    APPINDICATOR = ROOT / "packaging/flatpak/appindicator.sh"
+
+    def appindicator_fixture(self, arch):
+        # A .deb shaped like Ubuntu's: a shared library, its soname link and
+        # the copyright file, in a zstd data member.
+        tree = self.work / f"deb-{arch}"
+        multiarch = {"amd64": "x86_64", "arm64": "aarch64"}[arch] + "-linux-gnu"
+        lib = tree / "usr/lib" / multiarch
+        lib.mkdir(parents=True)
+        (lib / "libfixture.so.1.0.0").write_bytes(b"\x7fELF fixture")
+        (lib / "libfixture.so.1").symlink_to("libfixture.so.1.0.0")
+        docs = {}
+        deb = self.work / f"fixture_{arch}.deb"
+        names = []
+        for line in self.APPINDICATOR.read_text().splitlines():
+            match = re.match(r'\s+"(pool/\S+_' + arch + r'\.deb) [0-9a-f]{64}"', line)
+            if match:
+                names.append(match.group(1))
+        for name in names:
+            package = Path(name).name.split("_")[0]
+            doc = tree / "usr/share/doc" / package
+            doc.mkdir(parents=True, exist_ok=True)
+            (doc / "copyright").write_text(f"{package} copyright\n")
+            docs[package] = doc
+        data = self.work / f"data-{arch}.tar.zst"
+        result = run("tar", "--zstd", "-cf", str(data), "-C", str(tree), "usr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.work / "debian-binary").write_text("2.0\n")
+        shutil.copy(data, self.work / "data.tar.zst")
+        result = run("ar", "rc", str(deb), "debian-binary", "data.tar.zst", cwd=self.work)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return deb, names
+
+    def run_appindicator(self, target, arch, *, corrupt=False):
+        deb, names = self.appindicator_fixture(arch)
+        sha = hashlib.sha256(deb.read_bytes()).hexdigest()
+        # The script as written, with each pinned hash replaced by the
+        # fixture's, so only the downloads are stood in for.
+        script = self.work / "appindicator.sh"
+        script.write_text(re.sub(r'(_' + arch + r'\.deb) [0-9a-f]{64}"', r'\1 ' + sha + '"',
+                                 self.APPINDICATOR.read_text()))
+        mocks = self.work / "mocks"
+        served = self.work / ("junk.deb" if corrupt else deb.name)
+        if corrupt:
+            served.write_bytes(b"not the package")
+        executable(mocks / "curl", f'''#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) shift; out=$1 ;; esac
+  shift
+done
+cp "{served}" "$out"
+''')
+        out = self.work / f"staged-{arch}"
+        env = dict(os.environ, PATH=f"{mocks}:{os.environ['PATH']}")
+        return run("bash", str(script), target, str(out), env=env), out, names
+
+    def test_appindicator_pins_five_packages_per_architecture(self):
+        text = self.APPINDICATOR.read_text()
+        for arch in ("amd64", "arm64"):
+            pins = re.findall(r'"pool/\S+_' + arch + r'\.deb ([0-9a-f]{64})"', text)
+            self.assertEqual(len(pins), 5, arch)
+        result = run("bash", str(self.APPINDICATOR), "riscv64-unknown-linux-gnu", str(self.work / "x"))
+        self.assertEqual(result.returncode, 2)
+
+    def test_appindicator_stages_libraries_and_copyright_for_each_architecture(self):
+        for target, arch in (("x86_64-unknown-linux-gnu", "amd64"), ("aarch64-unknown-linux-gnu", "arm64")):
+            with self.subTest(arch=arch):
+                result, out, names = self.run_appindicator(target, arch)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((out / "lib/libfixture.so.1.0.0").is_file())
+                self.assertTrue((out / "lib/libfixture.so.1").is_symlink())
+                for name in names:
+                    package = Path(name).name.split("_")[0]
+                    self.assertTrue((out / "doc" / package / "copyright").is_file(), package)
+
+    def test_appindicator_refuses_a_download_with_another_hash(self):
+        result, out, _ = self.run_appindicator("x86_64-unknown-linux-gnu", "amd64", corrupt=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list((out / "lib").iterdir()) if (out / "lib").exists() else [], [])
+
     def test_copr_spec_installs_what_the_arch_package_installs(self):
         # The spec's %install, with RPM's macros expanded as Fedora does, run
         # over each architecture's release archive: the same files as the AUR
