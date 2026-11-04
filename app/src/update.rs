@@ -173,7 +173,10 @@ pub fn advice(reason: &Unsupported) -> String {
             "Installed from an .rpm package: update it with dnf or your software center.".into()
         }
         Unsupported::Nix => "Installed with Nix: update it through Nix.".into(),
-        Unsupported::Flatpak => "Installed with Flatpak: update it with flatpak update.".into(),
+        Unsupported::Flatpak => {
+            "Installed with Flatpak: update it with flatpak update, or install the newer .flatpak from the latest release if you installed a downloaded one."
+                .into()
+        }
         Unsupported::Snap => "Installed with Snap: update it with snap refresh.".into(),
         Unsupported::Cargo => "Built with cargo: build the new version the same way.".into(),
         Unsupported::MoveToApplications => {

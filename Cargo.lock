@@ -1392,6 +1392,7 @@ dependencies = [
  "gtk",
  "image",
  "jiff",
+ "libloading 0.8.9",
  "log",
  "notify",
  "objc2-app-kit",
