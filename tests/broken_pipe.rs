@@ -1,6 +1,6 @@
 //! A reader that closes early (`cww log | head`) ends the CLI quietly: no
-//! panic, no crash report, and the exit status a shell expects of a process
-//! SIGPIPE ended (141 on Unix).
+//! panic, and the exit status a shell expects of a process SIGPIPE ended
+//! (141 on Unix). Crash reports are off here, so a test never sends one.
 
 #![cfg(unix)]
 
@@ -19,7 +19,9 @@ fn a_reader_that_closes_early_ends_the_cli_quietly() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cww"))
         .args(["log", "-n", "50000", "--json"])
         .env("CWW_HOME", home.path())
-        .env("CWW_CRASH_REPORTS", "1")
+        // Never a real report from a test; the reporter's own refusal is
+        // covered by `crash_reports::tests::a_closed_pipe_is_never_a_crash`.
+        .env("CWW_CRASH_REPORTS", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -36,6 +38,5 @@ fn a_reader_that_closes_early_ends_the_cli_quietly() {
     let output = child.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("panicked"), "{stderr}");
-    assert!(!stderr.to_lowercase().contains("report"), "{stderr}");
     assert_eq!(output.status.code(), Some(141), "{stderr}");
 }
