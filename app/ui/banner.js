@@ -54,7 +54,9 @@ export function render(view) {
       h("div", { class: "banner__row" },
         h("div", { class: "banner__body" },
           h("h1", {}, `Version ${version} is ready`),
-          h("p", {}, "Restart to use it. Your windows come back.")),
+          h("p", {}, view.installs_next_start
+            ? "It installs the next time Chat with Work starts."
+            : "Restart to use it. Your windows come back.")),
         button("Restart to Update", () => invoke("banner_restart"), "btn-primary"),
         dismiss));
   } else {

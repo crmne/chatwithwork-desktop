@@ -34,6 +34,7 @@
     "allow-update-check",
     "allow-update-restart",
     "allow-update-dismiss",
+    "allow-set-automatic-updates",
     "allow-remove-model"
   ]
 }

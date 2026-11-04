@@ -85,3 +85,17 @@ test("a downloaded update still offers Restart to Update", () => {
   assert.equal(byKey(app.tree, "update-notice"), null);
   assert.ok(byText(app.tree, "button", "Restart to Update"));
 });
+
+test("updates install themselves unless turned off, and package installs don't get the switch", () => {
+  const app = settings({ phase: "current", version: "0.11.1", installs_updates: true });
+  const toggle = byKey(app.tree, "automatic-updates");
+  assert.ok(toggle.checked);
+  calls.length = 0;
+  toggle.checked = false;
+  toggle.fire("change");
+  assert.deepEqual(calls[0], { command: "set_automatic_updates", args: { enabled: false } });
+  const ready = settings({ phase: "ready", version: "0.11.1", release: { version: "0.12.0" }, installs_updates: true, installs_next_start: true });
+  assert.ok(ready.tree.textContent.includes("installs the next time Chat with Work starts"));
+  assert.ok(byText(ready.tree, "button", "Restart to Update"));
+  assert.equal(byKey(settings({ ...AUR, dismissed: true }).tree, "automatic-updates"), null);
+});

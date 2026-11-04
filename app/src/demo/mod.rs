@@ -2067,6 +2067,8 @@ fn start_at(scenario: Scenario, paths: Paths) -> anyhow::Result<Server> {
             onboarded: true,
             notifications_asked: true,
             dismissed_update: None,
+            automatic_updates: None,
+            newest_run: None,
         }
         .save(&paths)?;
     }

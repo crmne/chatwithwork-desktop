@@ -150,6 +150,16 @@ impl Desktop {
         });
     }
 
+    /// Turns installing updates by themselves on or off (app.json).
+    pub fn set_installs_updates(&self, on: bool) -> std::io::Result<()> {
+        let mut state = crate::state::AppState::load(&self.paths);
+        state.automatic_updates = Some(on);
+        state.save(&self.paths)?;
+        self.updates.set_installs_updates(on);
+        self.update_changed();
+        Ok(())
+    }
+
     /// Hides the notice and banner of the release they show until the next
     /// version, remembered in app.json.
     pub fn dismiss_update(&self) {
@@ -354,8 +364,8 @@ fn start_updates(desktop: &Arc<Desktop>, receipt: Option<fastframe_update::Recei
                 waiting.status().map(|status| status.version)
             };
             match receipt {
-                Some(receipt) => crate::update::finish(receipt, agent_version),
-                None => crate::update::reconcile_agent(agent_version()),
+                Some(receipt) => crate::update::finish(receipt, agent_version, &waiting.client),
+                None => crate::update::reconcile_agent(agent_version(), &waiting.client),
             }
         });
 }
@@ -438,7 +448,9 @@ pub fn run(
         other => other.clone(),
     };
     // A newer release's notice, dismissed once per version.
-    let dismissed_update = crate::state::AppState::load(&paths).dismissed_update;
+    let app_state = crate::state::AppState::load(&paths);
+    let dismissed_update = app_state.dismissed_update.clone();
+    let installs_updates = app_state.installs_updates();
     let desktop = Arc::new(Desktop {
         app: OnceLock::new(),
         client: Client::new(paths.socket_path()),
@@ -458,7 +470,11 @@ pub fn run(
         preferences: Default::default(),
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
-        updates: Arc::new(crate::update::Updates::new(update_error, dismissed_update)),
+        updates: Arc::new(crate::update::Updates::new(
+            update_error,
+            dismissed_update,
+            installs_updates,
+        )),
     });
 
     let mut builder = tauri::Builder::default();
@@ -550,6 +566,7 @@ pub fn run(
             crate::local::update_check,
             crate::local::update_restart,
             crate::local::update_dismiss,
+            crate::local::set_automatic_updates,
             crate::banner::banner_state,
             crate::banner::banner_restart,
             crate::banner::banner_dismiss,
@@ -587,6 +604,20 @@ pub fn run(
             // here, where only the instance that keeps running gets: a second
             // launch hands its arguments over without touching them.
             startup_scans.close(&desktop.paths);
+            // An update an earlier run downloaded installs now, before any
+            // window opens (update.rs, fastframe-update's policy), and the
+            // new version starts in its place. Only this instance gets here,
+            // and never right after an update was installed or rolled back.
+            if receipt.is_none()
+                && !desktop.updates.rolled_back()
+                && crate::update::install_kept(
+                    &desktop.paths,
+                    &desktop.client,
+                    !matches!(first_open, Open::Nothing),
+                )
+            {
+                std::process::exit(0);
+            }
             let handle = app.handle().clone();
             let _ = desktop.app.set(handle.clone());
             add_remote_capability(&handle, &desktop.server())?;

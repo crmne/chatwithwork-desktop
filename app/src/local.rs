@@ -778,6 +778,20 @@ pub fn update_dismiss(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Ans
     Ok(desktop.updates.view())
 }
 
+/// Install updates automatically, or offer them: on by default.
+#[tauri::command]
+pub fn set_automatic_updates(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    enabled: bool,
+) -> Answer {
+    local_page(&webview)?;
+    desktop
+        .set_installs_updates(enabled)
+        .map_err(|e| refusal("failed", format!("Couldn't save: {e}")))?;
+    Ok(desktop.updates.view())
+}
+
 /// Hands the downloaded update to its helper and quits.
 #[tauri::command]
 pub fn update_restart(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {

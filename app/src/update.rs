@@ -316,12 +316,15 @@ pub struct Updates {
     /// The version whose notice was dismissed (app.json), so a copy that
     /// can't update itself is told once per release.
     dismissed: Mutex<Option<String>>,
+    /// Install updates automatically (app.json's `automatic_updates`).
+    automatic: std::sync::atomic::AtomicBool,
     wake: Mutex<Option<Sender<()>>>,
 }
 
 impl Updates {
-    pub fn new(problem: Option<String>, dismissed: Option<String>) -> Self {
+    pub fn new(problem: Option<String>, dismissed: Option<String>, automatic: bool) -> Self {
         Self {
+            automatic: std::sync::atomic::AtomicBool::new(automatic),
             phase: Mutex::new(Phase::Idle),
             checked_at: Mutex::new(None),
             rolled_back: problem.is_some(),
@@ -329,6 +332,21 @@ impl Updates {
             dismissed: Mutex::new(dismissed),
             wake: Mutex::new(None),
         }
+    }
+
+    /// Whether updates install themselves.
+    pub fn installs_updates(&self) -> bool {
+        self.automatic.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_installs_updates(&self, on: bool) {
+        self.automatic
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// This launch is the version an update was rolled back to.
+    pub fn rolled_back(&self) -> bool {
+        self.rolled_back
     }
 
     /// What the settings show.
@@ -339,6 +357,17 @@ impl Updates {
         }
         view["version"] = json!(VERSION);
         view["automatic"] = json!(true);
+        let installs = self.installs_updates();
+        view["installs_updates"] = json!(installs);
+        // A downloaded update that installs at the next start on its own.
+        if let Some(version) = view["release"]["version"].as_str()
+            && view["phase"] == "ready"
+        {
+            view["installs_next_start"] = json!(
+                fastframe_update::policy::offer(VERSION, version, installs, Ok(()), None)
+                    == fastframe_update::policy::Offer::Automatic
+            );
+        }
         view["checked_at"] = json!(
             self.checked_at
                 .lock()
@@ -403,12 +432,6 @@ impl Updates {
         } else {
             "notice"
         });
-        // A picture of the Restart to Update card in --demo builds, which
-        // can't download a real update (`CWW_DEMO_BANNER=restart`).
-        #[cfg(feature = "demo")]
-        if std::env::var("CWW_DEMO_BANNER").as_deref() == Ok("restart") {
-            view["kind"] = json!("restart");
-        }
         Some(view)
     }
 
@@ -474,6 +497,28 @@ impl Updates {
         }
         self.set(Phase::Checking, tell);
         let checked = updater.check();
+        // Pictures of a downloaded update in --demo builds, which can't
+        // download a real one (`CWW_DEMO_UPDATE=ready`): the release the
+        // feed names, as if downloaded.
+        #[cfg(feature = "demo")]
+        if std::env::var("CWW_DEMO_UPDATE").as_deref() == Ok("ready")
+            && let Ok(Some(release)) = &checked
+        {
+            let prepared = Prepared::sample(
+                fastframe_update::Installation {
+                    executable: std::env::current_exe().unwrap_or_default(),
+                    kind: fastframe_update::Kind::Portable,
+                },
+                &release.version,
+            );
+            return self.set(
+                Phase::Ready {
+                    release: release.clone(),
+                    prepared: Box::new(prepared),
+                },
+                tell,
+            );
+        }
         *self.checked_at.lock().expect("update lock") = Some(jiff::Timestamp::now());
         let release = match checked {
             Ok(Some(release)) => release,
@@ -634,6 +679,70 @@ impl Updates {
     }
 }
 
+/// Whether the background agent is running a command: nothing installs or
+/// restarts it while one runs. An agent that isn't running runs nothing.
+pub fn commands_running(client: &crate::control::Client) -> bool {
+    client
+        .request(&cww::control::ControlRequest::Commands)
+        .ok()
+        .and_then(|answer| answer["commands"].as_array().cloned())
+        .is_some_and(|commands| commands.iter().any(|run| run["state"] == "running"))
+}
+
+/// At start, before any window opens: installs the update an earlier run
+/// downloaded, when it installs on its own (fastframe-update's policy: a
+/// newer release on this major version, automatic updates on, not one the
+/// person went back from) and the background agent runs no command. Hands
+/// it to the helper, which waits for this app to quit, installs it and
+/// starts the new version (rolled back if it doesn't start); the caller
+/// quits when this answers true. Also remembers the newest version that ran.
+pub fn install_kept(
+    paths: &crate::paths::Paths,
+    client: &crate::control::Client,
+    window: bool,
+) -> bool {
+    let mut state = crate::state::AppState::load(paths);
+    let before = state.newest_run.clone();
+    let newest = fastframe_update::policy::newest_run(VERSION, before.as_deref());
+    if before.as_deref() != Some(newest.as_str()) {
+        state.newest_run = Some(newest);
+        if let Err(e) = state.save(paths) {
+            log::warn!("couldn't remember the newest version: {e}");
+        }
+    }
+    let updater = updater();
+    let kept = match updater.kept() {
+        Ok(Some(kept)) => kept,
+        Ok(None) => return false,
+        Err(e) => {
+            log::warn!("the kept update didn't check out: {e:#}");
+            return false;
+        }
+    };
+    let installs = fastframe_update::policy::installs_at_start(
+        VERSION,
+        kept.version(),
+        state.installs_updates(),
+        before.as_deref(),
+        !commands_running(client),
+    );
+    if !installs {
+        log::info!(
+            "update {} waits: not installed at this start",
+            kept.version()
+        );
+        return false;
+    }
+    log::info!("installing update {} at start", kept.version());
+    match updater.handoff(kept, relaunch_arguments(window)) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("couldn't install the kept update: {e:#}");
+            false
+        }
+    }
+}
+
 /// What the app relaunches with after an update: its window if one was
 /// open, else just the tray.
 pub fn relaunch_arguments(window_open: bool) -> Vec<String> {
@@ -648,19 +757,31 @@ pub fn relaunch_arguments(window_open: bool) -> Vec<String> {
 /// started, then restarts the background agent if it still runs the old
 /// `cww`. `agent_version` waits for the agent's status (None while it
 /// isn't running, when there's nothing to restart).
-pub fn finish(receipt: Receipt, agent_version: impl FnOnce() -> Option<String>) {
+pub fn finish(
+    receipt: Receipt,
+    agent_version: impl FnOnce() -> Option<String>,
+    client: &crate::control::Client,
+) {
     if let Err(e) = receipt.acknowledge() {
         log::warn!("couldn't acknowledge the update: {e:#}");
         return;
     }
     log::info!("updated to {VERSION}");
-    reconcile_agent(agent_version());
+    reconcile_agent(agent_version(), client);
 }
 
 /// Package-manager upgrades have no updater receipt. Reconcile those too,
 /// without starting an agent the person stopped or restarting the same old
 /// executable repeatedly when only one member of the app/CLI pair changed.
-pub fn reconcile_agent(running: Option<String>) {
+pub fn reconcile_agent(running: Option<String>, client: &crate::control::Client) {
+    // Never mid-command: an agent running one is restarted once it's done.
+    if running.as_deref().is_some_and(|version| version != VERSION) {
+        let mut waited = Duration::ZERO;
+        while commands_running(client) && waited < Duration::from_secs(24 * 60 * 60) {
+            std::thread::sleep(Duration::from_secs(30));
+            waited += Duration::from_secs(30);
+        }
+    }
     let _ = reconcile_agent_with(
         running.as_deref(),
         || {
@@ -792,7 +913,7 @@ mod tests {
 
     #[test]
     fn the_view_says_where_updating_stands() {
-        let updates = Updates::new(Some("restored".into()), None);
+        let updates = Updates::new(Some("restored".into()), None, true);
         let view = updates.view();
         assert_eq!(view["phase"], "idle");
         assert_eq!(view["version"], VERSION);
@@ -824,7 +945,7 @@ mod tests {
 
     #[test]
     fn a_package_managers_release_is_announced_until_dismissed_once_per_version() {
-        let updates = Updates::new(None, Some("0.12.0".into()));
+        let updates = Updates::new(None, Some("0.12.0".into()), true);
         *updates.phase.lock().unwrap() = unsupported("0.12.0");
         // Dismissed at an earlier launch.
         assert_eq!(updates.available(), None);
@@ -850,7 +971,7 @@ mod tests {
 
     #[test]
     fn the_banner_offers_restart_or_the_notice_until_dismissed() {
-        let updates = Updates::new(None, None);
+        let updates = Updates::new(None, None, true);
         assert!(updates.banner().is_none());
         *updates.phase.lock().unwrap() = unsupported("0.13.0");
         let banner = updates.banner().unwrap();
@@ -867,10 +988,46 @@ mod tests {
         assert!(updates.available().is_none());
     }
 
+    fn ready(version: &str) -> Phase {
+        Phase::Ready {
+            release: Release {
+                version: version.into(),
+                url: String::new(),
+            },
+            prepared: Box::new(Prepared::sample(
+                fastframe_update::Installation {
+                    executable: "/Applications/Chat with Work.app/Contents/MacOS/cww-app".into(),
+                    kind: fastframe_update::Kind::MacBundle,
+                },
+                version,
+            )),
+        }
+    }
+
+    #[test]
+    fn a_download_on_this_major_installs_at_the_next_start_unless_turned_off() {
+        let major: u64 = VERSION.split('.').next().unwrap().parse().unwrap();
+        let next = format!("{major}.999.0");
+        let updates = Updates::new(None, None, true);
+        *updates.phase.lock().unwrap() = ready(&next);
+        let view = updates.view();
+        assert_eq!(view["phase"], "ready");
+        assert_eq!(view["installs_next_start"], true);
+        assert_eq!(updates.ready().as_deref(), Some(next.as_str()));
+        assert_eq!(updates.banner().unwrap()["kind"], "restart");
+        updates.set_installs_updates(false);
+        assert_eq!(updates.view()["installs_next_start"], false);
+        assert_eq!(updates.view()["installs_updates"], false);
+        // A new major version asks.
+        let updates = Updates::new(None, None, true);
+        *updates.phase.lock().unwrap() = ready(&format!("{}.0.0", major + 1));
+        assert_eq!(updates.view()["installs_next_start"], false);
+    }
+
     #[test]
     fn a_downloaded_update_is_still_restart_to_update() {
         // macOS and Windows: what the tray and General offer is unchanged.
-        let updates = Updates::new(None, None);
+        let updates = Updates::new(None, None, true);
         *updates.phase.lock().unwrap() = Phase::Installing {
             release: Release {
                 version: "0.12.0".into(),

@@ -51,6 +51,7 @@ const COMMANDS: &[&str] = &[
     "update_check",
     "update_restart",
     "update_dismiss",
+    "set_automatic_updates",
     // The update banner in the Chat with Work window (banner.rs).
     "banner_state",
     "banner_restart",

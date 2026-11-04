@@ -14,6 +14,18 @@ pub struct AppState {
     /// The release whose update notice was dismissed (update.rs), for a
     /// copy a package manager updates.
     pub dismissed_update: Option<String>,
+    /// Install updates automatically: `None` is on, the default.
+    pub automatic_updates: Option<bool>,
+    /// The newest version that ever ran here: a person who went back to an
+    /// older one isn't updated past it on their behalf (update.rs).
+    pub newest_run: Option<String>,
+}
+
+impl AppState {
+    /// Whether updates install themselves, on unless turned off.
+    pub fn installs_updates(&self) -> bool {
+        self.automatic_updates.unwrap_or(true)
+    }
 }
 
 impl AppState {
