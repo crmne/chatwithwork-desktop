@@ -315,6 +315,7 @@ struct Found {
 }
 
 /// The toolchain folders a run reads on Linux and macOS.
+#[cfg(not(windows))]
 pub(super) fn toolchain_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     toolchains(home)
         .read
