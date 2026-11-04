@@ -394,21 +394,36 @@ pub fn fetch_until(
     limit: Duration,
     stop: &dyn Fn() -> bool,
 ) -> Result<()> {
-    let _held = lock_mirror(mirror)?;
-    fetch_locked(mirror, repo, limit, stop)
+    let deadline = Instant::now() + limit;
+    let _held = lock_mirror(mirror, deadline, stop)?;
+    let left = deadline.saturating_duration_since(Instant::now());
+    fetch_locked(mirror, repo, left, stop)
 }
 
 /// One fetch of a mirror at a time, across every process that fetches it
 /// (the daemon's runs, `cww coding fetch`): a lock file in the mirror, held
-/// until the returned file is dropped.
-fn lock_mirror(mirror: &Path) -> Result<std::fs::File> {
+/// until the returned file is dropped. Waiting for it gives up at `deadline`
+/// or once `stop` says so.
+fn lock_mirror(mirror: &Path, deadline: Instant, stop: &dyn Fn() -> bool) -> Result<std::fs::File> {
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(mirror.join("cww-fetch.lock"))?;
-    lock.lock()?;
-    Ok(lock)
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+        if stop() {
+            bail!("stopped");
+        }
+        if Instant::now() >= deadline {
+            bail!("another fetch of this mirror took too long");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn fetch_locked(
@@ -458,12 +473,15 @@ pub fn fetch_if_stale(
     if fresh() {
         return;
     }
-    // Another run may be fetching it now: wait for it, then look again.
-    let Ok(_held) = lock_mirror(mirror) else {
+    // Another run may be fetching it now: wait for it (no longer than this
+    // run may, and not once it's stopped), then look again.
+    let deadline = Instant::now() + limit;
+    let Ok(_held) = lock_mirror(mirror, deadline, stop) else {
         return;
     };
+    let left = deadline.saturating_duration_since(Instant::now());
     if !fresh()
-        && let Err(e) = fetch_locked(mirror, repo, limit, stop)
+        && let Err(e) = fetch_locked(mirror, repo, left, stop)
     {
         tracing::info!(error = %e, "fetching a repository's mirror failed");
     }
