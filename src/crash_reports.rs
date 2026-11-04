@@ -159,6 +159,47 @@ pub fn set(paths: &Paths, on: bool) -> Result<()> {
 
 static INSTALLED: OnceLock<()> = OnceLock::new();
 
+/// Whether a panic is `print!` finding its reader gone (`cww status | head`):
+/// a reader closing early, never a crash worth a report.
+pub fn is_broken_pipe(info: &std::panic::PanicHookInfo<'_>) -> bool {
+    let payload = info.payload();
+    let text = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&'static str>().copied())
+        .unwrap_or_default();
+    is_broken_pipe_message(text)
+}
+
+/// The words `print!`'s panic has for a closed pipe: EPIPE on Unix, and on
+/// Windows a pipe closing or ended (`ERROR_NO_DATA`, `ERROR_BROKEN_PIPE`).
+pub fn is_broken_pipe_message(text: &str) -> bool {
+    text.starts_with("failed printing to std")
+        && [
+            "(os error 32)",
+            "(os error 232)",
+            "(os error 109)",
+            "Broken pipe",
+        ]
+        .iter()
+        .any(|sign| text.contains(sign))
+}
+
+/// Make this process end quietly when what it prints has no reader left,
+/// instead of panicking: with 141 on Unix, as a shell reports a process
+/// SIGPIPE ended, and 0 on Windows. Rust ignores SIGPIPE, so `print!` sees
+/// EPIPE and panics. Call it before [`install`], whose reports then never
+/// see these.
+pub fn exit_quietly_on_broken_pipe() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if is_broken_pipe(info) {
+            std::process::exit(if cfg!(unix) { 141 } else { 0 });
+        }
+        previous(info);
+    }));
+}
+
 /// Report this process's panics, when the person allows it. Call it once,
 /// early; later calls do nothing. Starts no thread.
 pub fn install(component: Component, paths: &Paths) {
@@ -200,7 +241,10 @@ struct Reporter {
 
 impl Reporter {
     fn panicked(&self, info: &std::panic::PanicHookInfo<'_>) {
-        if std::thread::current().name() == Some(THREAD) || REPORTING.with(Cell::get) {
+        if std::thread::current().name() == Some(THREAD)
+            || REPORTING.with(Cell::get)
+            || is_broken_pipe(info)
+        {
             return;
         }
         REPORTING.with(|reporting| reporting.set(true));
@@ -684,6 +728,23 @@ fn log_file(paths: &Paths) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_pipe_is_never_a_crash() {
+        assert!(is_broken_pipe_message(
+            "failed printing to stdout: Broken pipe (os error 32)"
+        ));
+        assert!(is_broken_pipe_message(
+            "failed printing to stdout: The pipe is being closed. (os error 232)"
+        ));
+        assert!(is_broken_pipe_message(
+            "failed printing to stderr: The pipe has been ended. (os error 109)"
+        ));
+        assert!(!is_broken_pipe_message(
+            "failed printing to stdout: No space left on device (os error 28)"
+        ));
+        assert!(!is_broken_pipe_message("index out of bounds: Broken pipe"));
+    }
     use std::io::{BufRead, BufReader, Read, Write};
 
     fn reporter(paths: &Paths, dsn: &str) -> Reporter {
