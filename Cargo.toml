@@ -87,7 +87,7 @@ tantivy = { version = "0.27.0", default-features = false, features = ["mmap", "l
 notify = "8.2"
 
 # Extraction: pdf, xlsx, docx/pptx (zip + xml). Only pure-Rust codecs.
-lopdf = { version = "0.46", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 calamine = "0.38"
 zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
