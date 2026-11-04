@@ -297,7 +297,7 @@ impl Watches {
             return;
         };
         let scope = Arc::new(Scope(vec![Target::Recursive(rel)]));
-        let found = collect_dirs(root, deny, Some(scope), cancelled);
+        let found = collect_dirs(root, deny, Some(Arc::clone(&scope)), cancelled);
         if cancelled.is_cancelled() {
             self.incomplete.insert(root.id.clone());
             return;
@@ -315,6 +315,15 @@ impl Watches {
             }
         }
         self.add_dirs(root, found);
+        if self.per_directory && self.covers(&root.id) {
+            // A folder made below between that walk and its watch.
+            let again = collect_dirs(root, deny, Some(scope), cancelled);
+            if cancelled.is_cancelled() {
+                self.incomplete.insert(root.id.clone());
+                return;
+            }
+            self.add_dirs(root, again);
+        }
     }
 
     fn add_dirs(&mut self, root: &RootHandle, mut dirs: Vec<PathBuf>) {
@@ -404,7 +413,7 @@ fn collect_dirs(
 fn is_project_marker(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| PROJECT_MARKERS.contains(&n))
+        .is_some_and(|n| PROJECT_MARKERS.contains(&n) || matches!(n, "CACHEDIR.TAG" | "pyvenv.cfg"))
 }
 
 /// Files whose rules decide what the index walks below their folder.

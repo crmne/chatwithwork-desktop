@@ -51,6 +51,11 @@ const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
 /// A search rescans folders that aren't watched in full, unless they were
 /// scanned this recently.
 const REFRESH_AFTER: Duration = Duration::from_secs(60);
+/// Even with every folder watched, the watches are built again and
+/// everything rescanned this often: some rules can't be watched (Git's
+/// `.git/info/exclude`, a marker appearing or going in a folder the index
+/// skips), and this is when they take effect at the latest.
+const RECHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// Lost events rebuild the watches at most this often; in between they only
 /// rescan.
 const REWATCH_AFTER: Duration = Duration::from_secs(60);
@@ -349,6 +354,13 @@ impl Worker {
                         self.note_burst();
                         continue;
                     }
+                    if self.burst.is_none() && self.last_full.elapsed() >= RECHECK_EVERY {
+                        if self.settings.watch {
+                            self.rewatch();
+                        }
+                        self.scan_all();
+                        continue;
+                    }
                     if self.burst.take().is_some() {
                         self.flush_pending();
                     } else {
@@ -393,7 +405,7 @@ impl Worker {
             return Some(quiet.min(cap));
         }
         if self.settings.roots.iter().all(|r| self.watched(&r.id)) {
-            return None;
+            return Some(RECHECK_EVERY.saturating_sub(self.last_full.elapsed()));
         }
         Some(
             self.settings
