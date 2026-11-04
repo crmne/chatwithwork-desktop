@@ -609,6 +609,19 @@ enum RootsCommand {
         /// Characters per chat per hour, or `default`.
         characters: String,
     },
+    /// The environment every command in a folder gets: `NAME=value` lines,
+    /// dotenv-style, kept in this computer's secret store. A value can be
+    /// `$(command)`, run in the command's own sandbox when a run starts.
+    /// Without a flag, lists the names.
+    Env {
+        root: String,
+        /// Replace the list with standard input's.
+        #[arg(long, conflicts_with = "clear")]
+        stdin: bool,
+        /// Forget the list.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1157,6 +1170,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         }
         RootsCommand::Remove { root } => {
             let removed = remove_root(&mut config, &root)?;
+            cww::commands::env::forget(&mut config, paths, &removed.id)?;
             config.save(paths)?;
             println!(
                 "Stopped sharing {} ({}).",
@@ -1228,6 +1242,56 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 root.path.display()
             );
             notify_daemon(paths, "");
+        }
+        RootsCommand::Env { root, stdin, clear } => {
+            use cww::commands::env;
+            let root = cww::roots::find(&config, &root)?.clone();
+            if clear {
+                env::forget(&mut config, paths, &root.id)?;
+                config.save(paths)?;
+                notify_daemon(paths, "");
+                println!("Forgot the environment of {} ({}).", root.label, root.id);
+            } else if stdin {
+                let mut text = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)?;
+                let variables =
+                    env::set(&mut config, paths, &root.id, &text).map_err(anyhow::Error::msg)?;
+                config.save(paths)?;
+                notify_daemon(paths, "");
+                let names: Vec<&str> = variables.iter().map(|v| v.name.as_str()).collect();
+                println!(
+                    "{} ({}) has {} in its environment{}.",
+                    root.label,
+                    root.id,
+                    if names.is_empty() {
+                        "nothing".to_string()
+                    } else {
+                        names.join(", ")
+                    },
+                    if root.runs_commands() {
+                        ""
+                    } else {
+                        ", for when it allows commands"
+                    }
+                );
+            } else {
+                let text = env::stored(&config, paths, &root.id)?.unwrap_or_default();
+                let variables = env::parse(&text).unwrap_or_default();
+                if variables.is_empty() {
+                    println!("{} ({}) has no environment.", root.label, root.id);
+                }
+                for variable in variables {
+                    let command = variable
+                        .parts
+                        .iter()
+                        .any(|p| matches!(p, env::Part::Command(_)));
+                    println!(
+                        "{}{}",
+                        variable.name,
+                        if command { " (from a command)" } else { "" }
+                    );
+                }
+            }
         }
         RootsCommand::ReadBudget { root, characters } => {
             let budget = match characters.trim() {

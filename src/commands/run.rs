@@ -26,7 +26,8 @@ pub(super) fn spawn(
         .spawn({
             let cell = cell.clone();
             move || {
-                let state = run(&plan, &cell);
+                let mut plan = plan;
+                let state = run(&mut plan, &cell);
                 lock(&cell).finish(state);
                 remove_home(&plan.home);
                 retire(&plan.id);
@@ -39,7 +40,7 @@ pub(super) fn spawn(
     }
 }
 
-fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
+fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     // The run's clock starts now, fetching included.
     let deadline = Instant::now() + Duration::from_secs(plan.limits.timeout_seconds.max(1));
     // The folder's repositories, fresh: `git fetch origin` in the run reads
@@ -78,6 +79,9 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
         return State::TimedOut;
     }
     let home = crate::paths::home_dir().ok();
+    if let Err(state) = resolve_env(plan, cell, sandbox, home.as_deref(), deadline) {
+        return state;
+    }
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
         Ok(process) => process,
@@ -168,6 +172,176 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
         }
     }
     state
+}
+
+/// Work out the folder's values in order, before the command starts: text
+/// as it is, and each `$( )` by running it in this run's own sandbox, with
+/// the values before it in its environment. Its output, less the newlines
+/// at its end, is the value; it never reaches the run's output. One that
+/// fails stops the run, naming the variable, with what it printed on its
+/// error stream, the values known by then taken out.
+fn resolve_env(
+    plan: &mut Plan,
+    cell: &Arc<Mutex<Cell>>,
+    sandbox: Sandbox,
+    home: Option<&std::path::Path>,
+    deadline: Instant,
+) -> Result<(), State> {
+    let variables = std::mem::take(&mut plan.env.variables);
+    let mut ran = false;
+    for variable in &variables {
+        let mut value = String::new();
+        for part in &variable.parts {
+            match part {
+                super::env::Part::Text(text) => value.push_str(text),
+                super::env::Part::Command(command) => {
+                    ran = true;
+                    let mut sub = plan.clone();
+                    sub.command = command.clone();
+                    let output = capture(&sub, cell, sandbox, home, deadline);
+                    let (code, out, err) = match output {
+                        Ok(output) => output,
+                        Err(Captured::Ended(state)) => return Err(state),
+                        Err(Captured::Failed(why)) => {
+                            return Err(State::Failed(format!(
+                                "{}'s $( ) didn't run: {why}",
+                                variable.name
+                            )));
+                        }
+                    };
+                    let why = if code != 0 {
+                        Some(format!("exited with {code}"))
+                    } else if out.len() > super::env::MAX_OUTPUT {
+                        Some(format!(
+                            "printed more than {} KiB",
+                            super::env::MAX_OUTPUT / 1024
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        let mut cell = lock(cell);
+                        cell.redact(plan);
+                        cell.append(Stream::Err, &err);
+                        return Err(State::Failed(format!("{}'s $( ) {why}", variable.name)));
+                    }
+                    match String::from_utf8(out) {
+                        Ok(text) if !text.contains('\0') => {
+                            value.push_str(text.trim_end_matches(['\n', '\r']))
+                        }
+                        _ => {
+                            return Err(State::Failed(format!(
+                                "{}'s $( ) printed something that isn't text",
+                                variable.name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        plan.env
+            .values
+            .push((variable.name.clone(), crate::coding::Secret::new(value)));
+    }
+    plan.env.variables = variables;
+    if ran && cfg!(windows) {
+        // The script the `$( )` read is the run's own again.
+        std::fs::write(plan.script_path(), super::windows::script(&plan.command))
+            .map_err(|e| State::Failed(format!("couldn't write its script: {e}")))?;
+    }
+    lock(cell).redact(plan);
+    Ok(())
+}
+
+enum Captured {
+    /// Stopped, or the run's clock ran out.
+    Ended(State),
+    Failed(String),
+}
+
+/// Run `plan` in its sandbox and keep what it prints, apart from the run's
+/// output: its exit code, its output (up to a byte past
+/// [`super::env::MAX_OUTPUT`]), and the end of its error stream. A stop
+/// or the run's clock ends it.
+fn capture(
+    plan: &Plan,
+    cell: &Arc<Mutex<Cell>>,
+    sandbox: Sandbox,
+    home: Option<&std::path::Path>,
+    deadline: Instant,
+) -> Result<(i32, Vec<u8>, Vec<u8>), Captured> {
+    if cfg!(windows) {
+        std::fs::write(plan.script_path(), super::windows::script(&plan.command))
+            .map_err(|e| Captured::Failed(format!("couldn't write its script: {e}")))?;
+    }
+    let request = plan.request_json(home, sandbox);
+    let mut process = mxc_sdk::__ffi::spawn_container_json(&request, false)
+        .map_err(|e| Captured::Failed(refusal(&e)))?;
+    drop(process.take_stdin());
+    let keep = |reader: Option<_>, limit: usize, tail: bool| {
+        reader.map(|mut reader: Box<dyn std::io::Read + Send>| {
+            std::thread::spawn(move || {
+                let mut kept = Vec::new();
+                let mut buffer = [0u8; 8192];
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            kept.extend_from_slice(&buffer[..n]);
+                            if kept.len() > limit {
+                                let drop = kept.len() - limit;
+                                if tail {
+                                    kept.drain(..drop);
+                                } else {
+                                    kept.truncate(limit);
+                                }
+                            }
+                        }
+                    }
+                }
+                kept
+            })
+        })
+    };
+    let out = keep(process.take_stdout(), super::env::MAX_OUTPUT + 1, false);
+    let err = keep(process.take_stderr(), 4096, true);
+    let closers = [process.stdout_closer(), process.stderr_closer()];
+    let ended = loop {
+        if lock(cell).stop || Instant::now() >= deadline {
+            let stopped = lock(cell).stop;
+            let _ = process.kill();
+            let _ = process.wait();
+            break Err(Captured::Ended(if stopped {
+                State::Stopped
+            } else {
+                State::TimedOut
+            }));
+        }
+        match process.try_wait() {
+            Ok(Some(code)) => break Ok(code),
+            Ok(None) => std::thread::sleep(POLL),
+            Err(e) => {
+                let _ = process.kill();
+                break Err(Captured::Failed(format!("the sandbox failed: {e}")));
+            }
+        }
+    };
+    let drained = Instant::now() + DRAIN;
+    while [&out, &err]
+        .iter()
+        .any(|r| r.as_ref().is_some_and(|r| !r.is_finished()))
+        && Instant::now() < drained
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for closer in closers.into_iter().flatten() {
+        closer.close();
+    }
+    let out = out.and_then(|r| r.join().ok()).unwrap_or_default();
+    let err = err.and_then(|r| r.join().ok()).unwrap_or_default();
+    let code = ended?;
+    let _ = process.wait();
+    Ok((code, out, err))
 }
 
 /// The limit to name for a run that exited with `code`, from what MXC says

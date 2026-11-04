@@ -118,6 +118,7 @@ cww roots list
 cww roots allow-changes work-docs   # let Chat with Work change files there too
 cww roots deny-changes work-docs    # read-only again
 cww roots read-budget app 5000000   # where [limits] sets an hourly read limit, let a chat read more of a folder
+cww roots env app --stdin < app.env  # NAME=value lines every command in the folder gets, kept in the secret store
 cww roots remove work-docs
 ```
 

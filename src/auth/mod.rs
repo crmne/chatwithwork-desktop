@@ -437,11 +437,25 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
     file.delete(REFRESH_TOKEN)?;
     // Claude Code's sign-in for coding bots (docs/coding-computers.md).
     file.delete(crate::coding::TOKEN_NAME)?;
+    // Shared folders' environments (docs/secrets.md).
+    let folder_env: Vec<String> = config
+        .roots
+        .iter()
+        .map(|root| &root.id)
+        .chain(&config.folder_env)
+        .map(|id| crate::commands::env::entry(id))
+        .collect();
+    for entry in &folder_env {
+        file.delete(entry)?;
+    }
     if config.server.is_some() || config.secret_store.is_some() {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
         store.delete(crate::coding::TOKEN_NAME)?;
+        for entry in &folder_env {
+            store.delete(entry)?;
+        }
         // What an older version saved, here too if it was never carried over.
         if store.in_keychain() {
             SecretStore::Keyring.delete(DEVICE_KEY)?;

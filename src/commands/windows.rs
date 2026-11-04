@@ -573,6 +573,7 @@ impl Plan {
                 env.push((name, value));
             }
         }
+        self.env.add_to(&mut env);
         env
     }
 
@@ -1012,6 +1013,7 @@ mod tests {
             },
             home: home.to_path_buf(),
             coding: Default::default(),
+            env: Default::default(),
         }
     }
 

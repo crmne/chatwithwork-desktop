@@ -327,6 +327,11 @@ pub fn remove_root(config: &mut Config, which: &str) -> Result<Root> {
 
 /// The index of the root `which` names: its ID, its path, or a label only
 /// one root has.
+/// The shared folder `which` names: its ID, path or label.
+pub fn find<'a>(config: &'a Config, which: &str) -> Result<&'a Root> {
+    Ok(&config.roots[find_root(config, which)?])
+}
+
 fn find_root(config: &Config, which: &str) -> Result<usize> {
     let as_path = canonical(Path::new(which)).ok();
     config

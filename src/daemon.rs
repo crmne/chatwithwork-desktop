@@ -1066,7 +1066,11 @@ impl Daemon {
 
     async fn remove_root(&self, which: String) -> Result<Value> {
         let root = self
-            .edit_config(move |config, _| remove_root(config, &which))
+            .edit_config(move |config, paths| {
+                let root = remove_root(config, &which)?;
+                crate::commands::env::forget(config, paths, &root.id)?;
+                Ok(root)
+            })
             .await?;
         let mut entry = AuditEntry::event("root_removed");
         entry.detail = Some(format!("{} ({})", root.id, root.label));
