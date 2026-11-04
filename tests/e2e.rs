@@ -5153,6 +5153,119 @@ async fn a_bots_unattended_commands_need_this_computers_yes() {
         .unwrap();
 }
 
+/// A bot can only ask for unattended commands; the person answers on this
+/// computer, and Allow does what sharing with `unattended: true` does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bot_asks_and_only_this_computer_allows_unattended_commands() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.save(&fx.paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let s = connect(&mut server).await;
+
+    control(
+        &fx.paths,
+        ControlRequest::RootsBot {
+            root: "docs".into(),
+            bot: "42".into(),
+            name: Some("Issue fixer".into()),
+            lent: true,
+            unattended: false,
+        },
+    )
+    .await;
+    let mut s = connect_or_keep(&mut server, s).await;
+    let tools = s.request("tools/list", json!({})).await;
+    assert!(
+        !tool_names(&tools).contains(&"ask_unattended".to_string()),
+        "never listed"
+    );
+
+    let asked = s
+        .bot_call("ask_unattended", json!({ "root": "docs" }), "42")
+        .await;
+    assert_eq!(
+        asked["structuredContent"],
+        json!({ "status": "asked" }),
+        "{asked}"
+    );
+    let again = s
+        .bot_call("ask_unattended", json!({ "root": "docs" }), "42")
+        .await;
+    assert_eq!(again["structuredContent"], json!({ "status": "asked" }));
+    let other = s
+        .bot_call("ask_unattended", json!({ "root": "ro" }), "42")
+        .await;
+    assert_eq!(error_code(&other), "not_lent");
+
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    let asks = status["unattended_asks"].as_array().unwrap();
+    assert_eq!(asks.len(), 1, "{status}");
+    assert_eq!(asks[0]["folder"], "Work docs");
+    assert_eq!(asks[0]["name"], "Issue fixer");
+    assert!(
+        !status["unattended_asks"]
+            .to_string()
+            .contains(&*fx.base.to_string_lossy())
+    );
+
+    let answer = |allow| ControlRequest::RootsUnattendedAnswer {
+        root: "docs".into(),
+        bot: "42".into(),
+        allow,
+    };
+    control(&fx.paths, answer(false)).await;
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    assert_eq!(status["unattended_asks"], json!([]), "Not now drops it");
+    assert_eq!(status["roots"][0]["bots"][0]["unattended"], Value::Null);
+    let refused = control_error(&fx.paths, answer(true)).await;
+    assert!(refused.contains("isn't waiting"), "{refused}");
+
+    s.bot_call("ask_unattended", json!({ "root": "docs" }), "42")
+        .await;
+    control(&fx.paths, answer(true)).await;
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    assert_eq!(status["unattended_asks"], json!([]));
+    let loan = &status["roots"][0]["bots"][0];
+    assert_eq!(loan["unattended"], true, "{loan}");
+    assert_eq!(loan["name"], "Issue fixer", "the loan keeps its name");
+
+    let mut s = connect_or_keep(&mut server, s).await;
+    let already = s
+        .bot_call("ask_unattended", json!({ "root": "docs" }), "42")
+        .await;
+    assert_eq!(already["structuredContent"], json!({ "status": "already" }));
+
+    let log = cww::audit::tail(&fx.paths.audit_file(), 200).unwrap();
+    let events: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
+    for event in [
+        "root_bot_unattended_asked",
+        "root_bot_unattended_declined",
+        "root_bot_lent",
+    ] {
+        assert!(events.contains(&event), "{event} in {events:?}");
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| **e == "root_bot_unattended_asked")
+            .count(),
+        2,
+        "one per question, none for a repeat"
+    );
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
 /// The session again, or the daemon's new one if it reconnected after a
 /// settings change.
 async fn connect_or_keep(server: &mut FakeServer, session: Session) -> Session {

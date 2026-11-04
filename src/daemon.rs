@@ -71,6 +71,12 @@ struct Daemon {
     /// The chat API as this device, while it's paired.
     chat_client: Mutex<Option<Arc<ChatClient>>>,
     notifications: Arc<crate::notification_delivery::Client>,
+    /// Bots' requests for unattended commands, waiting for the person here.
+    asks: Arc<crate::unattended_asks::Asks>,
+    /// Subscribers that answer those requests in a dialog of their own (the
+    /// desktop app). While there are none, a system notification tells
+    /// the person instead.
+    answering: std::sync::atomic::AtomicUsize,
 }
 
 /// The longest question the terminal may send, as the server allows.
@@ -603,8 +609,13 @@ async fn run_with_notifications(
         events,
         changes,
         shutdown: shutdown.clone(),
+        asks: Arc::new(crate::unattended_asks::Asks::load(
+            paths.state_dir.join("unattended-asks.json"),
+        )),
+        answering: std::sync::atomic::AtomicUsize::new(0),
         paths,
     });
+    tokio::spawn(Arc::clone(&daemon).tell_of_asks(shutdown.clone()));
     tokio::spawn(Arc::clone(&daemon).publish_status(shutdown.clone()));
     tokio::spawn(crate::printing::purge_print_files(
         daemon.paths.state_dir.join("printing"),
@@ -650,6 +661,7 @@ impl Daemon {
             config.limits.max_message_bytes,
         )
         .with_commands(command_tools(&config, &self.runner))
+        .with_asks(Arc::clone(&self.asks))
         .with_printing(crate::printing::tools::PrintTools {
             runner: self.runner.clone(),
             printers: crate::printing::settings::offered(&config),
@@ -665,6 +677,89 @@ impl Daemon {
                 )
             }),
         )
+    }
+
+    /// When a bot asks for unattended commands: the status changes, so the
+    /// desktop app asks the person in its own dialog, and when no app
+    /// answers, a system notification says to open it.
+    async fn tell_of_asks(self: Arc<Self>, shutdown: CancellationToken) {
+        // Each request is told of once.
+        let mut told = std::collections::HashSet::new();
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = self.asks.asked() => {}
+            }
+            self.changes.bump();
+            if self.answering.load(Ordering::SeqCst) > 0 {
+                continue;
+            }
+            let config = self.config.lock().await.clone();
+            let shown = self.asks.list(&config);
+            let pending = self.asks.pending();
+            told.retain(|ask| pending.contains(ask));
+            for ask in pending {
+                if !told.insert(ask.clone()) {
+                    continue;
+                }
+                let Some(view) = shown
+                    .iter()
+                    .find(|view| view.root == ask.root && view.bot == ask.bot)
+                else {
+                    continue;
+                };
+                let body = format!(
+                    "{} asks to run commands in {} without asking each time. Open Chat with \
+                     Work Desktop to answer, or run `cww roots requests`.",
+                    crate::unattended_asks::bot_name(view),
+                    view.folder
+                );
+                if let Err(e) = self.notifications.notice(
+                    &ask.notice_id(),
+                    "A bot asks to run commands unattended",
+                    &body,
+                ) {
+                    tracing::warn!("couldn't show a bot's request: {e:#}");
+                }
+            }
+        }
+    }
+
+    /// The requests waiting, named from `config`, after dropping those
+    /// nothing is left to answer for and withdrawing their notifications.
+    fn asks_json(&self, config: &Config) -> Value {
+        for stale in self.asks.prune(config) {
+            let _ = self.notifications.withdraw_notice(&stale.notice_id());
+        }
+        json!(self.asks.list(config))
+    }
+
+    /// The person's answer to a bot's request, from this computer: allowing
+    /// does what `roots_bot` with `unattended: true` does.
+    async fn answer_ask(&self, which: String, bot: String, allow: bool) -> Result<Value> {
+        let (root, label) = {
+            let config = self.config.lock().await;
+            let root = config
+                .roots
+                .iter()
+                .find(|r| r.id == which || r.label == which)
+                .with_context(|| format!("no shared folder {which:?}"))?;
+            (root.id.clone(), root.label.clone())
+        };
+        let ask = self
+            .asks
+            .take(&root, &bot)
+            .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
+        let _ = self.notifications.withdraw_notice(&ask.notice_id());
+        if allow {
+            return self.set_bot(root, bot, None, true, true).await;
+        }
+        let mut entry = AuditEntry::event("root_bot_unattended_declined");
+        entry.detail = Some(format!("{root} ({label}) for bot {bot}"));
+        self.audit.append(&entry);
+        self.changes.bump();
+        let config = self.config.lock().await;
+        Ok(json!({ "root": config.root(&root) }))
     }
 
     /// Push a fresh status to subscribers whenever something changes. Sleeps
@@ -1364,6 +1459,7 @@ impl Daemon {
             "printers": config.printers,
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
             "commands": commands_host(&config),
+            "unattended_asks": self.asks_json(&config),
         })
     }
 
@@ -1468,6 +1564,14 @@ impl ControlHandler for Daemon {
 
     async fn initial_status(&self) -> Option<Value> {
         Some(self.status_json().await)
+    }
+
+    fn answering_asks(&self, on: bool) {
+        if on {
+            self.answering.fetch_add(1, Ordering::SeqCst);
+        } else {
+            self.answering.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     async fn watch_chat(&self, chat: &str) -> Result<()> {
@@ -1629,6 +1733,9 @@ impl ControlHandler for Daemon {
                 lent,
                 unattended,
             } => self.set_bot(root, bot, name, lent, unattended).await,
+            ControlRequest::RootsUnattendedAnswer { root, bot, allow } => {
+                self.answer_ask(root, bot, allow).await
+            }
             ControlRequest::RootsReadBudget { root, read_budget } => {
                 self.set_read_budget(root, read_budget).await
             }

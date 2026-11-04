@@ -113,6 +113,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
+- `unattended_asks` lists the bots asking to run their commands unattended in a folder lent to them, waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
 - `read_budget` is there when the folder has a read budget of its own that counts (see `roots_read_budget`): the characters a chat may read from it per rolling hour. It's absent while no hourly read limit is set.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
 
@@ -265,6 +266,16 @@ Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and
 A loan's `claude_code` (shown when true) gives the bot's commands there this computer's Claude Code sign-in; only `cww coding setup` and `cww coding allow <root> <bot> [--off]` change it, and it ends with commands or changes in the folder, as `unattended` does ([docs/coding-computers.md](docs/coding-computers.md)).
 
 The desktop app lists these grants in Shared folders. Selection and unattended command controls live in the bot’s computer integration, in an app-owned settings pane; native confirmation is required to widen access. The old `lend` and `stop-lending` CLI names remain hidden aliases.
+
+### `roots_unattended_answer`
+
+```json
+{"cmd": "roots_unattended_answer", "root": "app", "bot": "42", "allow": true}
+```
+
+The person's answer to a bot's request to run its commands unattended in a folder lent to it, which Chat with Work can make with `ask_unattended` (PROTOCOL.md 7.2.1) but never grant. `allow: true` does what `roots_bot` with `lent: true, unattended: true` does, keeping the loan's name, and answers the same way, with a `root_bot_lent` audit entry; `allow: false` drops the request and writes `root_bot_unattended_declined`, answering with the `root`. Refused when no request from that bot is waiting for that folder: requests last 24 hours, and sharing again with `unattended`, stopping, or turning the folder's commands off answers them too. `status` lists the requests waiting in `unattended_asks`.
+
+The desktop app asks the person in a dialog of its own, one request at a time ("Issue fixer asks to run commands in App without asking each time. They still run in the folder's sandbox and are recorded. Allow?", Allow or Not now), while it's subscribed with the `asks` topic; while no client is, the daemon shows a system notification that says to open the app. `cww roots requests` lists the requests, `cww status` shows each under its loan, `cww roots share <root> <bot> --unattended` allows one and `cww roots decline <root> <bot>` turns it down. Settings pages can't send this request.
 
 ### Printers
 
@@ -652,6 +663,8 @@ To keep the chat list current, subscribe to the `chats` topic:
 ```json
 {"cmd": "subscribe", "topics": ["chats"]}
 ```
+
+A client that answers bots' requests for unattended commands in a dialog of its own (the desktop app) adds the `asks` topic. It brings no events; while one such client is subscribed, the daemon shows no system notification for a new request. A daemon from before 0.13.0 refuses the topic: subscribe again without it.
 
 The daemon subscribes to the server's list channel once however many clients watch it, and leaves it when the last one hangs up. List the chats (`chats`) when it says `watching`, then apply each change as it comes. A server from before live lists never says `watching`, and a daemon from before it refuses the topic (`bad request: unknown variant`): read the list again after each change instead. Hanging up ends any subscription at once.
 

@@ -313,6 +313,8 @@ For such a call the daemon:
 - refuses, with `not_lent`, `run_status`, `run_output` and `run_stop` for a command that isn't running in a folder lent to it;
 - refuses, with `needs_approval`, a `run` (not a dry run) that also carries `"com.chatwithwork/unattended": true` in a folder whose loan doesn't allow unattended commands. The server sends that flag when it runs the bot's command without asking anyone, which it does only where `roots` said `"unattended": true`.
 
+A bot's chat can also **ask** the person on the computer to let its commands run unattended in a folder lent to it, and only ask: `tools/call` with `"name": "ask_unattended"`, `"arguments": {"root": "<root id>"}` and the bot's ID in `_meta`. The tool is never in `tools/list`, so no model sees or calls it; the server calls it by name, from 0.13.0 on (an older daemon answers `-32602` unknown tool). It answers `{"status": "asked"}` when a request is now waiting for the person, or already was (a repeat asks nobody again), and `{"status": "already"}` when the loan is already unattended. It refuses with `not_lent` a call without a bot's ID or for a folder not lent to that bot, and with `not_writable` a folder whose commands aren't allowed. Nothing changes until the person answers on the computer: in the desktop app's own dialog, which names the bot and the folder from the computer's own settings, never the server's words, or from the command line or the control API (CONTROL.md, `roots_unattended_answer`). Allowing does what lending with unattended commands does; a request lasts 24 hours. The audit log records `root_bot_unattended_asked` and, when the person says no, `root_bot_unattended_declined`.
+
 Each folder still allows only what it allows anyone: changes where changes are allowed, commands where commands are allowed. Calls without `com.chatwithwork/botId` are a person's, as before. The audit log's entries for a bot's calls say `for bot <id>`. Lending a folder, stopping, and changing whether its commands run unattended write `root_bot_lent` and `root_bot_withdrawn` entries. Stopping commands in a folder, or making it read-only, ends every loan's unattended commands there.
 
 ### 7.3 Methods
@@ -322,7 +324,7 @@ Each folder still allows only what it allows anyone: changes where changes are a
 | `server/discover` | `supportedVersions`, `capabilities: {"tools":{}}`, and `_meta["io.modelcontextprotocol/serverInfo"] = {"name":"cww","version":…}`. |
 | `initialize` | Legacy handshake (7.1). `serverInfo.name` is `cww`, and the result carries instructions. |
 | `tools/list` | The seven read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the printing tools while a printer is allowed (8.21), the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands, printers or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
-| `tools/call` | See section 8. |
+| `tools/call` | See section 8, and `ask_unattended` (7.2.1), which a bot's chat calls by name though it's never listed. |
 | `notifications/initialized`, `notifications/cancelled` | Accepted. Cancelling abandons a call in progress. |
 | `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, anything else | `-32601` method not found. |
 
@@ -827,12 +829,12 @@ It answers `{ "printer", "label", "job", "state", "pages", "copies", "already" }
 | `unsupported` | The file can't be turned into text (binary, encrypted or damaged). |
 | `rate_limited` | A time-based limit the person set on the computer was hit, for reads or for changes (none is set by default, section 10), or as many commands as may run at once are running. The refusals of the tool calls per minute and of the hourly read budgets say when they free up ("It frees up in about 12 minutes: stop calling this computer's tools until then, and tell the person."), so the caller stops calling instead of spending its turns on refusals; the change budgets and the copy budget say only to try again later. A `grep` or `glob` whose first result is larger than what's left of the read budget says so, and to narrow the search, instead. |
 | `paused` | The user ran `cww pause`. |
-| `not_writable` | A change in a shared folder that doesn't allow changes. The message names the folder's label and says the person can allow changes on their computer. |
+| `not_writable` | A change in a shared folder that doesn't allow changes, or a command or `ask_unattended` (7.2.1) in one that doesn't allow commands. The message names the folder's label and says the person can allow changes on their computer. |
 | `exists` | Something is already at the path (or at `to`), and the call doesn't replace it. |
 | `not_changeable` | A kind of file the daemon never makes or changes: a program or launcher, an executable file, a binary file as text, an Office file as text. |
 | `trash_unavailable` | The system trash can't take the old version or the item, so nothing changed. |
 | `conflict` | The file changed since the caller looked (`expected_sha256`, or during the change). |
-| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it, or used a browser not lent to it. |
+| `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it, or used a browser not lent to it; or `ask_unattended` without a bot's ID. |
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
 | `browser_unavailable`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `no_tab`, `sensitive_field`, `would_submit`, `page_error` | The browser tools' refusals and failures (8.16). A browser action while the person allows only reading is `not_writable`. |
 | `internal` | Unexpected failure. |

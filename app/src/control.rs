@@ -185,9 +185,14 @@ impl Client {
 /// the app sees carries the last tool call, and changes with every audit
 /// entry so the activity log can refresh.
 fn watch_once(client: &Client, socket: &Path, on_status: &mut dyn FnMut(Status)) -> Result<()> {
-    let events = connect(socket)?
-        .subscribe(&[Topic::Status, Topic::Audit])
-        .map_err(|e| ControlError::Refused(format!("{e:#}")))?;
+    // The app answers bots' requests for unattended commands in its own
+    // dialog (`asks`); a daemon older than that topic refuses it.
+    let events = match connect(socket)?.subscribe(&[Topic::Status, Topic::Audit, Topic::Asks]) {
+        Ok(events) => events,
+        Err(_) => connect(socket)?
+            .subscribe(&[Topic::Status, Topic::Audit])
+            .map_err(|e| ControlError::Refused(format!("{e:#}")))?,
+    };
     let mut last_access = client
         .log(200)
         .ok()

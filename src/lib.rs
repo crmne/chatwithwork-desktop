@@ -47,6 +47,7 @@ pub mod tools;
 pub mod trash;
 pub mod tui;
 pub mod tunnel;
+pub mod unattended_asks;
 #[cfg(windows)]
 pub mod win;
 pub mod workspace;

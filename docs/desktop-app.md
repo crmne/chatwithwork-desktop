@@ -104,7 +104,9 @@ Scan… in the tray, `cww-app --scan`, or the composer's attach menu in the Chat
 
 Shared folders and Browser list which bots currently use them. The switches live in the bot’s Settings, inside its existing **Use this computer** integration. The app independently resolves that bot through the paired device’s DPoP API before showing or changing a grant. A different account, another person’s device, a guest, a private or inaccessible bot, or an integration for another device cannot mount it. Sharing more requires an OS dialog; stopping sharing takes effect immediately. Unattended commands appear only where the folder allows commands and require a separate confirmation.
 
-The CLI uses `cww roots share <root> <bot> [--unattended]`, `cww roots unshare <root> <bot>`, and `cww browser share|unshare <bot>`. Older command names remain hidden aliases; the local wire fields and audit event names remain compatible.
+When a bot asks to run its commands unattended in a folder lent to it (`ask_unattended`, PROTOCOL.md 7.2.1), the app asks in a native dialog of its own, one request at a time and after any other question it's asking, with the bot's and the folder's names from this computer's settings: Allow does what turning on unattended commands in the bot's settings does, Not now drops the request. The app subscribes to the daemon with the `asks` topic so the daemon doesn't also show a system notification (CONTROL.md, `roots_unattended_answer`); settings pages and server pages can't answer.
+
+The CLI uses `cww roots share <root> <bot> [--unattended]`, `cww roots unshare <root> <bot>`, `cww roots requests`, `cww roots decline <root> <bot>`, and `cww browser share|unshare <bot>`. Older command names remain hidden aliases; the local wire fields and audit event names remain compatible.
 
 ## Same-window settings contract (`settings-pane-v1`)
 
