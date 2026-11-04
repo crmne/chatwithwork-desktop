@@ -610,10 +610,25 @@ impl LocalFiles {
             return Ok(Output::Ask(json!({ "status": "already" })));
         }
         let asks = self.inner.asks.as_ref().expect("offered only with asks");
-        if asks.ask(&root, id) {
-            let mut entry = AuditEntry::event("root_bot_unattended_asked");
-            entry.detail = Some(format!("{root} ({}) for bot {id}", folder.label));
-            self.inner.audit.append(&entry);
+        let asked = asks.ask(&root, id).map_err(|e| {
+            ToolError::new(
+                ErrorCode::Internal,
+                format!("The request couldn't be kept on this computer: {e:#}"),
+            )
+        })?;
+        match asked {
+            crate::unattended_asks::Asked::Queued => {
+                let mut entry = AuditEntry::event("root_bot_unattended_asked");
+                entry.detail = Some(format!("{root} ({}) for bot {id}", folder.label));
+                self.inner.audit.append(&entry);
+            }
+            crate::unattended_asks::Asked::Already => {}
+            crate::unattended_asks::Asked::Full => {
+                return Err(ToolError::new(
+                    ErrorCode::RateLimited,
+                    "Too many bots' requests are waiting for the person on this computer.                      Ask again once they've answered some.",
+                ));
+            }
         }
         Ok(Output::Ask(json!({ "status": "asked" })))
     }

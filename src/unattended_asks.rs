@@ -54,9 +54,23 @@ pub struct AskView {
     pub expires_at: String,
 }
 
+/// What [`Asks::ask`] did with a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    /// It's waiting for the person now.
+    Queued,
+    /// The same request already was.
+    Already,
+    /// Too many wait already; it wasn't queued.
+    Full,
+}
+
 pub struct Asks {
     file: Option<PathBuf>,
     pending: Mutex<Vec<Ask>>,
+    /// Held while the list is written, so writes land in order, outside
+    /// the list's own lock.
+    saving: Mutex<()>,
     /// Woken when a new request comes in.
     asked: tokio::sync::Notify,
 }
@@ -82,9 +96,12 @@ impl Asks {
         let asks = Self {
             file: Some(file),
             pending: Mutex::new(pending),
+            saving: Mutex::new(()),
             asked: tokio::sync::Notify::new(),
         };
-        asks.edit(|_| ());
+        let _ = asks.edit(|_| ());
+        // Restored requests are told of as new ones are.
+        asks.asked.notify_one();
         asks
     }
 
@@ -93,12 +110,13 @@ impl Asks {
         Self {
             file: None,
             pending: Mutex::new(Vec::new()),
+            saving: Mutex::new(()),
             asked: tokio::sync::Notify::new(),
         }
     }
 
     /// Change the list (dropping expired requests first) and save it.
-    fn edit<T>(&self, change: impl FnOnce(&mut Vec<Ask>) -> T) -> T {
+    fn edit<T>(&self, change: impl FnOnce(&mut Vec<Ask>) -> T) -> (T, anyhow::Result<()>) {
         let now = now();
         self.edit_all(|pending| {
             pending.retain(|ask| ask.expires_at > now);
@@ -106,32 +124,39 @@ impl Asks {
         })
     }
 
-    /// Change the list, expired requests included, and save it.
-    fn edit_all<T>(&self, change: impl FnOnce(&mut Vec<Ask>) -> T) -> T {
-        let mut pending = self.pending.lock().expect("unattended asks");
-        let before = pending.clone();
-        let result = change(&mut pending);
-        if *pending != before
-            && let Some(file) = &self.file
-        {
-            let saved = serde_json::to_vec(&*pending)
+    /// Change the list, expired requests included, and save it. The file
+    /// is written after the list's lock is let go, so a slow disk never
+    /// holds up a reader; a failed save says why.
+    fn edit_all<T>(&self, change: impl FnOnce(&mut Vec<Ask>) -> T) -> (T, anyhow::Result<()>) {
+        let _saving = self.saving.lock().expect("unattended asks saving");
+        let (result, snapshot) = {
+            let mut pending = self.pending.lock().expect("unattended asks");
+            let before = pending.clone();
+            let result = change(&mut pending);
+            let changed = *pending != before;
+            (result, changed.then(|| pending.clone()))
+        };
+        let saved = match (snapshot, &self.file) {
+            (Some(snapshot), Some(file)) => serde_json::to_vec(&snapshot)
                 .map_err(anyhow::Error::from)
-                .and_then(|bytes| crate::paths::write_private_file(file, &bytes));
-            if let Err(e) = saved {
-                tracing::warn!("couldn't save the bots' requests: {e:#}");
-            }
+                .and_then(|bytes| crate::paths::write_private_file(file, &bytes)),
+            _ => Ok(()),
+        };
+        if let Err(e) = &saved {
+            tracing::warn!("couldn't save the bots' requests: {e:#}");
         }
-        result
+        (result, saved)
     }
 
-    /// Queue a request from `bot` for folder `root`. False when one is
-    /// already waiting (or too many are), so nobody is asked twice.
-    pub fn ask(&self, root: &str, bot: &str) -> bool {
-        let added = self.edit(|pending| {
-            if pending.len() >= MAX_PENDING
-                || pending.iter().any(|ask| ask.root == root && ask.bot == bot)
-            {
-                return false;
+    /// Queue a request from `bot` for folder `root`, unless the same one
+    /// waits or too many do. A request that can't be saved isn't queued.
+    pub fn ask(&self, root: &str, bot: &str) -> anyhow::Result<Asked> {
+        let (asked, saved) = self.edit(|pending| {
+            if pending.iter().any(|ask| ask.root == root && ask.bot == bot) {
+                return Asked::Already;
+            }
+            if pending.len() >= MAX_PENDING {
+                return Asked::Full;
             }
             let asked_at = now();
             pending.push(Ask {
@@ -140,22 +165,53 @@ impl Asks {
                 asked_at,
                 expires_at: asked_at + TTL.as_secs() as i64,
             });
-            true
+            Asked::Queued
         });
-        if added {
+        if asked == Asked::Queued {
+            if let Err(e) = saved {
+                // Not kept in memory either: the bot is told it failed.
+                let _ = self.edit(|pending| pending.retain(|a| !(a.root == root && a.bot == bot)));
+                return Err(e);
+            }
             self.asked.notify_one();
         }
-        added
+        Ok(asked)
     }
 
-    /// Take the request from `bot` for `root` off the list, if one waits.
-    pub fn take(&self, root: &str, bot: &str) -> Option<Ask> {
+    /// Take the request from `bot` for `root` off the list, if one waits
+    /// and `config` still leaves it something to answer for: the folder
+    /// still lent to that bot, with commands, not unattended yet.
+    pub fn take(&self, root: &str, bot: &str, config: &Config) -> Option<Ask> {
         self.edit(|pending| {
             let index = pending
                 .iter()
-                .position(|ask| ask.root == root && ask.bot == bot)?;
+                .position(|ask| ask.root == root && ask.bot == bot && open(config, ask))?;
             Some(pending.remove(index))
         })
+        .0
+    }
+
+    /// Put back a request taken for an answer that didn't go through.
+    pub fn restore(&self, ask: Ask) {
+        let _ = self.edit_all(|pending| {
+            if !pending
+                .iter()
+                .any(|a| a.root == ask.root && a.bot == ask.bot)
+            {
+                pending.push(ask);
+            }
+        });
+    }
+
+    /// Forget every request: the computer was paired with another server,
+    /// whose bots' numbers mean other bots. Returns them.
+    pub fn clear(&self) -> Vec<Ask> {
+        self.edit_all(std::mem::take).0
+    }
+
+    /// Wake whoever tells of requests, to look again.
+    pub fn wake(&self) {
+        self.asked.notify_one();
     }
 
     /// Drop the requests `config` no longer leaves anything to answer for:
@@ -170,6 +226,7 @@ impl Asks {
             *pending = kept;
             stale
         })
+        .0
     }
 
     /// The requests waiting, oldest first, named from `config`.
@@ -197,7 +254,7 @@ impl Asks {
 
     /// The requests waiting, as stored.
     pub fn pending(&self) -> Vec<Ask> {
-        self.edit(|pending| pending.clone())
+        self.edit(|pending| pending.clone()).0
     }
 
     /// Wait for a new request.
@@ -268,8 +325,12 @@ mod tests {
     #[test]
     fn asks_once_until_answered() {
         let asks = Asks::in_memory();
-        assert!(asks.ask("app", "42"));
-        assert!(!asks.ask("app", "42"), "a repeat raises no second question");
+        assert_eq!(asks.ask("app", "42").unwrap(), Asked::Queued);
+        assert_eq!(
+            asks.ask("app", "42").unwrap(),
+            Asked::Already,
+            "a repeat raises no second question"
+        );
         let list = asks.list(&config(true, false));
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].folder, "App");
@@ -279,22 +340,64 @@ mod tests {
             "Issue fixer asks to run commands in App without asking each time. They still \
              run in the folder's sandbox and are recorded. Allow?"
         );
-        assert!(asks.take("app", "42").is_some());
-        assert!(asks.take("app", "42").is_none());
-        assert!(asks.ask("app", "42"), "asks again after an answer");
+        assert!(asks.take("app", "42", &config(true, false)).is_some());
+        assert!(asks.take("app", "42", &config(true, false)).is_none());
+        assert_eq!(
+            asks.ask("app", "42").unwrap(),
+            Asked::Queued,
+            "asks again after an answer"
+        );
+    }
+
+    #[test]
+    fn a_request_whose_loan_went_away_cant_be_answered() {
+        let asks = Asks::in_memory();
+        asks.ask("app", "42").unwrap();
+        let mut withdrawn = config(true, false);
+        withdrawn.roots[0].bots.clear();
+        assert!(asks.take("app", "42", &withdrawn).is_none());
+        assert!(
+            asks.take("app", "42", &config(false, false)).is_none(),
+            "commands stopped"
+        );
+        let ask = asks.take("app", "42", &config(true, false)).unwrap();
+        asks.restore(ask);
+        assert_eq!(asks.pending().len(), 1, "put back when the answer failed");
+        assert_eq!(asks.clear().len(), 1);
+        assert!(asks.pending().is_empty());
+    }
+
+    #[test]
+    fn a_full_queue_says_so() {
+        let asks = Asks::in_memory();
+        for bot in 0..MAX_PENDING {
+            assert_eq!(asks.ask("app", &bot.to_string()).unwrap(), Asked::Queued);
+        }
+        assert_eq!(asks.ask("app", "999").unwrap(), Asked::Full);
+    }
+
+    #[test]
+    fn a_request_that_cant_be_saved_isnt_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        // A folder where the file should be: every save fails.
+        let file = dir.path().join("asks.json");
+        std::fs::create_dir(&file).unwrap();
+        let asks = Asks::load(file);
+        assert!(asks.ask("app", "42").is_err());
+        assert!(asks.pending().is_empty());
     }
 
     #[test]
     fn drops_what_nothing_is_left_to_answer_for() {
         let asks = Asks::in_memory();
-        asks.ask("app", "42");
+        asks.ask("app", "42").unwrap();
         assert!(asks.prune(&config(true, false)).is_empty());
         assert_eq!(
             asks.prune(&config(true, true)).len(),
             1,
             "already unattended"
         );
-        asks.ask("app", "42");
+        asks.ask("app", "42").unwrap();
         assert!(asks.list(&config(false, false)).is_empty());
         assert_eq!(
             asks.prune(&config(false, false)).len(),
@@ -309,7 +412,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("asks.json");
         let asks = Asks::load(file.clone());
-        asks.ask("app", "42");
+        asks.ask("app", "42").unwrap();
         let again = Asks::load(file.clone());
         assert_eq!(again.pending().len(), 1);
         let mut old = again.pending();

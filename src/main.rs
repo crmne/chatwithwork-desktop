@@ -599,8 +599,12 @@ enum RootsCommand {
     #[command(name = "unshare", alias = "stop-lending")]
     StopLending { root: String, bot: String },
     /// List the bots asking to run their commands unattended in a folder
-    /// shared with them. `share <root> <bot> --unattended` allows it.
+    /// shared with them.
     Requests,
+    /// Allow a bot's request to run its commands unattended in a folder,
+    /// through the daemon, which records it. It lasts until the folder's
+    /// sharing changes.
+    Allow { root: String, bot: String },
     /// Turn down a bot's request to run its commands unattended in a
     /// folder.
     Decline { root: String, bot: String },
@@ -1139,6 +1143,17 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 println!("{}", describe_ask(&ask));
             }
         }
+        RootsCommand::Allow { root, bot } => {
+            let request = ControlRequest::RootsUnattendedAnswer {
+                root,
+                bot: bot.clone(),
+                allow: true,
+            };
+            if control::request(&paths.socket_path(), request)?.is_none() {
+                anyhow::bail!("the daemon is not running, so no request is waiting");
+            }
+            println!("Bot {bot}'s commands there now run without asking each time.");
+        }
         RootsCommand::Decline { root, bot } => {
             let request = ControlRequest::RootsUnattendedAnswer {
                 root,
@@ -1571,9 +1586,9 @@ fn describe_ask(ask: &Value) -> String {
         .filter(|n| !n.trim().is_empty())
         .map_or_else(|| format!("Bot {bot}"), str::to_string);
     format!(
-        "{name} asks to run commands in {} without asking each time, until {}. \
-         `cww roots share {root} {bot} --unattended` allows it, \
-         `cww roots decline {root} {bot}` doesn't.",
+        "{name} asks to run commands in {} without asking each time; the request waits \
+         until {}. `cww roots allow {root} {bot}` allows it until you change the folder's \
+         sharing, `cww roots decline {root} {bot}` doesn't.",
         str(&ask["folder"]),
         str(&ask["expires_at"])
     )

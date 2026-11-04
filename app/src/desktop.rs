@@ -50,6 +50,9 @@ pub struct Desktop {
     pub updates: Arc<crate::update::Updates>,
     /// A thread is asking about bots' requests for unattended commands.
     answering_asks: AtomicBool,
+    /// The requests answered here, kept until the daemon stops listing
+    /// them, so a late status that still does never asks again.
+    answered_asks: Mutex<std::collections::HashSet<crate::model::UnattendedAsk>>,
 }
 
 impl Desktop {
@@ -212,9 +215,11 @@ impl Desktop {
         let spawned = std::thread::Builder::new()
             .name("cww-unattended-asks".into())
             .spawn(move || {
-                let mut answered = std::collections::HashSet::new();
                 loop {
                     let next = desktop.status().and_then(|status| {
+                        let mut answered = desktop.answered_asks.lock().expect("answered asks");
+                        // Forget those the daemon no longer lists.
+                        answered.retain(|ask| status.unattended_asks.contains(ask));
                         status
                             .unattended_asks
                             .into_iter()
@@ -224,6 +229,7 @@ impl Desktop {
                         desktop.answering_asks.store(false, Ordering::SeqCst);
                         // One that came in while this thread was stopping.
                         let more = desktop.status().is_some_and(|status| {
+                            let answered = desktop.answered_asks.lock().expect("answered asks");
                             status.unattended_asks.iter().any(|a| !answered.contains(a))
                         });
                         if more && !desktop.answering_asks.swap(true, Ordering::SeqCst) {
@@ -231,7 +237,9 @@ impl Desktop {
                         }
                         return;
                     };
-                    let Some(_asking) = desktop.asking.start() else {
+                    // After any question of the app's own, and of a page's.
+                    let free = !desktop.preferences.confirming();
+                    let Some(_asking) = desktop.asking.start().filter(|_| free) else {
                         // Another question is showing: this one waits.
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         continue;
@@ -260,7 +268,11 @@ impl Desktop {
                         // Answered elsewhere meanwhile, or no longer open.
                         log::info!("a bot's request wasn't answered here: {e}");
                     }
-                    answered.insert(ask);
+                    desktop
+                        .answered_asks
+                        .lock()
+                        .expect("answered asks")
+                        .insert(ask);
                 }
             });
         if spawned.is_err() {
@@ -557,6 +569,7 @@ pub fn run(
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
         answering_asks: AtomicBool::new(false),
+        answered_asks: Mutex::new(std::collections::HashSet::new()),
         updates: Arc::new(crate::update::Updates::new(
             update_error,
             dismissed_update,

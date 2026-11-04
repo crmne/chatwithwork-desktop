@@ -699,7 +699,7 @@ impl Daemon {
             let pending = self.asks.pending();
             told.retain(|ask| pending.contains(ask));
             for ask in pending {
-                if !told.insert(ask.clone()) {
+                if told.contains(&ask) {
                     continue;
                 }
                 let Some(view) = shown
@@ -714,12 +714,17 @@ impl Daemon {
                     crate::unattended_asks::bot_name(view),
                     view.folder
                 );
-                if let Err(e) = self.notifications.notice(
+                // Told once its notice is on its way; one that couldn't be
+                // sent is tried again with the next change.
+                match self.notifications.notice(
                     &ask.notice_id(),
                     "A bot asks to run commands unattended",
                     &body,
                 ) {
-                    tracing::warn!("couldn't show a bot's request: {e:#}");
+                    Ok(()) => {
+                        told.insert(ask);
+                    }
+                    Err(e) => tracing::warn!("couldn't show a bot's request: {e:#}"),
                 }
             }
         }
@@ -727,7 +732,11 @@ impl Daemon {
 
     /// The requests waiting, named from `config`, after dropping those
     /// nothing is left to answer for and withdrawing their notifications.
-    fn asks_json(&self, config: &Config) -> Value {
+    async fn asks_json(&self) -> Value {
+        // The config as it is now, not as it was before the status awaited
+        // anything: a request made meanwhile is never pruned by an old one.
+        let config = self.config.lock().await.clone();
+        let config = &config;
         for stale in self.asks.prune(config) {
             let _ = self.notifications.withdraw_notice(&stale.notice_id());
         }
@@ -739,21 +748,37 @@ impl Daemon {
     async fn answer_ask(&self, which: String, bot: String, allow: bool) -> Result<Value> {
         let (root, label) = {
             let config = self.config.lock().await;
+            // An ID first: the app sends one, and a label can be another
+            // folder's ID.
             let root = config
                 .roots
                 .iter()
-                .find(|r| r.id == which || r.label == which)
+                .find(|r| r.id == which)
+                .or_else(|| config.roots.iter().find(|r| r.label == which))
                 .with_context(|| format!("no shared folder {which:?}"))?;
             (root.id.clone(), root.label.clone())
         };
-        let ask = self
-            .asks
-            .take(&root, &bot)
-            .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
-        let _ = self.notifications.withdraw_notice(&ask.notice_id());
-        if allow {
-            return self.set_bot(root, bot, None, true, true).await;
+        // Only a request the config still leaves open: a loan withdrawn
+        // meanwhile is never lent again by an old request.
+        let ask = {
+            let config = self.config.lock().await;
+            self.asks.take(&root, &bot, &config)
         }
+        .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
+        if allow {
+            return match self.set_bot(root, bot, None, true, true).await {
+                Ok(answer) => {
+                    let _ = self.notifications.withdraw_notice(&ask.notice_id());
+                    Ok(answer)
+                }
+                Err(e) => {
+                    // Still waiting: the person can try again.
+                    self.asks.restore(ask);
+                    Err(e)
+                }
+            };
+        }
+        let _ = self.notifications.withdraw_notice(&ask.notice_id());
         let mut entry = AuditEntry::event("root_bot_unattended_declined");
         entry.detail = Some(format!("{root} ({label}) for bot {bot}"));
         self.audit.append(&entry);
@@ -931,6 +956,11 @@ impl Daemon {
         self.runner.prune().await;
         if pairing_changed {
             self.tunnel_token.lock().await.cancel();
+            // Another server's bots have other numbers: a request from
+            // the old one must not be allowed for the new one's bot.
+            for ask in self.asks.clear() {
+                let _ = self.notifications.withdraw_notice(&ask.notice_id());
+            }
         }
         self.reloaded.notify_one();
         self.audit.append(&AuditEntry::event("reloaded"));
@@ -1459,7 +1489,7 @@ impl Daemon {
             "printers": config.printers,
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
             "commands": commands_host(&config),
-            "unattended_asks": self.asks_json(&config),
+            "unattended_asks": self.asks_json().await,
         })
     }
 
@@ -1569,8 +1599,9 @@ impl ControlHandler for Daemon {
     fn answering_asks(&self, on: bool) {
         if on {
             self.answering.fetch_add(1, Ordering::SeqCst);
-        } else {
-            self.answering.fetch_sub(1, Ordering::SeqCst);
+        } else if self.answering.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // The last app went: a request it didn't answer gets a notice.
+            self.asks.wake();
         }
     }
 

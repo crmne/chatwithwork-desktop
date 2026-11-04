@@ -138,6 +138,16 @@ impl Panels {
             .is_some_and(|entry| entry.generation == generation)
     }
 
+    /// Whether a page has an inline confirmation showing or being
+    /// prepared: the app's own dialogs wait for it, one question at a time.
+    pub fn confirming(&self) -> bool {
+        self.0
+            .lock()
+            .expect("settings panels")
+            .values()
+            .any(|entry| entry.confirmation.is_some() || entry.preparation.is_some())
+    }
+
     /// Reserve before blocking status/context work. A late response cannot
     /// replace a newer visible question, or recreate one after navigation.
     pub fn begin_confirmation(&self, owner: &str) -> Result<String, String> {
