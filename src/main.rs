@@ -67,6 +67,13 @@ enum Command {
         #[command(subcommand)]
         command: RootsCommand,
     },
+    /// Lend this computer to a coding bot: a folder, Claude Code signed in
+    /// for it, the repository and its toolchain, checked in the sandbox
+    /// (docs/coding-computers.md).
+    Coding {
+        #[command(subcommand)]
+        command: CodingCommand,
+    },
     /// Manage the printers Chat with Work may use.
     Printers {
         #[command(subcommand)]
@@ -455,6 +462,73 @@ enum PrintersCommand {
 }
 
 #[derive(Subcommand)]
+enum CodingCommand {
+    /// Set this computer up for a coding bot, one step at a time. Asks
+    /// before each thing it allows or runs; run again, it skips what's done.
+    Setup {
+        /// The bot's number, from its address in Chat with Work (/bots/42).
+        #[arg(long)]
+        bot: Option<String>,
+        /// The bot's name, to recognize it here.
+        #[arg(long)]
+        name: Option<String>,
+        /// The folder it works in (default ~/bots).
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// The repository's SSH or https address.
+        #[arg(long)]
+        repo: Option<String>,
+        /// A deploy key to fetch it with (kept where it is, outside the
+        /// shared folders), instead of the keys `ssh` would offer.
+        #[arg(long)]
+        ssh_key: Option<PathBuf>,
+        /// Let the bot's commands there start without anyone approving each.
+        #[arg(long)]
+        unattended: bool,
+        /// The command that runs the repository's tests.
+        #[arg(long)]
+        test_command: Option<String>,
+        /// Answer yes to every question (never turns on --unattended).
+        #[arg(long)]
+        yes: bool,
+        /// Read the Claude Code token from standard input.
+        #[arg(long)]
+        token_stdin: bool,
+        /// Don't install the repository's toolchain or dependencies.
+        #[arg(long)]
+        skip_install: bool,
+        /// Don't run the tests and Claude Code in the sandbox at the end.
+        #[arg(long)]
+        skip_proof: bool,
+    },
+    /// What each bot's folders have, and the repositories' mirrors.
+    Status {
+        #[arg(long)]
+        bot: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keep a token from `claude setup-token` in this computer's secret store.
+    SignIn {
+        /// Read it from standard input instead of asking.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Forget the Claude Code token. Bots' next commands get none.
+    SignOut,
+    /// Let a bot's commands in a folder lent to it use the Claude Code
+    /// sign-in, or stop (`--off`).
+    Allow {
+        root: String,
+        bot: String,
+        #[arg(long)]
+        off: bool,
+    },
+    /// Fetch every repository's mirror now.
+    Fetch,
+}
+
+#[derive(Subcommand)]
 enum RootsCommand {
     /// Share a folder.
     Add {
@@ -728,6 +802,7 @@ fn run(cli: Cli) -> Result<()> {
             notify_daemon(&paths, "");
         }
         Command::Roots { command } => roots(&paths, command)?,
+        Command::Coding { command } => coding(&paths, command)?,
         Command::Printers { command } => {
             printers(&paths, command.unwrap_or(PrintersCommand::List))?
         }
@@ -931,6 +1006,96 @@ fn printers(paths: &Paths, command: PrintersCommand) -> Result<()> {
             config.save(paths)?;
             println!("{} is no longer shared with bot {bot}.", printer.label);
             notify_daemon(paths, "");
+        }
+    }
+    Ok(())
+}
+
+fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
+    use cww::coding::{self, repositories, setup};
+    let mut config = Config::load(paths)?;
+    match command {
+        CodingCommand::Setup {
+            bot,
+            name,
+            folder,
+            repo,
+            ssh_key,
+            unattended,
+            test_command,
+            yes,
+            token_stdin,
+            skip_install,
+            skip_proof,
+        } => setup::setup(
+            paths,
+            setup::Options {
+                bot,
+                bot_name: name,
+                folder,
+                repo,
+                ssh_key,
+                unattended: unattended.then_some(true),
+                test_command,
+                yes,
+                token_stdin,
+                skip_install,
+                skip_proof,
+            },
+        )?,
+        CodingCommand::Status { bot, json } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&setup::status_json(
+                        &config,
+                        paths,
+                        bot.as_deref()
+                    ))?
+                );
+            } else {
+                setup::summary(&config, paths, bot.as_deref());
+            }
+        }
+        CodingCommand::SignIn { stdin } => {
+            setup::store_token(&mut config, paths, stdin)?;
+            println!("Claude Code's sign-in is in this computer's secret store.");
+        }
+        CodingCommand::SignOut => {
+            coding::forget_token(&config, paths)?;
+            config.coding.claude_signed_in = false;
+            config.save(paths)?;
+            println!(
+                "Forgot Claude Code's sign-in here. Revoke the token at claude.ai too if it \
+                 may have leaked."
+            );
+            notify_daemon(paths, "");
+        }
+        CodingCommand::Allow { root, bot, off } => {
+            let root = cww::roots::set_bot_claude_code(&mut config, &root, &bot, !off)?;
+            config.save(paths)?;
+            println!(
+                "Bot {bot}'s commands in {} {} Claude Code's sign-in.",
+                root.label,
+                if off { "don't get" } else { "get" }
+            );
+            notify_daemon(paths, "");
+        }
+        CodingCommand::Fetch => {
+            for repo in &config.coding.repositories {
+                let mirror = repositories::mirror_dir(paths, repo);
+                if repositories::writable_by_commands(&mirror, &config.roots) {
+                    println!(
+                        "{} isn't fetched: its mirror is in a shared folder that allows changes",
+                        repo.name
+                    );
+                    continue;
+                }
+                match repositories::fetch(&mirror, Some(repo)) {
+                    Ok(()) => println!("Fetched {} ({}).", repo.name, repo.url),
+                    Err(e) => println!("{} didn't fetch: {e:#}", repo.name),
+                }
+            }
         }
     }
     Ok(())

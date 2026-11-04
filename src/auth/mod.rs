@@ -435,14 +435,18 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
     let file = SecretStore::File(paths.secrets_file());
     file.delete(DEVICE_KEY)?;
     file.delete(REFRESH_TOKEN)?;
+    // Claude Code's sign-in for coding bots (docs/coding-computers.md).
+    file.delete(crate::coding::TOKEN_NAME)?;
     if config.server.is_some() || config.secret_store.is_some() {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
+        store.delete(crate::coding::TOKEN_NAME)?;
         // What an older version saved, here too if it was never carried over.
         if store.in_keychain() {
             SecretStore::Keyring.delete(DEVICE_KEY)?;
             SecretStore::Keyring.delete(REFRESH_TOKEN)?;
+            SecretStore::Keyring.delete(crate::coding::TOKEN_NAME)?;
         }
     }
     // A damaged list fails the purge: deleting it would leave keys nothing

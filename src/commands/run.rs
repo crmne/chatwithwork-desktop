@@ -40,6 +40,21 @@ pub(super) fn spawn(
 }
 
 fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
+    // The run's clock starts now, fetching included.
+    let deadline = Instant::now() + Duration::from_secs(plan.limits.timeout_seconds.max(1));
+    // The folder's repositories, fresh: `git fetch origin` in the run reads
+    // the mirror, which only this side fetches. A stop ends a fetch too.
+    let stopped = || lock(cell).stop;
+    for (mirror, repo) in &plan.coding.mirrors {
+        if stopped() {
+            return State::Stopped;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return State::TimedOut;
+        }
+        crate::coding::repositories::fetch_if_stale(mirror, Some(repo), left, &stopped);
+    }
     if let Err(e) = make_home(plan) {
         return State::Failed(format!("couldn't make its home folder: {e}"));
     }
@@ -54,6 +69,14 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
         tracing::info!(run = %plan.id, code = %e.code, "the sandbox refused a command");
         return State::Failed(e.message);
     }
+    // A stop that came during the fetches, or the clock run out on them,
+    // starts nothing.
+    if stopped() {
+        return State::Stopped;
+    }
+    if Instant::now() >= deadline {
+        return State::TimedOut;
+    }
     let home = crate::paths::home_dir().ok();
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
@@ -63,6 +86,9 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
             return State::Failed(refusal(&e));
         }
     };
+    // Nothing to read: a program that waits for input (Claude Code waits
+    // three seconds) sees its end at once.
+    drop(process.take_stdin());
     let readers: Vec<_> = [
         (process.take_stdout(), Stream::Out),
         (process.take_stderr(), Stream::Err),
@@ -83,7 +109,6 @@ fn run(plan: &Plan, cell: &Arc<Mutex<Cell>>) -> State {
     })
     .collect();
     let closers = [process.stdout_closer(), process.stderr_closer()];
-    let deadline = Instant::now() + Duration::from_secs(plan.limits.timeout_seconds.max(1));
     let mut ended = None;
     let mut polls: u32 = 0;
     let state = loop {
@@ -272,6 +297,14 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
     }
     if cfg!(windows) {
         std::fs::write(plan.script_path(), super::windows::script(&plan.command))?;
+    }
+    #[cfg(unix)]
+    if let Some(claude) = &plan.coding.claude {
+        // The one `claude` first on its PATH: a link to the program setup
+        // checked, where it really is, which the sandbox reads.
+        let bin = plan.claude_bin();
+        std::fs::create_dir_all(&bin)?;
+        std::os::unix::fs::symlink(&claude.real, bin.join("claude"))?;
     }
     Ok(())
 }

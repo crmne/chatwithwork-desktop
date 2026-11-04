@@ -455,7 +455,13 @@ impl Plan {
     pub fn windows_environment(&self, host: &Host) -> Vec<(String, String)> {
         let found = host.toolchains();
         let own = display(&self.home);
-        let mut path: Vec<PathBuf> = found.path.clone();
+        let mut path: Vec<PathBuf> = Vec::new();
+        if let Some(claude) = &self.coding.claude {
+            // The folder of the `claude.exe` setup checked comes first, as
+            // it's named there.
+            path.push(claude.entry.clone().unwrap_or_else(|| claude.read.clone()));
+        }
+        path.extend(found.path.clone());
         path.extend(host.system_path(&self.folder));
         let system32 = host.system32();
         path.extend([
@@ -551,6 +557,7 @@ impl Plan {
                 format!("{own}\\AppData\\Local\\mise-state"),
             ),
         ]);
+        env.extend(self.coding_environment());
         for (name, value) in found.env {
             if name == "MISE_DATA_DIR" {
                 env.extend([
@@ -573,6 +580,7 @@ impl Plan {
     /// reads: the toolchains, and the system's `PATH` outside `C:\Windows`.
     pub fn windows_readable(&self, host: &Host) -> Vec<String> {
         let mut read = host.toolchains().read;
+        read.extend(self.coding_readable().into_iter().map(PathBuf::from));
         read.extend(
             host.system_path(&self.folder)
                 .into_iter()
@@ -1003,6 +1011,7 @@ mod tests {
                 output_chars: 20_000,
             },
             home: home.to_path_buf(),
+            coding: Default::default(),
         }
     }
 

@@ -134,7 +134,7 @@ While paused, every tool call from Chat with Work is refused with the `paused` e
 {"cmd": "reload"}
 ```
 
-Re-reads `config.toml`: roots, deny list, limits and pairing. Answers `{"ok": true}`. Use it after editing the file by hand; the other requests reload on their own.
+Re-reads `config.toml`: roots, deny list, limits and pairing. Answers `{"ok": true, "restarting": false}`. Use it after editing the file by hand; the other requests reload on their own. `restarting: true` says the worker is restarting under a sandbox that fits the new folders: it stops the commands it runs, and the next one answers `status` with another `pid` once it's ready, usually within a second.
 
 ### Pairing
 
@@ -234,6 +234,14 @@ Allows commands in a shared folder that allows changes (`commands: true`), or st
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
 
+### `coding_check`
+
+```json
+{"cmd": "coding_check", "root": "bots", "dir": "app", "command": "bin/rails test", "bot": "42"}
+```
+
+`cww coding setup`'s proof: starts one command in a shared folder that allows commands, as the bot `bot`'s run would start there, with its Claude Code sign-in where its loan allows it, and answers its status at once (as `run` does, PROTOCOL.md 8.15). Follow it with `commands` and `command_output`; stop it with `command_stop`. Refused where the folder doesn't allow commands. Writes a `coding_check` audit entry with the command line. Only a same-user client reaches the control socket, and such a client could run the command itself.
+
 ### `roots_read_budget`
 
 ```json
@@ -253,6 +261,8 @@ Answers with the updated `root` and writes a `root_read_budget_set` audit entry;
 Shares a folder with a Chat with Work bot (`lent: true`), or stops sharing it (`false`), and says whether the bot's commands there may start without a person approving each one (`unattended`). `bot` is the bot's ID, the number in its address in Chat with Work (`/bots/42`); `name` is shown only here, to recognize it, and is kept when left out. Sharing again replaces the grant, so the same request changes `unattended`. `unattended: true` is refused where the folder doesn't allow commands. While a folder is shared with a bot, that bot's chats reach it as the folder allows (PROTOCOL.md 7.2.1), and no other folder: reads, changes where changes are allowed, and commands where commands are allowed, each change and command approved in Chat with Work unless the bot's own policy there, and for commands this loan, let it run. Clients should say that, and ask, before sharing a folder or turning `unattended` on; stopping needs no question, and takes effect at the next call. Only this channel and `config.toml` can change it, never the server.
 
 Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots share <root> <bot> [--name <name>] [--unattended]` and `cww roots unshare <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
+
+A loan's `claude_code` (shown when true) gives the bot's commands there this computer's Claude Code sign-in; only `cww coding setup` and `cww coding allow <root> <bot> [--off]` change it, and it ends with commands or changes in the folder, as `unattended` does ([docs/coding-computers.md](docs/coding-computers.md)).
 
 The desktop app lists these grants in Shared folders. Selection and unattended command controls live in the bot’s computer integration, in an app-owned settings pane; native confirmation is required to widen access. The old `lend` and `stop-lending` CLI names remain hidden aliases.
 

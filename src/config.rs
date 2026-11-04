@@ -50,6 +50,51 @@ pub struct Config {
     /// (docs/browser.md). Off until they turn it on here.
     #[serde(skip_serializing_if = "BrowserConfig::is_default")]
     pub browser: BrowserConfig,
+    /// What this computer has for coding bots: the Claude Code program a
+    /// bot's commands use, whether its sign-in is stored, and the
+    /// repositories Desktop mirrors (docs/coding-computers.md). Only `cww
+    /// coding`, this file and the control channel change it, never the
+    /// server.
+    #[serde(skip_serializing_if = "CodingConfig::is_default")]
+    pub coding: CodingConfig,
+}
+
+/// Coding bots' setup on this computer (docs/coding-computers.md).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CodingConfig {
+    /// The `claude` program `cww coding setup` found and checked, by the
+    /// path it was found at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude: Option<PathBuf>,
+    /// A token from `claude setup-token` is in this computer's secret
+    /// store. The token itself never is in this file.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub claude_signed_in: bool,
+    /// Repositories Desktop keeps a mirror of, outside every shared folder,
+    /// each with a checkout in one that fetches from it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<Repository>,
+}
+
+impl CodingConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A repository a coding bot works on: its address, and its checkout,
+/// `name` in the shared folder `root`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Repository {
+    pub root: String,
+    pub name: String,
+    pub url: String,
+    /// A deploy key Desktop fetches the mirror with, instead of what `ssh`
+    /// would offer: a private key outside every shared folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_key: Option<PathBuf>,
 }
 
 /// The browser: whether Chat with Work may use it, on which sites, and for
@@ -287,6 +332,10 @@ pub struct BotLoan {
     /// Chat with Work. Only where commands are allowed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// The bot's commands here get this computer's Claude Code sign-in
+    /// (`[coding]`). Only for folders, only where commands are allowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub claude_code: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

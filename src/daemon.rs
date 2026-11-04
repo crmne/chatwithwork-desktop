@@ -1564,7 +1564,10 @@ impl ControlHandler for Daemon {
             }
             ControlRequest::Reload => {
                 self.reload().await?;
-                Ok(json!({}))
+                // A worker restarting for a new sandbox stops what it runs,
+                // and answers nothing until the next one is up: say so, so a
+                // client waits for it (`cww coding setup` does).
+                Ok(json!({ "restarting": RESTART_FOR_SANDBOX.load(Ordering::SeqCst) }))
             }
             ControlRequest::Shutdown => {
                 let mut entry = AuditEntry::event("shutdown_requested");
@@ -1785,6 +1788,40 @@ impl ControlHandler for Daemon {
                 let mut entry = AuditEntry::event("command_stopped");
                 entry.detail = Some(format!("run {}", status.id));
                 self.audit.append(&entry);
+                Ok(serde_json::to_value(status)?)
+            }
+            ControlRequest::CodingCheck {
+                root,
+                dir,
+                command,
+                bot,
+            } => {
+                let mut entry = AuditEntry::event("coding_check");
+                entry.path = Some(format!("{root}:{dir}"));
+                entry.detail = Some(match &bot {
+                    Some(bot) => format!("{command}, for bot {bot}"),
+                    None => command.clone(),
+                });
+                self.audit.append(&entry);
+                let started = self
+                    .runner
+                    .start(crate::commands::Request {
+                        root,
+                        dir,
+                        command,
+                        bot,
+                    })
+                    .await;
+                let status = match started {
+                    Ok(status) => status,
+                    Err(refused) => {
+                        let mut entry = AuditEntry::event("coding_check");
+                        entry.decision = Some(crate::audit::Decision::Denied);
+                        entry.code = Some(refused.code.clone());
+                        self.audit.append(&entry);
+                        return Err(command_refusal(refused));
+                    }
+                };
                 Ok(serde_json::to_value(status)?)
             }
             ControlRequest::AuditTail { lines } => {

@@ -75,6 +75,7 @@ fn request(command: &str) -> Request {
         root: "project".into(),
         dir: String::new(),
         command: command.into(),
+        bot: None,
     }
 }
 
@@ -96,7 +97,15 @@ fn shell(command: &str) -> Request {
 }
 
 fn wait(runs: &Runs, id: &str) -> Finished {
-    let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 150 } else { 30 });
+    wait_for(
+        runs,
+        id,
+        Duration::from_secs(if cfg!(windows) { 150 } else { 30 }),
+    )
+}
+
+fn wait_for(runs: &Runs, id: &str, limit: Duration) -> Finished {
+    let deadline = Instant::now() + limit;
     loop {
         if !runs.status(id).unwrap().running() {
             return runs.finished(id).unwrap();
@@ -576,6 +585,7 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
             output_chars: 2,
         },
         home: "/".into(),
+        coding: Default::default(),
     };
     let mut cell = Cell::new(&plan, "r".into(), String::new());
     cell.append(Stream::Out, "héllo".as_bytes());
@@ -1030,4 +1040,203 @@ mod on_windows {
         let done = wait(&fx.runs, &status.id);
         assert_eq!(done.status.limit.as_deref(), Some("processes"), "{done:?}");
     }
+}
+
+/// A bot allowed Claude Code here gets the sign-in in Claude Code's own
+/// variable and its `claude` first on `PATH`, and what it prints never
+/// carries the token. A person's run, and another bot's, get neither. On
+/// Linux where Bubblewrap runs, on Windows where process containers do (CI's
+/// Windows on Arm), and on macOS with `CWW_TEST_SEATBELT=1` (CI's Macs
+/// don't run commands).
+#[test]
+fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
+    let runs_here = if cfg!(windows) {
+        Sandbox::for_host().is_ok()
+    } else if cfg!(target_os = "macos") {
+        std::env::var("CWW_TEST_SEATBELT").as_deref() == Ok("1")
+    } else {
+        sandbox_works() && !on_landlock()
+    };
+    if !runs_here {
+        return;
+    }
+    const TOKEN: &str = "sk-ant-oat01-testtokenTESTTOKEN0123456789abcdefghijklmnop_-";
+    let mut fx = fixture(true);
+    let install = fx._dir.path().join("claude-install");
+    std::fs::create_dir_all(&install).unwrap();
+    let program = if cfg!(windows) {
+        let program = install.join("claude.cmd");
+        std::fs::write(
+            &program,
+            "@echo claude here with %CLAUDE_CODE_OAUTH_TOKEN%\r\n",
+        )
+        .unwrap();
+        program
+    } else {
+        let program = install.join("claude");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\necho \"claude here with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        program
+    };
+    fx.config.secret_store = Some("file".into());
+    fx.config.roots[0].network = true;
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: true,
+    });
+    fx.config.coding.claude = Some(program);
+    fx.config.coding.claude_signed_in = true;
+    let paths = fx.runs.paths.clone();
+    crate::coding::store(&fx.config, &paths)
+        .set(crate::coding::TOKEN_NAME, TOKEN)
+        .unwrap();
+    // Claude Code needs the network; where the sandbox can't give one (CI's
+    // Ubuntu refuses network namespaces), there's nothing to check.
+    let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+    if wait(&fx.runs, &probe.id).status.state == "failed" {
+        eprintln!("no network for commands here");
+        return;
+    }
+
+    let (line, echo) = if cfg!(windows) {
+        (
+            "claude; \"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"; [Console]::Error.WriteLine($env:CLAUDE_CODE_OAUTH_TOKEN)",
+            "\"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"",
+        )
+    } else {
+        (
+            "claude; echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"; echo \"$CLAUDE_CODE_OAUTH_TOKEN\" >&2",
+            "echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"",
+        )
+    };
+    let bot = Request {
+        bot: Some("42".into()),
+        ..shell(line)
+    };
+    let status = fx.runs.start(&fx.config, &bot).unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(
+        done.stdout.contains("claude here with [claude-code-token]"),
+        "{done:?}"
+    );
+    assert!(done.stdout.contains("env:[claude-code-token]"), "{done:?}");
+    assert!(done.stderr.contains("[claude-code-token]"), "{done:?}");
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    for text in [&done.stdout, &done.stderr, &window.text] {
+        assert!(!text.contains("testtokenTESTTOKEN"), "the token printed");
+    }
+
+    for request in [
+        shell(echo),
+        Request {
+            bot: Some("7".into()),
+            ..shell(echo)
+        },
+    ] {
+        let status = fx.runs.start(&fx.config, &request).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        assert_eq!(done.stdout.trim(), "env:", "{request:?}");
+    }
+}
+
+/// The real Claude Code, found as `cww coding setup` finds it, answers from
+/// the sandbox with a token from `claude setup-token`, as a bot's run gets
+/// it. Needs the network and `CWW_TEST_CLAUDE_TOKEN`; spends a few tokens
+/// of that subscription. Its failures never print the output, which would
+/// hold the token if it leaked.
+#[test]
+#[ignore = "needs Claude Code, the network, and CWW_TEST_CLAUDE_TOKEN"]
+fn real_claude_code_answers_from_the_sandbox() {
+    let token = std::env::var("CWW_TEST_CLAUDE_TOKEN").expect("CWW_TEST_CLAUDE_TOKEN");
+    assert!(crate::coding::valid_token(&token), "not a setup token");
+    let program = crate::coding::setup::find_claude().expect("Claude Code installed");
+    let mut fx = fixture(true);
+    fx.config.limits.command_timeout_seconds = 180;
+    fx.config.secret_store = Some("file".into());
+    fx.config.roots[0].network = true;
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: true,
+    });
+    fx.config.coding.claude = Some(program);
+    fx.config.coding.claude_signed_in = true;
+    let paths = fx.runs.paths.clone();
+    crate::coding::store(&fx.config, &paths)
+        .set(crate::coding::TOKEN_NAME, &token)
+        .unwrap();
+    let ask = Request {
+        bot: Some("42".into()),
+        ..request("claude -p 'Reply with the word ready.' --max-turns 1")
+    };
+    let status = fx.runs.start(&fx.config, &ask).unwrap();
+    let done = wait_for(&fx.runs, &status.id, Duration::from_secs(190));
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    for text in [&done.stdout, &done.stderr, &window.text] {
+        assert!(!text.contains(&token), "the token printed");
+    }
+    eprintln!(
+        "state {} exit {:?}\nstdout: {}\nstderr: {}",
+        done.status.state, done.status.exit_code, done.stdout, done.stderr
+    );
+    assert_eq!(done.status.exit_code, Some(0));
+    assert!(done.stdout.to_lowercase().contains("ready"));
+}
+
+/// A run reads Claude Code's folder where it really is: Bubblewrap can't
+/// start with a link given as a folder to bind (mise's
+/// `installs/claude/latest`), which stopped every run of a bot allowed
+/// Claude Code on a NUC. And never a folder that holds a shared one: then
+/// only the program.
+#[cfg(unix)]
+#[test]
+fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("2.1.316");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("claude"), "").unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("latest")).unwrap();
+    let program = dir.path().join("latest").join("claude");
+    let fx = fixture(true);
+    let real_program = program.canonicalize().unwrap();
+    let read = crate::coding::grant(&real_program, &fx.config, &fx.runs.paths).unwrap();
+    assert_eq!(read, real.canonicalize().unwrap());
+    let mut plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("claude"),
+        "000000000000",
+    )
+    .unwrap();
+    plan.coding.claude = Some(crate::coding::Claude {
+        real: real_program,
+        program,
+        read,
+        entry: None,
+        token: crate::coding::Secret::new("x".into()),
+    });
+    let real = real.canonicalize().unwrap().to_string_lossy().into_owned();
+    assert_eq!(plan.coding_readable(), [real]);
+
+    // Beside the shared folder: its parent would hold the folder.
+    let beside = fx.folder.parent().unwrap().join("claude");
+    std::fs::write(&beside, "").unwrap();
+    let beside = beside.canonicalize().unwrap();
+    assert_eq!(
+        crate::coding::grant(&beside, &fx.config, &fx.runs.paths),
+        Some(beside.clone()),
+        "only the program"
+    );
 }
