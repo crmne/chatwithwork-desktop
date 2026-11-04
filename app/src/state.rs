@@ -36,6 +36,18 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Changes app.json under one lock, so two changes at once can't drop
+    /// either: loads it, applies `change`, and saves it.
+    pub fn update(paths: &Paths, change: impl FnOnce(&mut Self)) -> std::io::Result<()> {
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _writing = WRITING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = Self::load(paths);
+        change(&mut state);
+        state.save(paths)
+    }
+
     pub fn save(&self, paths: &Paths) -> std::io::Result<()> {
         let file = paths.app_state_file();
         if let Some(dir) = file.parent() {

@@ -253,8 +253,7 @@ fn remote_window(app: &AppHandle, label: &str, url: Url) -> tauri::Result<Webvie
     });
     if label == MAIN {
         let app = app.clone();
-        let banner = desktop.updates.banner();
-        std::thread::spawn(move || crate::banner::sync(&app, banner));
+        std::thread::spawn(move || crate::banner::sync(&app));
     }
     #[cfg(target_os = "linux")]
     watch_failed_loads(&window, desktop);

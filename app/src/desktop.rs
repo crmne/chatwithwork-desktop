@@ -124,14 +124,6 @@ impl Desktop {
         let app = self.app();
         crate::windows::tell_settings(&app, "update", self.updates.view());
         let ready = self.updates.ready();
-        let entry = ready
-            .clone()
-            .map(crate::tray::UpdateEntry::Restart)
-            .or_else(|| {
-                self.updates
-                    .available()
-                    .map(crate::tray::UpdateEntry::Available)
-            });
         // For end-to-end tests on machines driven over SSH, where nobody
         // clicks: install a downloaded, verified update at once.
         if ready.is_some() && std::env::var_os("CWW_UPDATE_INSTALL_WHEN_READY").is_some() {
@@ -139,11 +131,21 @@ impl Desktop {
             std::thread::spawn(move || desktop.restart_to_update());
         }
         let banner_app = app.clone();
-        let banner = self.updates.banner();
-        std::thread::spawn(move || crate::banner::sync(&banner_app, banner));
+        std::thread::spawn(move || crate::banner::sync(&banner_app));
         let tray_app = app.clone();
         let _ = app.run_on_main_thread(move || {
             let desktop = tray_app.state::<Arc<Desktop>>();
+            // Read here, on the main thread, so a later change always wins.
+            let entry = desktop
+                .updates
+                .ready()
+                .map(crate::tray::UpdateEntry::Restart)
+                .or_else(|| {
+                    desktop
+                        .updates
+                        .available()
+                        .map(crate::tray::UpdateEntry::Available)
+                });
             if let Some(tray) = desktop.tray.lock().expect("tray lock").as_mut() {
                 tray.set_update(&tray_app, entry);
             }
@@ -152,9 +154,7 @@ impl Desktop {
 
     /// Turns installing updates by themselves on or off (app.json).
     pub fn set_installs_updates(&self, on: bool) -> std::io::Result<()> {
-        let mut state = crate::state::AppState::load(&self.paths);
-        state.automatic_updates = Some(on);
-        state.save(&self.paths)?;
+        crate::state::AppState::update(&self.paths, |state| state.automatic_updates = Some(on))?;
         self.updates.set_installs_updates(on);
         self.update_changed();
         Ok(())
@@ -162,15 +162,22 @@ impl Desktop {
 
     /// Hides the notice and banner of the release they show until the next
     /// version, remembered in app.json.
-    pub fn dismiss_update(&self) {
-        if let Some(version) = self.updates.dismiss() {
-            let mut state = crate::state::AppState::load(&self.paths);
-            state.dismissed_update = Some(version);
-            if let Err(e) = state.save(&self.paths) {
-                log::warn!("couldn't save the dismissed update: {e}");
-            }
-            self.update_changed();
+    pub fn dismiss_update(&self, shown: &str) {
+        // The version on the card, and only while it's still the one shown;
+        // saved first, so a failed save doesn't hide it for this session only.
+        if self.updates.banner_version().as_deref() != Some(shown) {
+            return;
         }
+        let shown = shown.to_owned();
+        let saved = crate::state::AppState::update(&self.paths, |state| {
+            state.dismissed_update = Some(shown.clone());
+        });
+        if let Err(e) = saved {
+            log::warn!("couldn't save the dismissed update: {e}");
+            return;
+        }
+        self.updates.dismiss(&shown);
+        self.update_changed();
     }
 
     /// Installs the downloaded update: its helper waits for the app to

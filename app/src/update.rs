@@ -402,15 +402,16 @@ impl Updates {
     /// Dismisses the notice of the release it's showing (and its banner),
     /// and returns that version, for app.json. A downloaded update's banner
     /// goes too; the tray and General still offer Restart to Update.
-    pub fn dismiss(&self) -> Option<String> {
-        let version = self.banner_version()?;
-        *self.dismissed.lock().expect("update lock") = Some(version.clone());
-        Some(version)
+    pub fn dismiss(&self, version: &str) -> Option<String> {
+        (self.banner_version()? == version).then(|| {
+            *self.dismissed.lock().expect("update lock") = Some(version.to_owned());
+            version.to_owned()
+        })
     }
 
     /// The release the banner shows: one waiting for Restart to Update or
     /// for a package manager, until it's dismissed.
-    fn banner_version(&self) -> Option<String> {
+    pub fn banner_version(&self) -> Option<String> {
         let dismissed = self.dismissed.lock().expect("update lock").clone();
         match &*self.phase.lock().expect("update lock") {
             Phase::Ready { release, .. } | Phase::Unsupported { release, .. }
@@ -472,11 +473,23 @@ impl Updates {
         tell: &dyn Fn(),
     ) {
         let installed = crate::update_notice::detect(reason, pkg, updater.managed_update());
-        let notice = crate::update_notice::notice(
+        // A local test feed serves its own files; otherwise the release's.
+        let files = std::env::var("CWW_UPDATE_FEED")
+            .ok()
+            .filter(|_| local_feed().is_some())
+            .map(|feed| feed.trim_end_matches('/').to_owned())
+            .unwrap_or_else(|| {
+                format!(
+                    "https://github.com/{}/releases/download/v{}",
+                    CONFIG.repository, release.version
+                )
+            });
+        let notice = crate::update_notice::notice_from(
             &installed,
             &release.version,
             std::env::consts::ARCH,
             dirs::download_dir().as_deref(),
+            &files,
         );
         let release = Release {
             url: notes(&release),
@@ -701,14 +714,14 @@ pub fn install_kept(
     client: &crate::control::Client,
     window: bool,
 ) -> bool {
-    let mut state = crate::state::AppState::load(paths);
+    let state = crate::state::AppState::load(paths);
     let before = state.newest_run.clone();
     let newest = fastframe_update::policy::newest_run(VERSION, before.as_deref());
-    if before.as_deref() != Some(newest.as_str()) {
-        state.newest_run = Some(newest);
-        if let Err(e) = state.save(paths) {
-            log::warn!("couldn't remember the newest version: {e}");
-        }
+    if before.as_deref() != Some(newest.as_str())
+        && let Err(e) =
+            crate::state::AppState::update(paths, |state| state.newest_run = Some(newest))
+    {
+        log::warn!("couldn't remember the newest version: {e}");
     }
     let updater = updater();
     let kept = match updater.kept() {
@@ -950,7 +963,7 @@ mod tests {
         // Dismissed at an earlier launch.
         assert_eq!(updates.available(), None);
         assert_eq!(updates.view()["dismissed"], true);
-        assert_eq!(updates.dismiss(), None);
+        assert_eq!(updates.dismiss("0.12.0"), None);
         // The next release is announced again.
         *updates.phase.lock().unwrap() = unsupported("0.13.0");
         assert_eq!(updates.available().as_deref(), Some("0.13.0"));
@@ -964,7 +977,8 @@ mod tests {
         // Never Restart to Update for it.
         assert!(updates.ready().is_none());
         assert!(updates.restart(Vec::new()).is_err());
-        assert_eq!(updates.dismiss().as_deref(), Some("0.13.0"));
+        assert_eq!(updates.dismiss("0.12.0"), None);
+        assert_eq!(updates.dismiss("0.13.0").as_deref(), Some("0.13.0"));
         assert_eq!(updates.available(), None);
         assert_eq!(updates.view()["dismissed"], true);
     }
@@ -983,7 +997,8 @@ mod tests {
         );
         assert_eq!(updates.banner_link("download"), None);
         assert_eq!(updates.banner_link("https://example.com"), None);
-        assert_eq!(updates.dismiss().as_deref(), Some("0.13.0"));
+        assert_eq!(updates.dismiss("0.12.0"), None);
+        assert_eq!(updates.dismiss("0.13.0").as_deref(), Some("0.13.0"));
         assert!(updates.banner().is_none());
         assert!(updates.available().is_none());
     }
@@ -1036,7 +1051,7 @@ mod tests {
         };
         assert_eq!(updates.available(), None);
         assert!(updates.view()["dismissed"].is_null());
-        assert_eq!(updates.dismiss(), None);
+        assert_eq!(updates.dismiss("0.12.0"), None);
     }
 
     #[test]

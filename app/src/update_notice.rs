@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use fastframe_update::{ManagedUpdate, Manager, Unsupported};
 use serde::Serialize;
 
-/// Where the release files are.
+/// Where the release files are (update.rs passes its own).
+#[cfg(test)]
 const DOWNLOADS: &str = "https://github.com/crmne/chatwithwork-desktop/releases/download";
 
 /// The README's one-line installer, for a copy it put there.
@@ -93,18 +94,38 @@ impl Probe for System {
     }
 
     fn run(&self, program: &str, args: &[&OsStr]) -> Option<String> {
-        let output = std::process::Command::new(program)
+        use std::io::Read;
+        let mut child = std::process::Command::new(program)
             .args(args)
             .env("LC_ALL", "C")
             .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .output()
+            .spawn()
             .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .filter(|out| !out.is_empty())
+        // A package database that is locked gives no answer, not a stuck
+        // update check.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().ok()? {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let mut output = String::new();
+        child
+            .stdout
+            .take()?
+            .take(4096)
+            .read_to_string(&mut output)
+            .ok()?;
+        let output = output.trim().to_owned();
+        (status.success() && !output.is_empty()).then_some(output)
     }
 }
 
@@ -182,6 +203,9 @@ pub fn installed(
                 .to_lowercase();
             if vendor == "plenty" {
                 Installed::Rpm
+            } else if vendor.is_empty() {
+                // rpm didn't say: not known to be a repository install.
+                Installed::Other(reason.clone())
             } else {
                 Installed::Managed(managed)
             }
@@ -197,13 +221,32 @@ pub fn installed(
 /// The notice for `installed` and the release `version` (already checked to
 /// be plain `X.Y.Z`), on a processor `arch` (`std::env::consts::ARCH`),
 /// with downloads going to `downloads`.
+#[cfg(test)]
 pub fn notice(
     installed: &Installed,
     version: &str,
     arch: &str,
     downloads: Option<&Path>,
 ) -> Notice {
-    let file = |name: String| format!("{DOWNLOADS}/v{version}/{name}");
+    notice_from(
+        installed,
+        version,
+        arch,
+        downloads,
+        &format!("{DOWNLOADS}/v{version}"),
+    )
+}
+
+/// [`notice`] with the release's files at `files` (a local test feed's
+/// address, say).
+pub fn notice_from(
+    installed: &Installed,
+    version: &str,
+    arch: &str,
+    downloads: Option<&Path>,
+    files: &str,
+) -> Notice {
+    let file = |name: String| format!("{files}/{name}");
     let saved = |name: &str| match downloads {
         Some(folder) => shell_path(&folder.join(name), crate::paths::home_dir().as_deref()),
         None => format!("./{name}"),
@@ -421,6 +464,35 @@ mod tests {
         let nix = super::notice(&nix, "0.12.0", "x86_64", None);
         assert!(nix.command.is_none());
         assert!(nix.how.contains("nixos-rebuild"));
+    }
+
+    #[test]
+    fn an_rpm_that_says_no_vendor_gets_no_repository_command() {
+        let dnf = Unsupported::SystemPackage(fastframe_update::PackageManager::Dnf);
+        let silent = Fake::default();
+        let command = "sudo dnf upgrade --refresh chatwithwork-desktop";
+        let installed = at(dnf.clone(), managed(Manager::Dnf, command), &silent);
+        assert_eq!(installed, Installed::Other(dnf));
+        assert!(
+            notice(&installed, "0.12.0", "x86_64", None)
+                .command
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_local_feed_names_its_own_files() {
+        let notice = notice_from(
+            &Installed::Deb,
+            "0.12.0",
+            "x86_64",
+            None,
+            "http://127.0.0.1:8799",
+        );
+        assert_eq!(
+            notice.download.as_deref(),
+            Some("http://127.0.0.1:8799/chatwithwork-desktop_0.12.0_amd64.deb")
+        );
     }
 
     #[test]

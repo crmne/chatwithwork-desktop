@@ -217,7 +217,7 @@ export function updateNotice(app, u) {
       h("button", { type: "button", class: "btn btn-ghost btn-icon", "aria-label": "Dismiss", title: "Dismiss", "data-key": "update-dismiss",
         onclick: async () => {
           try {
-            view.update = await call("update_dismiss");
+            view.update = await call("update_dismiss", { version: release });
           } catch (error) {
             view.updateError = error.message;
           }

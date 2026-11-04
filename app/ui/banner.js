@@ -48,7 +48,7 @@ export function render(view) {
   }
   const version = view.release?.version;
   const dismiss = h("button", { type: "button", class: "btn btn-ghost btn-icon", "aria-label": "Dismiss", title: "Dismiss",
-    onclick: () => invoke("banner_dismiss") }, glyph("x"));
+    onclick: () => invoke("banner_dismiss", { version }) }, glyph("x"));
   if (view.kind === "restart") {
     root.replaceChildren(
       h("div", { class: "banner__row" },

@@ -20,6 +20,9 @@ use crate::desktop::Desktop;
 
 pub const LABEL: &str = "update-banner";
 const PAGE: &str = "banner.html";
+/// What the view shows until it's placed (offline.html isn't it: any
+/// bundled page without commands of its own would do, and this one is empty).
+const INERT: &str = "banner-blank.html";
 const WIDTH: f64 = 440.0;
 const MARGIN: f64 = 16.0;
 
@@ -47,11 +50,17 @@ fn bounds(size: LogicalSize<f64>, height: f64) -> Rect {
 static FOLLOWS: AtomicBool = AtomicBool::new(false);
 
 /// Shows the banner for `view` in the Chat with Work window, updates it, or
-/// takes it away (`None`). Call off the main thread.
-pub fn sync(app: &AppHandle, view: Option<Value>) {
+/// takes it away, from the updater's state as it is now. One at a time, so
+/// a dismissal can't race a card being made. Call off the main thread.
+pub fn sync(app: &AppHandle) {
+    static SYNCING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _syncing = SYNCING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(window) = app.get_window(crate::windows::MAIN) else {
         return;
     };
+    let view = app.state::<Arc<Desktop>>().updates.banner();
     let existing = app.get_webview(LABEL);
     let Some(view) = view else {
         if let Some(banner) = existing {
@@ -68,14 +77,16 @@ pub fn sync(app: &AppHandle, view: Option<Value>) {
     };
     let fitted = *FITTED.lock().expect("banner height");
     let rect = bounds(size, fitted.unwrap_or_else(|| height(&view)));
-    let banner = match existing {
-        Some(banner) => banner,
+    let (banner, new) = match existing {
+        Some(banner) => (banner, false),
         None => {
-            let builder = WebviewBuilder::new(LABEL, WebviewUrl::App(PAGE.into()))
-                .on_navigation(is_page)
+            // An inert page first: on Linux placing the view moves it to
+            // another container, which would interrupt the page's load.
+            let builder = WebviewBuilder::new(LABEL, WebviewUrl::App(INERT.into()))
+                .on_navigation(|url| is_page(url) || is_inert(url))
                 .on_new_window(|_, _| NewWindowResponse::Deny);
             match window.add_child(builder, LogicalPosition::new(0.0, 0.0), size) {
-                Ok(banner) => banner,
+                Ok(banner) => (banner, true),
                 Err(e) => {
                     log::warn!("no update banner: {e}");
                     return;
@@ -86,6 +97,9 @@ pub fn sync(app: &AppHandle, view: Option<Value>) {
     if let Err(e) = crate::preferences::place(&banner, rect) {
         log::warn!("couldn't place the update banner: {e}");
     }
+    if new {
+        let _ = banner.navigate(crate::windows::local_url(PAGE));
+    }
     crate::windows::tell_window(app, LABEL, "update", &view);
     if !FOLLOWS.swap(true, Ordering::SeqCst) {
         let app = app.clone();
@@ -94,8 +108,7 @@ pub fn sync(app: &AppHandle, view: Option<Value>) {
                 let app = app.clone();
                 std::thread::spawn(move || {
                     if app.get_webview(LABEL).is_some() {
-                        let desktop = app.state::<Arc<Desktop>>();
-                        sync(&app, desktop.updates.banner());
+                        sync(&app);
                     }
                 });
             }
@@ -110,15 +123,16 @@ pub fn raise(app: &AppHandle) {
     if let Some(banner) = app.get_webview(LABEL) {
         let _ = banner.close();
         let app = app.clone();
-        std::thread::spawn(move || {
-            let desktop = app.state::<Arc<Desktop>>();
-            sync(&app, desktop.updates.banner());
-        });
+        std::thread::spawn(move || sync(&app));
     }
 }
 
 fn is_page(url: &tauri::Url) -> bool {
     crate::windows::is_local_url(url) && url.path() == format!("/{PAGE}")
+}
+
+fn is_inert(url: &tauri::Url) -> bool {
+    crate::windows::is_local_url(url) && url.path() == format!("/{INERT}")
 }
 
 /// Only the banner's own page may use its commands.
@@ -142,11 +156,13 @@ pub fn banner_fit(webview: Webview, app: AppHandle, height: f64) -> Answer {
     if !height.is_finite() {
         return Err(json!({ "code": "invalid", "message": "Not a height." }));
     }
-    *FITTED.lock().expect("banner height") = Some(height.clamp(56.0, 320.0));
-    std::thread::spawn(move || {
-        let desktop = app.state::<Arc<Desktop>>();
-        sync(&app, desktop.updates.banner());
-    });
+    let height = height.clamp(56.0, 320.0);
+    // Only a new height places the card again: placing it tells the page,
+    // which measures again.
+    let changed = FITTED.lock().expect("banner height").replace(height) != Some(height);
+    if changed {
+        std::thread::spawn(move || sync(&app));
+    }
     Ok(json!({}))
 }
 
@@ -170,9 +186,13 @@ pub fn banner_restart(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Ans
 /// Hides the banner (and a package install's notice) until the next
 /// version.
 #[tauri::command]
-pub fn banner_dismiss(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
+pub fn banner_dismiss(
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    version: String,
+) -> Answer {
     banner_page(&webview)?;
-    desktop.dismiss_update();
+    desktop.dismiss_update(&version);
     Ok(json!({}))
 }
 
