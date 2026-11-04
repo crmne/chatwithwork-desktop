@@ -160,6 +160,9 @@ pub fn disabled(reason: &str) {
 
 /// Confine this process. Must run before any other thread starts.
 pub fn confine(plan: Plan) -> Status {
+    // Read the system's watch quota while /proc/sys is still readable: the
+    // confined daemon can't, and would guess too high.
+    let _ = crate::reader::watch::default_limit();
     let status = sys::confine(&plan);
     let _ = PLAN.set(plan);
     let _ = STATUS.set(status.clone());
