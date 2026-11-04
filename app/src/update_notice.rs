@@ -449,6 +449,8 @@ mod tests {
         );
     }
 
+    // Linux and Unix paths: these installs don't exist on Windows.
+    #[cfg(unix)]
     #[test]
     fn a_deb_and_a_flatpak_bundle_are_downloaded_then_installed() {
         let fake = Fake::default();
@@ -486,6 +488,8 @@ mod tests {
         );
     }
 
+    // Linux and Unix paths: these installs don't exist on Windows.
+    #[cfg(unix)]
     #[test]
     fn an_appimage_points_at_its_updater_and_its_download() {
         let mut fake = Fake::default();
@@ -573,6 +577,8 @@ mod tests {
         assert!(system.command.is_none());
     }
 
+    // Linux and Unix paths: these installs don't exist on Windows.
+    #[cfg(unix)]
     #[test]
     fn paths_are_quoted_for_the_shell_only_when_they_need_it() {
         let home = Some(Path::new("/home/me"));
