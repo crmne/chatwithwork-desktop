@@ -457,8 +457,9 @@ impl Plan {
         let own = display(&self.home);
         let mut path: Vec<PathBuf> = Vec::new();
         if let Some(claude) = &self.coding.claude {
-            // The folder of the `claude.exe` setup checked comes first.
-            path.push(claude.read.clone());
+            // The folder of the `claude.exe` setup checked comes first, as
+            // it's named there.
+            path.push(claude.entry.clone().unwrap_or_else(|| claude.read.clone()));
         }
         path.extend(found.path.clone());
         path.extend(host.system_path(&self.folder));

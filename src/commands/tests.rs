@@ -1224,6 +1224,7 @@ fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
         real: real_program,
         program,
         read,
+        entry: None,
         token: crate::coding::Secret::new("x".into()),
     });
     let real = real.canonicalize().unwrap().to_string_lossy().into_owned();

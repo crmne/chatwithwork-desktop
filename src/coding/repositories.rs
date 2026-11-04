@@ -119,27 +119,35 @@ fn git() -> Command {
 
 /// `git` with `repo`'s deploy key, if it has one: only that key, never the
 /// agent's.
-fn git_for(repo: Option<&Repository>) -> Command {
+fn git_for(repo: Option<&Repository>, mirror: &Path) -> Command {
     let mut command = git();
     let quote = |path: &str| format!("'{}'", path.replace('\\', "/").replace('\'', "'\\''"));
-    // The person's own ~/.ssh/config, never the system's: inside the
-    // background service's user namespace, root's files under /etc/ssh look
-    // foreign, and ssh refuses to start ("Bad owner or permissions").
-    let config = if cfg!(unix) {
-        let own = crate::paths::home_dir()
-            .ok()
-            .map(|home| home.join(".ssh").join("config"))
-            .filter(|config| config.is_file());
-        Some(own.map_or_else(|| "/dev/null".to_string(), |c| quote(&c.to_string_lossy())))
-    } else {
-        None
-    };
     let key = repo.and_then(|r| r.ssh_key.as_ref());
-    // With a deploy key, no config at all: one's `IdentityFile` lines would
-    // be offered beside it, `IdentitiesOnly` notwithstanding.
-    let config = match (key, config) {
-        (Some(_), Some(_)) => Some("/dev/null".to_string()),
-        (_, config) => config,
+    let config = match key {
+        // With a deploy key, an empty config of Desktop's own, on every
+        // system: a real one's `IdentityFile` lines would be offered beside
+        // the key, `IdentitiesOnly` notwithstanding.
+        Some(_) => {
+            let empty = mirror
+                .parent()
+                .unwrap_or(mirror)
+                .join("cww-empty-ssh-config");
+            let _ = std::fs::create_dir_all(empty.parent().unwrap_or(&empty));
+            let _ = std::fs::write(&empty, b"");
+            Some(quote(&empty.to_string_lossy()))
+        }
+        // The person's own ~/.ssh/config, never the system's: inside the
+        // background service's user namespace, root's files under /etc/ssh
+        // look foreign, and ssh refuses to start ("Bad owner or
+        // permissions").
+        None if cfg!(unix) => {
+            let own = crate::paths::home_dir()
+                .ok()
+                .map(|home| home.join(".ssh").join("config"))
+                .filter(|config| config.is_file());
+            Some(own.map_or_else(|| "/dev/null".to_string(), |c| quote(&c.to_string_lossy())))
+        }
+        None => None,
     };
     let mut ssh = String::from("ssh");
     if let Some(config) = &config {
@@ -177,6 +185,13 @@ fn run(command: Command, limit: Duration) -> Result<()> {
 
 /// As [`run`], ended early (and the process killed) once `stop` says so.
 fn run_until(mut command: Command, limit: Duration, stop: &dyn Fn() -> bool) -> Result<()> {
+    // A group of its own, so ending it ends the ssh or https helper it
+    // started too, which would otherwise hold its stderr open.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -200,13 +215,11 @@ fn run_until(mut command: Command, limit: Duration, stop: &dyn Fn() -> bool) -> 
             break status;
         }
         if stop() {
-            let _ = child.kill();
-            let _ = child.wait();
+            end_all(&mut child);
             bail!("stopped");
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            end_all(&mut child);
             bail!("git took longer than {} seconds", limit.as_secs());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -223,6 +236,17 @@ fn run_until(mut command: Command, limit: Duration, stop: &dyn Fn() -> bool) -> 
         bail!("{}", last.trim());
     }
     Ok(())
+}
+
+/// End git and everything it started.
+fn end_all(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = rustix::process::Pid::from_child(child);
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Hooks off: an empty folder of Desktop's own.
@@ -277,7 +301,7 @@ pub fn create_mirror(
         return Ok(mirror);
     }
     std::fs::create_dir_all(mirror.parent().unwrap_or(&mirror))?;
-    let mut clone = git_for(Some(repo));
+    let mut clone = git_for(Some(repo), &mirror);
     clone
         .args(["clone", "--bare", "--quiet", "--"])
         .arg(&repo.url)
@@ -296,62 +320,37 @@ pub fn create_mirror(
     Ok(mirror)
 }
 
-/// Make the checkout `name` in `folder` from `mirror`: its `origin` is the
-/// mirror, so fetching needs no network or credentials, and a push fails.
-pub fn create_checkout(folder: &Path, name: &str, mirror: &Path) -> Result<PathBuf> {
-    let checkout = folder.join(name);
-    let git_dir = checkout.join(".git");
-    let config = git_dir.join("config");
-    // Each part as it is, never through a link a command could have made to
-    // send the write below somewhere else.
-    let plain = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink());
-    if [&checkout, &git_dir, &config]
-        .iter()
-        .any(|p| p.exists() && !plain(p))
-    {
-        bail!(
-            "{} is a link, or holds one where its Git settings are: choose another name",
-            checkout.display()
-        );
-    }
-    if config.is_file() {
-        // A checkout from before: its origin becomes the mirror. Only
-        // `git config --file`, which reads and writes that one file and
-        // runs nothing it says, since a command may have written it.
-        let mut origin = git();
-        origin
-            .arg("config")
-            .arg("--file")
-            .arg(&config)
-            .args(["remote.origin.url"])
-            .arg(mirror);
-        run(origin, Duration::from_secs(10)).context("pointing the checkout at the mirror")?;
-        // And nowhere else to push to.
-        let mut push = git();
-        push.arg("config")
-            .arg("--file")
-            .arg(&config)
-            .args(["--unset-all", "remote.origin.pushurl"]);
-        match push.stdout(Stdio::null()).stderr(Stdio::null()).status() {
-            // 5: there was none.
-            Ok(s) if s.success() || s.code() == Some(5) => {}
-            _ => bail!("couldn't clear the checkout's push address"),
+/// The command, run in the sandbox in the shared folder, that makes the
+/// checkout `name` from `mirror`, or, when there is one already, points its
+/// `origin` at the mirror and drops any push address. Its `origin` is then
+/// the mirror: fetching needs no network or credentials, and a push fails.
+/// `powershell` writes it for Windows PowerShell.
+pub fn checkout_command(name: &str, mirror: &Path, exists: bool, powershell: bool) -> String {
+    // Single quotes in both shells; a quote inside is doubled for
+    // PowerShell, and closed and escaped for sh.
+    let quote = |text: &str| {
+        if powershell {
+            format!("'{}'", text.replace('\'', "''"))
+        } else {
+            format!("'{}'", text.replace('\'', "'\\''"))
         }
-        return Ok(checkout);
+    };
+    let (name, mirror) = (quote(name), quote(&mirror.to_string_lossy()));
+    let then = if powershell { "; " } else { " && " };
+    if exists {
+        let set = format!("git -C {name} remote set-url origin {mirror}");
+        let unset = format!("git -C {name} config --unset-all remote.origin.pushurl");
+        // Nothing to drop is fine: git exits 5.
+        if powershell {
+            format!(
+                "{set}; if ($LASTEXITCODE -eq 0) {{ {unset}; if ($LASTEXITCODE -eq 5) {{ $global:LASTEXITCODE = 0 }} }}"
+            )
+        } else {
+            format!("{set}{then}{{ {unset}; s=$?; [ $s -eq 0 ] || [ $s -eq 5 ]; }}")
+        }
+    } else {
+        format!("git clone --quiet --no-hardlinks -- {mirror} {name}")
     }
-    if checkout.exists() {
-        bail!(
-            "{} is already there and isn't a checkout: choose another name or move it",
-            checkout.display()
-        );
-    }
-    let mut clone = git();
-    clone
-        .args(["clone", "--quiet", "--no-hardlinks", "--"])
-        .arg(mirror)
-        .arg(&checkout);
-    run(clone, Duration::from_secs(1800)).context("making the checkout")?;
-    Ok(checkout)
 }
 
 fn stamp(mirror: &Path) {
@@ -386,7 +385,7 @@ pub fn fetch_until(
     limit: Duration,
     stop: &dyn Fn() -> bool,
 ) -> Result<()> {
-    let mut fetch = git_for(repo);
+    let mut fetch = git_for(repo, mirror);
     fetch
         .arg("--git-dir")
         .arg(mirror)

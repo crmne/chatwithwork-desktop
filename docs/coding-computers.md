@@ -75,7 +75,7 @@ The mirror and its fetching stay out of the sandbox's reach; the checkout the bo
 
 - **The mirror** is a bare clone in Desktop's data folder (`<data>/repositories/<root>/<name>.git`), which no command can write (setup refuses, and Desktop never fetches a mirror, where a shared folder that allows changes holds the data folder): the sandbox reads it, for runs in that folder only. Its config is Desktop's alone, so fetching it runs nothing a bot wrote. It fetches branches and tags (`+refs/heads/*:refs/heads/*`), not pull requests' refs.
 - **Fetching** is Desktop's: `git fetch --prune` on the mirror, with your own Git credentials (your SSH keys and `~/.ssh/config`, never the system's `/etc/ssh` config, which ssh refuses inside the background service's user namespace; your credential helper), hooks off, run by whoever starts commands (the supervisor, or the daemon on Windows) before a command starts in that folder if the last fetch is over a minute old, with a 60-second limit, and by `cww coding fetch`. A fetch that fails doesn't stop the command; `cww coding status` shows the last failure. Nothing else runs `git` outside the sandbox, and never in a shared folder.
-- **The checkout** is `git clone <mirror> <folder>/<name>`: its `origin` is the mirror's path, so `git fetch origin` in a command works without a network, keys or tokens, and a push fails. `config.toml` records the repository's address, its checkout and its folder:
+- **The checkout** is `git clone <mirror> <name>`, run in the sandbox in the folder: its `origin` is the mirror's path, so `git fetch origin` in a command works without a network, keys or tokens, and a push fails. `config.toml` records the repository's address, its checkout and its folder:
 
 ```toml
 [[coding.repositories]]
@@ -84,7 +84,7 @@ name = "app"
 url = "git@github.com:acme/app.git"
 ```
 
-An address with a password or token in it (`https://user:token@...`) is refused: use an SSH key or a credential helper. For a deploy key (read-only, for this one repository), `--ssh-key ~/.ssh/deploy-key` fetches with only that key, never the SSH agent's or one your SSH config names (that config isn't read then); it must be outside every shared folder, and `config.toml` records only its path (`ssh_key`). A checkout already in the folder is kept, and its `origin` pointed at the mirror with `git config --file`, which runs nothing the checkout's config says. Changes reach GitHub only through Chat with Work's GitHub App, which commits the files the bot names from the computer and opens the pull request, each approved as the bot's policy says.
+An address with a password or token in it (`https://user:token@...`) is refused: use an SSH key or a credential helper. For a deploy key (read-only, for this one repository), `--ssh-key ~/.ssh/deploy-key` fetches with only that key, never the SSH agent's or one your SSH config names (that config isn't read then); it must be outside every shared folder, and `config.toml` records only its path (`ssh_key`). Desktop writes nothing in the shared folder itself: the checkout is made by a command in the sandbox, as the bot (`git clone` from the mirror), which can change only that folder, so a link a command left there can't redirect it. A checkout already there is kept, and the same kind of command points its `origin` at the mirror and drops any push address. Changes reach GitHub only through Chat with Work's GitHub App, which commits the files the bot names from the computer and opens the pull request, each approved as the bot's policy says.
 
 ## What Chat with Work sees
 

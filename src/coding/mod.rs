@@ -178,6 +178,10 @@ pub struct Claude {
     /// The folder the program really is in, or only the program where that
     /// folder is too broad to read (see [`grant`]).
     pub read: PathBuf,
+    /// Windows: the folder holding the `claude.exe` setup checked, as it
+    /// is named there (the program may be a link to a file named otherwise),
+    /// first on the run's PATH and read too.
+    pub entry: Option<PathBuf>,
     pub token: Secret,
 }
 
@@ -269,11 +273,20 @@ pub fn for_run(
             .ok()
             .filter(|p| p.is_file())?;
         let read = grant(&real, config, paths)?;
+        let entry = if cfg!(windows) {
+            let named = crate::roots::canonical(program.parent()?)
+                .ok()?
+                .join(program.file_name()?);
+            Some(grant(&named, config, paths)?)
+        } else {
+            None
+        };
         let token = token()?;
         Some(Claude {
             program,
             real,
             read,
+            entry,
             token,
         })
     });

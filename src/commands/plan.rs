@@ -407,6 +407,7 @@ impl Plan {
         let mut dirs: Vec<PathBuf> = self.coding.mirrors.iter().map(|(m, _)| m.clone()).collect();
         if let Some(claude) = &self.coding.claude {
             dirs.push(claude.read.clone());
+            dirs.extend(claude.entry.clone());
         }
         let mut read: Vec<String> = Vec::new();
         for dir in dirs {

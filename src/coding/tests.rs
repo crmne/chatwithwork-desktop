@@ -56,6 +56,7 @@ fn a_secret_never_prints() {
         program: "/x/claude".into(),
         real: "/y/claude".into(),
         read: "/y".into(),
+        entry: None,
         token: secret,
     };
     assert!(!format!("{claude:?}").contains("oat01"));
@@ -213,6 +214,7 @@ fn repository_addresses_never_hold_a_token() {
     assert_eq!(name_from_url("https://github.com/acme/..").as_deref(), None);
 }
 
+#[cfg(unix)]
 #[test]
 fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
     if std::process::Command::new("git")
@@ -264,7 +266,7 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
     assert!(mirror.starts_with(&paths.data_dir));
     let folder = dir.path().join("bots");
     std::fs::create_dir(&folder).unwrap();
-    let checkout = repositories::create_checkout(&folder, "app", &mirror).unwrap();
+    let checkout = in_sandboxs_place(&folder, "app", &mirror);
     assert!(checkout.join("a").is_file());
 
     std::fs::write(upstream.join("a"), "2").unwrap();
@@ -288,6 +290,7 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
     if std::process::Command::new("git")
@@ -354,7 +357,7 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         ],
         &checkout,
     );
-    repositories::create_checkout(&folder, "app", &mirror).unwrap();
+    in_sandboxs_place(&folder, "app", &mirror);
     assert_eq!(
         PathBuf::from(git(&["remote", "get-url", "origin"], &checkout)),
         mirror
@@ -364,13 +367,6 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         mirror,
         "no other place to push to"
     );
-
-    // A checkout that is a link is refused.
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(&checkout, folder.join("linked")).unwrap();
-        assert!(repositories::create_checkout(&folder, "linked", &mirror).is_err());
-    }
 }
 
 #[test]
@@ -398,5 +394,39 @@ fn claude_inside_a_toolchain_gets_its_own_folder_even_under_a_broad_one() {
     assert_ne!(
         grant_with(&program, &shared, &paths, std::slice::from_ref(&toolchain)),
         Some(install)
+    );
+}
+
+/// Run the command setup runs in the sandbox to make or adopt a checkout,
+/// here with `sh`, and answer the checkout.
+#[cfg(unix)]
+fn in_sandboxs_place(folder: &std::path::Path, name: &str, mirror: &std::path::Path) -> PathBuf {
+    let exists = folder.join(name).exists();
+    let line = repositories::checkout_command(name, mirror, exists, false);
+    let out = std::process::Command::new("sh")
+        .args(["-c", &line])
+        .current_dir(folder)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{line}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    folder.join(name)
+}
+
+#[test]
+fn checkout_commands_quote_what_they_name() {
+    let mirror = PathBuf::from("/data/it's here/app.git");
+    let sh = repositories::checkout_command("app", &mirror, false, false);
+    assert_eq!(
+        sh,
+        "git clone --quiet --no-hardlinks -- '/data/it'\\''s here/app.git' 'app'"
+    );
+    let ps = repositories::checkout_command("app", &mirror, true, true);
+    assert!(
+        ps.starts_with("git -C 'app' remote set-url origin '/data/it''s here/app.git'; "),
+        "{ps}"
     );
 }

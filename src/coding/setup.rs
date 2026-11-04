@@ -242,7 +242,7 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     }
 
     // 6. The repository.
-    let checkout = repository_step(&mut config, paths, &ask, &options, &root_id)?;
+    let checkout = repository_step(&mut config, paths, &ask, &options, &root_id, &bot)?;
 
     // 7. The toolchain.
     if let Some((name, _, mirror)) = &checkout {
@@ -694,6 +694,7 @@ fn repository_step(
     ask: &Asker,
     options: &Options,
     root_id: &str,
+    bot: &str,
 ) -> Result<Option<(String, PathBuf, PathBuf)>> {
     let root = config.root(root_id).cloned().context("the folder")?;
     let existing = config
@@ -729,7 +730,9 @@ fn repository_step(
     };
     let mut repo = repo;
     if let Some(key) = &options.ssh_key {
-        let key = expand_home(key)?;
+        // Where it really is: a link could be changed later to point at
+        // another key.
+        let key = crate::roots::canonical(&expand_home(key)?)?;
         repositories::check_ssh_key(&key, &config.roots)?;
         repo.ssh_key = Some(key);
     }
@@ -746,13 +749,7 @@ fn repository_step(
             return Ok(None);
         }
     };
-    let checkout = match repositories::create_checkout(&root.path, &repo.name, &mirror) {
-        Ok(c) => c,
-        Err(e) => {
-            Step::Failed(format!("{e:#}")).print("Repository");
-            return Ok(None);
-        }
-    };
+    // Kept first: a run reads only the mirrors of the folder's repositories.
     if !config.coding.repositories.contains(&repo) {
         config
             .coding
@@ -760,6 +757,24 @@ fn repository_step(
             .retain(|r| !(r.root == repo.root && r.name == repo.name));
         config.coding.repositories.push(repo.clone());
         save(config, paths)?;
+    }
+    // Made, or pointed at the mirror, by a command in the sandbox, as the
+    // bot: that can change only the shared folder, so a link a command left
+    // there can't send the write anywhere else. Desktop itself writes
+    // nothing in a shared folder.
+    let checkout = root.path.join(&repo.name);
+    let exists = std::fs::symlink_metadata(&checkout).is_ok();
+    let line = repositories::checkout_command(&repo.name, &mirror, exists, cfg!(windows));
+    let (state, code, output) = check(paths, root_id, "", &line, bot, Duration::from_secs(1800))
+        .unwrap_or_else(|e| ("failed".into(), None, format!("{e:#}")));
+    if state != "exited" || code != Some(0) {
+        Step::Failed(format!(
+            "making the checkout in the sandbox {state}{}\n{}",
+            code.map(|c| format!(" with {c}")).unwrap_or_default(),
+            tail(&output, 8)
+        ))
+        .print("Repository");
+        return Ok(None);
     }
     let _ = ask;
     Step::Ok(format!(
