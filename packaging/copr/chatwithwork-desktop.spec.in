@@ -1,0 +1,102 @@
+# Fedora COPR (paolino/chatwithwork-desktop) and openSUSE: the release's
+# complete Linux archive, with the same files as the release's .rpm.
+# Rendered and submitted by packaging/copr/submit.sh; see PACKAGING.md,
+# "Package managers".
+%global debug_package %{nil}
+# The browser engine's files are hashed into its manifest, so nothing may
+# strip, compress or rewrite them (no brp scripts), and its private Node
+# runtime provides nothing to the rest of the system.
+%global __os_install_post %{nil}
+%global __provides_exclude_from ^/usr/lib/chatwithwork/.*$
+%global __requires_exclude_from ^/usr/lib/chatwithwork/browser-engine/.*$
+
+Name:           chatwithwork-desktop
+Version:        @VERSION@
+Release:        @PKGREL@%{?dist}
+Summary:        Chat with Work Desktop: the desktop app, terminal interface and background agent
+License:        GPL-3.0-only
+URL:            https://chatwithwork.com
+Source0:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/cww-app-v%{version}-x86_64-unknown-linux-gnu.tar.gz
+Source1:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/cww-app-v%{version}-aarch64-unknown-linux-gnu.tar.gz
+ExclusiveArch:  x86_64 aarch64
+
+BuildRequires:  coreutils
+BuildRequires:  systemd-rpm-macros
+# Owns the icon theme's directories, which openSUSE's build checks require.
+BuildRequires:  hicolor-icon-theme
+Requires:       hicolor-icon-theme
+# The libraries the app links (WebKitGTK, GTK, ALSA, PipeWire, D-Bus) are
+# required by soname automatically; these are the programs it runs.
+Requires:       bubblewrap
+Requires:       slirp4netns
+Requires:       util-linux
+Recommends:     xdg-desktop-portal
+Recommends:     gnome-keyring
+Recommends:     cups-client
+%if 0%{?suse_version}
+Requires:       iptables
+Recommends:     libayatana-appindicator3-1
+Recommends:     sane-backends
+Recommends:     tesseract-ocr
+%else
+Requires:       iptables-nft
+Recommends:     libayatana-appindicator-gtk3
+Recommends:     sane-backends-libs
+Recommends:     sane-backends-drivers-scanners
+Recommends:     tesseract
+%endif
+Provides:       cww = %{version}-%{release}
+
+%description
+Chat with Work Desktop is the open-source desktop app for Chat with Work:
+Chat with Work in a window of its own, and a background agent (cww on the
+command line) that lets Chat with Work read, and with your approval change
+files and run commands, in the folders you share, and nothing else.
+Includes the applications-menu entry, icon and systemd user service.
+
+%prep
+%ifarch x86_64
+%global archive_source %{SOURCE0}
+%global archive_sha256 @LINUX_APP_AMD64_SHA256@
+%global target x86_64-unknown-linux-gnu
+%endif
+%ifarch aarch64
+%global archive_source %{SOURCE1}
+%global archive_sha256 @LINUX_APP_ARM64_SHA256@
+%global target aarch64-unknown-linux-gnu
+%endif
+echo "%{archive_sha256}  %{archive_source}" | sha256sum -c -
+%setup -q -T -c
+tar -xzf %{archive_source}
+
+%build
+
+%install
+dir=cww-app-v%{version}-%{target}
+install -dm755 %{buildroot}/usr/lib/chatwithwork
+cp -R "$dir/browser-engine" %{buildroot}/usr/lib/chatwithwork/
+install -Dm755 "$dir/cww" %{buildroot}%{_bindir}/cww
+install -Dm755 "$dir/cww-app" %{buildroot}%{_bindir}/cww-app
+install -Dm644 "$dir/cww-app.desktop" %{buildroot}%{_datadir}/applications/cww-app.desktop
+install -Dm644 "$dir/cww-app.svg" %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/cww-app.svg
+install -Dm644 "$dir/packaging/systemd/cww.service" %{buildroot}%{_userunitdir}/cww.service
+install -Dm644 "$dir/README.md" "$dir/PROTOCOL.md" "$dir/SECURITY.md" -t %{buildroot}%{_docdir}/%{name}/
+install -Dm644 "$dir/LICENSE" -t %{buildroot}%{_licensedir}/%{name}/
+
+%post
+@POSTINSTALL@
+
+%files
+%dir %{_licensedir}/%{name}
+%license %{_licensedir}/%{name}/LICENSE
+%doc %{_docdir}/%{name}/
+%{_bindir}/cww
+%{_bindir}/cww-app
+/usr/lib/chatwithwork/
+%{_datadir}/applications/cww-app.desktop
+%{_datadir}/icons/hicolor/scalable/apps/cww-app.svg
+%{_userunitdir}/cww.service
+
+%changelog
+* @CHANGELOG_DATE@ Carmine Paolino <carmine@paolino.me> - @VERSION@-@PKGREL@
+- Chat with Work Desktop @VERSION@: https://github.com/crmne/chatwithwork-desktop/releases/tag/v@VERSION@
