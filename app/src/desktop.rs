@@ -820,7 +820,7 @@ fn tray_library_loads() -> bool {
     .iter()
     // SAFETY: these libraries run no initialization code beyond what loading
     // them for the tray already would.
-    .any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+    .any(|name| unsafe { libloading::Library::new(*name) }.is_ok())
 }
 
 #[cfg(not(target_os = "linux"))]
