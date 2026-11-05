@@ -693,6 +693,9 @@ jobs:
             fi
           done
           cat checksums.txt
+          # The download brought the old signature, checked above, and
+          # sign-checksums never overwrites a file.
+          rm -f checksums.txt.sig
           native-packages sign-checksums checksums.txt \
             --public-key ../app/assets/update-public-key.hex \
             --key-env CWW_UPDATE_SIGNING_KEY
