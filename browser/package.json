@@ -15,7 +15,7 @@
     "test:package": "node --test scripts/package.test.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
+    "@playwright/test": "1.65.0",
     "@types/chrome": "0.3.7",
     "@types/node": "26.6.6",
     "typescript": "7.0.2"
