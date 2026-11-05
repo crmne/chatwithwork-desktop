@@ -304,6 +304,15 @@ const TOOLCHAINS: &[Toolchain] = &[
         bins: &[],
         env: None,
     },
+    // The system's C and C++ headers, which MXC's Bubblewrap baseline leaves
+    // out of `/usr`: without them a compiler finds no `stdio.h`, and any
+    // build that compiles C (a `-sys` crate, a native gem) fails. Read only,
+    // and not there on macOS, whose headers are in the SDK MXC already reads.
+    Toolchain {
+        read: "/usr/include",
+        bins: &[],
+        env: None,
+    },
 ];
 
 /// The system resolver's socket, hidden when there's no network so a
