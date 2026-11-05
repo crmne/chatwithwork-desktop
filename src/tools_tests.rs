@@ -518,3 +518,156 @@ async fn a_patch_dry_run_reads_against_each_folders_budget() {
     let answer = call(&f, "patch", json!({ "changes": changes })).await;
     assert_eq!(answer["effect"], "patched", "{answer}");
 }
+
+/// A folder `app` lent to bot 7 that allows changes, with commands as
+/// given, its loan unattended as given, and the bots' requests in memory.
+fn ask_fixture(
+    commands: bool,
+    unattended: bool,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    LocalFiles,
+    Arc<crate::unattended_asks::Asks>,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let app = base.join("app");
+    write(&app.join("README.md"), "hello\n");
+    let paths = Paths::under(&base.join("cww"));
+    let mut config = Config {
+        roots: vec![Root {
+            bots: vec![BotLoan {
+                id: "7".into(),
+                name: "Fixer".into(),
+                unattended,
+                claude_code: false,
+            }],
+            id: "app".into(),
+            label: "App".into(),
+            path: app,
+            follow_symlinks: false,
+            writable: true,
+            commands,
+            network: false,
+            read_budget: None,
+        }],
+        ..Config::default()
+    };
+    config.index.enabled = false;
+    let reader = Arc::new(Reader::new(&config, &paths, Changes::default()).unwrap());
+    let limiter = Arc::new(Limiter::new(config.limits.clone()));
+    let writer = Arc::new(Writer::new(
+        Arc::clone(&reader),
+        Arc::clone(&limiter),
+        Trash::new(Some(paths.home_trash.clone().unwrap())),
+    ));
+    let audit = base.join("audit.jsonl");
+    let asks = Arc::new(crate::unattended_asks::Asks::in_memory());
+    let files = LocalFiles::new(
+        reader,
+        writer,
+        limiter,
+        Arc::new(AuditLog::open(&audit).unwrap()),
+        Arc::new(AtomicBool::new(false)),
+        config.limits.max_message_bytes,
+    )
+    .with_asks(Arc::clone(&asks));
+    (tmp, audit, files, asks)
+}
+
+async fn ask(files: &LocalFiles, args: Value, caller: Caller) -> Value {
+    let Value::Object(args) = args else {
+        panic!("arguments are an object")
+    };
+    files
+        .call_as(
+            ASK_UNATTENDED,
+            Some(args),
+            Some("1".into()),
+            "r".into(),
+            None,
+            caller,
+        )
+        .await
+        .expect("a known tool")
+        .structured_content
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_bot_asks_for_unattended_commands_once_and_never_sees_the_tool() {
+    let (_tmp, audit, files, asks) = ask_fixture(true, false);
+    let names: Vec<String> = files.tools().iter().map(|t| t.name.to_string()).collect();
+    assert!(
+        !names.iter().any(|n| n == ASK_UNATTENDED),
+        "never listed: {names:?}"
+    );
+
+    let asked = ask(&files, json!({ "root": "app" }), bot()).await;
+    assert_eq!(asked, json!({ "status": "asked" }));
+    let again = ask(&files, json!({ "root": "app" }), bot()).await;
+    assert_eq!(
+        again,
+        json!({ "status": "asked" }),
+        "a repeat is still waiting"
+    );
+    assert_eq!(asks.pending().len(), 1, "and raises no second question");
+
+    let log = tail(&audit, 10).unwrap();
+    let asked: Vec<_> = log
+        .iter()
+        .filter(|e| e.event == "root_bot_unattended_asked")
+        .collect();
+    assert_eq!(asked.len(), 1, "one ask, audited once");
+    let detail = asked[0].detail.as_deref().unwrap();
+    assert_eq!(detail, "app (App) for bot 7");
+    assert!(
+        !log.iter().any(|e| serde_json::to_string(e)
+            .unwrap()
+            .contains(&*_tmp.path().to_string_lossy())),
+        "no path in the audit log"
+    );
+}
+
+#[tokio::test]
+async fn an_unattended_loan_is_already_allowed() {
+    let (_tmp, _audit, files, asks) = ask_fixture(true, true);
+    let answer = ask(&files, json!({ "root": "app" }), bot()).await;
+    assert_eq!(answer, json!({ "status": "already" }));
+    assert!(asks.pending().is_empty());
+}
+
+#[tokio::test]
+async fn only_a_bot_may_ask_and_only_for_its_folders_with_commands() {
+    let (tmp, _audit, files, asks) = ask_fixture(true, false);
+    let other = Caller::Bot {
+        id: "8".into(),
+        unattended: false,
+    };
+    assert_eq!(
+        code(&ask(&files, json!({ "root": "app" }), other).await),
+        "not_lent"
+    );
+    assert_eq!(
+        code(&ask(&files, json!({ "root": "nope" }), bot()).await),
+        "not_lent"
+    );
+    assert_eq!(
+        code(&ask(&files, json!({ "root": "app" }), Caller::Person).await),
+        "not_lent",
+        "no bot ID"
+    );
+    assert_eq!(
+        code(&ask(&files, json!({ "root": "app", "path": "app:" }), bot()).await),
+        "invalid_argument"
+    );
+    assert!(asks.pending().is_empty());
+    drop(tmp);
+
+    let (_tmp, _audit, files, asks) = ask_fixture(false, false);
+    let refused = ask(&files, json!({ "root": "app" }), bot()).await;
+    assert_eq!(code(&refused), "not_writable", "{refused}");
+    assert!(refused.to_string().contains("allow commands"), "{refused}");
+    assert!(asks.pending().is_empty());
+}

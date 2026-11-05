@@ -598,6 +598,16 @@ enum RootsCommand {
     /// Stop sharing a folder with a bot.
     #[command(name = "unshare", alias = "stop-lending")]
     StopLending { root: String, bot: String },
+    /// List the bots asking to run their commands unattended in a folder
+    /// shared with them.
+    Requests,
+    /// Allow a bot's request to run its commands unattended in a folder,
+    /// through the daemon, which records it. It lasts until the folder's
+    /// sharing changes.
+    Allow { root: String, bot: String },
+    /// Turn down a bot's request to run its commands unattended in a
+    /// folder.
+    Decline { root: String, bot: String },
     /// Set how many characters a chat may read from a shared folder in an
     /// hour, when `[limits]` sets an hourly read limit: from that limit to
     /// 20,000,000, for a folder worked in a lot, such as code. All chats
@@ -1117,6 +1127,44 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
 fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
     let mut config = Config::load(paths)?;
     match command {
+        RootsCommand::Requests => {
+            let Some(status) = control::request(&paths.socket_path(), ControlRequest::Status)?
+            else {
+                anyhow::bail!("the daemon is not running, so no request is waiting");
+            };
+            let asks = status["unattended_asks"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if asks.is_empty() {
+                println!("No bot is asking to run its commands unattended.");
+            }
+            for ask in asks {
+                println!("{}", describe_ask(&ask));
+            }
+        }
+        RootsCommand::Allow { root, bot } => {
+            let request = ControlRequest::RootsUnattendedAnswer {
+                root,
+                bot: bot.clone(),
+                allow: true,
+            };
+            if control::request(&paths.socket_path(), request)?.is_none() {
+                anyhow::bail!("the daemon is not running, so no request is waiting");
+            }
+            println!("Bot {bot}'s commands there now run without asking each time.");
+        }
+        RootsCommand::Decline { root, bot } => {
+            let request = ControlRequest::RootsUnattendedAnswer {
+                root,
+                bot: bot.clone(),
+                allow: false,
+            };
+            if control::request(&paths.socket_path(), request)?.is_none() {
+                anyhow::bail!("the daemon is not running, so no request is waiting");
+            }
+            println!("Bot {bot}'s commands there still wait for approval in Chat with Work.");
+        }
         RootsCommand::Add {
             path,
             label,
@@ -1518,9 +1566,32 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
                     ""
                 }
             );
+            let asking = status["unattended_asks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|ask| ask["root"] == r["id"] && ask["bot"] == loan["id"]);
+            if let Some(ask) = asking {
+                println!("      {}", describe_ask(ask));
+            }
         }
     }
     Ok(())
+}
+
+/// A bot's request for unattended commands, and how to answer it.
+fn describe_ask(ask: &Value) -> String {
+    let (root, bot) = (str(&ask["root"]), str(&ask["bot"]));
+    let name = Some(str(&ask["name"]))
+        .filter(|n| !n.trim().is_empty())
+        .map_or_else(|| format!("Bot {bot}"), str::to_string);
+    format!(
+        "{name} asks to run commands in {} without asking each time; the request waits \
+         until {}. `cww roots allow {root} {bot}` allows it until you change the folder's \
+         sharing, `cww roots decline {root} {bot}` doesn't.",
+        str(&ask["folder"]),
+        str(&ask["expires_at"])
+    )
 }
 
 fn pause(paths: &Paths, paused: bool) -> Result<()> {

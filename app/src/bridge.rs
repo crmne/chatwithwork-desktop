@@ -313,6 +313,16 @@ fn show_page_dialog(app: &AppHandle, label: &str, title: &str, dialog: &PageDial
 /// Demo builds can answer it for pictures and checks
 /// (`CWW_DEMO_CONFIRM=yes|no`); real builds always ask.
 pub(crate) fn confirm(app: &AppHandle, label: &str, question: &crate::computer::Question) -> bool {
+    confirm_or(app, label, question, "Cancel")
+}
+
+/// As [`confirm`], with `no` on the other button.
+pub(crate) fn confirm_or(
+    app: &AppHandle,
+    label: &str,
+    question: &crate::computer::Question,
+    no: &str,
+) -> bool {
     #[cfg(feature = "demo")]
     if let Ok(answer) = std::env::var("CWW_DEMO_CONFIRM") {
         return answer == "yes";
@@ -325,7 +335,7 @@ pub(crate) fn confirm(app: &AppHandle, label: &str, question: &crate::computer::
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
             question.yes.clone(),
-            "Cancel".into(),
+            no.into(),
         ));
     if let Some(window) = app.get_window(label) {
         dialog = dialog.parent(&window);

@@ -33,6 +33,22 @@ pub struct Status {
     /// Whether commands can run here: only on Windows, where it depends on
     /// the version of Windows (docs/commands.md); `None` elsewhere.
     pub commands: Option<CommandsHost>,
+    /// Bots asking to run their commands unattended in a folder lent to
+    /// them, waiting for the person here (CONTROL.md, `status`).
+    pub unattended_asks: Vec<UnattendedAsk>,
+}
+
+/// A bot's request for unattended commands, named from this computer's own
+/// settings: the folder's label and the loan's name for the bot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UnattendedAsk {
+    pub root: String,
+    pub folder: String,
+    pub bot: String,
+    pub name: String,
+    pub asked_at: String,
+    pub expires_at: String,
 }
 
 fn browser_asks_by_default() -> bool {

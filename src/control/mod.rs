@@ -154,6 +154,16 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unattended: bool,
     },
+    /// The person's answer to a bot's request to run its commands
+    /// unattended in a folder lent to it (`ask_unattended`, PROTOCOL.md
+    /// 7.2.1): `allow` does what `roots_bot` with `unattended: true` does,
+    /// and otherwise the request is dropped. Refused when no request from
+    /// that bot waits for that folder.
+    RootsUnattendedAnswer {
+        root: String,
+        bot: String,
+        allow: bool,
+    },
     /// Give a shared folder a read budget of its own: characters a chat
     /// may read from it per rolling hour (all chats together twice that),
     /// or `null` for the budget every folder shares.
@@ -528,6 +538,11 @@ pub enum Topic {
     /// Changes to the chat list: a chat started or changed, one removed,
     /// the projects, the account.
     Chats,
+    /// This subscriber answers bots' requests for unattended commands
+    /// (`unattended_asks` in `status`) in a dialog of its own: while one is
+    /// subscribed, the daemon shows no system notification for them. It
+    /// brings no events of its own.
+    Asks,
 }
 
 fn all_topics() -> Vec<Topic> {
@@ -635,6 +650,10 @@ pub trait ControlHandler: Send + Sync + 'static {
     }
 
     fn unwatch_chats(&self) {}
+
+    /// A subscriber started (`true`) or stopped answering bots' requests
+    /// for unattended commands (the `asks` topic).
+    fn answering_asks(&self, _on: bool) {}
 
     /// Where an attached browser extension is served, if anywhere.
     fn browser(&self) -> Option<Arc<crate::browsing::bridge::Bridge>> {
@@ -826,6 +845,10 @@ where
         }
         return write_line(write, &refusal_response(&e)).await;
     }
+    let answers = topics.contains(&Topic::Asks);
+    if answers {
+        handler.answering_asks(true);
+    }
     let result = forward_events(
         Subscriber { write, lines },
         handler,
@@ -835,6 +858,9 @@ where
         shutdown,
     )
     .await;
+    if answers {
+        handler.answering_asks(false);
+    }
     if let Some(chat) = &followed {
         handler.unwatch_chat(chat);
     }

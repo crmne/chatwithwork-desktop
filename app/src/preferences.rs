@@ -32,6 +32,9 @@ const PAGES: [&str; 7] = [
 #[derive(Default)]
 pub struct Panels(Mutex<BTreeMap<String, Entry>>, Mutex<()>);
 
+/// How long an inline confirmation can be consumed.
+const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
+
 struct Entry {
     proof: String,
     generation: u64,
@@ -138,6 +141,34 @@ impl Panels {
             .is_some_and(|entry| entry.generation == generation)
     }
 
+    /// Whether a page has an inline confirmation showing or being
+    /// prepared: the app's own dialogs wait for it, one question at a time.
+    pub fn confirming(&self) -> bool {
+        let mut entries = self.0.lock().expect("settings panels");
+        // One past its time can't be consumed any more: it holds nothing up.
+        for entry in entries.values_mut() {
+            if entry
+                .confirmation
+                .as_ref()
+                .is_some_and(|pending| pending.started.elapsed() > CONFIRMATION_LIFETIME)
+            {
+                entry.confirmation = None;
+            }
+        }
+        entries
+            .values()
+            .any(|entry| entry.confirmation.is_some() || entry.preparation.is_some())
+    }
+
+    /// A preparation that failed, if it's still the page's latest.
+    pub fn abandon_preparation(&self, owner: &str, preparation: &str) {
+        if let Some(entry) = self.0.lock().expect("settings panels").get_mut(owner)
+            && entry.preparation.as_deref() == Some(preparation)
+        {
+            entry.preparation = None;
+        }
+    }
+
     /// Reserve before blocking status/context work. A late response cannot
     /// replace a newer visible question, or recreate one after navigation.
     pub fn begin_confirmation(&self, owner: &str) -> Result<String, String> {
@@ -215,7 +246,7 @@ impl Panels {
             .take()
             .ok_or("Review this change before allowing it.")?;
         if token != Some(pending.token.as_str())
-            || pending.started.elapsed() > Duration::from_secs(120)
+            || pending.started.elapsed() > CONFIRMATION_LIFETIME
             || pending.request != serde_json::to_value(request).map_err(|e| e.to_string())?
             || pending.context != *context
             || pending.page != entry.page
@@ -1020,6 +1051,20 @@ fn standalone_now(app: &AppHandle, page: &str) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_preparation_holds_up_no_dialog() {
+        let panels = Panels::default();
+        panels.register("main");
+        let first = panels.begin_confirmation("main").unwrap();
+        let second = panels.begin_confirmation("main").unwrap();
+        assert!(panels.confirming());
+        // An older one failing leaves the newer one's.
+        panels.abandon_preparation("main", &first);
+        assert!(panels.confirming());
+        panels.abandon_preparation("main", &second);
+        assert!(!panels.confirming());
+    }
 
     #[test]
     fn late_preparation_cannot_replace_a_newer_question_or_survive_navigation() {

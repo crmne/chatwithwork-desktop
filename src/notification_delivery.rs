@@ -36,6 +36,8 @@ const CAPACITY: usize = 128;
 const VIEW_TTL: Duration = Duration::from_secs(75);
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const MAX_VIEWS: usize = 32;
+/// The prefix of the IDs of this computer's own notices.
+const LOCAL_NOTICE: &str = "local:";
 /// How long the server gives an offer before falling back to the browser.
 const OFFER_WINDOW: Duration = Duration::from_secs(15);
 
@@ -118,6 +120,17 @@ pub(crate) enum Input {
         account: String,
         chat: u64,
         visible: bool,
+    },
+    /// A notice from this computer itself, not the server: a bot's request
+    /// waiting for the person (`crate::unattended_asks`). Clicking it does
+    /// nothing more than the system does.
+    Notice {
+        id: String,
+        title: String,
+        body: String,
+    },
+    WithdrawNotice {
+        id: String,
     },
     Reset,
 }
@@ -511,6 +524,20 @@ impl Client {
         })
     }
 
+    /// Show a notice of this computer's own, replacing one with the same
+    /// `id`.
+    pub fn notice(&self, id: &str, title: &str, body: &str) -> Result<()> {
+        self.send(Input::Notice {
+            id: id.into(),
+            title: title.into(),
+            body: body.into(),
+        })
+    }
+
+    pub fn withdraw_notice(&self, id: &str) -> Result<()> {
+        self.send(Input::WithdrawNotice { id: id.into() })
+    }
+
     fn send(&self, command: Input) -> Result<()> {
         if !pipe::fits_frame(&command) {
             bail!("Notification frame too large");
@@ -854,6 +881,24 @@ impl Bridge {
                 }
             }
             Input::Permission { request } => self.permission(request),
+            Input::Notice { id, title, body } => {
+                let Some(attempt) = self.attempt.checked_add(1) else {
+                    return Ok(());
+                };
+                self.attempt = attempt;
+                // Its own prefix, so it never stands for a server's offer.
+                self.native(Command::Show {
+                    id: format!("{LOCAL_NOTICE}{id}"),
+                    attempt: Some(attempt),
+                    title,
+                    body: Some(body),
+                });
+            }
+            Input::WithdrawNotice { id } => {
+                self.native(Command::Withdraw {
+                    id: format!("{LOCAL_NOTICE}{id}"),
+                });
+            }
             Input::View {
                 session,
                 account,

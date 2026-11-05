@@ -48,6 +48,11 @@ pub struct Desktop {
     computer_view: Mutex<Option<serde_json::Value>>,
     /// Updating the app by itself (update.rs).
     pub updates: Arc<crate::update::Updates>,
+    /// A thread is asking about bots' requests for unattended commands.
+    answering_asks: AtomicBool,
+    /// The requests answered here, kept until the daemon stops listing
+    /// them, so a late status that still does never asks again.
+    answered_asks: Mutex<std::collections::HashSet<crate::model::UnattendedAsk>>,
 }
 
 impl Desktop {
@@ -195,6 +200,94 @@ impl Desktop {
         result
     }
 
+    /// Asks the person about each bot's request to run its commands
+    /// unattended (PROTOCOL.md 7.2.1, `ask_unattended`), one at a time and
+    /// after any other question of the app's, in a dialog the app draws.
+    /// Its words come from this computer's names for the bot and the
+    /// folder. Allow does what sharing with unattended commands does; Not
+    /// now drops the request. Only this dialog, the CLI and the control
+    /// channel answer; pages can't.
+    fn answer_asks(self: &Arc<Self>) {
+        if self.answering_asks.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let desktop = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("cww-unattended-asks".into())
+            .spawn(move || {
+                loop {
+                    let next = desktop.status().and_then(|status| {
+                        let mut answered = desktop.answered_asks.lock().expect("answered asks");
+                        // Forget those the daemon no longer lists.
+                        answered.retain(|ask| status.unattended_asks.contains(ask));
+                        status
+                            .unattended_asks
+                            .into_iter()
+                            .find(|ask| !answered.contains(ask))
+                    });
+                    let Some(ask) = next else {
+                        desktop.answering_asks.store(false, Ordering::SeqCst);
+                        // One that came in while this thread was stopping.
+                        let more = desktop.status().is_some_and(|status| {
+                            let answered = desktop.answered_asks.lock().expect("answered asks");
+                            status.unattended_asks.iter().any(|a| !answered.contains(a))
+                        });
+                        if more && !desktop.answering_asks.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        return;
+                    };
+                    // After any question of the app's own, and of a page's.
+                    let free = !desktop.preferences.confirming();
+                    let Some(_asking) = desktop.asking.start().filter(|_| free) else {
+                        // Another question is showing: this one waits.
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        continue;
+                    };
+                    let name = if ask.name.trim().is_empty() {
+                        format!("Bot {}", ask.bot)
+                    } else {
+                        ask.name.clone()
+                    };
+                    let question = crate::computer::Question {
+                        title: "Allow unattended commands".into(),
+                        message: format!(
+                            "{name} asks to run commands in {} without asking each time. They \
+                             still run in the folder's sandbox and are recorded. Allow?",
+                            ask.folder
+                        ),
+                        yes: "Allow".into(),
+                    };
+                    let allow = crate::bridge::confirm_or(&desktop.app(), "", &question, "Not now");
+                    let answer = cww::control::ControlRequest::RootsUnattendedAnswer {
+                        root: ask.root.clone(),
+                        bot: ask.bot.clone(),
+                        allow,
+                    };
+                    if let Err(e) = desktop.client.request(&answer) {
+                        // Not answered: asked again when a status lists it
+                        // still (the daemon keeps one an allow failed for),
+                        // never if it was answered elsewhere or withdrawn.
+                        log::info!("a bot's request wasn't answered here: {e}");
+                        // Looked at again a little later, whatever status
+                        // came meanwhile: one still listed asks again, never
+                        // at once, so an error that lasts can't keep a
+                        // dialog coming back.
+                        std::thread::sleep(std::time::Duration::from_secs(10));
+                        continue;
+                    }
+                    desktop
+                        .answered_asks
+                        .lock()
+                        .expect("answered asks")
+                        .insert(ask);
+                }
+            });
+        if spawned.is_err() {
+            self.answering_asks.store(false, Ordering::SeqCst);
+        }
+    }
+
     pub fn quit(&self) {
         self.quitting.store(true, Ordering::SeqCst);
         self.app().exit(0);
@@ -215,10 +308,16 @@ impl Desktop {
             }
         });
         let paired = status.as_ref().and_then(|s| s.server.clone());
+        let asks = status
+            .as_ref()
+            .is_some_and(|s| !s.unattended_asks.is_empty());
         self.tell_pages(&app, status.as_ref());
         *self.status.lock().expect("status lock") = status;
         self.status_known.store(true, Ordering::SeqCst);
         crate::windows::tell_settings(&app, "status", self.status_json());
+        if asks && let Some(desktop) = app.try_state::<Arc<Desktop>>() {
+            desktop.inner().answer_asks();
+        }
         // Paired with another server: the web app follows.
         if !self.server_fixed
             && let Some(paired) = paired
@@ -477,6 +576,8 @@ pub fn run(
         preferences: Default::default(),
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
+        answering_asks: AtomicBool::new(false),
+        answered_asks: Mutex::new(std::collections::HashSet::new()),
         updates: Arc::new(crate::update::Updates::new(
             update_error,
             dismissed_update,

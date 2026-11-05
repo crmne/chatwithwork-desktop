@@ -71,6 +71,12 @@ struct Daemon {
     /// The chat API as this device, while it's paired.
     chat_client: Mutex<Option<Arc<ChatClient>>>,
     notifications: Arc<crate::notification_delivery::Client>,
+    /// Bots' requests for unattended commands, waiting for the person here.
+    asks: Arc<crate::unattended_asks::Asks>,
+    /// Subscribers that answer those requests in a dialog of their own (the
+    /// desktop app). While there are none, a system notification tells
+    /// the person instead.
+    answering: std::sync::atomic::AtomicUsize,
 }
 
 /// The longest question the terminal may send, as the server allows.
@@ -553,6 +559,13 @@ async fn run_with_notifications(
             .context("starting the reader")??
     };
     let reader = Arc::new(reader);
+    let asks = {
+        let file = paths.state_dir.join("unattended-asks.json");
+        let pairing = crate::unattended_asks::pairing(&config);
+        tokio::task::spawn_blocking(move || crate::unattended_asks::Asks::load(file, pairing))
+            .await
+            .context("loading the bots' requests")?
+    };
     let limiter = Arc::new(Limiter::new(config.limits.clone()));
     let writer = Arc::new(Writer::new(
         Arc::clone(&reader),
@@ -603,8 +616,11 @@ async fn run_with_notifications(
         events,
         changes,
         shutdown: shutdown.clone(),
+        asks: Arc::new(asks),
+        answering: std::sync::atomic::AtomicUsize::new(0),
         paths,
     });
+    tokio::spawn(Arc::clone(&daemon).tell_of_asks(shutdown.clone()));
     tokio::spawn(Arc::clone(&daemon).publish_status(shutdown.clone()));
     tokio::spawn(crate::printing::purge_print_files(
         daemon.paths.state_dir.join("printing"),
@@ -650,6 +666,7 @@ impl Daemon {
             config.limits.max_message_bytes,
         )
         .with_commands(command_tools(&config, &self.runner))
+        .with_asks(Arc::clone(&self.asks))
         .with_printing(crate::printing::tools::PrintTools {
             runner: self.runner.clone(),
             printers: crate::printing::settings::offered(&config),
@@ -665,6 +682,136 @@ impl Daemon {
                 )
             }),
         )
+    }
+
+    /// When a bot asks for unattended commands: the status changes, so the
+    /// desktop app asks the person in its own dialog, and when no app
+    /// answers, a system notification says to open it.
+    async fn tell_of_asks(self: Arc<Self>, shutdown: CancellationToken) {
+        // Each request is told of once.
+        let mut told = std::collections::HashSet::new();
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = self.asks.asked() => {}
+            }
+            self.changes.bump();
+            if self.answering.load(Ordering::SeqCst) > 0 {
+                continue;
+            }
+            let config = self.config.lock().await.clone();
+            let shown = self.asks.list(&config);
+            let pending = self.with_asks(|asks| asks.pending()).await;
+            told.retain(|ask| pending.contains(ask));
+            for ask in pending {
+                if told.contains(&ask) {
+                    continue;
+                }
+                let Some(view) = shown
+                    .iter()
+                    .find(|view| view.root == ask.root && view.bot == ask.bot)
+                else {
+                    continue;
+                };
+                let body = format!(
+                    "{} asks to run commands in {} without asking each time. Open Chat with \
+                     Work Desktop to answer, or run `cww roots requests`.",
+                    crate::unattended_asks::bot_name(view),
+                    view.folder
+                );
+                // Told once its notice is on its way; one that couldn't be
+                // sent is tried again with the next change.
+                match self.notifications.notice(
+                    &ask.notice_id(),
+                    "A bot asks to run commands unattended",
+                    &body,
+                ) {
+                    Ok(()) => {
+                        told.insert(ask);
+                    }
+                    Err(e) => tracing::warn!("couldn't show a bot's request: {e:#}"),
+                }
+            }
+        }
+    }
+
+    /// Run `f` on the bots' requests on the blocking pool: changing them
+    /// writes their file, which never holds up the runtime's workers.
+    async fn with_asks<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&crate::unattended_asks::Asks) -> T + Send + 'static,
+    ) -> T {
+        let asks = Arc::clone(&self.asks);
+        tokio::task::spawn_blocking(move || f(&asks))
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+    }
+
+    /// The requests waiting, named from `config`, after dropping those
+    /// nothing is left to answer for and withdrawing their notifications.
+    async fn asks_json(&self) -> Value {
+        // The config as it is now, not as it was before the status awaited
+        // anything: a request made meanwhile is never pruned by an old one.
+        let config = Arc::new(self.config.lock().await.clone());
+        let pruning = Arc::clone(&config);
+        for stale in self.with_asks(move |asks| asks.prune(&pruning)).await {
+            let _ = self.notifications.withdraw_notice(&stale.notice_id());
+        }
+        json!(self.asks.list(&config))
+    }
+
+    /// The person's answer to a bot's request, from this computer: allowing
+    /// does what `roots_bot` with `unattended: true` does.
+    async fn answer_ask(&self, which: String, bot: String, allow: bool) -> Result<Value> {
+        let (root, label) = {
+            let config = self.config.lock().await;
+            // An ID first: the app sends one, and a label can be another
+            // folder's ID.
+            let root = config
+                .roots
+                .iter()
+                .find(|r| r.id == which)
+                .or_else(|| config.roots.iter().find(|r| r.label == which))
+                .with_context(|| format!("no shared folder {which:?}"))?;
+            (root.id.clone(), root.label.clone())
+        };
+        // Only a request the config still leaves open: a loan withdrawn
+        // meanwhile is never lent again by an old request.
+        let ask = {
+            let config = self.config.lock().await.clone();
+            let (root, bot) = (root.clone(), bot.clone());
+            self.with_asks(move |asks| asks.take(&root, &bot, &config))
+                .await
+        }
+        .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
+        if allow {
+            return match self
+                .set_bot(root, bot, None, true, true, Some(ask.clone()))
+                .await
+            {
+                Ok(answer) => {
+                    let _ = self.notifications.withdraw_notice(&ask.notice_id());
+                    Ok(answer)
+                }
+                Err(e) => {
+                    // Still waiting, if the config leaves it open: the
+                    // person can try again, and the apps hear of it.
+                    let config = self.config.lock().await.clone();
+                    if crate::unattended_asks::open(&config, &ask) {
+                        self.with_asks(move |asks| asks.restore(ask)).await;
+                        self.changes.bump();
+                    }
+                    Err(e)
+                }
+            };
+        }
+        let _ = self.notifications.withdraw_notice(&ask.notice_id());
+        let mut entry = AuditEntry::event("root_bot_unattended_declined");
+        entry.detail = Some(format!("{root} ({label}) for bot {bot}"));
+        self.audit.append(&entry);
+        self.changes.bump();
+        let config = self.config.lock().await;
+        Ok(json!({ "root": config.root(&root) }))
     }
 
     /// Push a fresh status to subscribers whenever something changes. Sleeps
@@ -830,12 +977,22 @@ impl Daemon {
             || config.browser.changes != new.browser.changes
             || config.browser.ask_before_actions != new.browser.ask_before_actions;
         self.configure_browser(&new);
+        let pairing = crate::unattended_asks::pairing(&new);
+        let paired_again = crate::unattended_asks::pairing(&config) != pairing;
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
         self.runner.prune().await;
         if pairing_changed {
             self.tunnel_token.lock().await.cancel();
+        }
+        // Another server's bots have other numbers: a request from the old
+        // pairing must not be allowed for the new one's bot. Only a new
+        // pairing drops them, never another reconnect.
+        if paired_again {
+            for ask in self.with_asks(move |asks| asks.clear(pairing)).await {
+                let _ = self.notifications.withdraw_notice(&ask.notice_id());
+            }
         }
         self.reloaded.notify_one();
         self.audit.append(&AuditEntry::event("reloaded"));
@@ -931,10 +1088,23 @@ impl Daemon {
         name: Option<String>,
         lent: bool,
         unattended: bool,
+        // A bot's request this answers: it still needs the loan it asked
+        // about, checked in the same edit, so a loan withdrawn meanwhile
+        // is never lent again by it.
+        answering: Option<crate::unattended_asks::Ask>,
     ) -> Result<Value> {
         let id = bot.clone();
         let root = self
             .edit_config(move |config, _| {
+                if let Some(ask) = &answering
+                    && !crate::unattended_asks::open(config, ask)
+                {
+                    anyhow::bail!(
+                        "bot {} isn't waiting for an answer about {} any more",
+                        ask.bot,
+                        ask.root
+                    );
+                }
                 crate::roots::set_bot(config, &which, &bot, name.as_deref(), lent, unattended)
             })
             .await?;
@@ -1364,6 +1534,7 @@ impl Daemon {
             "printers": config.printers,
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
             "commands": commands_host(&config),
+            "unattended_asks": self.asks_json().await,
         })
     }
 
@@ -1468,6 +1639,15 @@ impl ControlHandler for Daemon {
 
     async fn initial_status(&self) -> Option<Value> {
         Some(self.status_json().await)
+    }
+
+    fn answering_asks(&self, on: bool) {
+        if on {
+            self.answering.fetch_add(1, Ordering::SeqCst);
+        } else if self.answering.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // The last app went: a request it didn't answer gets a notice.
+            self.asks.wake();
+        }
     }
 
     async fn watch_chat(&self, chat: &str) -> Result<()> {
@@ -1628,7 +1808,10 @@ impl ControlHandler for Daemon {
                 name,
                 lent,
                 unattended,
-            } => self.set_bot(root, bot, name, lent, unattended).await,
+            } => self.set_bot(root, bot, name, lent, unattended, None).await,
+            ControlRequest::RootsUnattendedAnswer { root, bot, allow } => {
+                self.answer_ask(root, bot, allow).await
+            }
             ControlRequest::RootsReadBudget { root, read_budget } => {
                 self.set_read_budget(root, read_budget).await
             }

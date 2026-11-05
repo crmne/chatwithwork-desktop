@@ -70,6 +70,11 @@ pub const BOT_META: &str = "com.chatwithwork/botId";
 /// bot may run commands unattended where its loan says so.
 pub const UNATTENDED_META: &str = "com.chatwithwork/unattended";
 
+/// A bot's chat asks the person on this computer to let its commands run
+/// unattended in a folder lent to it (PROTOCOL.md 7.2.1). Never listed in
+/// `tools/list`, so no model sees it: the server calls it by name.
+pub const ASK_UNATTENDED: &str = "ask_unattended";
+
 /// Trusted browser-only local consent; never a model argument.
 pub const BROWSER_AUTO_APPROVE_META: &str = "com.chatwithwork/browserAutoApprove";
 
@@ -140,6 +145,8 @@ struct Inner {
     printing: Option<PrintTools>,
     /// The browser tools, while the person turned the browser on.
     browser: Option<BrowserTools>,
+    /// Bots' requests for unattended commands, waiting for the person.
+    asks: Option<Arc<crate::unattended_asks::Asks>>,
     reader: Arc<Reader>,
     writer: Arc<Writer>,
     limiter: Arc<Limiter>,
@@ -162,6 +169,7 @@ impl LocalFiles {
                 commands: None,
                 printing: None,
                 browser: None,
+                asks: None,
                 reader,
                 writer,
                 limiter,
@@ -199,6 +207,17 @@ impl LocalFiles {
         let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
         Self {
             inner: Arc::new(Inner { browser, ..inner }),
+        }
+    }
+
+    /// Take bots' requests for unattended commands (`ask_unattended`).
+    pub fn with_asks(self, asks: Arc<crate::unattended_asks::Asks>) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                asks: Some(asks),
+                ..inner
+            }),
         }
     }
 
@@ -265,6 +284,7 @@ impl LocalFiles {
                 || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
                 || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
                 || (PRINT_TOOLS.contains(&name) && self.printing().is_some())
+                || (name == ASK_UNATTENDED && self.inner.asks.is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -551,6 +571,73 @@ impl LocalFiles {
         Ok(None)
     }
 
+    /// Queue a bot's request to run its commands unattended in a folder
+    /// lent to it, for the person on this computer to answer there. Changes
+    /// nothing the computer allows.
+    async fn ask_unattended(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+        let Caller::Bot { id, .. } = caller else {
+            return Err(ToolError::new(
+                ErrorCode::NotLent,
+                "only a bot's chat can ask for unattended commands",
+            ));
+        };
+        let AskUnattendedArgs { root } = parse_args(args)?;
+        let reader = &self.inner.reader;
+        let not_lent = || {
+            ToolError::new(
+                ErrorCode::NotLent,
+                format!("the folder {root} isn't lent to this bot on this computer"),
+            )
+        };
+        let loan = reader.loan(&root, id).ok_or_else(not_lent)?;
+        let folder = reader
+            .roots()
+            .into_iter()
+            .find(|r| r.id == root)
+            .ok_or_else(not_lent)?;
+        if !folder.allows_commands {
+            return Err(ToolError::new(
+                ErrorCode::NotWritable,
+                format!(
+                    "Commands aren't allowed in the shared folder “{}”, so they can't run \
+                     there unattended. The person can allow commands for it in Chat with Work \
+                     Desktop on their computer.",
+                    folder.label
+                ),
+            ));
+        }
+        if loan.unattended {
+            return Ok(Output::Ask(json!({ "status": "already" })));
+        }
+        let asks = Arc::clone(self.inner.asks.as_ref().expect("offered only with asks"));
+        // Saving it writes a file: on the blocking pool.
+        let (asking, bot) = (root.clone(), id.clone());
+        let asked = blocking(move || {
+            asks.ask(&asking, &bot).map_err(|e| {
+                ToolError::new(
+                    ErrorCode::Internal,
+                    format!("The request couldn't be kept on this computer: {e:#}"),
+                )
+            })
+        })
+        .await?;
+        match asked {
+            crate::unattended_asks::Asked::Queued => {
+                let mut entry = AuditEntry::event("root_bot_unattended_asked");
+                entry.detail = Some(format!("{root} ({}) for bot {id}", folder.label));
+                self.inner.audit.append(&entry);
+            }
+            crate::unattended_asks::Asked::Already => {}
+            crate::unattended_asks::Asked::Full => {
+                return Err(ToolError::new(
+                    ErrorCode::RateLimited,
+                    "Too many bots' requests are waiting for the person on this computer.                      Ask again once they've answered some.",
+                ));
+            }
+        }
+        Ok(Output::Ask(json!({ "status": "asked" })))
+    }
+
     /// What a bot sees of the list of folders: only those lent to it, each
     /// saying whether its commands there start unattended.
     fn for_caller(&self, output: Output, caller: &Caller) -> Output {
@@ -607,6 +694,7 @@ impl LocalFiles {
         }
         let reader = Arc::clone(&self.inner.reader);
         match name {
+            ASK_UNATTENDED => self.ask_unattended(args, caller).await,
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;
                 let roots = blocking(move || Ok(reader.roots())).await?;
@@ -990,6 +1078,12 @@ pub fn run_change(writer: &Writer, name: &str, args: Value) -> Result<ChangeResu
 #[serde(deny_unknown_fields)]
 struct EmptyArgs {}
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskUnattendedArgs {
+    root: String,
+}
+
 enum Output {
     Roots(Value),
     Search(SearchResponse),
@@ -1005,6 +1099,8 @@ enum Output {
     Command(Value, Option<String>),
     /// A browser tool's answer, with a screenshot's picture.
     Browser(Answer),
+    /// `ask_unattended`'s answer.
+    Ask(Value),
 }
 
 impl Output {
@@ -1012,6 +1108,10 @@ impl Output {
     /// `budget` bytes. Returns the result, its size, and the item count.
     fn into_result(self, budget: usize) -> (CallToolResult, usize, Option<usize>) {
         match self {
+            Output::Ask(v) => {
+                let (r, b) = success(&v);
+                (r, b, None)
+            }
             Output::Roots(v) => {
                 let n = v["roots"].as_array().map(Vec::len);
                 let (r, b) = success(&v);

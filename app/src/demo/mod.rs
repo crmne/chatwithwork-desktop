@@ -430,8 +430,18 @@ fn sample() -> State {
             json!({"enabled":true,"changes":false,"stopped":false,
                 "ask_before_actions":true,"sites":["github.com","example.com"],"all_sites":false,"blocked_sites":[],"bots":[],
                 "extension":{"browser":"Chromium","version":"0.1.2","site_policy_version":2,"stopped":false}})
-        } else { Value::Null },
+        } else {
+            // The browser off, as a real daemon says it (null isn't a status).
+            json!({"enabled":false,"changes":false,"stopped":false,"ask_before_actions":true,
+                "sites":[],"all_sites":false,"blocked_sites":[],"bots":[],"extension":null})
+        },
         "paused": false,
+        // A bot waiting for this computer's yes to run commands unattended
+        // (`CWW_DEMO_UNATTENDED=1`), for pictures of the app's dialog.
+        "unattended_asks": if std::env::var_os("CWW_DEMO_UNATTENDED").is_some() {
+            json!([{ "root": "work-projects", "folder": "Work projects", "bot": "42",
+                     "name": "Issue fixer", "asked_at": ago(60), "expires_at": ago(-24 * 3600 + 60) }])
+        } else { json!([]) },
         "printers": [{ "id": "office-brother", "queue": "Office_Brother", "label": "Office Brother", "chats": true, "bots": [] }],
         "roots": [
             { "id": "documents", "label": "Documents", "available": true, "index": "ready",
@@ -650,6 +660,23 @@ impl Demo {
                         r["bots"] = json!(loans);
                     }
                     Self::event(s, if lent { "root_bot_lent" } else { "root_bot_withdrawn" });
+                });
+                json!({ "ok": true })
+            }
+            // The person's answer to a bot's request, as the daemon's
+            // `roots_unattended_answer`: the request goes either way.
+            "roots_unattended_answer" => {
+                let allow = request["allow"].as_bool().unwrap_or(false);
+                self.change(|s| {
+                    s.status["unattended_asks"] = json!([]);
+                    Self::event(
+                        s,
+                        if allow {
+                            "root_bot_lent"
+                        } else {
+                            "root_bot_unattended_declined"
+                        },
+                    );
                 });
                 json!({ "ok": true })
             }
