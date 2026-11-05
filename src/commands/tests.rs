@@ -1169,7 +1169,7 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
         return;
     }
 
-    let real = home.canonicalize().unwrap();
+    let real = crate::roots::canonical(&home).unwrap();
     let ssh = real.join(".ssh").join("id_ed25519");
     let credentials = real
         .join(crate::coding::CONFIG_DIR)

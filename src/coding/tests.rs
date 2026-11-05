@@ -70,7 +70,7 @@ fn the_login_is_found_where_claude_code_keeps_it() {
     signed_in_home(&home);
     let login = Login::find(&home);
     assert!(login.signed_in());
-    let real = home.canonicalize().unwrap();
+    let real = crate::roots::canonical(&home).unwrap();
     assert_eq!(login.dir, Some(real.join(CONFIG_DIR)));
     assert_eq!(login.file, Some(real.join(CONFIG_FILE)));
     let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
