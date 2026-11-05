@@ -403,6 +403,11 @@ pub(crate) mod fixtures {
     }
 
     pub fn pdf(text: &str) -> Vec<u8> {
+        pdf_pages(&[text])
+    }
+
+    /// A PDF with one line of text on each page.
+    pub fn pdf_pages(pages: &[&str]) -> Vec<u8> {
         use lopdf::content::{Content, Operation};
         use lopdf::{Document, Object, Stream, dictionary};
 
@@ -416,29 +421,36 @@ pub(crate) mod fixtures {
         let resources_id = doc.add_object(dictionary! {
             "Font" => dictionary! { "F1" => font_id },
         });
-        let content = Content {
-            operations: vec![
-                Operation::new("BT", vec![]),
-                Operation::new("Tf", vec!["F1".into(), 12.into()]),
-                Operation::new("Td", vec![72.into(), 720.into()]),
-                Operation::new("Tj", vec![Object::string_literal(text)]),
-                Operation::new("ET", vec![]),
-            ],
-        };
-        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
-        let page_id = doc.add_object(dictionary! {
-            "Type" => "Page",
-            "Parent" => pages_id,
-            "Contents" => content_id,
-            "Resources" => resources_id,
-            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
-        });
+        let kids: Vec<Object> = pages
+            .iter()
+            .map(|text| {
+                let content = Content {
+                    operations: vec![
+                        Operation::new("BT", vec![]),
+                        Operation::new("Tf", vec!["F1".into(), 12.into()]),
+                        Operation::new("Td", vec![72.into(), 720.into()]),
+                        Operation::new("Tj", vec![Object::string_literal(*text)]),
+                        Operation::new("ET", vec![]),
+                    ],
+                };
+                let content_id =
+                    doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+                doc.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "Contents" => content_id,
+                    "Resources" => resources_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                })
+                .into()
+            })
+            .collect();
         doc.objects.insert(
             pages_id,
             Object::Dictionary(dictionary! {
                 "Type" => "Pages",
-                "Kids" => vec![page_id.into()],
-                "Count" => 1,
+                "Count" => kids.len() as i64,
+                "Kids" => kids,
             }),
         );
         let catalog_id = doc.add_object(dictionary! {

@@ -8,6 +8,11 @@
 //! folder inside it. Files are found by name in the walk and opened through
 //! the root handle with the same policy as `read`, so a swap between the
 //! walk and the open can't escape the folder. Both stop at a time budget.
+//!
+//! `grep` also searches the documents `read` turns into text (PDF, Word,
+//! PowerPoint, spreadsheets), in that text and through the same cache:
+//! line numbers and context are lines of what `read` returns for them.
+//! Other binary files are skipped.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -508,6 +513,22 @@ fn bounded(value: Option<usize>, name: &str, min: usize, max: usize) -> Result<(
     }
 }
 
+/// The text `grep` searches in a file: its bytes, or for a document the
+/// text extracted from it.
+enum Body {
+    Raw(Vec<u8>),
+    Extracted(Arc<String>),
+}
+
+impl Body {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Body::Raw(bytes) => bytes,
+            Body::Extracted(text) => text.as_bytes(),
+        }
+    }
+}
+
 /// What one file holds that a `grep` returns.
 enum FileHits {
     Lines(Vec<GrepMatch>),
@@ -602,8 +623,10 @@ impl super::Reader {
         let mut files_searched = 0usize;
         let mut timed_out = false;
         let mut search = |start: &Start, found: Found| -> bool {
+            let Some(format) = format_for(found.rel.file_name().unwrap_or_default()) else {
+                return true;
+            };
             if found.size > max_bytes
-                || format_for(found.rel.file_name().unwrap_or_default()) != Some(Format::Text)
                 || (!start.is_file
                     && glob
                         .as_ref()
@@ -614,16 +637,28 @@ impl super::Reader {
             let Ok(mut opened) = start.root.open_file(&found.rel, policy) else {
                 return true;
             };
-            let Ok(bytes) = read_capped(&mut opened.file, max_bytes) else {
-                return true;
-            };
-            // Binary files are skipped, as ripgrep does: a NUL byte.
-            if bytes.contains(&0) {
-                return true;
-            }
-            files_searched += 1;
             let path = ToolPath::display(&start.root.id, &found.rel);
-            match search_file(&matcher, &path, &bytes, req.output, context) {
+            // A document (PDF, Word, PowerPoint, a spreadsheet) is searched
+            // in the text `read` returns for it, through the same cache, so
+            // its line numbers are lines of that text.
+            let text = if format == Format::Text {
+                let Ok(bytes) = read_capped(&mut opened.file, max_bytes) else {
+                    return true;
+                };
+                // Binary files are skipped, as ripgrep does: a NUL byte.
+                if bytes.contains(&0) {
+                    return true;
+                }
+                Body::Raw(bytes)
+            } else {
+                let name = found.rel.file_name().unwrap_or_default();
+                match self.extracted(&path, name, &mut opened, max_bytes) {
+                    Ok(text) => Body::Extracted(text),
+                    Err(_) => return true,
+                }
+            };
+            files_searched += 1;
+            match search_file(&matcher, &path, text.bytes(), req.output, context) {
                 None => true,
                 Some(FileHits::Lines(hits)) => {
                     for hit in hits {
@@ -980,6 +1015,130 @@ mod tests {
         let json = serde_json::to_value(grep(&f, req("helper"))).unwrap();
         assert!(json["matches"][0].get("before").is_none());
         assert_eq!(json["next_offset"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn greps_documents_in_their_text() {
+        use crate::reader::extract::fixtures;
+        let f = fixture();
+        let contracts = f.app.join("contracts");
+        fs::create_dir_all(&contracts).unwrap();
+        fs::write(
+            contracts.join("msa.pdf"),
+            fixtures::pdf_pages(&[
+                "Definitions",
+                "Termination for convenience: 90 days notice",
+                "Late payment interest: 9 percent",
+            ]),
+        )
+        .unwrap();
+        fs::write(
+            contracts.join("plan.docx"),
+            fixtures::docx(&["Intro", "Termination by either party"]),
+        )
+        .unwrap();
+        // Binary files that aren't documents stay skipped, by extension or
+        // by a NUL byte.
+        fs::write(contracts.join("scan.png"), "Termination").unwrap();
+        fs::write(contracts.join("blob.dat"), "Termination ").unwrap();
+
+        let content = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts".into()),
+                context: Some(2),
+                ..req("Termination")
+            },
+        );
+        assert_eq!(content.files_searched, 2);
+        let hits = content.matches.as_ref().unwrap();
+        assert_eq!(
+            lines(&content),
+            ["app:contracts/msa.pdf:3", "app:contracts/plan.docx:2"]
+        );
+        // Lines and context are lines of the text `read` returns.
+        let pdf = &hits[0];
+        assert_eq!(pdf.text, "Termination for convenience: 90 days notice");
+        let text = |l: &Option<Vec<Line>>| {
+            l.as_ref()
+                .unwrap()
+                .iter()
+                .map(|l| (l.line, l.text.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            text(&pdf.before),
+            [(1, "Definitions".to_string()), (2, String::new())]
+        );
+        assert_eq!(
+            text(&pdf.after),
+            [
+                (4, String::new()),
+                (5, "Late payment interest: 9 percent".to_string())
+            ]
+        );
+        let read = f
+            .reader
+            .read(&crate::reader::ReadRequest {
+                path: "app:contracts/msa.pdf".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            read.text.lines().nth(2),
+            Some("Termination for convenience: 90 days notice")
+        );
+        // The search converted each document once, into the cache `read`
+        // uses.
+        let mut cached: Vec<String> = f
+            .reader
+            .cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.0.clone())
+            .collect();
+        cached.sort();
+        assert_eq!(cached, ["app:contracts/msa.pdf", "app:contracts/plan.docx"]);
+
+        let files = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts".into()),
+                output: GrepOutput::Files,
+                ignore_case: true,
+                ..req("termination|interest")
+            },
+        );
+        assert_eq!(
+            files.files.unwrap(),
+            ["app:contracts/msa.pdf", "app:contracts/plan.docx"]
+        );
+        let counts = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts/msa.pdf".into()),
+                output: GrepOutput::Count,
+                ..req("Termination|interest")
+            },
+        );
+        assert_eq!(
+            counts.counts.unwrap(),
+            [FileCount {
+                path: "app:contracts/msa.pdf".into(),
+                count: 2
+            }]
+        );
+        // A glob narrows documents as it does text files.
+        let glob = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:".into()),
+                glob: Some("*.pdf".into()),
+                ..req("Termination")
+            },
+        );
+        assert_eq!(lines(&glob), ["app:contracts/msa.pdf:3"]);
     }
 
     #[test]
