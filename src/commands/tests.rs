@@ -564,9 +564,24 @@ fn no_secret_goes_on_a_command_line() {
         "QUOTED".into(),
         crate::coding::Secret::new("it's $HOME `x`".into()),
     ));
+    // A link a `$( )` left there is never written through.
+    #[cfg(unix)]
+    let target = {
+        let target = fx._dir.path().join("bashrc");
+        std::fs::write(&target, "mine\n").unwrap();
+        std::os::unix::fs::symlink(&target, plan.values_file()).unwrap();
+        target
+    };
     plan.write_values(None, Sandbox::Bubblewrap).unwrap();
     #[cfg(unix)]
     {
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "mine\n");
+        assert!(
+            !std::fs::symlink_metadata(plan.values_file())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(plan.values_file())
             .unwrap()

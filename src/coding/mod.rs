@@ -88,10 +88,13 @@ impl Login {
                 .ok()
                 .filter(|p| p.exists())
         };
-        // Never a folder a link makes broad (the home folder, a drive):
-        // a run writes all of it.
+        // Never a folder a link makes broad (the home folder, a drive), or
+        // one that isn't Claude Code's (a link to `~/.ssh`): a run writes
+        // all of it. A link to a folder named `.claude` elsewhere (dotfiles)
+        // is fine.
         let dir = real(CONFIG_DIR)
             .filter(|p| p.is_dir())
+            .filter(|p| p.file_name().is_some_and(|n| n == CONFIG_DIR))
             .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)));
         // Only the file itself, never another a link leads to.
         let file = real(CONFIG_FILE).filter(|p| {

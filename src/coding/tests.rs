@@ -82,6 +82,15 @@ fn the_login_is_found_where_claude_code_keeps_it() {
     assert_eq!(secrets.len(), 2, "never the other fields");
     assert!(!format!("{login:?}").contains("oat01"));
 
+    // A `~/.claude` that leads to a folder not named so is left out.
+    #[cfg(unix)]
+    {
+        let other = dir.path().join("home2");
+        std::fs::create_dir_all(other.join(".ssh")).unwrap();
+        std::os::unix::fs::symlink(other.join(".ssh"), other.join(CONFIG_DIR)).unwrap();
+        assert_eq!(Login::find(&other).dir, None);
+    }
+
     // Folders Claude Code keeps elsewhere aren't the computer's sign-in.
     std::fs::remove_file(home.join(CONFIG_DIR).join(CREDENTIALS_FILE)).unwrap();
     assert!(!Login::find(&home).signed_in());

@@ -424,17 +424,25 @@ impl Plan {
         for (name, value) in values {
             script.push_str(&format!("export {name}={}\n", shell_quote(&value)));
         }
+        // A `$( )` ran in the sandbox with this home before: it may have
+        // left a link here, which this process, outside the sandbox, must
+        // never write through. So whatever is there goes (a link itself,
+        // never what it leads to), and the file is made new.
+        let file = self.values_file();
+        match std::fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
         use std::io::Write;
-        options
-            .open(self.values_file())?
-            .write_all(script.as_bytes())
+        options.open(&file)?.write_all(script.as_bytes())
     }
 
     /// The folder in the run's home that holds only a link named `claude`
