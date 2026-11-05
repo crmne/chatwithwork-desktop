@@ -94,7 +94,7 @@ impl Login {
         // is fine.
         let dir = real(CONFIG_DIR)
             .filter(|p| p.is_dir())
-            .filter(|p| p.file_name().is_some_and(|n| n == CONFIG_DIR))
+            .filter(|p| p.file_name().is_some_and(is_config_dir))
             .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)));
         // Only the file itself, never another a link leads to.
         let file = real(CONFIG_FILE).filter(|p| {
@@ -149,6 +149,16 @@ impl Login {
             self.dir = None;
         }
         self
+    }
+}
+
+/// Whether a folder is named as Claude Code's: on Windows, whose file names
+/// ignore case, `.Claude` is that folder too.
+fn is_config_dir(name: &std::ffi::OsStr) -> bool {
+    if cfg!(windows) {
+        name.eq_ignore_ascii_case(CONFIG_DIR)
+    } else {
+        name == CONFIG_DIR
     }
 }
 
