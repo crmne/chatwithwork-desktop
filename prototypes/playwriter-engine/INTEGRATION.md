@@ -1,8 +1,8 @@
 # Product integration contract (under implementation)
 
 The reviewed direction is the unchanged registry engine, hosted by bundled
-Node22.23.4, behind CWW's existing fixed tools. Node22 preserves the macOS11
-minimum; plan a runtime/support decision before30April2027 (upstream EOL).
+Node 26.12.1, behind CWW's existing fixed tools. Node 26 needs macOS 13.5 or
+later; plan a runtime/support decision before 30 April 2029 (upstream EOL).
 This document defines ownership for parallel implementation, not a shipped
 capability or a replacement for existing tests.
 

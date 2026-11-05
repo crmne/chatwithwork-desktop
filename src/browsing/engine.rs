@@ -28,7 +28,7 @@ use crate::paths::Paths;
 
 use super::bridge::{Bridge, EngineSession};
 
-const NODE_VERSION: &str = "22.23.4";
+const NODE_VERSION: &str = "26.12.1";
 const ENGINE_VERSION: &str = "1.59.14";
 const MAX_FRAME: usize = 2 * 1024 * 1024;
 const MAX_TOTAL: usize = 16 * 1024 * 1024;

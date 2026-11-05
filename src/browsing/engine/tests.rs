@@ -32,7 +32,7 @@ fn installation_with_startup(
     let root = temp.path().join("browser-engine");
     std::fs::create_dir_all(root.join("node_modules/@xmorse/playwright-core")).unwrap();
     let node = if cfg!(windows) { "node.exe" } else { "node" };
-    std::fs::write(root.join(node), format!("#!/bin/sh\nif [ \"$1\" = '--version' ]; then printf 'v22.23.4\\n'; exit 0; fi\n{startup}\n{body}\n")).unwrap();
+    std::fs::write(root.join(node), format!("#!/bin/sh\nif [ \"$1\" = '--version' ]; then printf 'v26.12.1\\n'; exit 0; fi\n{startup}\n{body}\n")).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -59,7 +59,7 @@ fn installation_with_startup(
     };
     std::fs::write(root.join("manifest.json"), serde_json::to_vec(&json!({
         "protocol":1,"app_version":env!("CARGO_PKG_VERSION"),"node_version":NODE_VERSION,
-        "engine_version":ENGINE_VERSION,"target":target,"node_support_ends":"2027-04-30","files":files,
+        "engine_version":ENGINE_VERSION,"target":target,"node_support_ends":"2029-04-30","files":files,
     })).unwrap()).unwrap();
     let paths = Paths::under(&temp.path().join("state"));
     let installation = Installation::verify(&root, &Config::default(), &paths).unwrap();
