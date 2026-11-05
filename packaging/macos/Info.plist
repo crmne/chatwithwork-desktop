@@ -24,7 +24,7 @@
             </array>
         </dict>
     </array>
-    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>LSMinimumSystemVersion</key><string>13.5</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <!-- A menu bar app: no Dock icon and no menu bar of its own. -->
     <key>LSUIElement</key><true/>

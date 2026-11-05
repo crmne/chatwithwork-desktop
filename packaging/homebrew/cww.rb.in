@@ -5,6 +5,8 @@ class Cww < Formula
   license "GPL-3.0-only"
 
   on_macos do
+    # The bundled Node runtime needs macOS 13.5 (Homebrew names only Ventura).
+    depends_on macos: :ventura
     # Universal CLI and app bundle, signed with Developer ID and notarized.
     url "https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-macos-universal.tar.gz"
     sha256 "@MACOS_SHA256@"

@@ -6,7 +6,7 @@
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <volume-check>
         <allowed-os-versions>
-            <os-version min="11.0"/>
+            <os-version min="13.5"/>
         </allowed-os-versions>
     </volume-check>
     <welcome file="welcome.html" mime-type="text/html"/>

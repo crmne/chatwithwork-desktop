@@ -55,7 +55,7 @@ exit "${TEST_DAEMON_EXIT:-0}"
         (self.engine / "node_modules/@xmorse/playwright-core/package.json").write_text('{"version":"1.59.13"}')
         (self.engine / "notices").mkdir()
         (self.engine / "notices/Node-LICENSE").write_text("Aggregate runtime license")
-        executable(self.engine / "node", "#!/bin/sh\necho v22.23.4\n")
+        executable(self.engine / "node", "#!/bin/sh\necho v26.12.1\n")
         engine_package.seal(self.engine, "9.8.7", "x86_64-unknown-linux-gnu", json.loads(engine_package.PLATFORMS.read_text()))
 
     def archive(self, target="x86_64-unknown-linux-gnu"):
@@ -511,6 +511,31 @@ cp "$TEST_RELEASE/$name" "$output"
         for char in ('"', '`', '$', '\\'):
             command = command.replace("\\" + char, char)
         self.assertEqual(command.replace("%%", "%"), str(install / "cww-app"))
+
+    def test_every_place_names_the_same_macos_minimum(self):
+        # The bundled Node runtime sets the minimum (Node 26: macOS 13.5).
+        # A build, installer or listing that allows an older macOS installs an
+        # app whose browser engine can't start.
+        import tomllib
+        cargo = tomllib.loads((ROOT / ".cargo/config.toml").read_text())
+        minimum = cargo["env"]["MACOSX_DEPLOYMENT_TARGET"]
+        self.assertEqual(minimum, "13.5")
+
+        plist = plistlib.loads((ROOT / "packaging/macos/Info.plist").read_bytes())
+        self.assertEqual(plist["LSMinimumSystemVersion"], minimum)
+
+        from xml.etree import ElementTree
+        distribution = ElementTree.parse(ROOT / "packaging/macos/distribution.xml").getroot()
+        self.assertEqual(distribution.find(".//allowed-os-versions/os-version").get("min"), minimum)
+
+        # Homebrew names macOS by release: 13 is Ventura.
+        cask = (ROOT / "packaging/homebrew/chat-with-work.rb.in").read_text()
+        self.assertIn('depends_on macos: ">= :ventura"', cask)
+        formula = (ROOT / "packaging/homebrew/cww.rb.in").read_text()
+        self.assertIn("depends_on macos: :ventura", formula)
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"| macOS {minimum} or later |", readme)
 
     def test_every_platform_registers_the_same_link_schemes(self):
         source = (ROOT / "app/src/links.rs").read_text()

@@ -14,7 +14,7 @@ The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the
 
 | Platform | Install | Open |
 |---|---|---|
-| macOS 11 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
+| macOS 13.5 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
 | Windows 10 and 11 | Download the installer from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest): `cww-vX.Y.Z-x86_64-pc-windows-msvc.msi`, or `cww-vX.Y.Z-aarch64-pc-windows-msvc.msi` on Arm. Or run the PowerShell one-liner below. WinGet (`ChatWithWork.Desktop`) is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095) and isn't available yet. | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
 | Arch | `yay -S chatwithwork-desktop-bin` (or `chatwithwork-desktop` to build from source, `chatwithwork-desktop-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
 | Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-desktop_*.deb` | **Chat with Work** in the applications menu, or `cww`. |

@@ -24,8 +24,11 @@ executable and aggregate `LICENSE`, and runs `npm ci --omit=dev --ignore-scripts
 `@xmorse/playwright-core` 1.59.14; its original notices remain in `node_modules`,
 with provenance and runtime notices under `notices/`.
 
-Node 22.23.4 preserves the macOS 11 minimum. **Node 22 support ends on
-30 April 2027**: update the pinned runtime and platform/support decision before
+Node 26.12.1 needs macOS 13.5 or later, so that is the app's minimum too
+(`MACOSX_DEPLOYMENT_TARGET` in `.cargo/config.toml`, `LSMinimumSystemVersion`,
+the installer, and the Homebrew cask and formula). Its Linux x64 musl build
+lists kernel 6.12 and musl 1.2.5 or later. **Node 26 support ends on
+30 April 2029**: update the pinned runtime and platform/support decision before
 then, following the [official schedule](https://github.com/nodejs/Release/blob/main/schedule.json).
 The runtime manifest names the exact protocol, app, engine and Node versions,
 and hashes every regular file in the private tree. Each payload lives under the full

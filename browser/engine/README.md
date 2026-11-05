@@ -15,11 +15,11 @@ runtime is available.
 
 ## Private protocol
 
-`entry.mjs` is a fixed entry loaded by bundled Node 22.23.4 with
+`entry.mjs` is a fixed entry loaded by bundled Node 26.12.1 with
 `--no-addons --no-global-search-paths`. No runtime is downloaded on startup.
 The native wrapper sanitizes environment and verifies the complete private
-module tree. Node 22 preserves macOS 11 support; make the next runtime/support
-decision before its upstream end of support on 30 April 2027.
+module tree. Node 26 needs macOS 13.5 or later; make the next runtime/support
+decision before its upstream end of support on 30 April 2029.
 
 The helper emits `{type:"ready",protocol:1}` after loading. Initialization
 performs no browser access. The daemon prewarms under confinement, without a

@@ -1,6 +1,10 @@
 # whisper-rs generates bindings for the target's C ABI with libclang. Its
 # bundled fallback includes Linux libc layouts and cannot be used on Windows.
 [env]
+# The oldest macOS the binaries run on, as the bundled Node runtime needs
+# (Node 26: 13.5). Info.plist, the installer and Homebrew say the same;
+# packaging/test-packaging.py keeps them together. Other targets ignore it.
+MACOSX_DEPLOYMENT_TARGET = "13.5"
 # Portable binaries must not require the build machine's CPU instructions.
 GGML_NATIVE = "OFF"
 GGML_SSE42 = "OFF"
