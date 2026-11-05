@@ -688,9 +688,11 @@ jobs:
             [ -n "$built" ] || { echo "::error::$image isn't one this run built"; exit 1; }
             [ "$(sha256sum < "$built")" = "$(sha256sum < "$image")" ] ||
               { echo "::error::$image on the release isn't the one this run built"; exit 1; }
-            if ! grep -q "  ${image}$" checksums.txt; then
-              sha256sum -- "$image" >> checksums.txt
-            fi
+            # A rerun of packaging rebuilds the AppImages: replace any line
+            # an earlier run signed for this name.
+            awk -v name="$image" '$2 != name' checksums.txt > checksums.next
+            mv checksums.next checksums.txt
+            sha256sum -- "$image" >> checksums.txt
           done
           cat checksums.txt
           # The download brought the old signature, checked above, and
