@@ -541,11 +541,19 @@ pub fn clear(config: &mut Config, paths: &Paths, root: &str) -> anyhow::Result<(
     delete(config, paths, root)
 }
 
-/// Drop the note that folder `root` has a list, for a folder no longer
-/// shared (the caller saves `config`), and delete the list, which only
-/// logs a failure: a keychain that refuses never keeps a folder shared.
-pub fn forget(config: &mut Config, paths: &Paths, root: &str) {
+/// For a folder no longer shared (already gone from `config`): drop the
+/// note that it has a list and save `config`, then delete the list, which
+/// only logs a failure, since a keychain that refuses never keeps a folder
+/// shared, and a failed save never leaves a noted folder with no list.
+pub fn forget(config: &mut Config, paths: &Paths, root: &str) -> anyhow::Result<()> {
     config.folder_env.retain(|id| id != root);
+    config.save(paths)?;
+    delete_logged(config, paths, root);
+    Ok(())
+}
+
+/// [`delete`], logging a failure instead of returning it.
+pub fn delete_logged(config: &Config, paths: &Paths, root: &str) {
     if let Err(e) = delete(config, paths, root) {
         tracing::warn!("couldn't delete a removed folder's environment: {e:#}");
     }
@@ -764,7 +772,7 @@ mod tests {
         assert_eq!(stored(&config, &paths, "app").unwrap(), None);
         assert!(config.folder_env.is_empty());
         save(&mut config, &paths, "app", "A=1").unwrap();
-        forget(&mut config, &paths, "app");
+        forget(&mut config, &paths, "app").unwrap();
         assert_eq!(stored(&config, &paths, "app").unwrap(), None);
         assert!(config.folder_env.is_empty());
     }

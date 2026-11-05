@@ -355,7 +355,7 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
             }
             let mut config = Config::load(paths)?;
             let root = remove_root(&mut config, id)?;
-            config.save(paths)?;
+            crate::commands::env::forget(&mut config, paths, &root.id)?;
             Ok((format!("Stopped sharing {}.", root.path.display()), true))
         }
         DaemonCommand::LabelRoot { id, label } => {

@@ -1065,13 +1065,21 @@ impl Daemon {
     }
 
     async fn remove_root(&self, which: String) -> Result<Value> {
-        let root = self
-            .edit_config(move |config, paths| {
+        // The removal is saved first, then the folder's list deleted.
+        let (root, config) = self
+            .edit_config(move |config, _| {
                 let root = remove_root(config, &which)?;
-                crate::commands::env::forget(config, paths, &root.id);
-                Ok(root)
+                config.folder_env.retain(|id| id != &root.id);
+                Ok((root, config.clone()))
             })
             .await?;
+        {
+            let (paths, id) = (self.paths.clone(), root.id.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::commands::env::delete_logged(&config, &paths, &id);
+            })
+            .await;
+        }
         let mut entry = AuditEntry::event("root_removed");
         entry.detail = Some(format!("{} ({})", root.id, root.label));
         self.audit.append(&entry);

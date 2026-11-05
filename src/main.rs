@@ -1170,8 +1170,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         }
         RootsCommand::Remove { root } => {
             let removed = remove_root(&mut config, &root)?;
-            cww::commands::env::forget(&mut config, paths, &removed.id);
-            config.save(paths)?;
+            cww::commands::env::forget(&mut config, paths, &removed.id)?;
             println!(
                 "Stopped sharing {} ({}).",
                 removed.path.display(),
@@ -1272,16 +1271,10 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                     }
                 );
             } else {
-                let text = env::stored(&config, paths, &root.id)?.unwrap_or_default();
-                // A mistake is said, as a run would refuse with it.
-                let variables = env::parse(&text).map_err(|errors| {
-                    anyhow::anyhow!(
-                        "{} ({})'s environment has a mistake: {}",
-                        root.label,
-                        root.id,
-                        errors[0]
-                    )
-                })?;
+                // Read as a run reads it: a list gone from the store, or
+                // with a mistake, is said, as a run would refuse with it.
+                let variables =
+                    env::for_run(&config, paths, &root.id).map_err(anyhow::Error::msg)?;
                 if variables.is_empty() {
                     println!("{} ({}) has no environment.", root.label, root.id);
                 }
