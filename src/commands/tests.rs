@@ -362,6 +362,30 @@ fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
 }
 
 #[test]
+fn a_command_compiles_c_against_the_system_headers() {
+    let compiles = std::process::Command::new("cc").arg("--version").output();
+    if !sandbox_works()
+        || !Path::new("/usr/include/stdio.h").is_file()
+        || !compiles.is_ok_and(|o| o.status.success())
+    {
+        return;
+    }
+    let fx = fixture(true);
+    std::fs::write(
+        fx.folder.join("hello.c"),
+        "#include <stdio.h>\nint main(void) { puts(\"compiled\"); return 0; }\n",
+    )
+    .unwrap();
+    let status = fx
+        .runs
+        .start(&fx.config, &shell("cc hello.c -o hello && ./hello"))
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert_eq!(done.stdout, "compiled\n");
+}
+
+#[test]
 fn a_command_has_no_network_unless_the_folder_allows_it() {
     if !sandbox_works() {
         return;
