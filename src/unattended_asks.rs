@@ -291,16 +291,19 @@ impl Asks {
     }
 }
 
-/// Whether a request still has something to answer: the folder is lent to
-/// the bot, allows commands, and its loan isn't unattended yet.
+/// Whether a request still has something to answer: it came through the
+/// pairing `config` names (another server's bot can have the same number),
+/// the folder is lent to the bot, allows commands, and its loan isn't
+/// unattended yet.
 pub fn open(config: &Config, ask: &Ask) -> bool {
-    config
-        .roots
-        .iter()
-        .find(|root| root.id == ask.root)
-        .is_some_and(|root| {
-            root.runs_commands() && root.loan(&ask.bot).is_some_and(|loan| !loan.unattended)
-        })
+    ask.pairing == pairing(config)
+        && config
+            .roots
+            .iter()
+            .find(|root| root.id == ask.root)
+            .is_some_and(|root| {
+                root.runs_commands() && root.loan(&ask.bot).is_some_and(|loan| !loan.unattended)
+            })
 }
 
 /// What the person is asked, from this computer's own names for the bot
@@ -447,6 +450,22 @@ mod tests {
         old[0].expires_at = now() - 1;
         std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
         assert!(Asks::load(file, String::new()).pending().is_empty());
+    }
+
+    #[test]
+    fn a_request_is_never_answered_for_another_pairing() {
+        let asks = Asks::in_memory();
+        asks.ask("app", "42").unwrap();
+        // Paired meanwhile, before the reload dropped the request: the
+        // new server's bot 42 is another bot.
+        let mut paired = config(true, false);
+        paired.server = Some(crate::config::ServerConfig {
+            url: "https://two.example".into(),
+            device_id: "9".into(),
+        });
+        assert!(asks.take("app", "42", &paired).is_none());
+        assert!(asks.list(&paired).is_empty());
+        assert!(asks.take("app", "42", &config(true, false)).is_some());
     }
 
     #[test]

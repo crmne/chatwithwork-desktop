@@ -269,8 +269,12 @@ impl Desktop {
                         // still (the daemon keeps one an allow failed for),
                         // never if it was answered elsewhere or withdrawn.
                         log::info!("a bot's request wasn't answered here: {e}");
-                        desktop.answering_asks.store(false, Ordering::SeqCst);
-                        return;
+                        // Looked at again a little later, whatever status
+                        // came meanwhile: one still listed asks again, never
+                        // at once, so an error that lasts can't keep a
+                        // dialog coming back.
+                        std::thread::sleep(std::time::Duration::from_secs(10));
+                        continue;
                     }
                     desktop
                         .answered_asks
