@@ -82,6 +82,13 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if let Err(state) = resolve_env(plan, cell, sandbox, home.as_deref(), deadline) {
         return state;
     }
+    // The `$( )`s took time: a stop or the clock may have come meanwhile.
+    if stopped() {
+        return State::Stopped;
+    }
+    if Instant::now() >= deadline {
+        return State::TimedOut;
+    }
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
         Ok(process) => process,
@@ -227,7 +234,16 @@ fn resolve_env(
                     }
                     match String::from_utf8(out) {
                         Ok(text) if !text.contains('\0') => {
-                            value.push_str(text.trim_end_matches(['\n', '\r']))
+                            value.push_str(text.trim_end_matches(['\n', '\r']));
+                            // One variable is one string the system passes
+                            // whole, which Linux holds to 128 KiB.
+                            if value.len() > super::env::MAX_OUTPUT {
+                                return Err(State::Failed(format!(
+                                    "{}'s value is over {} KiB",
+                                    variable.name,
+                                    super::env::MAX_OUTPUT / 1024
+                                )));
+                            }
                         }
                         _ => {
                             return Err(State::Failed(format!(
@@ -306,7 +322,18 @@ fn capture(
     let out = keep(process.take_stdout(), super::env::MAX_OUTPUT + 1, false);
     let err = keep(process.take_stderr(), 4096, true);
     let closers = [process.stdout_closer(), process.stderr_closer()];
+    let mut polls: u32 = 0;
     let ended = loop {
+        polls = polls.wrapping_add(1);
+        // A `$( )` is held to the run's process limit, as the run is.
+        if polls.is_multiple_of(COUNT_EVERY)
+            && too_many_processes(process.id(), plan.limits.processes, sandbox)
+        {
+            lock(cell).limit = Some("processes");
+            let _ = process.kill();
+            let _ = process.wait();
+            break Err(Captured::Ended(State::Stopped));
+        }
         if lock(cell).stop || Instant::now() >= deadline {
             let stopped = lock(cell).stop;
             let _ = process.kill();

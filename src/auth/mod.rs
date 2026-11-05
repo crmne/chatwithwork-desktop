@@ -438,24 +438,29 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
     // Claude Code's sign-in for coding bots (docs/coding-computers.md).
     file.delete(crate::coding::TOKEN_NAME)?;
     // Shared folders' environments (docs/secrets.md).
+    // Their keychain entries are named for this install, so they go
+    // whether or not it paired; only where it noted one, so a computer
+    // with no keychain isn't asked to delete from one.
     let folder_env: Vec<String> = config
         .roots
         .iter()
         .map(|root| &root.id)
         .chain(&config.folder_env)
-        .map(|id| crate::commands::env::entry(id))
+        .map(|id| crate::commands::env::entry(paths, id))
         .collect();
     for entry in &folder_env {
         file.delete(entry)?;
+    }
+    if !config.folder_env.is_empty() && SecretStore::recorded(&config, paths).in_keychain() {
+        for entry in &folder_env {
+            SecretStore::Keyring.delete(entry)?;
+        }
     }
     if config.server.is_some() || config.secret_store.is_some() {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
         store.delete(crate::coding::TOKEN_NAME)?;
-        for entry in &folder_env {
-            store.delete(entry)?;
-        }
         // What an older version saved, here too if it was never carried over.
         if store.in_keychain() {
             SecretStore::Keyring.delete(DEVICE_KEY)?;

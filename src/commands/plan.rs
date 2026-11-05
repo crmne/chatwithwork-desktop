@@ -413,7 +413,7 @@ impl Plan {
                     self.env
                         .values
                         .iter()
-                        .map(|(name, value)| (value, format!("[{name}]"))),
+                        .map(|(_, value)| (value, super::env::REDACTED.to_string())),
                 ),
         )
     }

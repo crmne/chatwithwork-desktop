@@ -122,6 +122,8 @@ cww roots env app --stdin < app.env  # NAME=value lines every command in the fol
 cww roots remove work-docs
 ```
 
+Keep a file like `app.env` outside every shared folder, and delete it once `cww roots env` has read it: the command copies it into the secret store and leaves the file where it is, readable by the assistant and the folder's commands if it's in a shared folder. See [docs/secrets.md](docs/secrets.md).
+
 Share narrow folders: anything inside a shared folder can be read by the assistant, except files on the deny list. `cww` refuses to share `/`, your whole home folder, or system directories unless you pass `--i-know`.
 
 A shared folder is read-only until you allow changes in it (and a folder you share read-only stays read-only even inside one that allows changes), with `cww roots allow-changes` (or `--allow-changes` on `add`), the `w` key on the terminal UI's Shared folders page, or the "Allow changes" switch in the desktop app. Then the assistant can create, edit, move and delete files there. Chat with Work asks you before each change, the previous version of anything replaced and everything deleted goes to the system trash (the Trash on macOS, the Recycle Bin on Windows, your desktop's trash on Linux), and the activity log records every change. Nothing on the server can turn changes on. See [docs/file-changes.md](docs/file-changes.md).

@@ -1068,7 +1068,7 @@ impl Daemon {
         let root = self
             .edit_config(move |config, paths| {
                 let root = remove_root(config, &which)?;
-                crate::commands::env::forget(config, paths, &root.id)?;
+                crate::commands::env::forget(config, paths, &root.id);
                 Ok(root)
             })
             .await?;

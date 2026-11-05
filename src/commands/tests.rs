@@ -1163,7 +1163,7 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
     let mut fx = fixture(true);
     fx.config.secret_store = Some("file".into());
     let paths = fx.runs.paths.clone();
-    crate::commands::env::set(
+    crate::commands::env::save(
         &mut fx.config,
         &paths,
         "project",
@@ -1176,11 +1176,8 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
     let status = fx.runs.start(&fx.config, &shell(line)).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.status.exit_code, Some(0), "{done:?}");
-    assert!(
-        done.stdout.contains("t:[OP_SERVICE_ACCOUNT_TOKEN]"),
-        "{done:?}"
-    );
-    assert!(done.stderr.contains("p:[DB_PASSWORD]"), "{done:?}");
+    assert!(done.stdout.contains("t:[redacted]"), "{done:?}");
+    assert!(done.stderr.contains("p:[redacted]"), "{done:?}");
     // Only the whole text is taken out: a piece of it still shows, which is
     // how a test can see the value was worked out.
     assert!(done.stdout.contains("OPS_LITE"), "{done:?}");
@@ -1196,7 +1193,7 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
         );
     }
 
-    crate::commands::env::set(
+    crate::commands::env::save(
         &mut fx.config,
         &paths,
         "project",

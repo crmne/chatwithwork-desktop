@@ -14,8 +14,11 @@ use crate::paths::Paths;
 /// Longest list accepted, in bytes. Windows' Credential Manager holds at
 /// most 2,560 bytes an entry, and says so when it's more.
 pub const MAX_TEXT: usize = 16 * 1024;
-/// Most bytes a `$( )` may print.
+/// Most bytes a `$( )` may print, and a value may hold.
 pub const MAX_OUTPUT: usize = 64 * 1024;
+/// What a value becomes in what a run prints: never its name either, which
+/// Chat with Work isn't told.
+pub const REDACTED: &str = "[redacted]";
 
 /// Variables a run sets itself, or that change how its programs start:
 /// never a folder's. Compared without case, as Windows does.
@@ -49,6 +52,8 @@ const RESERVED: &[&str] = &[
     "WINDIR",
     "COMSPEC",
     "PATHEXT",
+    "HOMEDRIVE",
+    "HOMEPATH",
     "PSMODULEPATH",
     "PSMODULEANALYSISCACHEPATH",
     "PYTHONUTF8",
@@ -173,7 +178,12 @@ pub fn parse(text: &str) -> Result<Vec<Variable>, Vec<LineError>> {
         match parser.variable() {
             Ok(None) => {}
             Ok(Some(variable)) => {
-                if variables.iter().any(|v| v.name == variable.name) {
+                // Without case, as a run sets them: a second spelling
+                // would never reach the command.
+                if variables
+                    .iter()
+                    .any(|v| v.name.eq_ignore_ascii_case(&variable.name))
+                {
                     errors.push(LineError {
                         line,
                         message: format!("{} is set twice", variable.name),
@@ -314,6 +324,12 @@ impl Parser<'_> {
             }
             _ => self.bare()?,
         };
+        // No process's environment holds a NUL, nor does its command line.
+        if parts.iter().any(|part| match part {
+            Part::Text(text) | Part::Command(text) => text.contains('\0'),
+        }) {
+            return Err(format!("{name} holds a NUL character"));
+        }
         Ok(Some(Variable { name, parts }))
     }
 
@@ -357,7 +373,11 @@ impl Parser<'_> {
                     self.next();
                     break;
                 }
-                Some('#') if text.is_empty() || text.ends_with([' ', '\t']) => {
+                // A comment only at the value's start or after a space: a
+                // `#` right after a `$( )` is text.
+                Some('#')
+                    if (parts.is_empty() && text.is_empty()) || text.ends_with([' ', '\t']) =>
+                {
                     self.skip_line();
                     break;
                 }
@@ -394,7 +414,7 @@ impl Parser<'_> {
             self.next();
             match (quote, c) {
                 (Some(q), c) if c == q => quote = None,
-                (Some('"'), '\\') => {
+                (Some('"'), c) if c == ESCAPE => {
                     command.push(c);
                     if let Some(escaped) = self.next() {
                         command.push(escaped);
@@ -402,6 +422,15 @@ impl Parser<'_> {
                     continue;
                 }
                 (Some(_), _) => {}
+                // Escaped by the shell that runs it (sh's `\`, PowerShell's
+                // backtick): never the `)` that ends it.
+                (None, c) if c == ESCAPE => {
+                    command.push(c);
+                    if let Some(escaped) = self.next() {
+                        command.push(escaped);
+                    }
+                    continue;
+                }
                 (None, '\'' | '"') => quote = Some(c),
                 (None, '(') => depth += 1,
                 (None, ')') if depth == 0 => break,
@@ -418,62 +447,116 @@ impl Parser<'_> {
     }
 }
 
+/// What escapes the next character in the shell a `$( )` runs in.
+const ESCAPE: char = if cfg!(windows) { '`' } else { '\\' };
+
 fn push_text(parts: &mut Vec<Part>, text: &mut String) {
     if !text.is_empty() {
         parts.push(Part::Text(std::mem::take(text)));
     }
 }
 
-/// Where the secret store keeps folder `root`'s list.
-pub fn entry(root: &str) -> String {
-    format!("folder-env-{root}")
+/// Where the secret store keeps folder `root`'s list: named for this
+/// install too (by its config folder), since the keychain's entries are
+/// shared by every install of the person's account, paired or not, and
+/// another's folder can have the same ID.
+pub fn entry(paths: &Paths, root: &str) -> String {
+    let digest = ring::digest::digest(
+        &ring::digest::SHA256,
+        paths.config_dir.to_string_lossy().as_bytes(),
+    );
+    let install: String = digest.as_ref()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("folder-env:{install}:{root}")
 }
 
+/// The store folders' lists are in: the keychain under this install's
+/// names, whatever server is paired, or the 0600 file where this computer
+/// keeps its keys there.
 fn store(config: &Config, paths: &Paths) -> SecretStore {
-    SecretStore::for_config(config, paths)
+    match SecretStore::for_config(config, paths) {
+        store if store.in_keychain() => SecretStore::Keyring,
+        file => file,
+    }
 }
 
 /// Folder `root`'s list as stored, if it has one.
 pub fn stored(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Option<String>> {
-    store(config, paths).get(&entry(root))
+    store(config, paths).get(&entry(paths, root))
+}
+
+fn errors_text(errors: &[LineError]) -> String {
+    errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Keep `text` as folder `root`'s list, once it reads without a mistake,
-/// and note in `config` that it has one (the caller saves it). Empty, it
-/// forgets the list.
-pub fn set(
+/// and save `config` noting it has one. If `config` can't be saved, the
+/// list that was there before is put back. Empty, it [`clear`]s the list.
+pub fn save(
     config: &mut Config,
     paths: &Paths,
     root: &str,
     text: &str,
-) -> Result<Vec<Variable>, String> {
-    let variables = parse(text).map_err(|errors| {
-        errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+) -> anyhow::Result<Vec<Variable>> {
+    let variables = parse(text).map_err(|errors| anyhow::anyhow!(errors_text(&errors)))?;
     if variables.is_empty() {
-        forget(config, paths, root).map_err(|e| format!("{e:#}"))?;
-    } else {
-        store(config, paths)
-            .set(&entry(root), text)
-            .map_err(|e| format!("{e:#}"))?;
-        if !config.folder_env.iter().any(|id| id == root) {
-            config.folder_env.push(root.to_string());
+        clear(config, paths, root)?;
+        return Ok(variables);
+    }
+    let store = store(config, paths);
+    let name = entry(paths, root);
+    let before = store.get(&name)?;
+    store.set(&name, text)?;
+    let noted = config.folder_env.iter().any(|id| id == root);
+    if !noted {
+        config.folder_env.push(root.to_string());
+    }
+    if let Err(e) = config.save(paths) {
+        if !noted {
+            config.folder_env.retain(|id| id != root);
         }
+        let put_back = match &before {
+            Some(before) => store.set(&name, before),
+            None => store.delete(&name),
+        };
+        if let Err(back) = put_back {
+            tracing::warn!("couldn't put a folder's environment back: {back:#}");
+        }
+        return Err(e);
     }
     Ok(variables)
 }
 
-/// Forget folder `root`'s list wherever it can be (the store this computer
-/// uses, and the 0600 file), and the note that it has one.
-pub fn forget(config: &mut Config, paths: &Paths, root: &str) -> anyhow::Result<()> {
-    store(config, paths).delete(&entry(root))?;
-    SecretStore::File(paths.secrets_file()).delete(&entry(root))?;
+/// Forget folder `root`'s list: the note in `config` first, saved, so a
+/// failed save never leaves a folder noted with no list, then the list.
+pub fn clear(config: &mut Config, paths: &Paths, root: &str) -> anyhow::Result<()> {
     config.folder_env.retain(|id| id != root);
-    Ok(())
+    config.save(paths)?;
+    delete(config, paths, root)
+}
+
+/// Drop the note that folder `root` has a list, for a folder no longer
+/// shared (the caller saves `config`), and delete the list, which only
+/// logs a failure: a keychain that refuses never keeps a folder shared.
+pub fn forget(config: &mut Config, paths: &Paths, root: &str) {
+    config.folder_env.retain(|id| id != root);
+    if let Err(e) = delete(config, paths, root) {
+        tracing::warn!("couldn't delete a removed folder's environment: {e:#}");
+    }
+}
+
+/// Delete folder `root`'s list wherever it can be: the store this
+/// computer uses, and the 0600 file.
+pub fn delete(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<()> {
+    let name = entry(paths, root);
+    store(config, paths).delete(&name)?;
+    SecretStore::File(paths.secrets_file()).delete(&name)
 }
 
 /// The variables of folder `root` for a run: none, without reading the
@@ -661,28 +744,116 @@ mod tests {
             secret_store: Some("file".into()),
             ..Default::default()
         };
-        assert!(set(&mut config, &paths, "app", "PATH=/x").is_err());
+        assert!(save(&mut config, &paths, "app", "PATH=/x").is_err());
         assert_eq!(for_run(&config, &paths, "app").unwrap(), Vec::new());
-        set(&mut config, &paths, "app", "A=1\nB=$(echo 2)").unwrap();
+        save(&mut config, &paths, "app", "A=1\nB=$(echo 2)").unwrap();
         assert_eq!(config.folder_env, ["app"]);
         assert_eq!(for_run(&config, &paths, "app").unwrap().len(), 2);
         // Noted, but gone from the store: the run stops.
         SecretStore::File(paths.secrets_file())
-            .delete(&entry("app"))
+            .delete(&entry(&paths, "app"))
             .unwrap();
         assert!(for_run(&config, &paths, "app").is_err());
-        set(&mut config, &paths, "app", "A=1\nB=$(echo 2)").unwrap();
+        save(&mut config, &paths, "app", "A=1\nB=$(echo 2)").unwrap();
         assert!(
             !std::fs::read_to_string(paths.config_dir.join("config.toml"))
                 .unwrap_or_default()
                 .contains("A=1")
         );
-        set(&mut config, &paths, "app", "# nothing\n").unwrap();
+        save(&mut config, &paths, "app", "# nothing\n").unwrap();
         assert_eq!(stored(&config, &paths, "app").unwrap(), None);
         assert!(config.folder_env.is_empty());
-        set(&mut config, &paths, "app", "A=1").unwrap();
-        forget(&mut config, &paths, "app").unwrap();
+        save(&mut config, &paths, "app", "A=1").unwrap();
+        forget(&mut config, &paths, "app");
         assert_eq!(stored(&config, &paths, "app").unwrap(), None);
         assert!(config.folder_env.is_empty());
+    }
+
+    #[test]
+    fn names_differ_by_more_than_case() {
+        assert_eq!(
+            errors("API_KEY=1\napi_key=2"),
+            ["line 2: api_key is set twice"]
+        );
+        assert!(parse("HOMEPATH=x").is_err());
+        assert!(parse("HomeDrive=x").is_err());
+    }
+
+    #[test]
+    fn a_nul_never_reaches_a_run() {
+        assert_eq!(errors("A=x\0y"), ["line 1: A holds a NUL character"]);
+        assert_eq!(
+            errors("A=\"$(echo \0)\""),
+            ["line 1: A holds a NUL character"]
+        );
+    }
+
+    #[test]
+    fn a_hash_right_after_a_command_is_text() {
+        assert_eq!(
+            one("A=pre$(printf foo)#suffix").parts,
+            [
+                Part::Text("pre".into()),
+                Part::Command("printf foo".into()),
+                Part::Text("#suffix".into())
+            ]
+        );
+        assert_eq!(
+            one("A=$(printf foo) # comment").parts,
+            [Part::Command("printf foo".into())]
+        );
+        assert!(one("A= # nothing").parts.is_empty());
+    }
+
+    #[test]
+    fn an_escaped_parenthesis_doesnt_end_a_command() {
+        let escaped = format!("A=$(printf {ESCAPE}))");
+        assert_eq!(
+            one(&escaped).parts,
+            [Part::Command(format!("printf {ESCAPE})"))]
+        );
+    }
+
+    #[test]
+    fn a_list_that_cant_be_noted_is_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::under(dir.path());
+        paths.ensure().unwrap();
+        let mut config = Config {
+            secret_store: Some("file".into()),
+            ..Default::default()
+        };
+        save(&mut config, &paths, "app", "A=1").unwrap();
+        // A folder where config.toml should be: every save fails.
+        let file = paths.config_dir.join("config.toml");
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(save(&mut config, &paths, "app", "A=2").is_err());
+        assert_eq!(
+            stored(&config, &paths, "app").unwrap().as_deref(),
+            Some("A=1")
+        );
+        assert!(save(&mut config, &paths, "other", "B=1").is_err());
+        assert_eq!(stored(&config, &paths, "other").unwrap(), None);
+        assert_eq!(config.folder_env, ["app"]);
+        // Cleared: the note goes first, so a failed save keeps both.
+        assert!(clear(&mut config, &paths, "app").is_err());
+        assert_eq!(
+            stored(&config, &paths, "app").unwrap().as_deref(),
+            Some("A=1")
+        );
+    }
+
+    #[test]
+    fn each_install_has_its_own_entries() {
+        let one = tempfile::tempdir().unwrap();
+        let two = tempfile::tempdir().unwrap();
+        let (one, two) = (
+            crate::paths::Paths::under(one.path()),
+            crate::paths::Paths::under(two.path()),
+        );
+        assert_ne!(entry(&one, "app"), entry(&two, "app"));
+        assert_eq!(entry(&one, "app"), entry(&one, "app"));
+        assert!(entry(&one, "app").ends_with(":app"));
     }
 }

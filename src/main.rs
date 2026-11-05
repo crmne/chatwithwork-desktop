@@ -1170,7 +1170,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         }
         RootsCommand::Remove { root } => {
             let removed = remove_root(&mut config, &root)?;
-            cww::commands::env::forget(&mut config, paths, &removed.id)?;
+            cww::commands::env::forget(&mut config, paths, &removed.id);
             config.save(paths)?;
             println!(
                 "Stopped sharing {} ({}).",
@@ -1247,16 +1247,13 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             use cww::commands::env;
             let root = cww::roots::find(&config, &root)?.clone();
             if clear {
-                env::forget(&mut config, paths, &root.id)?;
-                config.save(paths)?;
+                env::clear(&mut config, paths, &root.id)?;
                 notify_daemon(paths, "");
                 println!("Forgot the environment of {} ({}).", root.label, root.id);
             } else if stdin {
                 let mut text = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)?;
-                let variables =
-                    env::set(&mut config, paths, &root.id, &text).map_err(anyhow::Error::msg)?;
-                config.save(paths)?;
+                let variables = env::save(&mut config, paths, &root.id, &text)?;
                 notify_daemon(paths, "");
                 let names: Vec<&str> = variables.iter().map(|v| v.name.as_str()).collect();
                 println!(
@@ -1276,7 +1273,15 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 );
             } else {
                 let text = env::stored(&config, paths, &root.id)?.unwrap_or_default();
-                let variables = env::parse(&text).unwrap_or_default();
+                // A mistake is said, as a run would refuse with it.
+                let variables = env::parse(&text).map_err(|errors| {
+                    anyhow::anyhow!(
+                        "{} ({})'s environment has a mistake: {}",
+                        root.label,
+                        root.id,
+                        errors[0]
+                    )
+                })?;
                 if variables.is_empty() {
                     println!("{} ({}) has no environment.", root.label, root.id);
                 }
