@@ -293,7 +293,7 @@ impl Asks {
 
 /// Whether a request still has something to answer: the folder is lent to
 /// the bot, allows commands, and its loan isn't unattended yet.
-fn open(config: &Config, ask: &Ask) -> bool {
+pub fn open(config: &Config, ask: &Ask) -> bool {
     config
         .roots
         .iter()

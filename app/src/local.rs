@@ -120,7 +120,8 @@ pub async fn prepare_control(
         .begin_confirmation(&owner)
         .map_err(|e| refusal("forbidden", e))?;
     let desktop = desktop.inner().clone();
-    blocking(move || {
+    let preparing = (Arc::clone(&desktop), owner.clone(), preparation.clone());
+    let answer = blocking(move || {
         let context =
             crate::preferences::grant_context(&desktop.app(), &desktop, &webview, &request)
                 .map_err(|e| refusal("forbidden", e))?;
@@ -144,7 +145,15 @@ pub async fn prepare_control(
             .map_err(|e| refusal("forbidden", e))?;
         Ok(json!({"confirmation":token,"message":question.message}))
     })
-    .await?
+    .await;
+    // One that failed holds up no dialog of the app's.
+    if !matches!(answer, Ok(Ok(_))) {
+        let (desktop, owner, preparation) = preparing;
+        desktop
+            .preferences
+            .abandon_preparation(&owner, &preparation);
+    }
+    answer?
 }
 
 #[tauri::command]

@@ -785,14 +785,22 @@ impl Daemon {
         }
         .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
         if allow {
-            return match self.set_bot(root, bot, None, true, true).await {
+            return match self
+                .set_bot(root, bot, None, true, true, Some(ask.clone()))
+                .await
+            {
                 Ok(answer) => {
                     let _ = self.notifications.withdraw_notice(&ask.notice_id());
                     Ok(answer)
                 }
                 Err(e) => {
-                    // Still waiting: the person can try again.
-                    self.with_asks(move |asks| asks.restore(ask)).await;
+                    // Still waiting, if the config leaves it open: the
+                    // person can try again, and the apps hear of it.
+                    let config = self.config.lock().await.clone();
+                    if crate::unattended_asks::open(&config, &ask) {
+                        self.with_asks(move |asks| asks.restore(ask)).await;
+                        self.changes.bump();
+                    }
                     Err(e)
                 }
             };
@@ -970,14 +978,18 @@ impl Daemon {
             || config.browser.ask_before_actions != new.browser.ask_before_actions;
         self.configure_browser(&new);
         let pairing = crate::unattended_asks::pairing(&new);
+        let paired_again = crate::unattended_asks::pairing(&config) != pairing;
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
         self.runner.prune().await;
         if pairing_changed {
             self.tunnel_token.lock().await.cancel();
-            // Another server's bots have other numbers: a request from
-            // the old one must not be allowed for the new one's bot.
+        }
+        // Another server's bots have other numbers: a request from the old
+        // pairing must not be allowed for the new one's bot. Only a new
+        // pairing drops them, never another reconnect.
+        if paired_again {
             for ask in self.with_asks(move |asks| asks.clear(pairing)).await {
                 let _ = self.notifications.withdraw_notice(&ask.notice_id());
             }
@@ -1076,10 +1088,23 @@ impl Daemon {
         name: Option<String>,
         lent: bool,
         unattended: bool,
+        // A bot's request this answers: it still needs the loan it asked
+        // about, checked in the same edit, so a loan withdrawn meanwhile
+        // is never lent again by it.
+        answering: Option<crate::unattended_asks::Ask>,
     ) -> Result<Value> {
         let id = bot.clone();
         let root = self
             .edit_config(move |config, _| {
+                if let Some(ask) = &answering
+                    && !crate::unattended_asks::open(config, ask)
+                {
+                    anyhow::bail!(
+                        "bot {} isn't waiting for an answer about {} any more",
+                        ask.bot,
+                        ask.root
+                    );
+                }
                 crate::roots::set_bot(config, &which, &bot, name.as_deref(), lent, unattended)
             })
             .await?;
@@ -1783,7 +1808,7 @@ impl ControlHandler for Daemon {
                 name,
                 lent,
                 unattended,
-            } => self.set_bot(root, bot, name, lent, unattended).await,
+            } => self.set_bot(root, bot, name, lent, unattended, None).await,
             ControlRequest::RootsUnattendedAnswer { root, bot, allow } => {
                 self.answer_ask(root, bot, allow).await
             }

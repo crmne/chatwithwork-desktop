@@ -265,8 +265,12 @@ impl Desktop {
                         allow,
                     };
                     if let Err(e) = desktop.client.request(&answer) {
-                        // Answered elsewhere meanwhile, or no longer open.
+                        // Not answered: asked again when a status lists it
+                        // still (the daemon keeps one an allow failed for),
+                        // never if it was answered elsewhere or withdrawn.
                         log::info!("a bot's request wasn't answered here: {e}");
+                        desktop.answering_asks.store(false, Ordering::SeqCst);
+                        return;
                     }
                     desktop
                         .answered_asks
