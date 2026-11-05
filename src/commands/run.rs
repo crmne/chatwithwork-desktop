@@ -89,6 +89,9 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if Instant::now() >= deadline {
         return State::TimedOut;
     }
+    if let Err(e) = plan.write_values(home.as_deref(), sandbox) {
+        return State::Failed(format!("couldn't give it its folder's environment: {e}"));
+    }
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
         Ok(process) => process,
@@ -290,6 +293,8 @@ fn capture(
         std::fs::write(plan.script_path(), super::windows::script(&plan.command))
             .map_err(|e| Captured::Failed(format!("couldn't write its script: {e}")))?;
     }
+    plan.write_values(home, sandbox)
+        .map_err(|e| Captured::Failed(format!("couldn't give it its folder's environment: {e}")))?;
     let request = plan.request_json(home, sandbox);
     let mut process = mxc_sdk::__ffi::spawn_container_json(&request, false)
         .map_err(|e| Captured::Failed(refusal(&e)))?;

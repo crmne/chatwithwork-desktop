@@ -399,7 +399,10 @@ pub struct Limits {
     pub max_change_file_bytes: u64,
     /// Most files and folders one move or delete of a folder may carry.
     pub max_change_entries: usize,
-    /// CPU time each process a command starts may use, in seconds.
+    /// CPU time each process a command starts may use, in seconds, all its
+    /// threads together. Zero is no limit, the default: a build or a test
+    /// suite on many cores uses ten minutes of it in one, and the wall
+    /// clock (`command_timeout_seconds`) still ends a run.
     pub command_cpu_seconds: u64,
     /// Memory each process a command starts may allocate, in megabytes.
     pub command_memory_mb: u64,
@@ -408,7 +411,8 @@ pub struct Limits {
     /// Processes a command may have at once, itself included, before it's
     /// stopped. Checked by the daemon on Linux; MXC can't hold it there.
     pub command_processes: u32,
-    /// Commands running at once, across all chats.
+    /// Commands running at once, across all chats. Zero is no limit; the
+    /// default is this computer's CPU count ([`default_commands_running`]).
     pub commands_running: usize,
     /// Characters of each of a command's streams (output and errors) its
     /// result keeps, from the end.
@@ -463,7 +467,19 @@ impl Limits {
         if self.copy_bytes_per_hour == 100 * 1024 * 1024 {
             self.copy_bytes_per_hour = new.copy_bytes_per_hour;
         }
+        if self.commands_running == 4 {
+            self.commands_running = new.commands_running;
+        }
+        if self.command_cpu_seconds == 600 {
+            self.command_cpu_seconds = new.command_cpu_seconds;
+        }
     }
+}
+
+/// Commands that may run at once by default: one per CPU this computer
+/// has, or 4 where it can't say.
+pub fn default_commands_running() -> usize {
+    std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
 }
 
 impl Default for Limits {
@@ -485,11 +501,11 @@ impl Default for Limits {
             change_bytes_per_hour: 0,
             max_change_file_bytes: 10 * 1024 * 1024,
             max_change_entries: 1_000,
-            command_cpu_seconds: 600,
+            command_cpu_seconds: 0,
             command_memory_mb: 4_096,
             command_timeout_seconds: 1_800,
             command_processes: 256,
-            commands_running: 4,
+            commands_running: default_commands_running(),
             command_output_chars: 20_000,
             copy_bytes_per_hour: 0,
             print_pages_per_day: 200,
@@ -580,6 +596,30 @@ mod tests {
             toml::from_str("[[roots]]\nid = \"docs\"\nlabel = \"Docs\"\npath = \"/tmp/docs\"\n")
                 .unwrap();
         assert!(!config.roots[0].writable);
+    }
+
+    /// 0.13.1 and earlier ran at most 4 commands at once and held each
+    /// process to 600 CPU seconds: a config that still says exactly those
+    /// moves to the new defaults, the CPU count and no CPU limit.
+    #[test]
+    fn old_command_limits_move_up_and_custom_ones_stay() {
+        let mut limits = Limits {
+            commands_running: 4,
+            command_cpu_seconds: 600,
+            ..Limits::default()
+        };
+        limits.raise_old_defaults();
+        assert_eq!(limits.commands_running, default_commands_running());
+        assert_eq!(limits.command_cpu_seconds, 0);
+        let mut custom = Limits {
+            commands_running: 2,
+            command_cpu_seconds: 120,
+            ..Limits::default()
+        };
+        custom.raise_old_defaults();
+        assert_eq!(custom.commands_running, 2);
+        assert_eq!(custom.command_cpu_seconds, 120);
+        assert!(Limits::default().commands_running >= 1);
     }
 
     /// 0.13.1 and earlier noted a stored Claude Code token: such a config

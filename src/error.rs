@@ -28,6 +28,9 @@ pub enum ErrorCode {
     Unsupported,
     /// A rate or volume limit was hit. Retrying later may work.
     RateLimited,
+    /// As many commands as the computer runs at once are running. Waiting
+    /// for one to end works.
+    Busy,
     /// The user paused the agent.
     Paused,
     /// A change in a shared folder that doesn't allow changes.
@@ -82,6 +85,7 @@ impl ErrorCode {
             Self::TooLarge => "too_large",
             Self::Unsupported => "unsupported",
             Self::RateLimited => "rate_limited",
+            Self::Busy => "busy",
             Self::Paused => "paused",
             Self::NotWritable => "not_writable",
             Self::Exists => "exists",

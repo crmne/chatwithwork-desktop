@@ -307,13 +307,18 @@ fn parse<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ToolError> {
         .map_err(|e| ToolError::invalid_argument(format!("invalid arguments: {e}")))
 }
 
+#[cfg(test)]
+pub(super) fn busy_code_for_tests(err: RunError) -> ErrorCode {
+    tool_error(err).code
+}
+
 fn tool_error(err: RunError) -> ToolError {
     let code = match err.code.as_str() {
         "not_allowed" => ErrorCode::NotWritable,
         "invalid_path" => ErrorCode::InvalidPath,
         "not_found" => ErrorCode::NotFound,
         "invalid" => ErrorCode::InvalidArgument,
-        "busy" => ErrorCode::RateLimited,
+        "busy" => ErrorCode::Busy,
         _ => ErrorCode::Internal,
     };
     ToolError::new(code, err.message)

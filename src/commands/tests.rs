@@ -192,7 +192,8 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
             .unwrap()
             .ends_with("data/runs/0123456789ab")
     );
-    assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
+    // No CPU limit by default: MXC gets none.
+    assert!(json["resources"].get("cpuTimeMs").is_none(), "{json}");
     if cfg!(target_os = "macos") {
         assert!(json["resources"].get("memoryMb").is_none(), "{json}");
     } else {
@@ -279,6 +280,11 @@ fn seatbelt_is_named() {
     assert_eq!(json["seatbelt"]["guiAccess"], false);
     // MXC refuses a memory limit on Seatbelt, and with it every run.
     assert!(json["resources"].get("memoryMb").is_none(), "{json}");
+    assert!(json["resources"].get("cpuTimeMs").is_none(), "{json}");
+    let mut limited = plan.clone();
+    limited.limits.cpu_seconds = 600;
+    let json: serde_json::Value =
+        serde_json::from_str(&limited.request_json(None, Sandbox::Seatbelt)).unwrap();
     assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
 }
 
@@ -489,13 +495,22 @@ fn too_many_running_commands_wait_their_turn() {
     let mut fx = fixture(true);
     fx.config.limits.commands_running = 1;
     let first = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
-    assert_eq!(
-        fx.runs
-            .start(&fx.config, &request("true"))
-            .unwrap_err()
-            .code,
-        "busy"
+    let busy = fx.runs.start(&fx.config, &request("true")).unwrap_err();
+    assert_eq!(busy.code, "busy");
+    assert!(
+        busy.message.contains("1 commands are already running"),
+        "{busy:?}"
     );
+    assert!(busy.message.contains("Wait for one to end"), "{busy:?}");
+    // It's not a rate limit, and the model hears so.
+    assert_eq!(
+        super::tools::busy_code_for_tests(busy),
+        crate::error::ErrorCode::Busy
+    );
+    // 0 is no limit.
+    fx.config.limits.commands_running = 0;
+    let second = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
+    fx.runs.stop(&second.id).unwrap();
     fx.config.roots[0].commands = false;
     fx.runs.stop_outside(&fx.config);
     assert_eq!(wait(&fx.runs, &first.id).status.state, "stopped");
@@ -503,6 +518,97 @@ fn too_many_running_commands_wait_their_turn() {
         fx.runs.status("ffffffffffff").unwrap_err().code,
         "not_found"
     );
+}
+
+/// No secret goes on a command line, where any user of this computer could
+/// read it (`ps`): Bubblewrap takes `--setenv NAME VALUE` there, so the
+/// folder's values reach the run through a file of its own instead, which
+/// it reads and deletes. The request MXC turns into Bubblewrap's arguments
+/// holds none of them, and while the run sleeps no process on this
+/// computer has one in its arguments.
+#[test]
+fn no_secret_goes_on_a_command_line() {
+    const SECRET: &str = "argvSECRETvalue0123456789";
+    let mut fx = fixture(true);
+    fx.config.secret_store = Some("file".into());
+    let paths = fx.runs.paths.clone();
+    crate::commands::env::save(
+        &mut fx.config,
+        &paths,
+        "project",
+        &format!("API_TOKEN={SECRET}\n"),
+    )
+    .unwrap();
+    let mut plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("echo hi"),
+        "000000000000",
+    )
+    .unwrap();
+    plan.env.values = vec![(
+        "API_TOKEN".into(),
+        crate::coding::Secret::new(SECRET.into()),
+    )];
+    let request_text = plan.request_json(None, Sandbox::Bubblewrap);
+    assert!(!request_text.contains(SECRET), "{request_text}");
+    let json: serde_json::Value = serde_json::from_str(&request_text).unwrap();
+    let command = json["process"]["commandLine"].as_str().unwrap();
+    assert!(command.starts_with(". '"), "{command}");
+    assert!(command.ends_with("\necho hi"), "{command}");
+    // The other sandboxes pass it to the process, not its arguments.
+    assert!(plan.request_json(None, Sandbox::Seatbelt).contains(SECRET));
+    // The file says each value exactly, quotes and all.
+    std::fs::create_dir_all(&plan.home).unwrap();
+    plan.env.values.push((
+        "QUOTED".into(),
+        crate::coding::Secret::new("it's $HOME `x`".into()),
+    ));
+    plan.write_values(None, Sandbox::Bubblewrap).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(plan.values_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let read = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                ". '{}'; printf '%s|%s' \"$API_TOKEN\" \"$QUOTED\"",
+                plan.values_file().display()
+            ))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&read.stdout),
+            format!("{SECRET}|it's $HOME `x`")
+        );
+    }
+
+    if !sandbox_works() || on_landlock() {
+        return;
+    }
+    let line = "echo \"t:$API_TOKEN\"; test -e \"$HOME/.cww-env\" && echo left; sleep 3";
+    let status = fx.runs.start(&fx.config, &shell(line)).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+        if let Ok(argv) = std::fs::read(entry.path().join("cmdline"))
+            && String::from_utf8_lossy(&argv).contains(SECRET)
+        {
+            seen.push(entry.file_name());
+        }
+    }
+    let done = wait(&fx.runs, &status.id);
+    assert!(
+        seen.is_empty(),
+        "a process has the secret in its arguments: {seen:?}"
+    );
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(done.stdout.contains("t:[redacted]"), "{done:?}");
+    assert!(!done.stdout.contains("left"), "the file stayed: {done:?}");
 }
 
 #[test]

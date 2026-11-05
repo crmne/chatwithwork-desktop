@@ -380,7 +380,63 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// `text` as one word of `sh`, in single quotes.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 impl Plan {
+    /// Where a run on Bubblewrap finds its folder's values: Bubblewrap
+    /// takes a run's environment on its own command line (`--setenv NAME
+    /// VALUE`), which any user of this computer can read (`ps`,
+    /// `/proc/<pid>/cmdline`). So a run whose environment holds secrets
+    /// gets them from this file in its own home (0600, in Desktop's private
+    /// data folder), which its shell reads first and deletes. Linux's other
+    /// sandbox, macOS and Windows pass the environment to the process
+    /// itself, which only this user can read.
+    pub fn values_file(&self) -> PathBuf {
+        self.home.join(".cww-env")
+    }
+
+    fn values_in_file(&self, sandbox: Sandbox) -> bool {
+        sandbox == Sandbox::Bubblewrap && !self.env.values.is_empty()
+    }
+
+    fn is_folder_value(&self, name: &str, value: &str) -> bool {
+        self.env
+            .values
+            .iter()
+            .any(|(n, v)| n == name && v.expose() == value)
+    }
+
+    /// Write [`Plan::values_file`] where the run needs it, before the
+    /// sandbox starts: `export` lines the shell reads, each value quoted.
+    /// The values are exactly those [`Plan::environment`] would set.
+    pub fn write_values(&self, home: Option<&Path>, sandbox: Sandbox) -> std::io::Result<()> {
+        if !self.values_in_file(sandbox) {
+            return Ok(());
+        }
+        let mut script = String::new();
+        let values = self
+            .environment(home)
+            .into_iter()
+            .filter(|(name, value)| self.is_folder_value(name, value));
+        for (name, value) in values {
+            script.push_str(&format!("export {name}={}\n", shell_quote(&value)));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        use std::io::Write;
+        options
+            .open(self.values_file())?
+            .write_all(script.as_bytes())
+    }
+
     /// The folder in the run's home that holds only a link named `claude`
     /// to the program setup checked (Linux and macOS).
     pub fn claude_bin(&self) -> PathBuf {
@@ -566,17 +622,25 @@ impl Plan {
         }
         let mut readwrite = vec![display(&self.folder), display(&self.home)];
         readwrite.extend(self.coding_writable());
+        let in_file = self.values_in_file(sandbox);
         let env: Vec<String> = self
             .environment(home)
             .into_iter()
+            .filter(|(name, value)| !(in_file && self.is_folder_value(name, value)))
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        let command = if in_file {
+            let file = shell_quote(&display(&self.values_file()));
+            format!(". {file}; rm -f {file}\n{}", self.command)
+        } else {
+            self.command.clone()
+        };
         let mut document = json!({
             "version": "1.1.0-alpha",
             "containerId": format!("cww-run-{}", self.id),
             "lifecycle": { "destroyOnExit": true, "preservePolicy": false },
             "process": {
-                "commandLine": self.command,
+                "commandLine": command,
                 // The runner keeps the wall clock itself, so it can say why
                 // a run ended.
                 "timeout": 0,
@@ -589,11 +653,13 @@ impl Plan {
                 "deniedPaths": denied,
             },
             "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
-            "resources": {
-                "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
-                "priority": "low",
-            },
+            "resources": { "priority": "low" },
         });
+        // 0 is no CPU limit, which MXC takes as the field left out.
+        if self.limits.cpu_seconds > 0 {
+            document["resources"]["cpuTimeMs"] =
+                self.limits.cpu_seconds.saturating_mul(1000).into();
+        }
         // MXC refuses a run whose memory limit its backend can't hold, as
         // Seatbelt can't; 0 means none.
         if self.limits.memory_mb > 0 && sandbox != Sandbox::Seatbelt {

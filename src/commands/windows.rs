@@ -618,10 +618,11 @@ impl Plan {
             .into_iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
-        let mut resources = json!({
-            "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
-            "priority": "low",
-        });
+        let mut resources = json!({ "priority": "low" });
+        // 0 is no CPU limit, which MXC takes as the field left out.
+        if self.limits.cpu_seconds > 0 {
+            resources["cpuTimeMs"] = self.limits.cpu_seconds.saturating_mul(1000).into();
+        }
         if self.limits.memory_mb > 0 {
             resources["memoryMb"] = self.limits.memory_mb.into();
         }

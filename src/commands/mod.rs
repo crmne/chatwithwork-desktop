@@ -448,11 +448,14 @@ impl Runs {
             ));
         }
         let running = self.running();
-        if running >= config.limits.commands_running {
+        let most = config.limits.commands_running;
+        if most > 0 && running >= most {
             return Err(RunError::new(
                 "busy",
                 format!(
-                    "{running} commands are already running here; wait for one to end, or stop one"
+                    "{running} commands are already running on this computer, as many as it runs \
+                     at once. Wait for one to end (follow it with run_status) and run this \
+                     again, or stop one"
                 ),
             ));
         }
