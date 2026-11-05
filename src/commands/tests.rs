@@ -1209,7 +1209,7 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
         "{done:?}"
     );
     assert!(!done.stdout.contains("ran"), "{done:?}");
-    assert!(done.stderr.contains("nope [KEY]"), "{done:?}");
+    assert!(done.stderr.contains("nope [redacted]"), "{done:?}");
     assert!(!done.stderr.contains("secretKEYvalue42"), "{done:?}");
 }
 
