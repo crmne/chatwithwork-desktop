@@ -138,6 +138,9 @@ pub struct Plan {
     /// The folder's repository mirrors, and Claude Code for a bot allowed
     /// it. Set by whoever starts the run, after [`plan`].
     pub coding: crate::coding::RunCoding,
+    /// The folder's environment (`env.rs`): read by whoever starts the run,
+    /// its values worked out by the run's thread before the command starts.
+    pub env: super::env::RunEnv,
 }
 
 /// Check `request` against `config`: the folder allows commands, the
@@ -199,6 +202,7 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
         limits: Limits::from_config(&config.limits),
         home: paths.runs_dir().join(id),
         coding: Default::default(),
+        env: Default::default(),
     })
 }
 
@@ -397,6 +401,23 @@ impl Plan {
         }
     }
 
+    /// What the run's output has taken out: Claude Code's token, and the
+    /// folder's values.
+    pub fn redactor(&self) -> crate::coding::Redactor {
+        crate::coding::Redactor::new(
+            self.coding
+                .claude
+                .iter()
+                .map(|c| (&c.token, crate::coding::REDACTED.to_string()))
+                .chain(
+                    self.env
+                        .values
+                        .iter()
+                        .map(|(_, value)| (value, super::env::REDACTED.to_string())),
+                ),
+        )
+    }
+
     /// Folders a run reads beyond the toolchains: the folder's mirrors, and
     /// the folder Claude Code's program really is in.
     pub fn coding_readable(&self) -> Vec<String> {
@@ -482,6 +503,7 @@ impl Plan {
                 env.push((name, value));
             }
         }
+        self.env.add_to(&mut env);
         env
     }
 

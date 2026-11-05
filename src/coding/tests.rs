@@ -160,7 +160,7 @@ fn output_loses_the_token_across_chunks() {
     let secret = Secret::new(TOKEN.into());
     let text = format!("before {TOKEN} middle {TOKEN}after\n");
     for split in [1, 3, 7, 13, 40, 64, text.len()] {
-        let mut redactor = Redactor::new(Some(&secret));
+        let mut redactor = Redactor::new([(&secret, REDACTED.to_string())]);
         let mut out = Vec::new();
         for chunk in text.as_bytes().chunks(split) {
             out.extend(redactor.push(chunk));
@@ -178,14 +178,51 @@ fn output_loses_the_token_across_chunks() {
 #[test]
 fn output_keeps_what_only_starts_like_the_token() {
     let secret = Secret::new(TOKEN.into());
-    let mut redactor = Redactor::new(Some(&secret));
+    let mut redactor = Redactor::new([(&secret, REDACTED.to_string())]);
     let mut out = redactor.push(b"sk-ant-oat01-abc");
     assert!(out.is_empty(), "a possible start waits");
     out.extend(redactor.push(b" and more"));
     out.extend(redactor.finish());
     assert_eq!(String::from_utf8(out).unwrap(), "sk-ant-oat01-abc and more");
-    let mut none = Redactor::new(None);
+    let mut none = Redactor::new([]);
     assert_eq!(none.push(b"anything"), b"anything");
+}
+
+#[test]
+fn output_loses_every_secret_across_chunks() {
+    let token = Secret::new(TOKEN.into());
+    let long = Secret::new("ops_testSERVICEaccount0123".into());
+    // One secret that starts another: the longer is never left half shown.
+    let short = Secret::new("ops_test".into());
+    let text = "a sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ_-xyz b \
+                ops_testSERVICEaccount0123 c ops_test d ops_testSERVICEaccount0123";
+    let expected = format!("a {REDACTED} b [LONG] c [SHORT] d [LONG]");
+    for split in [1, 2, 5, 9, 31, text.len()] {
+        let mut redactor = Redactor::new([
+            (&token, REDACTED.to_string()),
+            (&long, "[LONG]".to_string()),
+            (&short, "[SHORT]".to_string()),
+        ]);
+        let mut out = Vec::new();
+        for chunk in text.as_bytes().chunks(split) {
+            out.extend(redactor.push(chunk));
+        }
+        out.extend(redactor.finish());
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected,
+            "chunks of {split}"
+        );
+    }
+    // A shorter one held at the end, as the start of a longer, still goes.
+    let mut redactor = Redactor::new([
+        (&long, "[LONG]".to_string()),
+        (&short, "[SHORT]".to_string()),
+    ]);
+    let mut out = redactor.push(b"x ops_testSERV");
+    assert_eq!(out, b"x ", "a possible start of the longer waits");
+    out.extend(redactor.finish());
+    assert_eq!(String::from_utf8(out).unwrap(), "x [SHORT]SERV");
 }
 
 #[test]

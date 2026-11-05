@@ -57,6 +57,11 @@ pub struct Config {
     /// server.
     #[serde(skip_serializing_if = "CodingConfig::is_default")]
     pub coding: CodingConfig,
+    /// Shared folders, by ID, whose environment is in this computer's
+    /// secret store (`cww roots env`, docs/secrets.md). Only their names:
+    /// the lists themselves are never in this file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folder_env: Vec<String>,
 }
 
 /// Coding bots' setup on this computer (docs/coding-computers.md).

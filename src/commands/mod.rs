@@ -20,6 +20,7 @@
 #[cfg(unix)]
 pub mod channel;
 mod channel_call;
+pub mod env;
 pub mod follow;
 mod plan;
 mod run;
@@ -227,7 +228,7 @@ struct Cell {
     out_total: u64,
     err_total: u64,
     tail_bytes: usize,
-    /// Take the run's secret, if it has one, out of each stream.
+    /// Take the run's secrets, if it has any, out of each stream.
     redact_out: crate::coding::Redactor,
     redact_err: crate::coding::Redactor,
 }
@@ -257,9 +258,16 @@ impl Cell {
             err_total: 0,
             // UTF-8 takes at most 4 bytes a character.
             tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
-            redact_out: crate::coding::Redactor::new(plan.coding.claude.as_ref().map(|c| &c.token)),
-            redact_err: crate::coding::Redactor::new(plan.coding.claude.as_ref().map(|c| &c.token)),
+            redact_out: plan.redactor(),
+            redact_err: plan.redactor(),
         }
+    }
+
+    /// Take out every secret `plan` has now, its folder's values included,
+    /// once the run has worked them out.
+    fn redact(&mut self, plan: &Plan) {
+        self.redact_out = plan.redactor();
+        self.redact_err = plan.redactor();
     }
 
     /// What a stream printed, with the run's secret taken out before
@@ -459,6 +467,10 @@ impl Runs {
             request.bot.as_deref(),
             || crate::coding::token(config, &self.paths),
         );
+        // The folder's environment, read here too; its `$( )` run in the
+        // run's own sandbox, by its thread.
+        plan.env.variables = env::for_run(config, &self.paths, &request.root)
+            .map_err(|message| RunError::new("unavailable", message))?;
         let cell = Arc::new(Mutex::new(Cell::new(
             &plan,
             request.root.clone(),

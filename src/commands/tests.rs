@@ -586,6 +586,7 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
         },
         home: "/".into(),
         coding: Default::default(),
+        env: Default::default(),
     };
     let mut cell = Cell::new(&plan, "r".into(), String::new());
     cell.append(Stream::Out, "héllo".as_bytes());
@@ -1148,6 +1149,68 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         let done = wait(&fx.runs, &status.id);
         assert_eq!(done.stdout.trim(), "env:", "{request:?}");
     }
+}
+
+/// A folder's environment reaches every command there: text as it is, and
+/// `$( )` worked out in the run's own sandbox, with the values before it.
+/// Neither ever prints, and a `$( )` that fails stops the run, naming its
+/// variable. Where Bubblewrap or Landlock runs.
+#[test]
+fn a_folders_environment_reaches_its_commands_and_never_prints() {
+    if !sandbox_works() {
+        return;
+    }
+    let mut fx = fixture(true);
+    fx.config.secret_store = Some("file".into());
+    let paths = fx.runs.paths.clone();
+    crate::commands::env::save(
+        &mut fx.config,
+        &paths,
+        "project",
+        "OP_SERVICE_ACCOUNT_TOKEN=ops_literalTOKEN0123456789\n\
+         DB_PASSWORD=\"pw-$(printf %s \"$OP_SERVICE_ACCOUNT_TOKEN\" | tr a-z A-Z)\"\n",
+    )
+    .unwrap();
+    let line = "echo \"t:$OP_SERVICE_ACCOUNT_TOKEN\"; echo \"p:$DB_PASSWORD\" >&2; \
+                echo \"$DB_PASSWORD\" | cut -c4-11";
+    let status = fx.runs.start(&fx.config, &shell(line)).unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(done.stdout.contains("t:[redacted]"), "{done:?}");
+    assert!(done.stderr.contains("p:[redacted]"), "{done:?}");
+    // Only the whole text is taken out: a piece of it still shows, which is
+    // how a test can see the value was worked out.
+    assert!(done.stdout.contains("OPS_LITE"), "{done:?}");
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    for text in [&done.stdout, &done.stderr, &window.text] {
+        assert!(
+            !text.contains("literalTOKEN0123456789"),
+            "the value printed"
+        );
+        assert!(
+            !text.contains("LITERALTOKEN0123456789"),
+            "the worked-out value printed"
+        );
+    }
+
+    crate::commands::env::save(
+        &mut fx.config,
+        &paths,
+        "project",
+        "KEY=secretKEYvalue42\nBAD=$(echo \"nope $KEY\" >&2; exit 3)\n",
+    )
+    .unwrap();
+    let status = fx.runs.start(&fx.config, &shell("echo ran")).unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.state, "failed", "{done:?}");
+    assert_eq!(
+        done.status.error.as_deref(),
+        Some("BAD's $( ) exited with 3"),
+        "{done:?}"
+    );
+    assert!(!done.stdout.contains("ran"), "{done:?}");
+    assert!(done.stderr.contains("nope [redacted]"), "{done:?}");
+    assert!(!done.stderr.contains("secretKEYvalue42"), "{done:?}");
 }
 
 /// The real Claude Code, found as `cww coding setup` finds it, answers from

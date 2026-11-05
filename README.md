@@ -118,8 +118,11 @@ cww roots list
 cww roots allow-changes work-docs   # let Chat with Work change files there too
 cww roots deny-changes work-docs    # read-only again
 cww roots read-budget app 5000000   # where [limits] sets an hourly read limit, let a chat read more of a folder
+cww roots env app --stdin < app.env  # NAME=value lines every command in the folder gets, kept in the secret store
 cww roots remove work-docs
 ```
+
+Keep a file like `app.env` outside every shared folder, and delete it once `cww roots env` has read it: the command copies it into the secret store and leaves the file where it is, readable by the assistant and the folder's commands if it's in a shared folder. See [docs/secrets.md](docs/secrets.md).
 
 Share narrow folders: anything inside a shared folder can be read by the assistant, except files on the deny list. `cww` refuses to share `/`, your whole home folder, or system directories unless you pass `--i-know`.
 

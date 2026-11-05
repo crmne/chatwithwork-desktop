@@ -293,53 +293,71 @@ pub fn for_run(
     RunCoding { mirrors, claude }
 }
 
-/// Takes a secret's exact text out of a stream as it passes, across the
-/// chunks it arrives in: it holds back only an end that could be the start
-/// of the secret, and lets it go once it can't be, or at the end.
+/// Takes secrets' exact text out of a stream as it passes, across the
+/// chunks it arrives in, each replaced by its label: it holds back only an
+/// end that could be the start of one, and lets it go once it can't be, or
+/// at the end.
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
-    secret: Vec<u8>,
+    /// Each secret's bytes and label, longest first, so a secret that
+    /// starts another never leaves the longer one's rest behind.
+    secrets: Vec<(Vec<u8>, String)>,
     held: Vec<u8>,
 }
 
 impl Redactor {
-    pub fn new(secret: Option<&Secret>) -> Self {
+    pub fn new<'a>(secrets: impl IntoIterator<Item = (&'a Secret, String)>) -> Self {
+        let mut secrets: Vec<(Vec<u8>, String)> = secrets
+            .into_iter()
+            .map(|(s, label)| (s.expose().as_bytes().to_vec(), label))
+            .filter(|(s, _)| !s.is_empty())
+            .collect();
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.0.len()));
         Self {
-            secret: secret
-                .map(|s| s.expose().as_bytes().to_vec())
-                .unwrap_or_default(),
+            secrets,
             held: Vec::new(),
         }
     }
 
     /// The bytes that may go out now.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<u8> {
-        if self.secret.is_empty() {
+        if self.secrets.is_empty() {
             return bytes.to_vec();
         }
         self.held.extend_from_slice(bytes);
-        let mut out = Vec::with_capacity(self.held.len());
-        let mut i = 0;
+        self.drain(false)
+    }
+
+    /// The end of the stream: whatever was held back, with any whole
+    /// secret in it taken out.
+    pub fn finish(&mut self) -> Vec<u8> {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, last: bool) -> Vec<u8> {
         let held = std::mem::take(&mut self.held);
+        let mut out = Vec::with_capacity(held.len());
+        let mut i = 0;
         while i < held.len() {
             let rest = &held[i..];
-            if rest.starts_with(&self.secret) {
-                out.extend_from_slice(REDACTED.as_bytes());
-                i += self.secret.len();
-            } else if self.secret.starts_with(rest) {
-                // The end could be the secret's start: wait for more.
+            if !last
+                && self
+                    .secrets
+                    .iter()
+                    .any(|(s, _)| s.len() > rest.len() && s.starts_with(rest))
+            {
+                // The end could be a secret's start: wait for more.
                 self.held = rest.to_vec();
                 return out;
+            }
+            if let Some((secret, label)) = self.secrets.iter().find(|(s, _)| rest.starts_with(s)) {
+                out.extend_from_slice(label.as_bytes());
+                i += secret.len();
             } else {
                 out.push(held[i]);
                 i += 1;
             }
         }
         out
-    }
-
-    /// The end of the stream: whatever was held back.
-    pub fn finish(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.held)
     }
 }

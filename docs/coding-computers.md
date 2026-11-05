@@ -122,3 +122,5 @@ Tried for real on 2026-11-03:
 - The desktop app's page for this ("Lend this computer to a coding bot" on a bot's computer pane), driving the same steps over the control API.
 - Other coding agents' sign-ins (Codex, Gemini CLI). `[coding]` is shaped so each gets its own entry and its own `claude_code`-like switch on a loan.
 - A token for a person's own chats' commands: only bots get one.
+
+Other secrets a bot's commands need (a test suite's keys, a 1Password service account's token and the values `op read` gets with it) go in the folder's environment, `cww roots env` ([secrets.md](secrets.md)), which every command in the folder gets.
