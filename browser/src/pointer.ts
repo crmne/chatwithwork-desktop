@@ -75,7 +75,7 @@ function hitTarget(target: Element, point: Point, control: Element = target): st
   // Usually a cookie or consent banner, a sticky header, or an element still
   // off-screen: say how to clear it, so a model doesn't click the same spot
   // again (one chat in production retried ten times).
-  return `Something is drawn over that element: scroll it into view or close the overlay, then try again. It's covered by <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}`;
+  return `Something is drawn over that element: scroll it into view or close the overlay, then read the page again and try again. It's covered by <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}`;
 }
 
 export interface PointerState {
