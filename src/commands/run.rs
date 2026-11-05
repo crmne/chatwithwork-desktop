@@ -506,6 +506,15 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
         let bin = plan.claude_bin();
         std::fs::create_dir_all(&bin)?;
         std::os::unix::fs::symlink(&claude.real, bin.join("claude"))?;
+        // Claude Code's sign-in where Claude Code looks for it, in the
+        // run's home: links to the person's `~/.claude` and `~/.claude.json`,
+        // which the sandbox lets it read and write.
+        if let Some(dir) = &claude.login.dir {
+            std::os::unix::fs::symlink(dir, plan.home.join(crate::coding::CONFIG_DIR))?;
+        }
+        if let Some(file) = &claude.login.file {
+            std::os::unix::fs::symlink(file, plan.home.join(crate::coding::CONFIG_FILE))?;
+        }
     }
     Ok(())
 }

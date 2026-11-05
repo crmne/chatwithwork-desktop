@@ -72,10 +72,13 @@ pub struct CodingConfig {
     /// path it was found at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<PathBuf>,
-    /// A token from `claude setup-token` is in this computer's secret
-    /// store. The token itself never is in this file.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub claude_signed_in: bool,
+    /// What 0.13.1 and earlier wrote when they kept a token from `claude
+    /// setup-token` in the secret store. Read so those configs still load,
+    /// never written: the next `cww coding` deletes that token
+    /// ([`crate::coding::forget_legacy_token`]), since runs now use Claude
+    /// Code's own sign-in.
+    #[serde(rename = "claude_signed_in", skip_serializing)]
+    pub legacy_token: bool,
     /// Repositories Desktop keeps a mirror of, outside every shared folder,
     /// each with a checkout in one that fetches from it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -84,7 +87,7 @@ pub struct CodingConfig {
 
 impl CodingConfig {
     fn is_default(&self) -> bool {
-        *self == Self::default()
+        self.claude.is_none() && self.repositories.is_empty()
     }
 }
 
@@ -577,6 +580,32 @@ mod tests {
             toml::from_str("[[roots]]\nid = \"docs\"\nlabel = \"Docs\"\npath = \"/tmp/docs\"\n")
                 .unwrap();
         assert!(!config.roots[0].writable);
+    }
+
+    /// 0.13.1 and earlier noted a stored Claude Code token: such a config
+    /// still loads, and saving it drops the note.
+    #[test]
+    fn an_old_claude_code_token_note_loads_and_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::under(tmp.path());
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            "[coding]\nclaude = \"/usr/bin/claude\"\nclaude_signed_in = true\n",
+        )
+        .unwrap();
+        let mut config = Config::load(&paths).unwrap();
+        assert!(config.coding.legacy_token);
+        config.coding.legacy_token = false;
+        config.save(&paths).unwrap();
+        let text = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(!text.contains("claude_signed_in"), "{text}");
+        assert!(text.contains("/usr/bin/claude"), "{text}");
+
+        std::fs::write(paths.config_file(), "[coding]\nclaude_signed_in = true\n").unwrap();
+        Config::load(&paths).unwrap().save(&paths).unwrap();
+        let text = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(!text.contains("coding"), "{text}");
     }
 
     #[test]

@@ -387,16 +387,12 @@ impl Plan {
         self.home.join(".cww-bin")
     }
 
-    /// What a bot's run allowed Claude Code gets: its token, in Claude
-    /// Code's own variable, no self-updates, whose folder it can't write,
-    /// and its temporary files in the run's own.
+    /// What a bot's run allowed Claude Code gets: no self-updates, whose
+    /// folder it can't write, and its temporary files in the run's own. Its
+    /// sign-in is where Claude Code keeps it ([`Plan::coding_writable`]).
     pub fn coding_environment(&self) -> Vec<(String, String)> {
         match &self.coding.claude {
-            Some(claude) => vec![
-                (
-                    crate::coding::TOKEN_ENV.to_string(),
-                    claude.token.expose().to_string(),
-                ),
+            Some(_) => vec![
                 ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
                 // Claude Code keeps its own files under /tmp otherwise,
                 // which Seatbelt and the process container don't give a
@@ -410,14 +406,15 @@ impl Plan {
         }
     }
 
-    /// What the run's output has taken out: Claude Code's token, and the
-    /// folder's values.
+    /// What the run's output has taken out: the tokens of Claude Code's
+    /// sign-in Desktop could read when it started, and the folder's values.
     pub fn redactor(&self) -> crate::coding::Redactor {
         crate::coding::Redactor::new(
             self.coding
                 .claude
                 .iter()
-                .map(|c| (&c.token, crate::coding::REDACTED.to_string()))
+                .flat_map(|c| c.login.secrets.iter())
+                .map(|secret| (secret, crate::coding::REDACTED.to_string()))
                 .chain(
                     self.env
                         .values
@@ -425,6 +422,19 @@ impl Plan {
                         .map(|(_, value)| (value, super::env::REDACTED.to_string())),
                 ),
         )
+    }
+
+    /// What a run allowed Claude Code reads and writes beyond its folder
+    /// and home: `~/.claude` and `~/.claude.json`, where they really are,
+    /// which its own home links to (`run.rs`). Claude Code refreshes its
+    /// tokens there. Nothing else of the person's home.
+    pub fn coding_writable(&self) -> Vec<String> {
+        self.coding
+            .claude
+            .iter()
+            .flat_map(|c| c.login.paths())
+            .map(|p| display(p))
+            .collect()
     }
 
     /// Folders a run reads beyond the toolchains: the folder's mirrors, and
@@ -554,6 +564,8 @@ impl Plan {
                     .map(|p| p.to_string()),
             );
         }
+        let mut readwrite = vec![display(&self.folder), display(&self.home)];
+        readwrite.extend(self.coding_writable());
         let env: Vec<String> = self
             .environment(home)
             .into_iter()
@@ -572,7 +584,7 @@ impl Plan {
                 "env": env,
             },
             "filesystem": {
-                "readwritePaths": [display(&self.folder), display(&self.home)],
+                "readwritePaths": readwrite,
                 "readonlyPaths": found.read,
                 "deniedPaths": denied,
             },
@@ -592,7 +604,9 @@ impl Plan {
             document["seatbelt"] = json!({
                 "guiAccess": false,
                 "nestedPty": false,
-                "keychainAccess": false,
+                // Claude Code keeps its sign-in in the login keychain on
+                // macOS: a run allowed it reaches the keychain.
+                "keychainAccess": self.coding.claude.as_ref().is_some_and(|c| c.login.keychain),
                 "extraMachLookups": [],
             });
         } else {

@@ -2,12 +2,13 @@
 //! sign-in a bot's commands get, the repositories Desktop mirrors for them,
 //! and what a bot's `roots` says is ready.
 //!
-//! The token lives in the secret store (`auth::secrets`), never in a file a
-//! command reads. Only whoever starts a command reads it, for one run of a
-//! bot whose loan says `claude_code`, and the run's output has its text
-//! taken out ([`Redactor`]). Mirrors live in Desktop's data folder, which no
-//! command writes, so fetching one with the person's credentials runs
-//! nothing a bot wrote.
+//! The sign-in is Claude Code's own, where Claude Code keeps it on this
+//! computer ([`Login`]): a bot whose loan says `claude_code` gets those
+//! paths in its run's sandbox, to read and write as Claude Code does when
+//! it refreshes its tokens, and nothing else of the home folder. Any token
+//! Desktop can read there is taken out of the run's output ([`Redactor`]).
+//! Mirrors live in Desktop's data folder, which no command writes, so
+//! fetching one with the person's credentials runs nothing a bot wrote.
 
 pub mod detect;
 pub mod repositories;
@@ -23,14 +24,22 @@ use crate::auth::secrets::SecretStore;
 use crate::config::{CodingConfig, Config, Root};
 use crate::paths::Paths;
 
-/// The secret store's name for the token `claude setup-token` printed.
-pub const TOKEN_NAME: &str = "claude-code-token";
-/// Claude Code's own variable for such a token.
-pub const TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+/// Claude Code's folder in the home folder: its settings, sessions and, on
+/// Linux and Windows, its sign-in (`.credentials.json`).
+pub const CONFIG_DIR: &str = ".claude";
+/// Claude Code's file in the home folder: its account and preferences.
+pub const CONFIG_FILE: &str = ".claude.json";
+/// Where Claude Code keeps its tokens on Linux and Windows, in [`CONFIG_DIR`].
+pub const CREDENTIALS_FILE: &str = ".credentials.json";
+/// The login keychain item Claude Code keeps its tokens in on macOS.
+pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// Most repositories a bot's `roots` names in one folder.
 pub const MAX_REPOSITORIES_LISTED: usize = 20;
-/// What a run's output says where the token was.
+/// What a run's output says where a token was.
 pub const REDACTED: &str = "[claude-code-token]";
+/// The secret store's name for the token `cww coding sign-in` kept, before
+/// runs used Claude Code's own sign-in. Only ever deleted now.
+pub const LEGACY_TOKEN_NAME: &str = "claude-code-token";
 
 /// A value that never prints: not in `Debug`, logs or errors.
 #[derive(Clone, PartialEq, Eq)]
@@ -52,41 +61,146 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Whether `token` looks like what `claude setup-token` prints: an OAuth
-/// token of Anthropic's, one line of URL-safe characters.
-pub fn valid_token(token: &str) -> bool {
-    token.starts_with("sk-ant-oat")
-        && (40..=512).contains(&token.len())
-        && token
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+/// Claude Code's sign-in on this computer, where Claude Code itself keeps
+/// it for whoever runs `claude` here: `~/.claude` and `~/.claude.json` in
+/// the home folder, and on macOS the login keychain's
+/// `Claude Code-credentials`. Only those standard places: never another
+/// folder `CLAUDE_CONFIG_DIR` or an account switcher points at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Login {
+    /// `~/.claude`, where it really is, if it's there.
+    pub dir: Option<PathBuf>,
+    /// `~/.claude.json`, where it really is, if it's there.
+    pub file: Option<PathBuf>,
+    /// macOS: the keychain holds the tokens, so the run's sandbox reaches
+    /// the keychain.
+    pub keychain: bool,
+    /// The tokens Desktop could read, to take out of a run's output.
+    pub secrets: Vec<Secret>,
 }
 
-/// Where the token is kept: the store this computer's pairing uses.
-pub fn store(config: &Config, paths: &Paths) -> SecretStore {
-    SecretStore::for_config(config, paths)
-}
-
-/// Forget the token everywhere it can be: the store this computer uses, and
-/// the keychain's unscoped entry, which a sign-in before pairing wrote and
-/// which pairing would otherwise copy back.
-pub fn forget_token(config: &Config, paths: &Paths) -> anyhow::Result<()> {
-    let store = store(config, paths);
-    store.delete(TOKEN_NAME)?;
-    if store.in_keychain() {
-        SecretStore::Keyring.delete(TOKEN_NAME)?;
+impl Login {
+    /// The sign-in in the home folder `home`, as it is now. The keychain is
+    /// asked only for the person's own home, whose keychain it is.
+    pub fn find(home: &Path) -> Self {
+        let real = |name: &str| {
+            crate::roots::canonical(&home.join(name))
+                .ok()
+                .filter(|p| p.exists())
+        };
+        let dir = real(CONFIG_DIR).filter(|p| p.is_dir());
+        let file = real(CONFIG_FILE).filter(|p| p.is_file());
+        let mut secrets = dir
+            .as_ref()
+            .and_then(|d| std::fs::read_to_string(d.join(CREDENTIALS_FILE)).ok())
+            .map(|text| tokens_in(&text))
+            .unwrap_or_default();
+        let keychain = cfg!(target_os = "macos")
+            && crate::paths::home_dir()
+                .ok()
+                .and_then(|h| crate::roots::canonical(&h).ok())
+                == crate::roots::canonical(home).ok()
+            && keychain_item(false).is_some();
+        if keychain && let Some(text) = keychain_item(true) {
+            secrets.extend(tokens_in(&text));
+        }
+        Self {
+            dir,
+            file,
+            keychain,
+            secrets,
+        }
     }
-    SecretStore::File(paths.secrets_file()).delete(TOKEN_NAME)
+
+    /// Whether Claude Code is signed in here: tokens in its folder, or in
+    /// the keychain.
+    pub fn signed_in(&self) -> bool {
+        self.keychain || !self.secrets.is_empty()
+    }
+
+    /// The paths a run reads and writes for it.
+    pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.dir.iter().chain(self.file.iter())
+    }
 }
 
-/// The stored token, if there is one and it can be read.
-pub fn token(config: &Config, paths: &Paths) -> Option<Secret> {
-    store(config, paths)
-        .get(TOKEN_NAME)
-        .ok()
-        .flatten()
-        .filter(|t| valid_token(t))
-        .map(Secret::new)
+/// Every token of Anthropic's in Claude Code's credentials (`accessToken`,
+/// `refreshToken`), wherever it is in the JSON.
+fn tokens_in(text: &str) -> Vec<Secret> {
+    fn walk(value: &Value, found: &mut Vec<Secret>) {
+        match value {
+            Value::String(s) if s.starts_with("sk-ant-") && s.len() >= 20 => {
+                found.push(Secret::new(s.clone()));
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, found)),
+            Value::Object(map) => map.values().for_each(|v| walk(v, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
+        walk(&value, &mut found);
+    }
+    found
+}
+
+/// The keychain item Claude Code keeps its tokens in, or `None`: with
+/// `password`, its tokens, read as Claude Code reads them (`security
+/// find-generic-password -w`), which a locked keychain (an SSH session's)
+/// refuses; without, only that it's there, which needs no unlocking.
+fn keychain_item(password: bool) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::{Command, Stdio};
+        let mut args = vec!["find-generic-password", "-s", KEYCHAIN_SERVICE];
+        if password {
+            args.push("-w");
+        }
+        let mut child = Command::new("/usr/bin/security")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        // As Claude Code does, give up after two seconds: a locked keychain
+        // waits on a dialog.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
+        let output = child.wait_with_output().ok()?;
+        let text = String::from_utf8(output.stdout).ok()?;
+        output.status.success().then(|| text.trim().to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = password;
+        None
+    }
+}
+
+/// Forget the token `cww coding sign-in` kept, everywhere it can be, and
+/// the config's note of it: runs now use Claude Code's own sign-in.
+pub fn forget_legacy_token(config: &mut Config, paths: &Paths) -> anyhow::Result<()> {
+    let store = SecretStore::for_config(config, paths);
+    store.delete(LEGACY_TOKEN_NAME)?;
+    if store.in_keychain() {
+        SecretStore::Keyring.delete(LEGACY_TOKEN_NAME)?;
+    }
+    SecretStore::File(paths.secrets_file()).delete(LEGACY_TOKEN_NAME)?;
+    config.coding.legacy_token = false;
+    Ok(())
 }
 
 /// Whether Claude Code is ready for a bot's commands in a folder, as the
@@ -96,9 +210,11 @@ pub enum ClaudeState {
     Ready,
     /// Setup found no `claude` here.
     NotInstalled,
-    /// No token is stored.
+    /// Claude Code isn't signed in on this computer. Only `cww coding`
+    /// says so: the server's `roots` comes from the config, which doesn't
+    /// know, and a run then hears it from Claude Code itself.
     NotSignedIn,
-    /// Stored, but not for this bot in this folder.
+    /// Not lent to this bot in this folder.
     NotAllowed,
     /// The folder's commands have no network, which Claude Code needs.
     NoNetwork,
@@ -120,8 +236,10 @@ impl ClaudeState {
         match self {
             Self::Ready => "Claude Code is ready",
             Self::NotInstalled => "Claude Code isn't installed",
-            Self::NotSignedIn => "Claude Code isn't signed in",
-            Self::NotAllowed => "Claude Code is signed in, but not for this bot here",
+            Self::NotSignedIn => {
+                "Claude Code isn't signed in on this computer: run `claude` once and sign in"
+            }
+            Self::NotAllowed => "this bot's runs here don't use Claude Code's sign-in",
             Self::NoNetwork => "this folder's commands have no network, which Claude Code needs",
         }
     }
@@ -130,8 +248,6 @@ impl ClaudeState {
 pub fn claude_state(coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
     if coding.claude.is_none() {
         ClaudeState::NotInstalled
-    } else if !coding.claude_signed_in {
-        ClaudeState::NotSignedIn
     } else if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
         ClaudeState::NotAllowed
     } else if !root.network {
@@ -170,7 +286,7 @@ pub struct RunCoding {
 }
 
 /// Claude Code for one run: the program setup checked, where it really is,
-/// what the sandbox reads for it, and the token.
+/// what the sandbox reads for it, and the computer's sign-in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claude {
     pub program: PathBuf,
@@ -182,7 +298,7 @@ pub struct Claude {
     /// is named there (the program may be a link to a file named otherwise),
     /// first on the run's PATH and read too.
     pub entry: Option<PathBuf>,
-    pub token: Secret,
+    pub login: Login,
 }
 
 impl Claude {
@@ -243,14 +359,16 @@ pub fn grant_with(
     }
 }
 
-/// What a run of `request` in folder `root` gets. `token` reads the secret
-/// store, and is asked only when the bot's loan allows Claude Code.
+/// What a run of `request` in folder `root` gets. `login` looks for Claude
+/// Code's sign-in, and is asked only when the bot's loan allows Claude Code.
+/// A run gets Claude Code even when it isn't signed in, and hears so from
+/// Claude Code itself.
 pub fn for_run(
     config: &Config,
     paths: &Paths,
     root: &str,
     bot: Option<&str>,
-    token: impl FnOnce() -> Option<Secret>,
+    login: impl FnOnce() -> Login,
 ) -> RunCoding {
     let mirrors = config
         .coding
@@ -281,13 +399,12 @@ pub fn for_run(
         } else {
             None
         };
-        let token = token()?;
         Some(Claude {
             program,
             real,
             read,
             entry,
-            token,
+            login: login(),
         })
     });
     RunCoding { mirrors, claude }

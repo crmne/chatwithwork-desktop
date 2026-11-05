@@ -491,9 +491,6 @@ enum CodingCommand {
         /// Answer yes to every question (never turns on --unattended).
         #[arg(long)]
         yes: bool,
-        /// Read the Claude Code token from standard input.
-        #[arg(long)]
-        token_stdin: bool,
         /// Don't install the repository's toolchain or dependencies.
         #[arg(long)]
         skip_install: bool,
@@ -508,16 +505,8 @@ enum CodingCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Keep a token from `claude setup-token` in this computer's secret store.
-    SignIn {
-        /// Read it from standard input instead of asking.
-        #[arg(long)]
-        stdin: bool,
-    },
-    /// Forget the Claude Code token. Bots' next commands get none.
-    SignOut,
-    /// Let a bot's commands in a folder lent to it use the Claude Code
-    /// sign-in, or stop (`--off`).
+    /// Let a bot's commands in a folder lent to it use this computer's
+    /// Claude Code sign-in, or stop (`--off`).
     Allow {
         root: String,
         bot: String,
@@ -1037,6 +1026,17 @@ fn printers(paths: &Paths, command: PrintersCommand) -> Result<()> {
 fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
     use cww::coding::{self, repositories, setup};
     let mut config = Config::load(paths)?;
+    if config.coding.legacy_token {
+        // Runs use Claude Code's own sign-in now: the token an earlier
+        // version kept goes.
+        coding::forget_legacy_token(&mut config, paths)?;
+        config.save(paths)?;
+        println!(
+            "Deleted the Claude Code token Desktop kept: bots' runs now use this computer's own \
+             Claude Code sign-in. Revoke that token at claude.ai (Settings, Claude Code) if you \
+             no longer use it."
+        );
+    }
     match command {
         CodingCommand::Setup {
             bot,
@@ -1047,7 +1047,6 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
             unattended,
             test_command,
             yes,
-            token_stdin,
             skip_install,
             skip_proof,
         } => setup::setup(
@@ -1061,7 +1060,6 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
                 unattended: unattended.then_some(true),
                 test_command,
                 yes,
-                token_stdin,
                 skip_install,
                 skip_proof,
             },
@@ -1079,20 +1077,6 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
             } else {
                 setup::summary(&config, paths, bot.as_deref());
             }
-        }
-        CodingCommand::SignIn { stdin } => {
-            setup::store_token(&mut config, paths, stdin)?;
-            println!("Claude Code's sign-in is in this computer's secret store.");
-        }
-        CodingCommand::SignOut => {
-            coding::forget_token(&config, paths)?;
-            config.coding.claude_signed_in = false;
-            config.save(paths)?;
-            println!(
-                "Forgot Claude Code's sign-in here. Revoke the token at claude.ai too if it \
-                 may have leaked."
-            );
-            notify_daemon(paths, "");
         }
         CodingCommand::Allow { root, bot, off } => {
             let root = cww::roots::set_bot_claude_code(&mut config, &root, &bot, !off)?;

@@ -465,7 +465,13 @@ impl Runs {
             &self.paths,
             &request.root,
             request.bot.as_deref(),
-            || crate::coding::token(config, &self.paths),
+            || {
+                self.paths
+                    .person_home
+                    .as_deref()
+                    .map(crate::coding::Login::find)
+                    .unwrap_or_default()
+            },
         );
         // The folder's environment, read here too; its `$( )` run in the
         // run's own sandbox, by its thread.
