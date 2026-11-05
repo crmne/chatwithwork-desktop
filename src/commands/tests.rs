@@ -1174,7 +1174,8 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
     // Only the shell's own commands: where the package is built (Nix's
     // sandbox) the sandbox has no `tr` or `cut`.
     let line = "echo \"t:$OP_SERVICE_ACCOUNT_TOKEN\"; echo \"p:$DB_PASSWORD\" >&2; \
-                piece=\"${DB_PASSWORD%%TOKEN*}\"; echo \"piece:${piece#pw-}\"";
+                piece=\"${DB_PASSWORD%%TOKEN*}\"; echo \"piece:${piece#pw-}\"; \
+                echo \"tail:${DB_PASSWORD##*TOKEN0123456789}\"";
     let status = fx.runs.start(&fx.config, &shell(line)).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.status.exit_code, Some(0), "{done:?}");
@@ -1183,6 +1184,7 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
     // Only the whole text is taken out: a piece of it still shows, which is
     // how a test can see the value was worked out.
     assert!(done.stdout.contains("piece:ops_literal"), "{done:?}");
+    assert!(done.stdout.contains("tail:-v2"), "{done:?}");
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
     for text in [&done.stdout, &done.stderr, &window.text] {
         assert!(
