@@ -574,7 +574,7 @@ impl LocalFiles {
     /// Queue a bot's request to run its commands unattended in a folder
     /// lent to it, for the person on this computer to answer there. Changes
     /// nothing the computer allows.
-    fn ask_unattended(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+    async fn ask_unattended(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
         let Caller::Bot { id, .. } = caller else {
             return Err(ToolError::new(
                 ErrorCode::NotLent,
@@ -609,13 +609,18 @@ impl LocalFiles {
         if loan.unattended {
             return Ok(Output::Ask(json!({ "status": "already" })));
         }
-        let asks = self.inner.asks.as_ref().expect("offered only with asks");
-        let asked = asks.ask(&root, id).map_err(|e| {
-            ToolError::new(
-                ErrorCode::Internal,
-                format!("The request couldn't be kept on this computer: {e:#}"),
-            )
-        })?;
+        let asks = Arc::clone(self.inner.asks.as_ref().expect("offered only with asks"));
+        // Saving it writes a file: on the blocking pool.
+        let (asking, bot) = (root.clone(), id.clone());
+        let asked = blocking(move || {
+            asks.ask(&asking, &bot).map_err(|e| {
+                ToolError::new(
+                    ErrorCode::Internal,
+                    format!("The request couldn't be kept on this computer: {e:#}"),
+                )
+            })
+        })
+        .await?;
         match asked {
             crate::unattended_asks::Asked::Queued => {
                 let mut entry = AuditEntry::event("root_bot_unattended_asked");
@@ -689,7 +694,7 @@ impl LocalFiles {
         }
         let reader = Arc::clone(&self.inner.reader);
         match name {
-            ASK_UNATTENDED => self.ask_unattended(args, caller),
+            ASK_UNATTENDED => self.ask_unattended(args, caller).await,
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;
                 let roots = blocking(move || Ok(reader.roots())).await?;

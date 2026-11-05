@@ -3,10 +3,11 @@
 //!
 //! The server can only queue a request here; it never changes what the
 //! computer allows. Only the person on this computer answers one: in the
-//! desktop app's own dialog, or with `cww roots share <root> <bot>
-//! --unattended` or `cww roots decline <root> <bot>`, which go through the
-//! control channel (CONTROL.md, `roots_unattended_answer`). A request lasts
-//! a day, and is kept in the state folder so a restart doesn't lose it.
+//! desktop app's own dialog, or with `cww roots allow <root> <bot>` or
+//! `cww roots decline <root> <bot>`, which go through the control channel
+//! (CONTROL.md, `roots_unattended_answer`). A request lasts a day, and is
+//! kept in the state folder so a restart doesn't lose it, but only for the
+//! pairing it came through.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -31,6 +32,10 @@ const MAX_PENDING: usize = 64;
 pub struct Ask {
     pub root: String,
     pub bot: String,
+    /// The pairing it came through ([`pairing`]): another server's bots
+    /// have other numbers, so a request never outlives its pairing.
+    #[serde(default)]
+    pub pairing: String,
     pub asked_at: i64,
     pub expires_at: i64,
 }
@@ -67,12 +72,24 @@ pub enum Asked {
 
 pub struct Asks {
     file: Option<PathBuf>,
+    /// The pairing requests are made through now.
+    pairing: Mutex<String>,
     pending: Mutex<Vec<Ask>>,
     /// Held while the list is written, so writes land in order, outside
     /// the list's own lock.
     saving: Mutex<()>,
     /// Woken when a new request comes in.
     asked: tokio::sync::Notify,
+}
+
+/// The pairing `config` names: the server and this computer's device ID
+/// there, empty when unpaired.
+pub fn pairing(config: &Config) -> String {
+    config
+        .server
+        .as_ref()
+        .map(|server| format!("{} {}", server.url, server.device_id))
+        .unwrap_or_default()
 }
 
 fn now() -> i64 {
@@ -87,19 +104,23 @@ fn rfc3339(seconds: i64) -> String {
 }
 
 impl Asks {
-    /// The requests saved in `file`, if any, without the expired ones.
-    pub fn load(file: PathBuf) -> Self {
-        let pending: Vec<Ask> = std::fs::read(&file)
+    /// The requests saved in `file`, if any, without the expired ones and
+    /// those made through another pairing than `pairing`: the computer may
+    /// have been paired again while the daemon was stopped.
+    pub fn load(file: PathBuf, pairing: String) -> Self {
+        let saved: Vec<Ask> = std::fs::read(&file)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         let asks = Self {
             file: Some(file),
-            pending: Mutex::new(pending),
+            pairing: Mutex::new(pairing.clone()),
+            pending: Mutex::new(saved),
             saving: Mutex::new(()),
             asked: tokio::sync::Notify::new(),
         };
-        let _ = asks.edit(|_| ());
+        // Dropped from the file too.
+        let _ = asks.edit(|pending| pending.retain(|ask| ask.pairing == pairing));
         // Restored requests are told of as new ones are.
         asks.asked.notify_one();
         asks
@@ -109,6 +130,7 @@ impl Asks {
     pub fn in_memory() -> Self {
         Self {
             file: None,
+            pairing: Mutex::new(String::new()),
             pending: Mutex::new(Vec::new()),
             saving: Mutex::new(()),
             asked: tokio::sync::Notify::new(),
@@ -162,6 +184,11 @@ impl Asks {
             pending.push(Ask {
                 root: root.into(),
                 bot: bot.into(),
+                pairing: self
+                    .pairing
+                    .lock()
+                    .expect("unattended asks pairing")
+                    .clone(),
                 asked_at,
                 expires_at: asked_at + TTL.as_secs() as i64,
             });
@@ -203,9 +230,10 @@ impl Asks {
         });
     }
 
-    /// Forget every request: the computer was paired with another server,
-    /// whose bots' numbers mean other bots. Returns them.
-    pub fn clear(&self) -> Vec<Ask> {
+    /// Forget every request: the computer was paired again, as `pairing`,
+    /// and another server's bots' numbers mean other bots. Returns them.
+    pub fn clear(&self, pairing: String) -> Vec<Ask> {
+        *self.pairing.lock().expect("unattended asks pairing") = pairing;
         self.edit_all(std::mem::take).0
     }
 
@@ -363,7 +391,7 @@ mod tests {
         let ask = asks.take("app", "42", &config(true, false)).unwrap();
         asks.restore(ask);
         assert_eq!(asks.pending().len(), 1, "put back when the answer failed");
-        assert_eq!(asks.clear().len(), 1);
+        assert_eq!(asks.clear(String::new()).len(), 1);
         assert!(asks.pending().is_empty());
     }
 
@@ -382,7 +410,7 @@ mod tests {
         // A folder where the file should be: every save fails.
         let file = dir.path().join("asks.json");
         std::fs::create_dir(&file).unwrap();
-        let asks = Asks::load(file);
+        let asks = Asks::load(file, String::new());
         assert!(asks.ask("app", "42").is_err());
         assert!(asks.pending().is_empty());
     }
@@ -411,13 +439,34 @@ mod tests {
     fn requests_expire_and_survive_a_restart() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("asks.json");
-        let asks = Asks::load(file.clone());
+        let asks = Asks::load(file.clone(), String::new());
         asks.ask("app", "42").unwrap();
-        let again = Asks::load(file.clone());
+        let again = Asks::load(file.clone(), String::new());
         assert_eq!(again.pending().len(), 1);
         let mut old = again.pending();
         old[0].expires_at = now() - 1;
         std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
-        assert!(Asks::load(file).pending().is_empty());
+        assert!(Asks::load(file, String::new()).pending().is_empty());
+    }
+
+    #[test]
+    fn a_new_pairing_drops_the_old_ones_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("asks.json");
+        let asks = Asks::load(file.clone(), "https://one.example 7".into());
+        asks.ask("app", "42").unwrap();
+        // Paired again while the daemon was stopped.
+        let again = Asks::load(file.clone(), "https://two.example 9".into());
+        assert!(again.pending().is_empty());
+        assert!(
+            Asks::load(file, "https://one.example 7".into())
+                .pending()
+                .is_empty()
+        );
+        // Paired again while it ran.
+        asks.ask("app", "42").unwrap();
+        assert_eq!(asks.clear("https://two.example 9".into()).len(), 1);
+        asks.ask("app", "42").unwrap();
+        assert_eq!(asks.pending()[0].pairing, "https://two.example 9");
     }
 }

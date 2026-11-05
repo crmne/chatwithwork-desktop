@@ -559,6 +559,13 @@ async fn run_with_notifications(
             .context("starting the reader")??
     };
     let reader = Arc::new(reader);
+    let asks = {
+        let file = paths.state_dir.join("unattended-asks.json");
+        let pairing = crate::unattended_asks::pairing(&config);
+        tokio::task::spawn_blocking(move || crate::unattended_asks::Asks::load(file, pairing))
+            .await
+            .context("loading the bots' requests")?
+    };
     let limiter = Arc::new(Limiter::new(config.limits.clone()));
     let writer = Arc::new(Writer::new(
         Arc::clone(&reader),
@@ -609,9 +616,7 @@ async fn run_with_notifications(
         events,
         changes,
         shutdown: shutdown.clone(),
-        asks: Arc::new(crate::unattended_asks::Asks::load(
-            paths.state_dir.join("unattended-asks.json"),
-        )),
+        asks: Arc::new(asks),
         answering: std::sync::atomic::AtomicUsize::new(0),
         paths,
     });
@@ -696,7 +701,7 @@ impl Daemon {
             }
             let config = self.config.lock().await.clone();
             let shown = self.asks.list(&config);
-            let pending = self.asks.pending();
+            let pending = self.with_asks(|asks| asks.pending()).await;
             told.retain(|ask| pending.contains(ask));
             for ask in pending {
                 if told.contains(&ask) {
@@ -730,17 +735,29 @@ impl Daemon {
         }
     }
 
+    /// Run `f` on the bots' requests on the blocking pool: changing them
+    /// writes their file, which never holds up the runtime's workers.
+    async fn with_asks<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&crate::unattended_asks::Asks) -> T + Send + 'static,
+    ) -> T {
+        let asks = Arc::clone(&self.asks);
+        tokio::task::spawn_blocking(move || f(&asks))
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+    }
+
     /// The requests waiting, named from `config`, after dropping those
     /// nothing is left to answer for and withdrawing their notifications.
     async fn asks_json(&self) -> Value {
         // The config as it is now, not as it was before the status awaited
         // anything: a request made meanwhile is never pruned by an old one.
-        let config = self.config.lock().await.clone();
-        let config = &config;
-        for stale in self.asks.prune(config) {
+        let config = Arc::new(self.config.lock().await.clone());
+        let pruning = Arc::clone(&config);
+        for stale in self.with_asks(move |asks| asks.prune(&pruning)).await {
             let _ = self.notifications.withdraw_notice(&stale.notice_id());
         }
-        json!(self.asks.list(config))
+        json!(self.asks.list(&config))
     }
 
     /// The person's answer to a bot's request, from this computer: allowing
@@ -761,8 +778,10 @@ impl Daemon {
         // Only a request the config still leaves open: a loan withdrawn
         // meanwhile is never lent again by an old request.
         let ask = {
-            let config = self.config.lock().await;
-            self.asks.take(&root, &bot, &config)
+            let config = self.config.lock().await.clone();
+            let (root, bot) = (root.clone(), bot.clone());
+            self.with_asks(move |asks| asks.take(&root, &bot, &config))
+                .await
         }
         .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
         if allow {
@@ -773,7 +792,7 @@ impl Daemon {
                 }
                 Err(e) => {
                     // Still waiting: the person can try again.
-                    self.asks.restore(ask);
+                    self.with_asks(move |asks| asks.restore(ask)).await;
                     Err(e)
                 }
             };
@@ -950,6 +969,7 @@ impl Daemon {
             || config.browser.changes != new.browser.changes
             || config.browser.ask_before_actions != new.browser.ask_before_actions;
         self.configure_browser(&new);
+        let pairing = crate::unattended_asks::pairing(&new);
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
@@ -958,7 +978,7 @@ impl Daemon {
             self.tunnel_token.lock().await.cancel();
             // Another server's bots have other numbers: a request from
             // the old one must not be allowed for the new one's bot.
-            for ask in self.asks.clear() {
+            for ask in self.with_asks(move |asks| asks.clear(pairing)).await {
                 let _ = self.notifications.withdraw_notice(&ask.notice_id());
             }
         }
