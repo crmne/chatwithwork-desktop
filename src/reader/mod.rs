@@ -494,6 +494,7 @@ impl Reader {
             path.rel.file_name().unwrap_or_default(),
             &mut opened,
             state.limits.max_file_bytes,
+            None,
         )?;
 
         let total_chars = text.chars().count();
@@ -638,7 +639,16 @@ impl Reader {
         name: &str,
         opened: &mut safe_fs::OpenedFile,
         max_bytes: u64,
+        deadline: Option<std::time::Instant>,
     ) -> Result<Arc<String>, ToolError> {
+        // Asked of this version: the file may have changed since the caller
+        // looked at its size, and its text may be in the cache.
+        if opened.size > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!("{path} is over the {max_bytes} bytes this reads"),
+            ));
+        }
         let key: CacheKey = (
             path.to_string(),
             opened.identity,
@@ -649,7 +659,12 @@ impl Reader {
             return Ok(text);
         }
         let bytes = extract::read_capped(&mut opened.file, max_bytes)?;
-        let text = Arc::new(extract::extract(name, &bytes, MAX_EXTRACTED_CHARS)?);
+        let text = Arc::new(extract::extract_until(
+            name,
+            &bytes,
+            MAX_EXTRACTED_CHARS,
+            deadline,
+        )?);
         self.store(key, Arc::clone(&text));
         Ok(text)
     }

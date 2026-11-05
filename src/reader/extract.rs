@@ -6,6 +6,7 @@
 //! process unchanged.
 
 use std::io::{Cursor, Read};
+use std::time::Instant;
 
 use crate::error::{ErrorCode, ToolError};
 
@@ -143,15 +144,27 @@ pub fn read_capped(reader: &mut impl Read, max_bytes: u64) -> Result<Vec<u8>, To
 
 /// Extract up to `max_chars` characters of text from `bytes`.
 pub fn extract(name: &str, bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
+    extract_until(name, bytes, max_chars, None)
+}
+
+/// As [`extract`], stopping with an error between a document's pages, parts
+/// or rows once `deadline` passes, so a call with a time budget isn't held
+/// by one large document. Never a partial text: what's cached is whole.
+pub fn extract_until(
+    name: &str,
+    bytes: &[u8],
+    max_chars: usize,
+    deadline: Option<Instant>,
+) -> Result<String, ToolError> {
     let Some(format) = format_for(name) else {
         return Err(unsupported());
     };
     let result = std::panic::catch_unwind(|| match format {
         Format::Text => text(bytes, max_chars),
-        Format::Pdf => pdf(bytes, max_chars),
-        Format::Docx => office_xml(bytes, OfficeKind::Docx, max_chars),
-        Format::Pptx => office_xml(bytes, OfficeKind::Pptx, max_chars),
-        Format::Spreadsheet => spreadsheet(bytes, max_chars),
+        Format::Pdf => pdf(bytes, max_chars, deadline),
+        Format::Docx => office_xml(bytes, OfficeKind::Docx, max_chars, deadline),
+        Format::Pptx => office_xml(bytes, OfficeKind::Pptx, max_chars, deadline),
+        Format::Spreadsheet => spreadsheet(bytes, max_chars, deadline),
     });
     match result {
         Ok(r) => r,
@@ -159,6 +172,17 @@ pub fn extract(name: &str, bytes: &[u8], max_chars: usize) -> Result<String, Too
             ErrorCode::Unsupported,
             "the file could not be parsed",
         )),
+    }
+}
+
+/// Stop if `deadline` has passed.
+fn in_time(deadline: Option<Instant>) -> Result<(), ToolError> {
+    match deadline {
+        Some(deadline) if Instant::now() >= deadline => Err(ToolError::new(
+            ErrorCode::Internal,
+            "the document took too long to turn into text",
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -178,7 +202,7 @@ fn text(bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
     Ok(truncate_chars(&s, max_chars).to_string())
 }
 
-fn pdf(bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
+fn pdf(bytes: &[u8], max_chars: usize, deadline: Option<Instant>) -> Result<String, ToolError> {
     let doc = lopdf::Document::load_mem(bytes).map_err(|e| {
         ToolError::new(
             ErrorCode::Unsupported,
@@ -193,6 +217,7 @@ fn pdf(bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
     }
     let mut out = String::new();
     for page in doc.get_pages().keys() {
+        in_time(deadline)?;
         if let Ok(text) = doc.extract_text_with_limit(&[*page], 16 * 1024 * 1024) {
             out.push_str(text.trim_end());
             out.push_str("\n\n");
@@ -213,7 +238,12 @@ enum OfficeKind {
 /// Largest decompressed XML part accepted, against zip bombs.
 const MAX_XML_PART: u64 = 64 * 1024 * 1024;
 
-fn office_xml(bytes: &[u8], kind: OfficeKind, max_chars: usize) -> Result<String, ToolError> {
+fn office_xml(
+    bytes: &[u8],
+    kind: OfficeKind,
+    max_chars: usize,
+    deadline: Option<Instant>,
+) -> Result<String, ToolError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|_| ToolError::new(ErrorCode::Unsupported, "the document could not be opened"))?;
     let parts: Vec<String> = match kind {
@@ -239,6 +269,7 @@ fn office_xml(bytes: &[u8], kind: OfficeKind, max_chars: usize) -> Result<String
     };
     let mut out = String::new();
     for (i, part) in parts.iter().enumerate() {
+        in_time(deadline)?;
         let Ok(entry) = archive.by_name(part) else {
             continue;
         };
@@ -304,7 +335,73 @@ fn xml_text(xml: &[u8], kind: OfficeKind, out: &mut String, max_chars: usize) {
     }
 }
 
-fn spreadsheet(bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
+/// Most cells of a workbook read as they come, blank ones included.
+const MAX_CELLS: usize = 20_000_000;
+
+/// An `.xlsx`'s cells one at a time, its rows' cells apart by tabs, from the
+/// first column. Never through `worksheet_range`, which sets aside room for
+/// every cell between a sheet's first and last: two cells far apart, in a
+/// file of a few bytes, would ask for terabytes, which ends the process.
+fn xlsx_text<RS: Read + std::io::Seek>(
+    workbook: &mut calamine::Xlsx<RS>,
+    max_chars: usize,
+    deadline: Option<Instant>,
+) -> Result<String, ToolError> {
+    use calamine::{Data, Reader};
+
+    let mut out = String::new();
+    let mut cells_read = 0usize;
+    'sheets: for name in workbook.sheet_names() {
+        let Ok(mut cells) = workbook.worksheet_cells_reader(&name) else {
+            continue;
+        };
+        out.push_str(&format!("## {name}\n"));
+        let mut row = None;
+        let mut next_column = 0;
+        let mut line = String::new();
+        while let Ok(Some(cell)) = cells.next_cell() {
+            cells_read += 1;
+            if cells_read.is_multiple_of(4096) {
+                in_time(deadline)?;
+            }
+            let (at_row, column) = cell.get_position();
+            if row != Some(at_row) {
+                if !line.is_empty() {
+                    out.push_str(&line);
+                    out.push('\n');
+                    line.clear();
+                }
+                row = Some(at_row);
+                next_column = 0;
+            }
+            if out.len() > max_chars * 4 || cells_read >= MAX_CELLS {
+                line.clear();
+                break 'sheets;
+            }
+            let value = Data::from(cell.get_value().clone());
+            if value == Data::Empty {
+                continue;
+            }
+            for _ in next_column..column {
+                line.push('\t');
+            }
+            line.push_str(&value.to_string());
+            next_column = column;
+        }
+        if !line.is_empty() {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    Ok(truncate_chars(out.trim_end(), max_chars).to_string())
+}
+
+fn spreadsheet(
+    bytes: &[u8],
+    max_chars: usize,
+    deadline: Option<Instant>,
+) -> Result<String, ToolError> {
     use calamine::{Data, Reader};
 
     let mut workbook = calamine::open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| {
@@ -313,13 +410,18 @@ fn spreadsheet(bytes: &[u8], max_chars: usize) -> Result<String, ToolError> {
             format!("the spreadsheet could not be opened: {e}"),
         )
     })?;
+    if let calamine::Sheets::Xlsx(xlsx) = &mut workbook {
+        return xlsx_text(xlsx, max_chars, deadline);
+    }
     let mut out = String::new();
     for name in workbook.sheet_names() {
+        in_time(deadline)?;
         let Ok(range) = workbook.worksheet_range(&name) else {
             continue;
         };
         out.push_str(&format!("## {name}\n"));
         for row in range.rows() {
+            in_time(deadline)?;
             let cells: Vec<String> = row
                 .iter()
                 .map(|c| match c {
@@ -507,6 +609,52 @@ mod tests {
         let pdf = fixtures::pdf("Invoice number 4711");
         let text = extract("invoice.pdf", &pdf, 1000).unwrap();
         assert!(text.contains("Invoice number 4711"), "{text:?}");
+    }
+
+    #[test]
+    fn an_xlsx_reads_cell_by_cell_however_far_apart_its_cells_are() {
+        let sheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>Termination</t></is></c><c r="C1"><v>90</v></c></row>
+            <row r="3"><c r="B3" t="inlineStr"><is><t>Interest</t></is></c></row>
+            <row r="1048576"><c r="XFD1048576" t="inlineStr"><is><t>far</t></is></c></row>
+            </sheetData></worksheet>"#;
+        let xlsx = fixtures::zip(&[
+            (
+                "[Content_Types].xml",
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Terms" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            ("xl/worksheets/sheet1.xml", sheet),
+        ]);
+        // `worksheet_range` would ask for room for 17 billion cells here.
+        let text = extract("terms.xlsx", &xlsx, 100_000).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "## Terms");
+        assert_eq!(lines[1], "Termination\t\t90");
+        assert_eq!(lines[2], "\tInterest");
+        assert!(
+            lines[3].ends_with("far") && lines[3].starts_with('\t'),
+            "{text}"
+        );
+        let past = Some(Instant::now() - std::time::Duration::from_secs(1));
+        assert!(extract_until("a.pdf", &fixtures::pdf("x"), 100, past).is_err());
+        assert!(extract_until("a.docx", &fixtures::docx(&["x"]), 100, past).is_err());
+        // An xlsx is asked between cells; a small one ends before it asks.
+        assert_eq!(
+            extract_until("b.pdf", &fixtures::pdf("x"), 100, None).unwrap(),
+            "x"
+        );
     }
 
     #[test]

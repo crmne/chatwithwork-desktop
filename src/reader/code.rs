@@ -535,15 +535,19 @@ enum FileHits {
     Count(usize),
 }
 
-/// Search `bytes`, the text of `path`. `None` when nothing matches.
+/// Search `bytes`, the text of `path`: at most `most` matching lines, as a
+/// document's text can be millions of them. `None` when nothing matches,
+/// which is always so of no text at all (`read` gives it no lines), whatever
+/// the pattern.
 fn search_file(
     matcher: &RegexMatcher,
     path: &str,
     bytes: &[u8],
     output: GrepOutput,
     context: usize,
+    most: usize,
 ) -> Option<FileHits> {
-    if !matcher.is_match(bytes).unwrap_or(false) {
+    if bytes.is_empty() || !matcher.is_match(bytes).unwrap_or(false) {
         return None;
     }
     let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
@@ -568,6 +572,7 @@ fn search_file(
         .iter()
         .enumerate()
         .filter(|(_, line)| is_match(line))
+        .take(most)
         .map(|(i, line)| GrepMatch {
             path: path.to_string(),
             line: i + 1,
@@ -622,6 +627,7 @@ impl super::Reader {
         let mut more = false;
         let mut files_searched = 0usize;
         let mut timed_out = false;
+        let ran_out = std::cell::Cell::new(false);
         let mut search = |start: &Start, found: Found| -> bool {
             let Some(format) = format_for(found.rel.file_name().unwrap_or_default()) else {
                 return true;
@@ -652,13 +658,21 @@ impl super::Reader {
                 Body::Raw(bytes)
             } else {
                 let name = found.rel.file_name().unwrap_or_default();
-                match self.extracted(&path, name, &mut opened, max_bytes) {
+                match self.extracted(&path, name, &mut opened, max_bytes, Some(deadline)) {
                     Ok(text) => Body::Extracted(text),
+                    // A converter that stopped for the clock says so, as
+                    // the walk does; a damaged document is only skipped.
+                    Err(_) if Instant::now() >= deadline => {
+                        ran_out.set(true);
+                        return false;
+                    }
                     Err(_) => return true,
                 }
             };
             files_searched += 1;
-            match search_file(&matcher, &path, text.bytes(), req.output, context) {
+            // What this page still needs, and one more to say there's more.
+            let most = (offset + limit + 1).saturating_sub(seen).max(1);
+            match search_file(&matcher, &path, text.bytes(), req.output, context, most) {
                 None => true,
                 Some(FileHits::Lines(hits)) => {
                     for hit in hits {
@@ -724,6 +738,7 @@ impl super::Reader {
                 break;
             }
         }
+        let timed_out = timed_out || ran_out.get();
         let output = req.output;
         Ok(GrepResponse {
             output,
@@ -1139,6 +1154,56 @@ mod tests {
             },
         );
         assert_eq!(lines(&glob), ["app:contracts/msa.pdf:3"]);
+    }
+
+    /// A blank or image-only document has no text, so nothing matches in
+    /// it, even a pattern that matches nothing at all.
+    #[test]
+    fn a_document_without_text_never_matches() {
+        use crate::reader::extract::fixtures;
+        let f = fixture();
+        fs::write(f.app.join("blank.pdf"), fixtures::pdf("")).unwrap();
+        let found = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:blank.pdf".into()),
+                ..req("^$")
+            },
+        );
+        assert_eq!(found.files_searched, 1);
+        assert!(found.matches.unwrap().is_empty());
+    }
+
+    /// One file's lines stop at what the page needs, not the file's.
+    #[test]
+    fn a_file_gives_only_the_lines_a_page_needs() {
+        let matcher = matcher(&req("x")).unwrap();
+        let text = "x\n".repeat(1000);
+        let Some(FileHits::Lines(hits)) = search_file(
+            &matcher,
+            "app:a",
+            text.as_bytes(),
+            GrepOutput::Content,
+            0,
+            3,
+        ) else {
+            panic!("three lines");
+        };
+        assert_eq!(hits.len(), 3);
+        let f = fixture();
+        fs::write(f.app.join("many.txt"), &text).unwrap();
+        let page = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:many.txt".into()),
+                limit: Some(2),
+                offset: Some(5),
+                ..req("x")
+            },
+        );
+        assert_eq!(page.matches.unwrap().len(), 2);
+        assert!(page.truncated, "and says there's more");
+        assert_eq!(page.next_offset, Some(7));
     }
 
     #[test]
