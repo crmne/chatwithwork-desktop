@@ -707,25 +707,31 @@ impl Daemon {
                 if told.contains(&ask) {
                     continue;
                 }
-                let Some(view) = shown
-                    .iter()
-                    .find(|view| view.root == ask.root && view.bot == ask.bot)
-                else {
+                let Some(view) = shown.iter().find(|view| {
+                    view.root == ask.root && view.bot == ask.bot && view.kind == ask.kind
+                }) else {
                     continue;
                 };
+                let claude_code = ask.kind == crate::unattended_asks::AskKind::ClaudeCode;
                 let body = format!(
-                    "{} asks to run commands in {} without asking each time. Open Chat with \
-                     Work Desktop to answer, or run `cww roots requests`.",
+                    "{} asks to {} {}. Open Chat with Work Desktop to answer, or run `cww roots \
+                     requests`.",
                     crate::unattended_asks::bot_name(view),
+                    if claude_code {
+                        "run Claude Code in"
+                    } else {
+                        "run commands without asking each time in"
+                    },
                     view.folder
                 );
+                let title = if claude_code {
+                    "A bot asks to run Claude Code"
+                } else {
+                    "A bot asks to run commands unattended"
+                };
                 // Told once its notice is on its way; one that couldn't be
                 // sent is tried again with the next change.
-                match self.notifications.notice(
-                    &ask.notice_id(),
-                    "A bot asks to run commands unattended",
-                    &body,
-                ) {
+                match self.notifications.notice(&ask.notice_id(), title, &body) {
                     Ok(()) => {
                         told.insert(ask);
                     }
@@ -762,7 +768,14 @@ impl Daemon {
 
     /// The person's answer to a bot's request, from this computer: allowing
     /// does what `roots_bot` with `unattended: true` does.
-    async fn answer_ask(&self, which: String, bot: String, allow: bool) -> Result<Value> {
+    async fn answer_ask(
+        &self,
+        which: String,
+        bot: String,
+        kind: crate::unattended_asks::AskKind,
+        allow: bool,
+    ) -> Result<Value> {
+        use crate::unattended_asks::AskKind;
         let (root, label) = {
             let config = self.config.lock().await;
             // An ID first: the app sends one, and a label can be another
@@ -780,15 +793,19 @@ impl Daemon {
         let ask = {
             let config = self.config.lock().await.clone();
             let (root, bot) = (root.clone(), bot.clone());
-            self.with_asks(move |asks| asks.take(&root, &bot, &config))
+            self.with_asks(move |asks| asks.take(&root, &bot, kind, &config))
                 .await
         }
         .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
         if allow {
-            return match self
-                .set_bot(root, bot, None, true, true, Some(ask.clone()))
-                .await
-            {
+            let answered = match kind {
+                AskKind::Unattended => {
+                    self.set_bot(root, bot, None, true, true, Some(ask.clone()))
+                        .await
+                }
+                AskKind::ClaudeCode => self.give_claude_code(root, bot, ask.clone()).await,
+            };
+            return match answered {
                 Ok(answer) => {
                     let _ = self.notifications.withdraw_notice(&ask.notice_id());
                     Ok(answer)
@@ -806,7 +823,10 @@ impl Daemon {
             };
         }
         let _ = self.notifications.withdraw_notice(&ask.notice_id());
-        let mut entry = AuditEntry::event("root_bot_unattended_declined");
+        let mut entry = AuditEntry::event(match kind {
+            AskKind::Unattended => "root_bot_unattended_declined",
+            AskKind::ClaudeCode => "root_bot_claude_code_declined",
+        });
         entry.detail = Some(format!("{root} ({label}) for bot {bot}"));
         self.audit.append(&entry);
         self.changes.bump();
@@ -1124,6 +1144,34 @@ impl Daemon {
                 ""
             }
         ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
+    /// The person's yes to a bot's request for Claude Code in a folder lent
+    /// to it: what `cww coding allow` does, if the request is still open.
+    async fn give_claude_code(
+        &self,
+        which: String,
+        bot: String,
+        answering: crate::unattended_asks::Ask,
+    ) -> Result<Value> {
+        let id = bot.clone();
+        let root = self
+            .edit_config(move |config, _| {
+                if !crate::unattended_asks::open(config, &answering) {
+                    anyhow::bail!(
+                        "bot {} isn't waiting for an answer about {} any more",
+                        answering.bot,
+                        answering.root
+                    );
+                }
+                crate::roots::set_bot_claude_code(config, &which, &bot, true)
+            })
+            .await?;
+        let mut entry = AuditEntry::event("root_bot_claude_code_allowed");
+        entry.detail = Some(format!("{} ({}) for bot {id}", root.id, root.label));
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
@@ -1809,9 +1857,12 @@ impl ControlHandler for Daemon {
                 lent,
                 unattended,
             } => self.set_bot(root, bot, name, lent, unattended, None).await,
-            ControlRequest::RootsUnattendedAnswer { root, bot, allow } => {
-                self.answer_ask(root, bot, allow).await
-            }
+            ControlRequest::RootsUnattendedAnswer {
+                root,
+                bot,
+                allow,
+                kind,
+            } => self.answer_ask(root, bot, kind, allow).await,
             ControlRequest::RootsReadBudget { root, read_budget } => {
                 self.set_read_budget(root, read_budget).await
             }

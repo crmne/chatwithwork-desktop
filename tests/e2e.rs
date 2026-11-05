@@ -5159,6 +5159,94 @@ async fn a_bots_unattended_commands_need_this_computers_yes() {
         .unwrap();
 }
 
+/// A coding bot asks for Claude Code in a folder lent to it, never listed
+/// and never granted by the server: the person answers on this computer,
+/// Allow gives that loan `claude_code`, and the bot's `roots` then says
+/// ready. Deny gives nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_coding_bot_asks_and_only_this_computer_allows_claude_code() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, true, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.roots[0].commands = true;
+    config.roots[0].network = true;
+    config.save(&fx.paths).unwrap();
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let s = connect(&mut server).await;
+    control(
+        &fx.paths,
+        ControlRequest::RootsBot {
+            root: "docs".into(),
+            bot: "42".into(),
+            name: Some("Issue fixer".into()),
+            lent: true,
+            unattended: false,
+        },
+    )
+    .await;
+    let mut s = connect_or_keep(&mut server, s).await;
+    let tools = s.request("tools/list", json!({})).await;
+    assert!(!tool_names(&tools).contains(&"ask_claude_code".to_string()));
+    let roots = s.bot_call("roots", json!({}), "42").await;
+    assert_eq!(
+        roots["structuredContent"]["roots"][0]["coding"]["claude_code"], "not_allowed",
+        "{roots}"
+    );
+
+    let mine = s.call("ask_claude_code", json!({ "root": "docs" })).await;
+    assert_eq!(error_code(&mine), "not_lent", "only a bot asks");
+    let asked = s
+        .bot_call("ask_claude_code", json!({ "root": "docs" }), "42")
+        .await;
+    assert_eq!(
+        asked["structuredContent"],
+        json!({ "status": "asked" }),
+        "{asked}"
+    );
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    let asks = status["unattended_asks"].as_array().unwrap();
+    assert_eq!(asks.len(), 1, "{status}");
+    assert_eq!(asks[0]["kind"], "claude_code");
+    assert_eq!(asks[0]["name"], "Issue fixer");
+
+    let answer = |allow| ControlRequest::RootsUnattendedAnswer {
+        root: "docs".into(),
+        bot: "42".into(),
+        allow,
+        kind: cww::unattended_asks::AskKind::ClaudeCode,
+    };
+    control(&fx.paths, answer(false)).await;
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    assert_eq!(status["unattended_asks"], json!([]), "Deny drops it");
+    assert!(!Config::load(&fx.paths).unwrap().roots[0].bots[0].claude_code);
+
+    s.bot_call("ask_claude_code", json!({ "root": "docs" }), "42")
+        .await;
+    control(&fx.paths, answer(true)).await;
+    let config = Config::load(&fx.paths).unwrap();
+    assert!(config.roots[0].bots[0].claude_code);
+    assert!(!config.roots[0].bots[0].unattended, "nothing else");
+    let mut s = connect_or_keep(&mut server, s).await;
+    let roots = s.bot_call("roots", json!({}), "42").await;
+    assert_eq!(
+        roots["structuredContent"]["roots"][0]["coding"]["claude_code"], "ready",
+        "{roots}"
+    );
+    let already = s
+        .bot_call("ask_claude_code", json!({ "root": "docs" }), "42")
+        .await;
+    assert_eq!(already["structuredContent"], json!({ "status": "already" }));
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
 /// A bot can only ask for unattended commands; the person answers on this
 /// computer, and Allow does what sharing with `unattended: true` does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5223,6 +5311,7 @@ async fn a_bot_asks_and_only_this_computer_allows_unattended_commands() {
         root: "docs".into(),
         bot: "42".into(),
         allow,
+        kind: Default::default(),
     };
     control(&fx.paths, answer(false)).await;
     let status = control(&fx.paths, ControlRequest::Status).await;

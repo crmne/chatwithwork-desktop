@@ -310,10 +310,12 @@ impl ClaudeState {
     }
 }
 
-pub fn claude_state(coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
-    if coding.claude.is_none() {
-        ClaudeState::NotInstalled
-    } else if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
+/// The state as the config says it: a loan's yes, and the network. Whether
+/// Claude Code is installed and signed in, the config can't say (a run finds
+/// `claude` itself when no setup recorded one), so only `cww coding status`,
+/// which looks, says `not_installed` and `not_signed_in`.
+pub fn claude_state(_coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
+    if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
         ClaudeState::NotAllowed
     } else if !root.network {
         ClaudeState::NoNetwork
@@ -450,7 +452,11 @@ pub fn for_run(
         if claude_state(&config.coding, root, bot) != ClaudeState::Ready {
             return None;
         }
-        let program = config.coding.claude.clone()?;
+        let program = config
+            .coding
+            .claude
+            .clone()
+            .or_else(|| found_claude(&config.roots))?;
         // Without Windows' `\\?\` prefix, which a run's PATH and grants can't use.
         let real = crate::roots::canonical(&program)
             .ok()
@@ -473,6 +479,18 @@ pub fn for_run(
         })
     });
     RunCoding { mirrors, claude }
+}
+
+/// The `claude` this computer has, found once by whoever starts runs when
+/// no setup recorded one: a bot allowed Claude Code needs no `cww coding
+/// setup`. Never one a command could have changed.
+fn found_claude(roots: &[Root]) -> Option<PathBuf> {
+    static FOUND: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+    let mut found = FOUND.lock().unwrap_or_else(|e| e.into_inner());
+    if found.as_ref().is_none_or(|p| !p.is_file()) {
+        *found = setup::find_claude_outside(roots);
+    }
+    found.clone()
 }
 
 /// Takes secrets' exact text out of a stream as it passes, across the

@@ -15,11 +15,17 @@ Two of those were unsafe, and this design removes them:
 - **The token sat in a file in the lent folder.** The deny list kept it from Chat with Work's tools, but not from the commands the bot runs there ([commands.md, What it doesn't protect against](commands.md#what-it-doesnt-protect-against)), any of which could print it. Desktop now uses Claude Code's own sign-in where Claude Code keeps it ([below](#claude-codes-sign-in)), never a copy in a shared folder.
 - **The mirror was fetched, outside the sandbox, from inside the lent folder.** A command the bot runs can write that mirror's `.git/config` (`core.sshCommand`, `core.fsmonitor`, a credential helper), and the timer's next `git fetch` would run it as the person, outside every sandbox.
 
-## The guided setup
+## Without any setup: the bot asks
+
+A coding bot needs nothing typed on the computer. What it needs is what the computer already has: a folder shared with the bot that allows commands and the network (the folder's settings in the app, as for any bot), Claude Code installed and signed in the normal way (`claude`, then signing in), and the person's yes. When the bot's computer says Claude Code isn't allowed for it in a lent folder (`coding.claude_code` is `not_allowed`), Chat with Work asks the computer (`ask_claude_code`, PROTOCOL.md 7.2.1), and the desktop app asks in a dialog of its own, named from this computer's settings: "Let Issue fixer run Claude Code in bots?", saying what that gives the bot's runs ([below](#claude-codes-sign-in)), with Allow and Deny. Allow gives that bot's runs in that folder this computer's Claude Code sign-in, as `cww coding allow` does; Deny drops the request. Only the person on this computer answers: in that dialog, with `cww roots allow <root> <bot> --claude-code` or `cww roots decline <root> <bot> --claude-code`, or through the control channel. The server can only ask. When the app isn't running, a system notification says to open it, and `cww roots requests` lists what waits. A request lasts 24 hours, and needs a folder lent to the bot with commands allowed.
+
+A run then finds `claude` itself where no setup recorded one (your `PATH`, mise, the native installer's `~/.local/bin`, Homebrew, npm's global programs), never one in a shared folder a command could change. The guided setup below remains for scripts and servers, and for the repository mirror.
+
+## The guided setup (for scripts)
 
 ```
 cww coding setup
-cww coding setup --bot 42 --repo git@github.com:acme/app.git --folder ~/bots
+cww coding setup --bot "Issue fixer" --repo git@github.com:acme/app.git --folder ~/bots
 cww coding setup --bot 42 --repo git@github.com:acme/app.git --ssh-key ~/.ssh/app-deploy
 cww coding status [--bot 42] [--json]
 cww coding allow <root> <bot> [--off]   # this bot's runs there use Claude Code's sign-in, or stop
@@ -29,7 +35,7 @@ cww coding fetch         # fetch every repository's mirror now
 `setup` asks one thing at a time, says what it's about to do before it does it, and prints each step's state as it goes (`ok`, `needs you`, `skipped`, `failed: why`). Run again, it skips what's done. Every answer can be given as a flag, so the desktop app (and a person over SSH) can drive the same steps.
 
 1. **Paired.** The computer is paired and the daemon runs, or it says to run `cww login`.
-2. **Bot.** Which bot: the number in its address in Chat with Work (`/bots/42`), or `--bot`, and its name, shown only here.
+2. **Bot.** Which bot: it lists the bots you can read, each with its project and organization, and you type part of its name until one is left (letters in order are enough: "isfx" finds "Issue fixer"). `--bot` takes a name, part of one, or an ID; with `--yes` or no terminal, a name that matches more than one bot is refused, saying which. An ID works even where the computer can't list bots.
 3. **Folder.** Pick a shared folder or make one (default `~/bots`, `%USERPROFILE%\bots` on Windows). It shares it, allows changes, commands and the network (Claude Code needs the network), and lends it to the bot, each after saying what it allows, as `cww roots allow-commands` does. It asks separately whether the bot's commands there may start **unattended**; the default is no, so each asks you in Chat with Work.
 4. **Claude Code.** It looks for `claude` where you'd run it (your `PATH`, then the native installer's `~/.local/bin`, Homebrew, npm's global programs) and runs `claude --version`. Missing, it offers Anthropic's own installer (`curl -fsSL https://claude.ai/install.sh | bash`, or `irm https://claude.ai/install.ps1 | iex` on Windows) after showing the command, or prints it to run yourself. It remembers the program it found by its full path.
 5. **Sign-in.** It checks that Claude Code is signed in on this computer the normal way (you ran `claude` and signed in). If not, it says to run `claude` once and sign in, then setup again. Then it asks, once, on this computer: "Let bots' coding runs use this computer's Claude Code sign-in?", Yes or No (No by default, yes with `--yes`), after saying what that gives the bot's runs (below). Nothing is copied: the runs use the sign-in where Claude Code keeps it.
@@ -114,7 +120,7 @@ In a bot's `roots` (PROTOCOL.md 7.2.1), each lent folder says whether Claude Cod
   "coding": { "claude_code": "ready", "repositories": ["app"] } }
 ```
 
-`claude_code` is `ready`; `not_installed` (setup found no `claude`); `not_allowed` (this bot's runs here don't use the sign-in); or `no_network` (this folder's commands have no network, which Claude Code needs). It's what `config.toml` says, checked again when a run starts; whether Claude Code is signed in isn't in it (the worker that answers can't read the home folder), so `not_signed_in` comes only from `cww coding status`. No path, address, version or token.
+`claude_code` is `ready`; `not_allowed` (this bot's runs here don't use the sign-in: the server asks, above); or `no_network` (this folder's commands have no network, which Claude Code needs). It's what `config.toml` says, checked again when a run starts; whether Claude Code is installed and signed in isn't in it (the worker that answers can't look in the home folder), so `not_installed` and `not_signed_in` come only from `cww coding status`, and a run hears them from the shell or Claude Code itself. No path, address, version or token.
 
 The server keeps it with the folders it already remembers for the bot, and the bot's page says what the computer still needs, with the command that fixes it: "NUC hasn't given this bot its Claude Code sign-in in bots. On NUC, run `cww coding setup --bot 42`." The server asks the computer's `roots` for the bot when the page shows a computer it hasn't heard from in a while, as it does for a bot's own runs. The recipes that run Claude Code assume this setup: `claude` is found and signed in, `git fetch origin` works without credentials, and when `roots` says Claude Code isn't ready, the bot stops and tells its team what to run, rather than trying.
 
@@ -122,7 +128,7 @@ The server keeps it with the folders it already remembers for the bot, and the b
 
 The rules in [SECURITY.md](../SECURITY.md) and [commands.md](commands.md) all still hold; this adds:
 
-- **Only this computer decides.** The `[coding]` table, `claude_code` on a loan, and the repositories are changed only by `cww coding`, `cww roots`, the control API, or editing `config.toml`, never by the server. The server can ask for unattended commands (`ask_unattended`), and the person answers here. Turning a folder's commands off, or making it read-only, ends its loans' `claude_code` as it ends `unattended`.
+- **Only this computer decides.** The `[coding]` table, `claude_code` on a loan, and the repositories are changed only by `cww coding`, `cww roots`, the control API (the app's dialog), or editing `config.toml`, never by the server. The server can ask for unattended commands (`ask_unattended`) and for Claude Code (`ask_claude_code`), and the person answers here. Turning a folder's commands off, or making it read-only, ends its loans' `claude_code` as it ends `unattended`.
 - **The sign-in never reaches the worker, the server or the audit log.** Only a run whose loan allows it reads Claude Code's own paths, and the tokens Desktop can read there are removed from the run's output. It's never copied: Desktop stores no token of its own.
 - **Desktop runs `git` outside the sandbox only on its own mirror**, with fixed arguments, hooks off, and a config no command can write. It never runs anything outside the sandbox in a shared folder. The setup's toolchain step is the one exception, run by the person, in their terminal, after they agreed, before any bot has touched the checkout.
 - **What a compromised server could do** in a folder lent with `claude_code` and commands: what it can already do there (run commands, as approvals or the unattended loan allow), plus use the person's Claude Code subscription, read their Claude Code history, with the network try to leak its tokens, and change Claude Code's settings so the person's own next `claude` runs something outside the sandbox ([What it can't promise](#claude-codes-sign-in)). It can't learn a token from `roots`, reach another folder, push to the repository, or change any of these Desktop settings.

@@ -140,9 +140,10 @@ fn claude_is_ready_only_for_a_bot_allowed_it_where_commands_reach_the_network() 
         claude_state(&coding, &no_commands, "42"),
         ClaudeState::NotAllowed
     );
+    // No setup needed: a run finds `claude` itself.
     assert_eq!(
         claude_state(&CodingConfig::default(), &root(Some(loan(true))), "42"),
-        ClaudeState::NotInstalled
+        ClaudeState::Ready
     );
 }
 
@@ -512,4 +513,38 @@ fn checkout_commands_quote_what_they_name() {
         ps.starts_with("git -C 'app' remote set-url origin '/data/it''s here/app.git'; "),
         "{ps}"
     );
+}
+
+/// `cww coding setup` picks a bot by name: an ID or a whole name finds one,
+/// and letters in order find every bot whose name, project and organization
+/// hold them.
+#[test]
+fn a_bot_is_picked_by_name() {
+    let answer = serde_json::json!({
+        "account": { "name": "Plenty" },
+        "bots": [
+            { "id": 24, "name": "Solco issue fixer", "project": { "name": "Solco" } },
+            { "id": 34, "name": "Issue fixer", "project": { "name": "Chat with Work" } },
+            { "id": 7, "name": "Weekly digest", "project": null },
+        ]
+    });
+    let choices = super::setup::bot_choices(&answer);
+    assert_eq!(choices.len(), 3);
+    assert_eq!(choices[2].project, "Private");
+    assert_eq!(choices[0].organization, "Plenty");
+    let ids = |query: &str| -> Vec<String> {
+        super::setup::matching(&choices, query)
+            .iter()
+            .map(|c| c.id.clone())
+            .collect()
+    };
+    assert_eq!(ids("34"), ["34"]);
+    assert_eq!(ids("#24"), ["24"]);
+    assert_eq!(ids("issue fixer"), ["34"], "a whole name is that bot");
+    assert_eq!(ids("isfx"), ["24", "34"]);
+    assert_eq!(ids("solco"), ["24"]);
+    assert_eq!(ids("cww isfx"), Vec::<String>::new());
+    assert_eq!(ids("chat isfx"), Vec::<String>::new(), "in the order shown");
+    assert_eq!(ids("isfx chat"), ["34"]);
+    assert_eq!(ids("digest"), ["7"]);
 }

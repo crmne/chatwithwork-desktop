@@ -113,7 +113,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
-- `unattended_asks` lists the bots asking to run their commands unattended in a folder lent to them, waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
+- `unattended_asks` lists the bots asking, about a folder lent to them, to run their commands unattended (`"kind": "unattended"`) or to run Claude Code with this computer's sign-in (`"kind": "claude_code"`), waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "kind": "unattended", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
 - `read_budget` is there when the folder has a read budget of its own that counts (see `roots_read_budget`): the characters a chat may read from it per rolling hour. It's absent while no hourly read limit is set.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
 
@@ -271,7 +271,10 @@ The desktop app lists these grants in Shared folders. Selection and unattended c
 
 ```json
 {"cmd": "roots_unattended_answer", "root": "app", "bot": "42", "allow": true}
+{"cmd": "roots_unattended_answer", "root": "app", "bot": "42", "allow": true, "kind": "claude_code"}
 ```
+
+With `"kind": "claude_code"` it answers a request for Claude Code (`ask_claude_code`): `allow: true` does what `cww coding allow <root> <bot>` does and writes `root_bot_claude_code_allowed`; `allow: false` writes `root_bot_claude_code_declined`. The app's dialog for it says "Let Issue fixer run Claude Code in App?" and what that gives the bot's runs, with Allow and Deny; `cww roots allow` and `decline` take `--claude-code`. Without `kind`, it's a request for unattended commands, as below.
 
 The person's answer to a bot's request to run its commands unattended in a folder lent to it, which Chat with Work can make with `ask_unattended` (PROTOCOL.md 7.2.1) but never grant. `allow: true` does what `roots_bot` with `lent: true, unattended: true` does, keeping the loan's name, and answers the same way, with a `root_bot_lent` audit entry; `allow: false` drops the request and writes `root_bot_unattended_declined`, answering with the `root`. Refused when no request from that bot is waiting for that folder: requests last 24 hours, and sharing again with `unattended`, stopping, or turning the folder's commands off answers them too. `status` lists the requests waiting in `unattended_asks`.
 

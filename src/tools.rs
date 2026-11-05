@@ -74,6 +74,10 @@ pub const UNATTENDED_META: &str = "com.chatwithwork/unattended";
 /// unattended in a folder lent to it (PROTOCOL.md 7.2.1). Never listed in
 /// `tools/list`, so no model sees it: the server calls it by name.
 pub const ASK_UNATTENDED: &str = "ask_unattended";
+/// A bot's request to run Claude Code with this computer's sign-in in a
+/// folder lent to it (PROTOCOL.md 7.2.1, docs/coding-computers.md): called
+/// by the server by name, never listed.
+pub const ASK_CLAUDE_CODE: &str = "ask_claude_code";
 
 /// Trusted browser-only local consent; never a model argument.
 pub const BROWSER_AUTO_APPROVE_META: &str = "com.chatwithwork/browserAutoApprove";
@@ -284,7 +288,8 @@ impl LocalFiles {
                 || (CHANGE_TOOLS.contains(&name) && self.inner.writer.enabled())
                 || (COMMAND_TOOLS.contains(&name) && self.commands().is_some())
                 || (PRINT_TOOLS.contains(&name) && self.printing().is_some())
-                || (name == ASK_UNATTENDED && self.inner.asks.is_some())
+                || ((name == ASK_UNATTENDED || name == ASK_CLAUDE_CODE)
+                    && self.inner.asks.is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -571,14 +576,21 @@ impl LocalFiles {
         Ok(None)
     }
 
-    /// Queue a bot's request to run its commands unattended in a folder
-    /// lent to it, for the person on this computer to answer there. Changes
-    /// nothing the computer allows.
-    async fn ask_unattended(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+    /// Queue a bot's request about a folder lent to it, to run its
+    /// commands there unattended or to run Claude Code there with this
+    /// computer's sign-in, for the person on this computer to answer there.
+    /// Changes nothing the computer allows.
+    async fn ask(
+        &self,
+        args: Value,
+        caller: &Caller,
+        kind: crate::unattended_asks::AskKind,
+    ) -> Result<Output, ToolError> {
+        use crate::unattended_asks::AskKind;
         let Caller::Bot { id, .. } = caller else {
             return Err(ToolError::new(
                 ErrorCode::NotLent,
-                "only a bot's chat can ask for unattended commands",
+                "only a bot's chat can ask this computer for that",
             ));
         };
         let AskUnattendedArgs { root } = parse_args(args)?;
@@ -599,21 +611,28 @@ impl LocalFiles {
             return Err(ToolError::new(
                 ErrorCode::NotWritable,
                 format!(
-                    "Commands aren't allowed in the shared folder “{}”, so they can't run \
-                     there unattended. The person can allow commands for it in Chat with Work \
-                     Desktop on their computer.",
-                    folder.label
+                    "Commands aren't allowed in the shared folder “{}”, so {} The person can \
+                     allow commands for it in Chat with Work Desktop on their computer.",
+                    folder.label,
+                    match kind {
+                        AskKind::Unattended => "they can't run there unattended.",
+                        AskKind::ClaudeCode => "Claude Code can't run there.",
+                    }
                 ),
             ));
         }
-        if loan.unattended {
+        let given = match kind {
+            AskKind::Unattended => loan.unattended,
+            AskKind::ClaudeCode => loan.claude_code,
+        };
+        if given {
             return Ok(Output::Ask(json!({ "status": "already" })));
         }
         let asks = Arc::clone(self.inner.asks.as_ref().expect("offered only with asks"));
         // Saving it writes a file: on the blocking pool.
         let (asking, bot) = (root.clone(), id.clone());
         let asked = blocking(move || {
-            asks.ask(&asking, &bot).map_err(|e| {
+            asks.ask(&asking, &bot, kind).map_err(|e| {
                 ToolError::new(
                     ErrorCode::Internal,
                     format!("The request couldn't be kept on this computer: {e:#}"),
@@ -623,7 +642,10 @@ impl LocalFiles {
         .await?;
         match asked {
             crate::unattended_asks::Asked::Queued => {
-                let mut entry = AuditEntry::event("root_bot_unattended_asked");
+                let mut entry = AuditEntry::event(match kind {
+                    AskKind::Unattended => "root_bot_unattended_asked",
+                    AskKind::ClaudeCode => "root_bot_claude_code_asked",
+                });
                 entry.detail = Some(format!("{root} ({}) for bot {id}", folder.label));
                 self.inner.audit.append(&entry);
             }
@@ -694,7 +716,14 @@ impl LocalFiles {
         }
         let reader = Arc::clone(&self.inner.reader);
         match name {
-            ASK_UNATTENDED => self.ask_unattended(args, caller).await,
+            ASK_UNATTENDED => {
+                self.ask(args, caller, crate::unattended_asks::AskKind::Unattended)
+                    .await
+            }
+            ASK_CLAUDE_CODE => {
+                self.ask(args, caller, crate::unattended_asks::AskKind::ClaudeCode)
+                    .await
+            }
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;
                 let roots = blocking(move || Ok(reader.roots())).await?;
