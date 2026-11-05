@@ -263,7 +263,7 @@ Shares a folder with a Chat with Work bot (`lent: true`), or stops sharing it (`
 
 Answers with the updated `root`, whose `bots` lists its loans (`id`, `name`, and `unattended` when true), and writes a `root_bot_lent` or `root_bot_withdrawn` audit entry. `status` lists each root's `bots` the same way. Stopping commands in a folder (`roots_commands`) or making it read-only (`roots_writable`) turns every loan's `unattended` off there. `cww roots share <root> <bot> [--name <name>] [--unattended]` and `cww roots unshare <root> <bot>` do the same from the command line; `cww status` lists the loans under each folder.
 
-A loan's `claude_code` (shown when true) gives the bot's commands there this computer's own Claude Code sign-in (`~/.claude`, `~/.claude.json`, and on macOS the login keychain); only `cww coding setup` and `cww coding allow <root> <bot> [--off]` change it, and it ends with commands or changes in the folder, as `unattended` does ([docs/coding-computers.md](docs/coding-computers.md)).
+A loan's `claude_code` (shown when true) gives the bot's commands there this computer's own Claude Code sign-in (`~/.claude`, and `~/.claude.json` except on Windows, and on macOS the login keychain); only `cww coding setup` and `cww coding allow <root> <bot> [--off]` change it, and it ends with commands or changes in the folder, as `unattended` does ([docs/coding-computers.md](docs/coding-computers.md)).
 
 The desktop app lists these grants in Shared folders. Selection and unattended command controls live in the bot’s computer integration, in an app-owned settings pane; native confirmation is required to widen access. The old `lend` and `stop-lending` CLI names remain hidden aliases.
 

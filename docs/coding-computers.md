@@ -66,7 +66,7 @@ claude_code = true     # this bot's runs here use this computer's Claude Code si
 | macOS (Seatbelt) | `~/.claude` and `~/.claude.json`, and the login keychain (MXC's `keychainAccess`: `securityd` and `~/Library/Keychains`) | the same links; the tokens come from the keychain item, as outside the sandbox |
 | Windows (process container) | `%USERPROFILE%\.claude` (a process container grants folders only, so not `.claude.json`) | `CLAUDE_CONFIG_DIR`, Claude Code's own variable, names that folder |
 
-Nothing else of the home folder is there: not `~/.ssh`, not your other projects, not other programs' settings. A run also gets `DISABLE_AUTOUPDATER=1` (it can't write Claude Code's program folder) and `CLAUDE_CODE_TMPDIR` in its own temporary folder.
+Nothing else of the home folder is there: not `~/.ssh`, not your other projects, not other programs' settings. Desktop leaves out a `~/.claude` that a link makes broad (the home folder, a drive) or that holds a shared folder or Desktop's own, and a `~/.claude.json` that's a link to another file; it reads `.credentials.json` only as a regular file of at most 64 KiB. A run also gets `DISABLE_AUTOUPDATER=1` (it can't write Claude Code's program folder) and `CLAUDE_CODE_TMPDIR` in its own temporary folder.
 
 **The right `claude`.** For such a run the sandbox reads the folder holding the program setup recorded (for the native installer, `~/.local/share/claude/versions`, where `~/.local/bin/claude` leads), and `PATH` starts with a folder of the run's own holding only a link named `claude` to it (on Windows, the folder holding `claude.exe` goes first). mise's shims and everything else stay after it, so a `claude` that mise or npm also installed doesn't shadow it, and no wrapper is needed.
 

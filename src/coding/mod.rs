@@ -88,11 +88,20 @@ impl Login {
                 .ok()
                 .filter(|p| p.exists())
         };
-        let dir = real(CONFIG_DIR).filter(|p| p.is_dir());
-        let file = real(CONFIG_FILE).filter(|p| p.is_file());
+        // Never a folder a link makes broad (the home folder, a drive):
+        // a run writes all of it.
+        let dir = real(CONFIG_DIR)
+            .filter(|p| p.is_dir())
+            .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)));
+        // Only the file itself, never another a link leads to.
+        let file = real(CONFIG_FILE).filter(|p| {
+            p.is_file()
+                && crate::roots::canonical(home)
+                    .is_ok_and(|home| p.as_path() == home.join(CONFIG_FILE))
+        });
         let mut secrets = dir
             .as_ref()
-            .and_then(|d| std::fs::read_to_string(d.join(CREDENTIALS_FILE)).ok())
+            .and_then(|d| read_small(&d.join(CREDENTIALS_FILE)))
             .map(|text| tokens_in(&text))
             .unwrap_or_default();
         let keychain = cfg!(target_os = "macos")
@@ -122,6 +131,49 @@ impl Login {
     pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
         self.dir.iter().chain(self.file.iter())
     }
+
+    /// Without any path that holds Desktop's own folders or a shared
+    /// folder, which a run must never write through it.
+    fn narrowed(mut self, config: &Config, paths: &Paths) -> Self {
+        let holds = |outer: &PathBuf| {
+            let inner = |p: &Path| crate::roots::canonical(p).is_ok_and(|p| p.starts_with(outer));
+            [&paths.config_dir, &paths.data_dir, &paths.state_dir]
+                .iter()
+                .any(|own| inner(own))
+                || config.roots.iter().any(|r| inner(&r.path))
+        };
+        if self.dir.as_ref().is_some_and(holds) {
+            self.dir = None;
+        }
+        self
+    }
+}
+
+/// Largest credentials file Desktop reads: Claude Code's is under 1 KiB.
+const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
+
+/// A regular file's text, if it's at most [`MAX_CREDENTIALS_BYTES`]. A run
+/// allowed the sign-in can replace the file, so never a FIFO, which would
+/// hold up whoever starts runs, or a huge one.
+fn read_small(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = options.open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_CREDENTIALS_BYTES {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(MAX_CREDENTIALS_BYTES + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    (text.len() as u64 <= MAX_CREDENTIALS_BYTES).then_some(text)
 }
 
 /// Every token of Anthropic's in Claude Code's credentials (`accessToken`,
@@ -404,7 +456,7 @@ pub fn for_run(
             real,
             read,
             entry,
-            login: login(),
+            login: login().narrowed(config, paths),
         })
     });
     RunCoding { mirrors, claude }

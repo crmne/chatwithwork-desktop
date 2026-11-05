@@ -646,7 +646,8 @@ fn sign_in_step(
              `claude` you run yourself starts outside the sandbox. Desktop removes the tokens \
              from what commands print, which doesn't stop a command written to hide them.",
             if cfg!(target_os = "macos") {
-                " and its item in your login keychain"
+                " and reach your login keychain as Claude Code does (any item that lets the \
+                 `security` command read it, other programs' too)"
             } else {
                 ""
             }

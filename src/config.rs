@@ -73,11 +73,14 @@ pub struct CodingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<PathBuf>,
     /// What 0.13.1 and earlier wrote when they kept a token from `claude
-    /// setup-token` in the secret store. Read so those configs still load,
-    /// never written: the next `cww coding` deletes that token
-    /// ([`crate::coding::forget_legacy_token`]), since runs now use Claude
-    /// Code's own sign-in.
-    #[serde(rename = "claude_signed_in", skip_serializing)]
+    /// setup-token` in the secret store. Kept, so any save leaves it, until
+    /// the next `cww coding` deletes that token
+    /// ([`crate::coding::forget_legacy_token`]): runs now use Claude Code's
+    /// own sign-in.
+    #[serde(
+        rename = "claude_signed_in",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub legacy_token: bool,
     /// Repositories Desktop keeps a mirror of, outside every shared folder,
     /// each with a checkout in one that fetches from it.
@@ -87,7 +90,7 @@ pub struct CodingConfig {
 
 impl CodingConfig {
     fn is_default(&self) -> bool {
-        self.claude.is_none() && self.repositories.is_empty()
+        *self == Self::default()
     }
 }
 
@@ -623,7 +626,7 @@ mod tests {
     }
 
     /// 0.13.1 and earlier noted a stored Claude Code token: such a config
-    /// still loads, and saving it drops the note.
+    /// still loads, and the note goes only once the token is deleted.
     #[test]
     fn an_old_claude_code_token_note_loads_and_is_dropped() {
         let tmp = tempfile::tempdir().unwrap();
@@ -642,10 +645,10 @@ mod tests {
         assert!(!text.contains("claude_signed_in"), "{text}");
         assert!(text.contains("/usr/bin/claude"), "{text}");
 
+        // Another save before then keeps it, so the token still goes.
         std::fs::write(paths.config_file(), "[coding]\nclaude_signed_in = true\n").unwrap();
         Config::load(&paths).unwrap().save(&paths).unwrap();
-        let text = std::fs::read_to_string(paths.config_file()).unwrap();
-        assert!(!text.contains("coding"), "{text}");
+        assert!(Config::load(&paths).unwrap().coding.legacy_token);
     }
 
     #[test]

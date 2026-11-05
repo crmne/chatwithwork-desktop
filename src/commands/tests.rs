@@ -1239,6 +1239,7 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
             &program,
             "@echo claude here\r\n\
              @type \"%CLAUDE_CONFIG_DIR%\\.credentials.json\"\r\n\
+             @type \"%CLAUDE_CONFIG_DIR%\\.credentials.json\" 1>&2\r\n\
              @echo.\r\n\
              @echo refreshed> \"%CLAUDE_CONFIG_DIR%\\refreshed\"\r\n",
         )
@@ -1249,6 +1250,7 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
         std::fs::write(
             &program,
             "#!/bin/sh\necho claude here\ncat \"$HOME/.claude/.credentials.json\"\necho\n\
+             cat \"$HOME/.claude/.credentials.json\" >&2\necho >&2\n\
              cat \"$HOME/.claude.json\"\necho\necho refreshed > \"$HOME/.claude/refreshed\"\n",
         )
         .unwrap();
@@ -1305,6 +1307,7 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
     // The sign-in was read, with its tokens taken out.
     assert!(done.stdout.contains("claudeAiOauth"), "{done:?}");
     assert!(done.stdout.contains("[claude-code-token]"), "{done:?}");
+    assert!(done.stderr.contains("[claude-code-token]"), "{done:?}");
     if !cfg!(windows) {
         assert!(
             done.stdout.contains("oauthAccount"),

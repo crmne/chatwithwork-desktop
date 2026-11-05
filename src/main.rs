@@ -1028,14 +1028,23 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
     let mut config = Config::load(paths)?;
     if config.coding.legacy_token {
         // Runs use Claude Code's own sign-in now: the token an earlier
-        // version kept goes.
-        coding::forget_legacy_token(&mut config, paths)?;
-        config.save(paths)?;
-        println!(
-            "Deleted the Claude Code token Desktop kept: bots' runs now use this computer's own \
-             Claude Code sign-in. Revoke that token at claude.ai (Settings, Claude Code) if you \
-             no longer use it."
-        );
+        // version kept goes. A store that refuses never stops the command
+        // (`allow --off` above all); the note stays, so the next one tries
+        // again. Its words go to stderr, keeping `--json` one document.
+        match coding::forget_legacy_token(&mut config, paths).and_then(|()| config.save(paths)) {
+            Ok(()) => eprintln!(
+                "Deleted the Claude Code token Desktop kept: bots' runs now use this computer's \
+                 own Claude Code sign-in. Revoke that token at claude.ai (Settings, Claude Code) \
+                 if you no longer use it."
+            ),
+            Err(e) => {
+                config.coding.legacy_token = true;
+                eprintln!(
+                    "Couldn't delete the Claude Code token Desktop kept ({e:#}); the next `cww \
+                     coding` tries again."
+                );
+            }
+        }
     }
     match command {
         CodingCommand::Setup {
