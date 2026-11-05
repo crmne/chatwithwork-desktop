@@ -361,6 +361,9 @@ fn a_command_writes_only_its_folder_and_gets_a_clean_environment() {
     assert!(!Path::new(&home).exists());
 }
 
+/// A compiler in a run finds the system's headers (`/usr/include`), which
+/// MXC's Bubblewrap baseline leaves out. Skipped without a sandbox, the
+/// headers, or a C compiler.
 #[test]
 fn a_command_compiles_c_against_the_system_headers() {
     let compiles = std::process::Command::new("cc").arg("--version").output();
