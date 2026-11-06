@@ -271,6 +271,7 @@ impl Desktop {
                         bot: ask.bot.clone(),
                         allow,
                         kind: ask.kind,
+                        asked_at: Some(ask.asked_at.clone()),
                     };
                     if let Err(e) = desktop.client.request(&answer) {
                         // Not answered: asked again when a status lists it

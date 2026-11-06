@@ -548,3 +548,41 @@ fn a_bot_is_picked_by_name() {
     assert_eq!(ids("isfx chat"), ["34"]);
     assert_eq!(ids("digest"), ["7"]);
 }
+
+/// A `~/.claude` that holds Desktop's own folders is never lent to a run:
+/// from its control socket, a command could change what it's allowed.
+#[test]
+fn a_login_folder_holding_desktops_own_is_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let login = crate::roots::canonical(dir.path())
+        .unwrap()
+        .join(CONFIG_DIR);
+    let runtime = login.join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let mut paths = crate::paths::Paths::under(&dir.path().join("cww"));
+    paths.runtime_dir = runtime;
+    let found = Login {
+        dir: Some(login),
+        ..Default::default()
+    };
+    assert_eq!(found.narrowed(&Config::default(), &paths).dir, None);
+}
+
+/// A recorded `claude` that's gone isn't handed to a run: it finds the one
+/// installed instead, never one in a shared folder that allows changes.
+#[test]
+fn a_run_uses_the_recorded_claude_only_while_its_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorded = dir.path().join("claude");
+    std::fs::write(&recorded, "").unwrap();
+    let coding = CodingConfig {
+        claude: Some(recorded.clone()),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::setup::claude_for_run(&coding, &[]),
+        Some(recorded.clone())
+    );
+    std::fs::remove_file(&recorded).unwrap();
+    assert_ne!(super::setup::claude_for_run(&coding, &[]), Some(recorded));
+}

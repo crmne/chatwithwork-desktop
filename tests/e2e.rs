@@ -5216,6 +5216,7 @@ async fn a_coding_bot_asks_and_only_this_computer_allows_claude_code() {
         bot: "42".into(),
         allow,
         kind: cww::unattended_asks::AskKind::ClaudeCode,
+        asked_at: None,
     };
     control(&fx.paths, answer(false)).await;
     let status = control(&fx.paths, ControlRequest::Status).await;
@@ -5312,6 +5313,7 @@ async fn a_bot_asks_and_only_this_computer_allows_unattended_commands() {
         bot: "42".into(),
         allow,
         kind: Default::default(),
+        asked_at: None,
     };
     control(&fx.paths, answer(false)).await;
     let status = control(&fx.paths, ControlRequest::Status).await;

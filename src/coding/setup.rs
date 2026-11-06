@@ -441,29 +441,79 @@ pub fn find_claude() -> Option<PathBuf> {
     find_claude_outside(&[])
 }
 
-/// As [`find_claude`], passing over any candidate a command could change:
-/// one inside a shared folder that allows changes. Probing it would run what
-/// a bot wrote, as the person, outside the sandbox.
-pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
+/// Whether `path` is in a shared folder that allows changes, where a command
+/// could change it.
+fn changeable(roots: &[crate::config::Root], path: &Path) -> bool {
+    let real = crate::roots::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    roots.iter().any(|root| {
+        root.writable
+            && crate::roots::canonical(&root.path).is_ok_and(|shared| real.starts_with(shared))
+    })
+}
+
+/// The `claude` a run uses: the one setup recorded while it's there, else the
+/// first of the places it's installed. Only looks: whoever starts runs never
+/// runs a program to find it, outside the sandbox, and a run uses it only in
+/// there. Never one in a shared folder that allows changes.
+pub fn claude_for_run(
+    coding: &crate::config::CodingConfig,
+    roots: &[crate::config::Root],
+) -> Option<PathBuf> {
+    if let Some(recorded) = coding.claude.as_ref().filter(|p| p.is_file()) {
+        return Some(recorded.clone());
+    }
     let home = crate::paths::home_dir().ok()?;
     let exe = if cfg!(windows) {
         "claude.exe"
     } else {
         "claude"
     };
+    which("claude")
+        .into_iter()
+        .chain([
+            home.join(".local").join("bin").join(exe),
+            home.join(".local/share/mise/installs/claude/latest")
+                .join(exe),
+            PathBuf::from("/opt/homebrew/bin/claude"),
+            PathBuf::from("/usr/local/bin/claude"),
+            home.join(".npm-global").join("bin").join("claude"),
+            home.join(".claude").join("local").join(exe),
+        ])
+        .find(|p| p.is_file() && !changeable(roots, p))
+}
+
+/// As [`find_claude`], passing over any candidate a command could change:
+/// one inside a shared folder that allows changes. Probing it would run what
+/// a bot wrote, as the person, outside the sandbox.
+pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
+    let home = crate::paths::home_dir().ok()?;
+    // Commands given the sign-in can change anything in `~/.claude`, whose
+    // `local` is one of the places below.
+    let lent_login = roots
+        .iter()
+        .any(|root| root.bots.iter().any(|l| l.claude_code));
+    let login = crate::roots::canonical(&home.join(super::CONFIG_DIR)).ok();
+    let exe = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
     let mise = || {
-        let mut command = Command::new("mise");
+        let program = which("mise").filter(|p| !changeable(roots, p))?;
+        let mut command = Command::new(program);
         command.args(["which", "claude"]);
         output_within(command, PROBE_LIMIT)
             .map(PathBuf::from)
             .filter(|p| p.is_file())
     };
     let writable = |p: &PathBuf| {
-        let real = crate::roots::canonical(p).unwrap_or_else(|_| p.clone());
-        roots.iter().any(|root| {
-            root.writable
-                && crate::roots::canonical(&root.path).is_ok_and(|path| real.starts_with(path))
-        })
+        changeable(roots, p)
+            || (lent_login
+                && login.as_ref().is_some_and(|login| {
+                    crate::roots::canonical(p)
+                        .unwrap_or_else(|_| p.clone())
+                        .starts_with(login)
+                }))
     };
     let runs = |p: &PathBuf| p.is_file() && !writable(p) && version(p).is_some();
     // Each asked only when the one before didn't give a `claude` that runs.
@@ -1253,15 +1303,9 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     }
 }
 
-/// The `claude` a run would use: the one setup recorded, or the one this
-/// computer has.
+/// The `claude` a run would use.
 fn installed(config: &Config) -> Option<PathBuf> {
-    config
-        .coding
-        .claude
-        .clone()
-        .filter(|p| p.is_file())
-        .or_else(|| find_claude_outside(&config.roots))
+    claude_for_run(&config.coding, &config.roots)
 }
 
 /// The state as a run would find it: ready only when Claude Code is

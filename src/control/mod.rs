@@ -169,6 +169,11 @@ pub enum ControlRequest {
         /// coding allow` does.
         #[serde(default)]
         kind: crate::unattended_asks::AskKind,
+        /// The `asked_at` of the request the person was shown, where a
+        /// dialog showed one: an answer never reaches another that took its
+        /// place (the computer paired again, another bot with that number).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_at: Option<String>,
     },
     /// Give a shared folder a read budget of its own: characters a chat
     /// may read from it per rolling hour (all chats together twice that),

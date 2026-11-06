@@ -416,6 +416,9 @@ fn tail_text(tail: &VecDeque<u8>, total: u64, chars: usize) -> (String, usize) {
 #[derive(Clone)]
 pub struct Runs {
     inner: Arc<Mutex<Inner>>,
+    /// Held from counting what runs to adding this run, so two starting at
+    /// once never both take the last place.
+    starting: Arc<Mutex<()>>,
     paths: Paths,
 }
 
@@ -434,6 +437,7 @@ impl Runs {
                 finished: VecDeque::new(),
                 limits: Limits::from_config(&crate::config::Limits::default()),
             })),
+            starting: Arc::new(Mutex::new(())),
             paths,
         }
     }
@@ -447,6 +451,7 @@ impl Runs {
                 "this computer is paused; resume it to run commands",
             ));
         }
+        let starting = lock(&self.starting);
         let running = self.running();
         let most = config.limits.commands_running;
         if most > 0 && running >= most {
@@ -490,6 +495,7 @@ impl Runs {
             inner.limits = plan.limits;
             inner.runs.insert(id.clone(), cell.clone());
         }
+        drop(starting);
         self.launch(plan, cell.clone());
         let status = lock(&cell).status();
         Ok(status)

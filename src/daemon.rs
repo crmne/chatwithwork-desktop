@@ -773,6 +773,7 @@ impl Daemon {
         which: String,
         bot: String,
         kind: crate::unattended_asks::AskKind,
+        asked_at: Option<String>,
         allow: bool,
     ) -> Result<Value> {
         use crate::unattended_asks::AskKind;
@@ -793,7 +794,7 @@ impl Daemon {
         let ask = {
             let config = self.config.lock().await.clone();
             let (root, bot) = (root.clone(), bot.clone());
-            self.with_asks(move |asks| asks.take(&root, &bot, kind, &config))
+            self.with_asks(move |asks| asks.take(&root, &bot, kind, asked_at.as_deref(), &config))
                 .await
         }
         .with_context(|| format!("bot {bot} isn't waiting for an answer about {label}"))?;
@@ -1862,7 +1863,8 @@ impl ControlHandler for Daemon {
                 bot,
                 allow,
                 kind,
-            } => self.answer_ask(root, bot, kind, allow).await,
+                asked_at,
+            } => self.answer_ask(root, bot, kind, asked_at, allow).await,
             ControlRequest::RootsReadBudget { root, read_budget } => {
                 self.set_read_budget(root, read_budget).await
             }

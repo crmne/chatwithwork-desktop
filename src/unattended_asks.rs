@@ -54,7 +54,7 @@ impl AskKind {
 pub struct Ask {
     pub root: String,
     pub bot: String,
-    /// Before 0.13.2 every request was for unattended commands.
+    /// Before 0.14.0 every request was for unattended commands.
     #[serde(default)]
     pub kind: AskKind,
     /// The pairing it came through ([`pairing`]): another server's bots
@@ -244,12 +244,21 @@ impl Asks {
     /// Take the request of `kind` from `bot` for `root` off the list, if
     /// one waits and `config` still leaves it something to answer for: the
     /// folder still lent to that bot, with commands, and what it asks for
-    /// not given yet.
-    pub fn take(&self, root: &str, bot: &str, kind: AskKind, config: &Config) -> Option<Ask> {
+    /// not given yet. With `asked_at`, only the request shown as made then.
+    pub fn take(
+        &self,
+        root: &str,
+        bot: &str,
+        kind: AskKind,
+        asked_at: Option<&str>,
+        config: &Config,
+    ) -> Option<Ask> {
         self.edit(|pending| {
-            let index = pending
-                .iter()
-                .position(|ask| ask.is(root, bot, kind) && open(config, ask))?;
+            let index = pending.iter().position(|ask| {
+                ask.is(root, bot, kind)
+                    && open(config, ask)
+                    && asked_at.is_none_or(|shown| shown == rfc3339(ask.asked_at))
+            })?;
             Some(pending.remove(index))
         })
         .0
@@ -443,13 +452,41 @@ mod tests {
         let mut given = config(true, true);
         given.roots[0].bots[0].claude_code = true;
         assert!(
-            asks.take("app", "42", AskKind::ClaudeCode, &given)
+            asks.take("app", "42", AskKind::ClaudeCode, None, &given)
                 .is_none()
         );
         assert!(
-            asks.take("app", "42", AskKind::ClaudeCode, &config(true, true))
+            asks.take("app", "42", AskKind::ClaudeCode, None, &config(true, true))
                 .is_some(),
             "unattended already, but not Claude Code"
+        );
+        // An answer reaches only the request it was shown.
+        asks.ask("app", "42", AskKind::ClaudeCode).unwrap();
+        assert!(
+            asks.take(
+                "app",
+                "42",
+                AskKind::ClaudeCode,
+                Some("then"),
+                &config(true, true)
+            )
+            .is_none()
+        );
+        let shown = asks
+            .list(&config(true, true))
+            .into_iter()
+            .find(|a| a.kind == AskKind::ClaudeCode)
+            .unwrap()
+            .asked_at;
+        assert!(
+            asks.take(
+                "app",
+                "42",
+                AskKind::ClaudeCode,
+                Some(&shown),
+                &config(true, true)
+            )
+            .is_some()
         );
         // A request saved before kinds existed is for unattended commands.
         let old: Ask = serde_json::from_value(serde_json::json!({
@@ -481,11 +518,11 @@ mod tests {
              run in the folder's sandbox and are recorded. Allow?"
         );
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &config(true, false))
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
                 .is_some()
         );
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &config(true, false))
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
                 .is_none()
         );
         assert_eq!(
@@ -502,16 +539,22 @@ mod tests {
         let mut withdrawn = config(true, false);
         withdrawn.roots[0].bots.clear();
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &withdrawn)
+            asks.take("app", "42", AskKind::Unattended, None, &withdrawn)
                 .is_none()
         );
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &config(false, false))
-                .is_none(),
+            asks.take(
+                "app",
+                "42",
+                AskKind::Unattended,
+                None,
+                &config(false, false)
+            )
+            .is_none(),
             "commands stopped"
         );
         let ask = asks
-            .take("app", "42", AskKind::Unattended, &config(true, false))
+            .take("app", "42", AskKind::Unattended, None, &config(true, false))
             .unwrap();
         asks.restore(ask);
         assert_eq!(asks.pending().len(), 1, "put back when the answer failed");
@@ -592,12 +635,12 @@ mod tests {
             device_id: "9".into(),
         });
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &paired)
+            asks.take("app", "42", AskKind::Unattended, None, &paired)
                 .is_none()
         );
         assert!(asks.list(&paired).is_empty());
         assert!(
-            asks.take("app", "42", AskKind::Unattended, &config(true, false))
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
                 .is_some()
         );
     }

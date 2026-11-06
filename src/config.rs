@@ -333,8 +333,11 @@ impl Printer {
 /// A shared folder lent to one Chat with Work bot: the bot's ID on the
 /// server, the name it had when it was lent (for the local user only), and
 /// whether its commands here may run without a person approving each one.
+///
+/// Unknown keys are let through, unlike the rest of the file, for the
+/// `claude_code` key 0.13.1 and earlier wrote: that yes gave a run one token,
+/// not Claude Code's files, so it's dropped and never read as this one's.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct BotLoan {
     pub id: String,
     #[serde(default)]
@@ -343,9 +346,15 @@ pub struct BotLoan {
     /// Chat with Work. Only where commands are allowed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
-    /// The bot's commands here get this computer's Claude Code sign-in
-    /// (`[coding]`). Only for folders, only where commands are allowed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// The bot's commands here use this computer's own Claude Code sign-in:
+    /// the person's yes to what that gives them (docs/coding-computers.md),
+    /// `claude_login` in the file. Only for folders, only where commands are
+    /// allowed.
+    #[serde(
+        default,
+        rename = "claude_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub claude_code: bool,
 }
 
@@ -599,6 +608,22 @@ mod tests {
             toml::from_str("[[roots]]\nid = \"docs\"\nlabel = \"Docs\"\npath = \"/tmp/docs\"\n")
                 .unwrap();
         assert!(!config.roots[0].writable);
+    }
+
+    /// A yes from 0.13.1 and earlier covered a token, not Claude Code's own
+    /// files: it never carries over, and the person is asked again.
+    #[test]
+    fn an_old_yes_to_a_claude_code_token_isnt_a_yes_to_its_files() {
+        let loan = |key: &str| -> BotLoan {
+            toml::from_str(&format!("id = \"42\"\n{key} = true\n")).unwrap()
+        };
+        assert!(!loan("claude_code").claude_code);
+        assert!(loan("claude_login").claude_code);
+        let saved = toml::to_string(&loan("claude_login")).unwrap();
+        assert!(saved.contains("claude_login = true"), "{saved}");
+        assert!(!saved.contains("claude_code"), "{saved}");
+        let dropped = toml::to_string(&loan("claude_code")).unwrap();
+        assert!(!dropped.contains("claude"), "{dropped}");
     }
 
     /// 0.13.1 and earlier ran at most 4 commands at once and held each

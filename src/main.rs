@@ -1157,6 +1157,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 bot: bot.clone(),
                 allow: true,
                 kind: ask_kind(claude_code),
+                asked_at: None,
             };
             if control::request(&paths.socket_path(), request)?.is_none() {
                 anyhow::bail!("the daemon is not running, so no request is waiting");
@@ -1177,6 +1178,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 bot: bot.clone(),
                 allow: false,
                 kind: ask_kind(claude_code),
+                asked_at: None,
             };
             if control::request(&paths.socket_path(), request)?.is_none() {
                 anyhow::bail!("the daemon is not running, so no request is waiting");
@@ -1592,8 +1594,8 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|ask| ask["root"] == r["id"] && ask["bot"] == loan["id"]);
-            if let Some(ask) = asking {
+                .filter(|ask| ask["root"] == r["id"] && ask["bot"] == loan["id"]);
+            for ask in asking {
                 println!("      {}", describe_ask(ask));
             }
         }
