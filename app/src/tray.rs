@@ -1,7 +1,8 @@
 //! The menu bar item (macOS), notification-area icon (Windows) or tray item
 //! (Linux, through the AppIndicator library), with the platform's own menu:
-//! the daemon's state as a greyed-out line (and a second one while there is
-//! more to say: indexing, or the last access), then Open Chat with Work,
+//! the daemon's state as a greyed-out line, or what to do about it as an
+//! entry while it needs the person (and a second one while there is more to
+//! say: indexing, or the last access), then Open Chat with Work,
 //! Scan…, Pause Sharing, Stop Using the Browser while the browser is on,
 //! Settings and Quit. Settings opens this computer's part of Chat with
 //! Work's own Settings once the computer is paired and the Chat with Work
@@ -26,9 +27,6 @@ mod ids {
     pub const UPDATE: &str = "update";
     pub const UPDATE_AVAILABLE: &str = "update-available";
 }
-
-/// The first line, as an action, while this computer has to sign in again.
-pub const RECONNECT_LABEL: &str = "Reconnect…";
 
 /// The entry while an update waits for a restart.
 pub fn update_label(version: &str) -> String {
@@ -95,6 +93,12 @@ pub fn tooltip(view: &TrayView, platform: Platform) -> String {
         (Some(detail), Platform::Linux) => format!("{}\n{detail}", view.tooltip),
         _ => view.tooltip.clone(),
     }
+}
+
+/// The menu's first line: what to do about the connection if anything is,
+/// else the state, greyed out.
+fn headline_text(view: &TrayView) -> &str {
+    view.prompt.map_or(&view.headline, |prompt| prompt.label())
 }
 
 /// What a menu entry asks of the app.
@@ -173,16 +177,11 @@ fn icon(dimmed: bool) -> Image<'static> {
 impl Tray {
     pub fn new(app: &AppHandle, view: &TrayView) -> tauri::Result<Self> {
         let platform = Platform::current();
-        let reconnects = view.reconnects;
         let headline = MenuItem::with_id(
             app,
             ids::HEADLINE,
-            if reconnects {
-                RECONNECT_LABEL
-            } else {
-                &view.headline
-            },
-            reconnects,
+            headline_text(view),
+            view.prompt.is_some(),
             None::<&str>,
         )?;
         let detail = MenuItem::with_id(
@@ -301,14 +300,9 @@ impl Tray {
         }
         let platform = Platform::current();
         let old = std::mem::replace(&mut self.view, view.clone());
-        let reconnects = view.reconnects;
-        if view.headline != old.headline || reconnects != old.reconnects {
-            let _ = self.headline.set_text(if reconnects {
-                RECONNECT_LABEL
-            } else {
-                &view.headline
-            });
-            let _ = self.headline.set_enabled(reconnects);
+        if view.headline != old.headline || view.prompt != old.prompt {
+            let _ = self.headline.set_text(headline_text(view));
+            let _ = self.headline.set_enabled(view.prompt.is_some());
         }
         // A missing detail leaves the menu, rather than showing as an
         // empty line.
@@ -373,7 +367,7 @@ mod tests {
             tooltip: "Chat with Work Desktop: Online".into(),
             dimmed: false,
             browser_stopped: None,
-            reconnects: false,
+            prompt: None,
         }
     }
 

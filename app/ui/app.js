@@ -9,7 +9,7 @@ import printers from "./pages/printers.js";
 import browser from "./pages/browser.js";
 import privacy from "./pages/privacy.js";
 import activity from "./pages/activity.js";
-import account, { reconnect } from "./pages/account.js";
+import account, { connectionAction, reconnect, reconnectWhenKnown } from "./pages/account.js";
 import notifications from "./pages/notifications.js";
 import general from "./pages/general.js";
 import botSharing from "./pages/bot_sharing.js";
@@ -246,9 +246,12 @@ function renderNav() {
         onclick: () => app.go(page) }, icon(PAGES[page].icon), PAGES[page].title)),
     h("div", { class: "nav__foot" },
       h("span", { class: `nav__status state state--${app.health.tone}` }, app.known ? app.health.label : "Checking…"),
-      app.status?.connection?.connection === "revoked"
+      connectionAction(app.status) === "connect"
+        ? button("Connect This Computer…", () => app.go("account"), { kind: "btn-primary" }) : null,
+      connectionAction(app.status) === "reconnect"
         ? button("Reconnect", () => reconnect(app), { kind: "btn-primary" })
-        : button("Open Chat with Work", () => call("show_main"), { kind: "btn-primary" })),
+        : button("Open Chat with Work", () => call("show_main"),
+          { kind: connectionAction(app.status) === "connect" ? "" : "btn-primary" })),
   );
 }
 
@@ -277,7 +280,10 @@ async function start() {
       app.render();
     }
   });
-  await on("navigate", (page) => app.go(page));
+  await on("navigate", (page) => {
+    if (page === "reconnect") reconnectWhenKnown(app);
+    else app.go(page);
+  });
   for (const page of Object.values(PAGES)) await page.listen?.(app, on);
   const present = (presentation) => {
     app.embedded = true;
@@ -296,8 +302,8 @@ async function start() {
     return;
   }
   const wanted = location.hash.slice(1);
-  app.reconnecting = wanted === "reconnect";
-  app.go(PAGES[wanted] ? wanted : app.reconnecting ? "account" : app.info.onboarded ? "general" : "welcome");
+  app.go(PAGES[wanted] ? wanted : wanted === "reconnect" ? "account" : app.info.onboarded ? "general" : "welcome");
+  if (wanted === "reconnect") reconnectWhenKnown(app);
 }
 
 start().catch((error) => {

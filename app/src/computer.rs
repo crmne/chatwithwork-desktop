@@ -261,7 +261,7 @@ impl Asking {
     /// Holds the right to ask until the guard drops, or says a question is
     /// already showing.
     pub fn start(&self) -> Option<AskingGuard<'_>> {
-        (!self.0.swap(true, Ordering::SeqCst)).then_some(AskingGuard(&self.0))
+        (!self.0.swap(true, Ordering::SeqCst)).then(|| AskingGuard(&self.0))
     }
 }
 
@@ -372,6 +372,17 @@ mod tests {
         assert!(view.contains(r#""label":"Docs""#));
         assert!(view.contains(r#""device_id":"7""#));
         assert!(view.contains(r#""bots":1"#) && !view.contains("Fixer"));
+    }
+
+    #[test]
+    fn one_question_at_a_time_however_often_another_tries() {
+        let asking = Asking::default();
+        let first = asking.start().expect("nothing is showing");
+        // A refused start must leave the first question's hold in place.
+        assert!(asking.start().is_none());
+        assert!(asking.start().is_none());
+        drop(first);
+        assert!(asking.start().is_some());
     }
 
     #[test]

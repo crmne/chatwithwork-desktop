@@ -306,6 +306,8 @@ impl Phase {
 /// The updater's state, shared by its thread, the settings and the tray.
 pub struct Updates {
     phase: Mutex<Phase>,
+    /// The newest version that ran before this start.
+    newest_run: Mutex<Option<String>>,
     /// When the last check ended, as the settings show it.
     checked_at: Mutex<Option<jiff::Timestamp>>,
     /// The message of an update that was rolled back, until it's seen.
@@ -326,12 +328,25 @@ impl Updates {
         Self {
             automatic: std::sync::atomic::AtomicBool::new(automatic),
             phase: Mutex::new(Phase::Idle),
+            newest_run: Mutex::new(None),
             checked_at: Mutex::new(None),
             rolled_back: problem.is_some(),
             problem: Mutex::new(problem),
             dismissed: Mutex::new(dismissed),
             wake: Mutex::new(None),
         }
+    }
+
+    /// Says what newest version ran before this start, as `remember_run`
+    /// answers it.
+    pub fn with_newest_run(self, newest_run: Option<String>) -> Self {
+        *self.newest_run.lock().expect("update lock") = newest_run;
+        self
+    }
+
+    /// The newest version that ran before this start.
+    pub fn newest_run(&self) -> Option<String> {
+        self.newest_run.lock().expect("update lock").clone()
     }
 
     /// Whether updates install themselves.
@@ -363,10 +378,13 @@ impl Updates {
         if let Some(version) = view["release"]["version"].as_str()
             && view["phase"] == "ready"
         {
-            view["installs_next_start"] = json!(
-                fastframe_update::policy::offer(VERSION, version, installs, Ok(()), None)
-                    == fastframe_update::policy::Offer::Automatic
-            );
+            let newest_run = self.newest_run();
+            view["installs_next_start"] = json!(installs_on_its_own(
+                VERSION,
+                version,
+                installs,
+                newest_run.as_deref()
+            ));
         }
         view["checked_at"] = json!(
             self.checked_at
@@ -693,29 +711,23 @@ impl Updates {
 }
 
 /// Whether the background agent is running a command: nothing installs or
-/// restarts it while one runs. An agent that isn't running runs nothing.
+/// restarts it while one runs. An agent that isn't running runs nothing; one
+/// that doesn't say may be running one.
 pub fn commands_running(client: &crate::control::Client) -> bool {
-    client
-        .request(&cww::control::ControlRequest::Commands)
-        .ok()
-        .and_then(|answer| answer["commands"].as_array().cloned())
-        .is_some_and(|commands| commands.iter().any(|run| run["state"] == "running"))
+    match client.request(&cww::control::ControlRequest::Commands) {
+        Ok(answer) => answer["commands"]
+            .as_array()
+            .is_none_or(|commands| commands.iter().any(|run| run["state"] == "running")),
+        Err(crate::control::ControlError::NotRunning) => false,
+        Err(_) => true,
+    }
 }
 
-/// At start, before any window opens: installs the update an earlier run
-/// downloaded, when it installs on its own (fastframe-update's policy: a
-/// newer release on this major version, automatic updates on, not one the
-/// person went back from) and the background agent runs no command. Hands
-/// it to the helper, which waits for this app to quit, installs it and
-/// starts the new version (rolled back if it doesn't start); the caller
-/// quits when this answers true. Also remembers the newest version that ran.
-pub fn install_kept(
-    paths: &crate::paths::Paths,
-    client: &crate::control::Client,
-    window: bool,
-) -> bool {
-    let state = crate::state::AppState::load(paths);
-    let before = state.newest_run.clone();
+/// Remembers the newest version that ran on this computer, on every start, so
+/// going back to an older one can be told from never having had a newer one.
+/// Answers what ran before this start.
+pub fn remember_run(paths: &crate::paths::Paths) -> Option<String> {
+    let before = crate::state::AppState::load(paths).newest_run;
     let newest = fastframe_update::policy::newest_run(VERSION, before.as_deref());
     if before.as_deref() != Some(newest.as_str())
         && let Err(e) =
@@ -723,6 +735,22 @@ pub fn install_kept(
     {
         log::warn!("couldn't remember the newest version: {e}");
     }
+    before
+}
+
+/// At start, before any window opens: installs the update an earlier run
+/// downloaded, when it's newer, installs on its own and the background agent
+/// runs no command. Hands
+/// it to the helper, which waits for this app to quit, installs it and
+/// starts the new version (rolled back if it doesn't start); the caller
+/// quits when this answers true.
+pub fn install_kept(
+    paths: &crate::paths::Paths,
+    client: &crate::control::Client,
+    window: bool,
+    newest_run: Option<&str>,
+) -> bool {
+    let state = crate::state::AppState::load(paths);
     let updater = updater();
     let kept = match updater.kept() {
         Ok(Some(kept)) => kept,
@@ -732,13 +760,14 @@ pub fn install_kept(
             return false;
         }
     };
-    let installs = fastframe_update::policy::installs_at_start(
-        VERSION,
-        kept.version(),
-        state.installs_updates(),
-        before.as_deref(),
-        !commands_running(client),
-    );
+    let installs = fastframe_update::is_newer(kept.version(), VERSION)
+        && installs_on_its_own(
+            VERSION,
+            kept.version(),
+            state.installs_updates(),
+            newest_run,
+        )
+        && !commands_running(client);
     if !installs {
         log::info!(
             "update {} waits: not installed at this start",
@@ -754,6 +783,25 @@ pub fn install_kept(
             false
         }
     }
+}
+
+/// Whether `release` installs at the next start without the person pressing
+/// anything: automatic updates are on, and it isn't one they went back from.
+///
+/// The rest of fastframe-update's `policy`, without its rule that a new major
+/// version asks. That rule is for apps people pay for by version. Carmine, on
+/// 2026-11-06: Chat with Work Desktop is tied to a website, not to anything a
+/// person paid for by version, so it shouldn't wait for major versions.
+fn installs_on_its_own(
+    current: &str,
+    release: &str,
+    automatic: bool,
+    newest_run: Option<&str>,
+) -> bool {
+    use fastframe_update::is_newer;
+    let went_back =
+        newest_run.is_some_and(|newest| is_newer(newest, current) && !is_newer(release, newest));
+    automatic && !went_back
 }
 
 /// What the app relaunches with after an update: its window if one was
@@ -1020,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn a_download_on_this_major_installs_at_the_next_start_unless_turned_off() {
+    fn a_download_installs_at_the_next_start_unless_turned_off_whatever_its_major() {
         let major: u64 = VERSION.split('.').next().unwrap().parse().unwrap();
         let next = format!("{major}.999.0");
         let updates = Updates::new(None, None, true);
@@ -1033,10 +1081,36 @@ mod tests {
         updates.set_installs_updates(false);
         assert_eq!(updates.view()["installs_next_start"], false);
         assert_eq!(updates.view()["installs_updates"], false);
-        // A new major version asks.
+        // A new major version installs too, and waits only with the switch off.
         let updates = Updates::new(None, None, true);
         *updates.phase.lock().unwrap() = ready(&format!("{}.0.0", major + 1));
+        assert_eq!(updates.view()["installs_next_start"], true);
+        updates.set_installs_updates(false);
         assert_eq!(updates.view()["installs_next_start"], false);
+    }
+
+    #[test]
+    fn general_does_not_promise_what_a_person_went_back_from() {
+        let major: u64 = VERSION.split('.').next().unwrap().parse().unwrap();
+        let left = format!("{}.0.0", major + 1);
+        let updates = Updates::new(None, None, true).with_newest_run(Some(left.clone()));
+        *updates.phase.lock().unwrap() = ready(&left);
+        assert_eq!(updates.view()["installs_next_start"], false);
+    }
+
+    #[test]
+    fn a_person_who_went_back_is_not_updated_past_it_even_to_a_new_major() {
+        // Back on 1.0.0 after 2.0.0: up to what they left is offered, not installed.
+        assert!(!installs_on_its_own("1.0.0", "1.5.0", true, Some("2.0.0")));
+        assert!(!installs_on_its_own("1.0.0", "2.0.0", true, Some("2.0.0")));
+        // Anything newer than what they left installs again.
+        assert!(installs_on_its_own("1.0.0", "2.0.1", true, Some("2.0.0")));
+        assert!(installs_on_its_own("1.0.0", "3.0.0", true, Some("2.0.0")));
+        // Never gone back.
+        assert!(installs_on_its_own("1.0.0", "2.0.0", true, Some("1.0.0")));
+        assert!(installs_on_its_own("1.0.0", "2.0.0", true, None));
+        // The switch off waits for Restart to Update.
+        assert!(!installs_on_its_own("1.0.0", "2.0.0", false, None));
     }
 
     #[test]

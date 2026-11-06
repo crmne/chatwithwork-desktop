@@ -105,7 +105,7 @@ There is no authentication beyond this: any process running as the user can driv
 }
 ```
 
-- `connection.connection` is `not_paired`, `connecting`, `connected`, `offline` or `revoked`. `since` is when it last changed. `last_error` is the most recent problem and may be absent.
+- `connection.connection` is `not_paired`, `connecting`, `connected`, `offline` or `revoked`. `since` is when it last changed. `last_error` is the most recent problem and may be absent. `revoked` also means a pairing with no credentials left to sign in with: only signing in again gets it back. A failed read of the credential store is `offline`, and retried.
 - `server` and `device_id` are `null` until the computer is paired.
 - `proxy` is the HTTP proxy the daemon reaches the server through, or `null` for a direct connection (or when the setting is invalid; `connection.last_error` says why). `url` never contains the password, which is replaced by `***`. `source` is `config` or the environment variable it came from, such as `HTTPS_PROXY`.
 - `sandbox.kind` is `landlock`, `seatbelt` or `none`; `sandbox.state` is `enforced`, `partial` (an older kernel enforces some of the rules), `off` or `unavailable`, with a `detail` when it isn't enforced.

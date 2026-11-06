@@ -350,6 +350,7 @@ pub fn cancel_pairing(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Ans
 #[tauri::command]
 pub async fn logout(webview: Webview, desktop: State<'_, Arc<Desktop>>) -> Answer {
     local_page(&webview)?;
+    desktop.stop_asking_to_connect();
     let account = desktop.account.clone();
     blocking(move || account.logout())
         .await?

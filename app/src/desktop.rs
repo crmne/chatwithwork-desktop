@@ -50,6 +50,15 @@ pub struct Desktop {
     pub updates: Arc<crate::update::Updates>,
     /// A thread is asking about bots' requests for unattended commands.
     answering_asks: AtomicBool,
+    /// Whether the person was asked to connect since the connection was
+    /// last fine.
+    connect_asked: AtomicBool,
+    /// Counts each time the connection is fine again, so a question waiting
+    /// from before knows it's out of date.
+    connect_episode: std::sync::atomic::AtomicU64,
+    /// Not asking, until this computer is connected: the welcome page offers
+    /// pairing itself, and a person who disconnected it meant to.
+    connect_quiet: AtomicBool,
     /// The requests answered here, kept until the daemon stops listing
     /// them, so a late status that still does never asks again.
     answered_asks: Mutex<std::collections::HashSet<crate::model::UnattendedAsk>>,
@@ -302,6 +311,63 @@ impl Desktop {
         self.app().exit(0);
     }
 
+    /// Asks the person to connect once a connection is lost for good: once
+    /// each time it's lost, and again at the next launch whatever they said
+    /// (docs/desktop-app.md, "Never silently not connected").
+    fn ask_to_connect(&self, status: Option<&Status>) {
+        use crate::model::ConnectionPrompt;
+        let Some(prompt) = ConnectionPrompt::of(status) else {
+            self.connect_asked.store(false, Ordering::SeqCst);
+            self.connect_episode.fetch_add(1, Ordering::SeqCst);
+            // Connecting doesn't count: it can pass and come back refused.
+            if status.is_some_and(|s| s.connection.connection == "connected") {
+                self.connect_quiet.store(false, Ordering::SeqCst);
+            }
+            return;
+        };
+        if !asks_to_connect()
+            || self.connect_quiet.load(Ordering::SeqCst)
+            || self.connect_asked.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let episode = self.connect_episode.load(Ordering::SeqCst);
+        let app = self.app();
+        std::thread::spawn(move || {
+            std::thread::sleep(prompt.patience());
+            let desktop = app.state::<Arc<Desktop>>().inner().clone();
+            // What to ask now, unless it has passed or the person has just
+            // disconnected this computer.
+            let wanted = || {
+                if desktop.connect_episode.load(Ordering::SeqCst) != episode
+                    || desktop.connect_quiet.load(Ordering::SeqCst)
+                {
+                    return None;
+                }
+                ConnectionPrompt::of(desktop.status().as_ref())
+            };
+            // After whichever question is open: one at a time.
+            let _asking = loop {
+                wanted()?;
+                if let Some(asking) = desktop.asking.start() {
+                    break asking;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            };
+            let prompt = wanted()?;
+            if crate::bridge::confirm_or(&app, MAIN, &prompt.question(), "Not Now") {
+                let _ = windows::show_settings(&app, Some(prompt.page()));
+            }
+            Some(())
+        });
+    }
+
+    /// The person is disconnecting this computer themselves: nothing to ask
+    /// until it's connected again, or the next launch.
+    pub fn stop_asking_to_connect(&self) {
+        self.connect_quiet.store(true, Ordering::SeqCst);
+    }
+
     /// A new status from the daemon (`None` while it isn't running).
     fn status_changed(&self, status: Option<Status>) {
         let app = self.app();
@@ -321,6 +387,7 @@ impl Desktop {
             .as_ref()
             .is_some_and(|s| !s.unattended_asks.is_empty());
         self.tell_pages(&app, status.as_ref());
+        self.ask_to_connect(status.as_ref());
         *self.status.lock().expect("status lock") = status;
         self.status_known.store(true, Ordering::SeqCst);
         crate::windows::tell_settings(&app, "status", self.status_json());
@@ -353,6 +420,15 @@ impl Desktop {
 
 /// The bridge's commands, for pages of `server` in the web app's windows
 /// only. Remote pages get nothing else: no core APIs, no events.
+/// Whether this run asks people to connect. Pictures and checks of a demo
+/// don't, unless they answer it (`CWW_DEMO_CONFIRM`).
+fn asks_to_connect() -> bool {
+    #[cfg(feature = "demo")]
+    return std::env::var_os("CWW_DEMO_CONFIRM").is_some();
+    #[cfg(not(feature = "demo"))]
+    true
+}
+
 fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> {
     let identifier = format!("remote-{}", server.origin());
     app.add_capability(
@@ -389,8 +465,12 @@ pub fn tray_action(app: &AppHandle, id: &str) {
             // The page starts the sign-in once it knows this computer's
             // server.
             let app = app.clone();
+            let status = desktop.status();
             std::thread::spawn(move || {
-                let _ = windows::show_settings(&app, Some("reconnect"));
+                let page = crate::model::ConnectionPrompt::of(status.as_ref())
+                    .unwrap_or(crate::model::ConnectionPrompt::Reconnect)
+                    .page();
+                let _ = windows::show_settings(&app, Some(page));
             });
         }
         Some(Action::Settings) => {
@@ -562,6 +642,7 @@ pub fn run(
         }
         other => other.clone(),
     };
+    let newest_run = crate::update::remember_run(&paths);
     // A newer release's notice, dismissed once per version.
     let app_state = crate::state::AppState::load(&paths);
     let dismissed_update = app_state.dismissed_update.clone();
@@ -586,12 +667,14 @@ pub fn run(
         opening: Mutex::new(()),
         computer_view: Mutex::new(None),
         answering_asks: AtomicBool::new(false),
+        connect_asked: AtomicBool::new(false),
+        connect_episode: Default::default(),
+        connect_quiet: AtomicBool::new(matches!(first_open, Open::Settings(Some("welcome")))),
         answered_asks: Mutex::new(std::collections::HashSet::new()),
-        updates: Arc::new(crate::update::Updates::new(
-            update_error,
-            dismissed_update,
-            installs_updates,
-        )),
+        updates: Arc::new(
+            crate::update::Updates::new(update_error, dismissed_update, installs_updates)
+                .with_newest_run(newest_run),
+        ),
     });
 
     let mut builder = tauri::Builder::default();
@@ -731,6 +814,7 @@ pub fn run(
                     &desktop.paths,
                     &desktop.client,
                     !matches!(first_open, Open::Nothing),
+                    desktop.updates.newest_run().as_deref(),
                 )
             {
                 std::process::exit(0);
