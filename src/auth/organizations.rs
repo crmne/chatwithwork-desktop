@@ -32,6 +32,8 @@ impl SavedOrganization {
             state_dir: primary.state_dir.join("organizations").join(&self.id),
             runtime_dir: primary.runtime_dir.join("organizations").join(&self.id),
             home_trash: None,
+            // An organization's chats run no commands.
+            person_home: None,
         })
     }
 

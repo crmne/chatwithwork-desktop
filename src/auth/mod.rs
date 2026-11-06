@@ -435,8 +435,8 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
     let file = SecretStore::File(paths.secrets_file());
     file.delete(DEVICE_KEY)?;
     file.delete(REFRESH_TOKEN)?;
-    // Claude Code's sign-in for coding bots (docs/coding-computers.md).
-    file.delete(crate::coding::TOKEN_NAME)?;
+    // The Claude Code token 0.13.1 and earlier kept for coding bots.
+    file.delete(crate::coding::LEGACY_TOKEN_NAME)?;
     // Shared folders' environments (docs/secrets.md).
     // Their keychain entries are named for this install, so they go
     // whether or not it paired; only where it noted one, so a computer
@@ -460,12 +460,12 @@ pub fn forget_all_secrets(paths: &Paths) -> Result<()> {
         let store = SecretStore::recorded(&config, paths);
         store.delete(DEVICE_KEY)?;
         store.delete(REFRESH_TOKEN)?;
-        store.delete(crate::coding::TOKEN_NAME)?;
+        store.delete(crate::coding::LEGACY_TOKEN_NAME)?;
         // What an older version saved, here too if it was never carried over.
         if store.in_keychain() {
             SecretStore::Keyring.delete(DEVICE_KEY)?;
             SecretStore::Keyring.delete(REFRESH_TOKEN)?;
-            SecretStore::Keyring.delete(crate::coding::TOKEN_NAME)?;
+            SecretStore::Keyring.delete(crate::coding::LEGACY_TOKEN_NAME)?;
         }
     }
     // A damaged list fails the purge: deleting it would leave keys nothing

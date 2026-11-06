@@ -4973,8 +4973,9 @@ async fn a_bot_reaches_only_the_folders_lent_to_it() {
 }
 
 /// A bot allowed this computer's Claude Code sign-in sees it's ready in
-/// `roots`, and its commands get it, with the token's text taken out of
-/// what they print; a person's commands and another bot's get nothing.
+/// `roots`, and its commands get it where Claude Code keeps it, with the
+/// tokens' text taken out of what they print; a person's commands and
+/// another bot's get nothing.
 /// The setup's check over the control socket starts a run as the bot does.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4984,6 +4985,14 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
     }
     const TOKEN: &str = "sk-ant-oat01-e2eTOKENe2etoken0123456789abcdefghijklmnopqrs";
     let fx = fixture();
+    // The person's own Claude Code sign-in, where Claude Code keeps it.
+    let home = fx.paths.person_home.clone().unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::write(
+        home.join(".claude/.credentials.json"),
+        json!({ "claudeAiOauth": { "accessToken": TOKEN } }).to_string(),
+    )
+    .unwrap();
     let mut server = FakeServer::start().await;
     pair_for_changes(&fx, &server, true, None);
     let install = fx.base.join("claude-install");
@@ -4991,7 +5000,7 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
     let program = install.join("claude");
     std::fs::write(
         &program,
-        "#!/bin/sh\necho \"claude with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+        "#!/bin/sh\necho \"claude with $(cat \"$HOME/.claude/.credentials.json\")\"\n",
     )
     .unwrap();
     {
@@ -5008,11 +5017,7 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
         claude_code: true,
     });
     config.coding.claude = Some(program);
-    config.coding.claude_signed_in = true;
     config.save(&fx.paths).unwrap();
-    cww::coding::store(&config, &fx.paths)
-        .set(cww::coding::TOKEN_NAME, TOKEN)
-        .unwrap();
 
     let shutdown = CancellationToken::new();
     let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
@@ -5041,13 +5046,14 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
     let out = ran["structuredContent"]["stdout"]
         .as_str()
         .unwrap_or_default();
-    assert_eq!(out.trim(), "claude with [claude-code-token]", "{ran}");
+    let expected = r#"claude with {"claudeAiOauth":{"accessToken":"[claude-code-token]"}}"#;
+    assert_eq!(out.trim(), expected, "{ran}");
     assert!(!ran.to_string().contains("e2eTOKEN"), "{ran}");
 
     let mine = s
         .call(
             "run",
-            json!({ "command": "echo \"x$CLAUDE_CODE_OAUTH_TOKEN\"", "path": "docs:" }),
+            json!({ "command": "cat \"$HOME/.claude/.credentials.json\"; echo x", "path": "docs:" }),
         )
         .await;
     assert_eq!(
@@ -5084,7 +5090,7 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
         assert!(Instant::now() < deadline, "the check didn't end");
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    assert_eq!(text.trim(), "claude with [claude-code-token]");
+    assert_eq!(text.trim(), expected);
 
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(10), daemon)

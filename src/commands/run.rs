@@ -89,6 +89,9 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if Instant::now() >= deadline {
         return State::TimedOut;
     }
+    if let Err(e) = plan.write_values(home.as_deref(), sandbox) {
+        return State::Failed(format!("couldn't give it its folder's environment: {e}"));
+    }
     let request = plan.request_json(home.as_deref(), sandbox);
     let mut process = match mxc_sdk::__ffi::spawn_container_json(&request, false) {
         Ok(process) => process,
@@ -290,6 +293,8 @@ fn capture(
         std::fs::write(plan.script_path(), super::windows::script(&plan.command))
             .map_err(|e| Captured::Failed(format!("couldn't write its script: {e}")))?;
     }
+    plan.write_values(home, sandbox)
+        .map_err(|e| Captured::Failed(format!("couldn't give it its folder's environment: {e}")))?;
     let request = plan.request_json(home, sandbox);
     let mut process = mxc_sdk::__ffi::spawn_container_json(&request, false)
         .map_err(|e| Captured::Failed(refusal(&e)))?;
@@ -506,6 +511,15 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
         let bin = plan.claude_bin();
         std::fs::create_dir_all(&bin)?;
         std::os::unix::fs::symlink(&claude.real, bin.join("claude"))?;
+        // Claude Code's sign-in where Claude Code looks for it, in the
+        // run's home: links to the person's `~/.claude` and `~/.claude.json`,
+        // which the sandbox lets it read and write.
+        if let Some(dir) = &claude.login.dir {
+            std::os::unix::fs::symlink(dir, plan.home.join(crate::coding::CONFIG_DIR))?;
+        }
+        if let Some(file) = &claude.login.file {
+            std::os::unix::fs::symlink(file, plan.home.join(crate::coding::CONFIG_FILE))?;
+        }
     }
     Ok(())
 }

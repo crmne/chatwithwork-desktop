@@ -380,23 +380,83 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// `text` as one word of `sh`, in single quotes.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 impl Plan {
+    /// Where a run on Bubblewrap finds its folder's values: Bubblewrap
+    /// takes a run's environment on its own command line (`--setenv NAME
+    /// VALUE`), which any user of this computer can read (`ps`,
+    /// `/proc/<pid>/cmdline`). So a run whose environment holds secrets
+    /// gets them from this file in its own home (0600, in Desktop's private
+    /// data folder), which its shell reads first and deletes. Linux's other
+    /// sandbox, macOS and Windows pass the environment to the process
+    /// itself, which only this user can read.
+    pub fn values_file(&self) -> PathBuf {
+        self.home.join(".cww-env")
+    }
+
+    fn values_in_file(&self, sandbox: Sandbox) -> bool {
+        sandbox == Sandbox::Bubblewrap && !self.env.values.is_empty()
+    }
+
+    fn is_folder_value(&self, name: &str, value: &str) -> bool {
+        self.env
+            .values
+            .iter()
+            .any(|(n, v)| n == name && v.expose() == value)
+    }
+
+    /// Write [`Plan::values_file`] where the run needs it, before the
+    /// sandbox starts: `export` lines the shell reads, each value quoted.
+    /// The values are exactly those [`Plan::environment`] would set.
+    pub fn write_values(&self, home: Option<&Path>, sandbox: Sandbox) -> std::io::Result<()> {
+        if !self.values_in_file(sandbox) {
+            return Ok(());
+        }
+        let mut script = String::new();
+        let values = self
+            .environment(home)
+            .into_iter()
+            .filter(|(name, value)| self.is_folder_value(name, value));
+        for (name, value) in values {
+            script.push_str(&format!("export {name}={}\n", shell_quote(&value)));
+        }
+        // A `$( )` ran in the sandbox with this home before: it may have
+        // left a link here, which this process, outside the sandbox, must
+        // never write through. So whatever is there goes (a link itself,
+        // never what it leads to), and the file is made new.
+        let file = self.values_file();
+        match std::fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        use std::io::Write;
+        options.open(&file)?.write_all(script.as_bytes())
+    }
+
     /// The folder in the run's home that holds only a link named `claude`
     /// to the program setup checked (Linux and macOS).
     pub fn claude_bin(&self) -> PathBuf {
         self.home.join(".cww-bin")
     }
 
-    /// What a bot's run allowed Claude Code gets: its token, in Claude
-    /// Code's own variable, no self-updates, whose folder it can't write,
-    /// and its temporary files in the run's own.
+    /// What a bot's run allowed Claude Code gets: no self-updates, whose
+    /// folder it can't write, and its temporary files in the run's own. Its
+    /// sign-in is where Claude Code keeps it ([`Plan::coding_writable`]).
     pub fn coding_environment(&self) -> Vec<(String, String)> {
         match &self.coding.claude {
-            Some(claude) => vec![
-                (
-                    crate::coding::TOKEN_ENV.to_string(),
-                    claude.token.expose().to_string(),
-                ),
+            Some(_) => vec![
                 ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
                 // Claude Code keeps its own files under /tmp otherwise,
                 // which Seatbelt and the process container don't give a
@@ -410,14 +470,15 @@ impl Plan {
         }
     }
 
-    /// What the run's output has taken out: Claude Code's token, and the
-    /// folder's values.
+    /// What the run's output has taken out: the tokens of Claude Code's
+    /// sign-in Desktop could read when it started, and the folder's values.
     pub fn redactor(&self) -> crate::coding::Redactor {
         crate::coding::Redactor::new(
             self.coding
                 .claude
                 .iter()
-                .map(|c| (&c.token, crate::coding::REDACTED.to_string()))
+                .flat_map(|c| c.login.secrets.iter())
+                .map(|secret| (secret, crate::coding::REDACTED.to_string()))
                 .chain(
                     self.env
                         .values
@@ -425,6 +486,19 @@ impl Plan {
                         .map(|(_, value)| (value, super::env::REDACTED.to_string())),
                 ),
         )
+    }
+
+    /// What a run allowed Claude Code reads and writes beyond its folder
+    /// and home: `~/.claude` and `~/.claude.json`, where they really are,
+    /// which its own home links to (`run.rs`). Claude Code refreshes its
+    /// tokens there. Nothing else of the person's home.
+    pub fn coding_writable(&self) -> Vec<String> {
+        self.coding
+            .claude
+            .iter()
+            .flat_map(|c| c.login.paths())
+            .map(|p| display(p))
+            .collect()
     }
 
     /// Folders a run reads beyond the toolchains: the folder's mirrors, and
@@ -554,17 +628,27 @@ impl Plan {
                     .map(|p| p.to_string()),
             );
         }
+        let mut readwrite = vec![display(&self.folder), display(&self.home)];
+        readwrite.extend(self.coding_writable());
+        let in_file = self.values_in_file(sandbox);
         let env: Vec<String> = self
             .environment(home)
             .into_iter()
+            .filter(|(name, value)| !(in_file && self.is_folder_value(name, value)))
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        let command = if in_file {
+            let file = shell_quote(&display(&self.values_file()));
+            format!(". {file}; rm -f {file}\n{}", self.command)
+        } else {
+            self.command.clone()
+        };
         let mut document = json!({
             "version": "1.1.0-alpha",
             "containerId": format!("cww-run-{}", self.id),
             "lifecycle": { "destroyOnExit": true, "preservePolicy": false },
             "process": {
-                "commandLine": self.command,
+                "commandLine": command,
                 // The runner keeps the wall clock itself, so it can say why
                 // a run ended.
                 "timeout": 0,
@@ -572,16 +656,18 @@ impl Plan {
                 "env": env,
             },
             "filesystem": {
-                "readwritePaths": [display(&self.folder), display(&self.home)],
+                "readwritePaths": readwrite,
                 "readonlyPaths": found.read,
                 "deniedPaths": denied,
             },
             "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
-            "resources": {
-                "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
-                "priority": "low",
-            },
+            "resources": { "priority": "low" },
         });
+        // 0 is no CPU limit, which MXC takes as the field left out.
+        if self.limits.cpu_seconds > 0 {
+            document["resources"]["cpuTimeMs"] =
+                self.limits.cpu_seconds.saturating_mul(1000).into();
+        }
         // MXC refuses a run whose memory limit its backend can't hold, as
         // Seatbelt can't; 0 means none.
         if self.limits.memory_mb > 0 && sandbox != Sandbox::Seatbelt {
@@ -592,7 +678,9 @@ impl Plan {
             document["seatbelt"] = json!({
                 "guiAccess": false,
                 "nestedPty": false,
-                "keychainAccess": false,
+                // Claude Code keeps its sign-in in the login keychain on
+                // macOS: a run allowed it reaches the keychain.
+                "keychainAccess": self.coding.claude.as_ref().is_some_and(|c| c.login.keychain),
                 "extraMachLookups": [],
             });
         } else {

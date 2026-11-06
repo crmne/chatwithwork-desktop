@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::{ClaudeState, TOKEN_NAME, detect, repositories, valid_token};
+use super::{ClaudeState, Login, detect, repositories};
 use crate::config::{Config, Repository};
 use crate::control::{self, ControlRequest};
 use crate::paths::Paths;
@@ -32,9 +32,6 @@ pub struct Options {
     /// Answer yes to every question: for a person who already decided,
     /// running it where nothing can ask.
     pub yes: bool,
-    /// Read the token from standard input instead of running
-    /// `claude setup-token`.
-    pub token_stdin: bool,
     pub skip_install: bool,
     pub skip_proof: bool,
 }
@@ -261,9 +258,9 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
     // 4. Claude Code, installed.
     let claude = claude_step(&mut config, paths, &ask)?;
 
-    // 5. Signed in, and this bot allowed it here.
+    // 5. Signed in, and this bot's runs here allowed to use it.
     if claude {
-        sign_in_step(&mut config, paths, &ask, &options, &root_id, &bot)?;
+        sign_in_step(&mut config, paths, &ask, &root_id, &bot)?;
     }
 
     // 6. The repository.
@@ -610,111 +607,55 @@ fn claude_step(config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> 
     Ok(true)
 }
 
-/// Read a line without showing it.
-fn read_hidden(prompt: &str) -> Result<String> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
-    print!("{prompt}");
-    std::io::stdout().flush()?;
-    crossterm::terminal::enable_raw_mode()?;
-    let mut text = String::new();
-    let result = loop {
-        match read() {
-            Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Enter => break Ok(()),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    break Err(anyhow::anyhow!("cancelled"));
-                }
-                KeyCode::Backspace => {
-                    text.pop();
-                }
-                KeyCode::Char(c) => text.push(c),
-                _ => {}
-            },
-            Ok(Event::Paste(pasted)) => text.push_str(&pasted),
-            Ok(_) => {}
-            Err(e) => break Err(e.into()),
-        }
-    };
-    crossterm::terminal::disable_raw_mode()?;
-    println!();
-    result.map(|()| text.trim().to_string())
-}
-
-/// Store a token, never shown. From standard input, or pasted.
-pub fn store_token(config: &mut Config, paths: &Paths, from_stdin: bool) -> Result<()> {
-    // On its own (`cww coding sign-in`), it guards its save as setup does:
-    // the settings as read before the prompt, never written back over newer.
-    let _own = LAST_SEEN.with(|last| last.borrow().is_none()).then(|| {
-        seen(config);
-        Reset
-    });
-    let token = if from_stdin {
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
-        line.trim().to_string()
-    } else {
-        read_hidden("Paste the token `claude setup-token` printed (it isn't shown): ")?
-    };
-    if !valid_token(&token) {
-        bail!("that isn't a token from `claude setup-token` (they start with sk-ant-oat)");
-    }
-    super::store(config, paths)
-        .set(TOKEN_NAME, &token)
-        .context(
-            "keeping the token in this computer's secret store, which this session can't \
-             reach (on Windows, an SSH session can't use the Credential Manager): run this in \
-             your own desktop session",
-        )?;
-    config.coding.claude_signed_in = true;
-    save(config, paths)
+/// Claude Code's sign-in on this computer, where Claude Code keeps it.
+fn login(paths: &Paths) -> Login {
+    paths
+        .person_home
+        .as_deref()
+        .map(Login::find)
+        .unwrap_or_default()
 }
 
 fn sign_in_step(
     config: &mut Config,
     paths: &Paths,
     ask: &Asker,
-    options: &Options,
     root: &str,
     bot: &str,
 ) -> Result<()> {
-    let stored = super::token(config, paths).is_some();
-    if !stored || options.token_stdin {
-        if options.token_stdin {
-            store_token(config, paths, true)?;
-        } else if !ask.interactive() {
-            Step::NeedsYou("not signed in: run `cww coding sign-in` in a terminal".into())
-                .print("Sign-in");
-            return Ok(());
-        } else {
-            println!(
-                "Claude Code signs in with your own Claude subscription. `claude setup-token` \
-                 opens the browser and prints a token; Desktop keeps it in this computer's \
-                 secret store and gives it only to the commands of bots you allow."
-            );
-            let program = config.coding.claude.clone().context("Claude Code")?;
-            let status = Command::new(&program).arg("setup-token").status();
-            if !status.is_ok_and(|s| s.success()) {
-                println!(
-                    "`claude setup-token` didn't finish; paste a token anyway if you have one."
-                );
-            }
-            store_token(config, paths, false)?;
-        }
-    } else if config.coding.claude_signed_in != stored {
-        config.coding.claude_signed_in = stored;
-        save(config, paths)?;
+    if !login(paths).signed_in() {
+        Step::NeedsYou(
+            "Claude Code isn't signed in on this computer: run `claude` once and sign in, then \
+             run this again"
+                .into(),
+        )
+        .print("Sign-in");
+        return Ok(());
     }
     let allowed = config
         .root(root)
         .and_then(|r| r.loan(bot))
         .is_some_and(|l| l.claude_code);
     if !allowed {
+        let label = config.root(root).map_or(root, |r| r.label.as_str());
         println!(
-            "Giving bot {bot} your Claude Code sign-in in this folder lets its commands there use \
-             your subscription. A command it runs could also read the token; Desktop removes it \
-             from what commands print, which doesn't stop a command written to hide it."
+            "Bot {bot}'s coding runs in {label} would use your Claude Code sign-in on this \
+             computer: they could read and change ~/.claude and ~/.claude.json{}, where Claude \
+             Code keeps it and refreshes it, and nothing else of your home folder. A command \
+             there could read its tokens, and change Claude Code's settings, which the next \
+             `claude` you run yourself starts outside the sandbox. Desktop removes the tokens \
+             from what commands print, which doesn't stop a command written to hide them.",
+            if cfg!(target_os = "macos") {
+                " and reach your login keychain as Claude Code does (any item that lets the \
+                 `security` command read it, other programs' too)"
+            } else {
+                ""
+            }
         );
-        if ask.confirm("Let this bot use it here?", true)? {
+        if ask.confirm(
+            "Let bots' coding runs use this computer's Claude Code sign-in?",
+            false,
+        )? {
             roots::set_bot_claude_code(config, root, bot, true)?;
             save(config, paths)?;
         }
@@ -723,9 +664,9 @@ fn sign_in_step(
         .root(root)
         .map(|r| super::claude_state(&config.coding, r, bot));
     match state {
-        Some(ClaudeState::Ready) => Step::Ok(
-            "signed in, in this computer's secret store, for this bot in this folder".into(),
-        ),
+        Some(ClaudeState::Ready) => {
+            Step::Ok("this computer's Claude Code sign-in, for this bot in this folder".into())
+        }
         Some(state) => Step::NeedsYou(state.sentence().into()),
         None => Step::Failed("the folder is gone".into()),
     }
@@ -1129,7 +1070,7 @@ fn proof_step(
 
 /// What each folder lent to a bot has, as `cww coding status` prints it.
 pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
-    let stored = super::token(config, paths).is_some();
+    let stored = login(paths).signed_in();
     match &config.coding.claude {
         Some(p) => println!("Claude Code: {}", p.display()),
         None => println!("Claude Code: not set up (`cww coding setup`)"),
@@ -1137,9 +1078,9 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     println!(
         "Sign-in: {}",
         if stored {
-            "in this computer's secret store"
+            "Claude Code is signed in on this computer"
         } else {
-            "none stored"
+            "Claude Code isn't signed in on this computer: run `claude` once and sign in"
         }
     );
     for root in &config.roots {
@@ -1184,16 +1125,16 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     }
 }
 
-/// The state as a run would find it: ready only when the token can be read
-/// from the store, whatever the config says.
+/// The state as a run would find it: ready only when Claude Code is signed
+/// in on this computer, which the config doesn't say.
 fn effective_state(
     coding: &crate::config::CodingConfig,
     root: &crate::config::Root,
     bot: &str,
-    stored: bool,
+    signed_in: bool,
 ) -> ClaudeState {
     match super::claude_state(coding, root, bot) {
-        ClaudeState::Ready if !stored => ClaudeState::NotSignedIn,
+        ClaudeState::Ready if !signed_in => ClaudeState::NotSignedIn,
         state => state,
     }
 }
@@ -1201,7 +1142,7 @@ fn effective_state(
 /// What `cww coding status --json` prints: per loan, the state the server
 /// would see, and per repository, its fetch. No token, ever.
 pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Value {
-    let stored = super::token(config, paths).is_some();
+    let stored = login(paths).signed_in();
     let loans: Vec<Value> = config
         .roots
         .iter()

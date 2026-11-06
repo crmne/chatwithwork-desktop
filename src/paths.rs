@@ -41,6 +41,11 @@ pub struct Paths {
     /// Windows (each drive has a Recycle Bin). [`Paths::under`] puts it
     /// under its base instead, so tests never touch the real one.
     pub home_trash: Option<PathBuf>,
+    /// The person's home folder, where Claude Code keeps its sign-in
+    /// (`~/.claude`, `~/.claude.json`) for coding runs
+    /// (docs/coding-computers.md). [`Paths::under`] puts it under its base
+    /// too, so tests never lend the real one.
+    pub person_home: Option<PathBuf>,
 }
 
 impl Paths {
@@ -50,6 +55,7 @@ impl Paths {
             // A side-by-side install still uses the real trash.
             let mut paths = Self::under(Path::new(&home));
             paths.home_trash = system_trash();
+            paths.person_home = home_dir().ok();
             return Ok(paths);
         }
         #[cfg(windows)]
@@ -58,7 +64,9 @@ impl Paths {
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute())
                 .map_or_else(|| home_dir().map(|h| h.join("AppData/Local")), Ok)?;
-            Ok(Self::under(&base.join("cww")))
+            let mut paths = Self::under(&base.join("cww"));
+            paths.person_home = home_dir().ok();
+            Ok(paths)
         }
         #[cfg(not(windows))]
         {
@@ -81,6 +89,7 @@ impl Paths {
                 state_dir,
                 runtime_dir,
                 home_trash: system_trash(),
+                person_home: Some(home),
             })
         }
     }
@@ -93,6 +102,7 @@ impl Paths {
             state_dir: base.join("state"),
             runtime_dir: base.join("run"),
             home_trash: (!cfg!(windows)).then(|| base.join("Trash")),
+            person_home: Some(base.join("home")),
         }
     }
 

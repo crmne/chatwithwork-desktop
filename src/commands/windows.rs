@@ -558,6 +558,17 @@ impl Plan {
             ),
         ]);
         env.extend(self.coding_environment());
+        // The run's own home has no `.claude`, and Windows can't link one
+        // there without Developer Mode: Claude Code's own variable names
+        // the person's, where its sign-in is (`.credentials.json`).
+        if let Some(dir) = self
+            .coding
+            .claude
+            .as_ref()
+            .and_then(|c| c.login.dir.as_ref())
+        {
+            env.push(("CLAUDE_CONFIG_DIR".to_string(), display(dir)));
+        }
         for (name, value) in found.env {
             if name == "MISE_DATA_DIR" {
                 env.extend([
@@ -607,15 +618,27 @@ impl Plan {
             .into_iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
-        let mut resources = json!({
-            "cpuTimeMs": self.limits.cpu_seconds.saturating_mul(1000),
-            "priority": "low",
-        });
+        let mut resources = json!({ "priority": "low" });
+        // 0 is no CPU limit, which MXC takes as the field left out.
+        if self.limits.cpu_seconds > 0 {
+            resources["cpuTimeMs"] = self.limits.cpu_seconds.saturating_mul(1000).into();
+        }
         if self.limits.memory_mb > 0 {
             resources["memoryMb"] = self.limits.memory_mb.into();
         }
         if self.limits.processes > 0 {
             resources["maxProcesses"] = self.limits.processes.into();
+        }
+        // Windows grants a run folders only: Claude Code's folder, which
+        // holds its sign-in there, and not `~/.claude.json`.
+        let mut readwrite = vec![display(&self.folder), display(&self.home)];
+        if let Some(dir) = self
+            .coding
+            .claude
+            .as_ref()
+            .and_then(|c| c.login.dir.as_ref())
+        {
+            readwrite.push(display(dir));
         }
         json!({
             "version": "1.1.0-alpha",
@@ -632,7 +655,7 @@ impl Plan {
                 "env": env,
             },
             "filesystem": {
-                "readwritePaths": [display(&self.folder), display(&self.home)],
+                "readwritePaths": readwrite,
                 "readonlyPaths": self.windows_readable(host),
                 "deniedPaths": [],
             },
@@ -1024,6 +1047,40 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect()
+    }
+
+    /// A bot's run allowed Claude Code gets the person's `.claude` folder,
+    /// to read and write, named by Claude Code's own variable: Windows
+    /// grants folders only, so not `.claude.json`. Other runs get neither.
+    #[test]
+    fn claude_codes_folder_is_granted_and_named_on_windows() {
+        let base = tempfile::tempdir().unwrap();
+        let host = host(base.path());
+        let folder = base.path().join("project");
+        let home = base.path().join("run");
+        let person = base.path().join("person").join(".claude");
+        let mut plan = plan(&folder, &home, true);
+        let without = plan.windows_request(&host);
+        assert_eq!(strings(&without["filesystem"]["readwritePaths"]).len(), 2);
+        assert!(!without.to_string().contains("CLAUDE_CONFIG_DIR"));
+        plan.coding.claude = Some(crate::coding::Claude {
+            program: base.path().join("claude.exe"),
+            real: base.path().join("claude.exe"),
+            read: base.path().to_path_buf(),
+            entry: None,
+            login: crate::coding::Login {
+                dir: Some(person.clone()),
+                file: Some(base.path().join("person").join(".claude.json")),
+                ..Default::default()
+            },
+        });
+        let json = plan.windows_request(&host);
+        assert_eq!(
+            strings(&json["filesystem"]["readwritePaths"]),
+            [display(&folder), display(&home), display(&person)]
+        );
+        let env = strings(&json["process"]["env"]);
+        assert!(env.contains(&format!("CLAUDE_CONFIG_DIR={}", display(&person))));
     }
 
     #[test]

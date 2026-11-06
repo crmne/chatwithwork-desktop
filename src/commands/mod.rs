@@ -448,11 +448,14 @@ impl Runs {
             ));
         }
         let running = self.running();
-        if running >= config.limits.commands_running {
+        let most = config.limits.commands_running;
+        if most > 0 && running >= most {
             return Err(RunError::new(
                 "busy",
                 format!(
-                    "{running} commands are already running here; wait for one to end, or stop one"
+                    "{running} commands are already running on this computer, as many as it runs \
+                     at once. Wait for one to end (follow it with run_status) and run this \
+                     again, or stop one"
                 ),
             ));
         }
@@ -465,7 +468,13 @@ impl Runs {
             &self.paths,
             &request.root,
             request.bot.as_deref(),
-            || crate::coding::token(config, &self.paths),
+            || {
+                self.paths
+                    .person_home
+                    .as_deref()
+                    .map(crate::coding::Login::find)
+                    .unwrap_or_default()
+            },
         );
         // The folder's environment, read here too; its `$( )` run in the
         // run's own sandbox, by its thread.

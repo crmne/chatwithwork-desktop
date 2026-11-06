@@ -192,7 +192,8 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
             .unwrap()
             .ends_with("data/runs/0123456789ab")
     );
-    assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
+    // No CPU limit by default: MXC gets none.
+    assert!(json["resources"].get("cpuTimeMs").is_none(), "{json}");
     if cfg!(target_os = "macos") {
         assert!(json["resources"].get("memoryMb").is_none(), "{json}");
     } else {
@@ -279,6 +280,11 @@ fn seatbelt_is_named() {
     assert_eq!(json["seatbelt"]["guiAccess"], false);
     // MXC refuses a memory limit on Seatbelt, and with it every run.
     assert!(json["resources"].get("memoryMb").is_none(), "{json}");
+    assert!(json["resources"].get("cpuTimeMs").is_none(), "{json}");
+    let mut limited = plan.clone();
+    limited.limits.cpu_seconds = 600;
+    let json: serde_json::Value =
+        serde_json::from_str(&limited.request_json(None, Sandbox::Seatbelt)).unwrap();
     assert_eq!(json["resources"]["cpuTimeMs"], 600_000);
 }
 
@@ -489,13 +495,22 @@ fn too_many_running_commands_wait_their_turn() {
     let mut fx = fixture(true);
     fx.config.limits.commands_running = 1;
     let first = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
-    assert_eq!(
-        fx.runs
-            .start(&fx.config, &request("true"))
-            .unwrap_err()
-            .code,
-        "busy"
+    let busy = fx.runs.start(&fx.config, &request("true")).unwrap_err();
+    assert_eq!(busy.code, "busy");
+    assert!(
+        busy.message.contains("1 commands are already running"),
+        "{busy:?}"
     );
+    assert!(busy.message.contains("Wait for one to end"), "{busy:?}");
+    // It's not a rate limit, and the model hears so.
+    assert_eq!(
+        super::tools::busy_code_for_tests(busy),
+        crate::error::ErrorCode::Busy
+    );
+    // 0 is no limit.
+    fx.config.limits.commands_running = 0;
+    let second = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
+    fx.runs.stop(&second.id).unwrap();
     fx.config.roots[0].commands = false;
     fx.runs.stop_outside(&fx.config);
     assert_eq!(wait(&fx.runs, &first.id).status.state, "stopped");
@@ -503,6 +518,112 @@ fn too_many_running_commands_wait_their_turn() {
         fx.runs.status("ffffffffffff").unwrap_err().code,
         "not_found"
     );
+}
+
+/// No secret goes on a command line, where any user of this computer could
+/// read it (`ps`): Bubblewrap takes `--setenv NAME VALUE` there, so the
+/// folder's values reach the run through a file of its own instead, which
+/// it reads and deletes. The request MXC turns into Bubblewrap's arguments
+/// holds none of them, and while the run sleeps no process on this
+/// computer has one in its arguments.
+#[test]
+fn no_secret_goes_on_a_command_line() {
+    const SECRET: &str = "argvSECRETvalue0123456789";
+    let mut fx = fixture(true);
+    fx.config.secret_store = Some("file".into());
+    let paths = fx.runs.paths.clone();
+    crate::commands::env::save(
+        &mut fx.config,
+        &paths,
+        "project",
+        &format!("API_TOKEN={SECRET}\n"),
+    )
+    .unwrap();
+    let mut plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("echo hi"),
+        "000000000000",
+    )
+    .unwrap();
+    plan.env.values = vec![(
+        "API_TOKEN".into(),
+        crate::coding::Secret::new(SECRET.into()),
+    )];
+    let request_text = plan.request_json(None, Sandbox::Bubblewrap);
+    assert!(!request_text.contains(SECRET), "{request_text}");
+    let json: serde_json::Value = serde_json::from_str(&request_text).unwrap();
+    let command = json["process"]["commandLine"].as_str().unwrap();
+    assert!(command.starts_with(". '"), "{command}");
+    assert!(command.ends_with("\necho hi"), "{command}");
+    // The other sandboxes pass it to the process, not its arguments.
+    assert!(plan.request_json(None, Sandbox::Seatbelt).contains(SECRET));
+    // The file says each value exactly, quotes and all.
+    std::fs::create_dir_all(&plan.home).unwrap();
+    plan.env.values.push((
+        "QUOTED".into(),
+        crate::coding::Secret::new("it's $HOME `x`".into()),
+    ));
+    // A link a `$( )` left there is never written through.
+    #[cfg(unix)]
+    let target = {
+        let target = fx._dir.path().join("bashrc");
+        std::fs::write(&target, "mine\n").unwrap();
+        std::os::unix::fs::symlink(&target, plan.values_file()).unwrap();
+        target
+    };
+    plan.write_values(None, Sandbox::Bubblewrap).unwrap();
+    #[cfg(unix)]
+    {
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "mine\n");
+        assert!(
+            !std::fs::symlink_metadata(plan.values_file())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(plan.values_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let read = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                ". '{}'; printf '%s|%s' \"$API_TOKEN\" \"$QUOTED\"",
+                plan.values_file().display()
+            ))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&read.stdout),
+            format!("{SECRET}|it's $HOME `x`")
+        );
+    }
+
+    if !sandbox_works() || on_landlock() {
+        return;
+    }
+    let line = "echo \"t:$API_TOKEN\"; test -e \"$HOME/.cww-env\" && echo left; sleep 3";
+    let status = fx.runs.start(&fx.config, &shell(line)).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+        if let Ok(argv) = std::fs::read(entry.path().join("cmdline"))
+            && String::from_utf8_lossy(&argv).contains(SECRET)
+        {
+            seen.push(entry.file_name());
+        }
+    }
+    let done = wait(&fx.runs, &status.id);
+    assert!(
+        seen.is_empty(),
+        "a process has the secret in its arguments: {seen:?}"
+    );
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(done.stdout.contains("t:[redacted]"), "{done:?}");
+    assert!(!done.stdout.contains("left"), "the file stayed: {done:?}");
 }
 
 #[test]
@@ -1070,14 +1191,44 @@ mod on_windows {
     }
 }
 
-/// A bot allowed Claude Code here gets the sign-in in Claude Code's own
-/// variable and its `claude` first on `PATH`, and what it prints never
-/// carries the token. A person's run, and another bot's, get neither. On
-/// Linux where Bubblewrap runs, on Windows where process containers do (CI's
-/// Windows on Arm), and on macOS with `CWW_TEST_SEATBELT=1` (CI's Macs
-/// don't run commands).
+/// The person's home in a fixture, signed in to Claude Code as Claude Code
+/// leaves it on Linux and Windows, with something else of theirs beside
+/// it. Returns the access token.
+fn signed_in_person_home(paths: &crate::paths::Paths) -> &'static str {
+    const ACCESS: &str = "sk-ant-oat01-testtokenTESTTOKEN0123456789abcdefghijklmnop_-";
+    let home = paths.person_home.clone().unwrap();
+    let claude = home.join(crate::coding::CONFIG_DIR);
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join(crate::coding::CREDENTIALS_FILE),
+        serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": ACCESS,
+                "refreshToken": "sk-ant-ort01-refreshTESTREFRESH0123456789",
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join(crate::coding::CONFIG_FILE),
+        "{\"oauthAccount\":{}}",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh").join("id_ed25519"), "private key\n").unwrap();
+    ACCESS
+}
+
+/// A bot allowed Claude Code here gets its `claude` first on `PATH` and the
+/// computer's Claude Code sign-in where Claude Code keeps it, to read and
+/// write, and nothing else of the person's home; what it prints never
+/// carries the tokens. A person's run, and another bot's, get none of it.
+/// On Linux where Bubblewrap runs, on Windows where process containers do
+/// (CI's Windows on Arm), and on macOS with `CWW_TEST_SEATBELT=1` (CI's
+/// Macs don't run commands).
 #[test]
-fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
+fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() {
     let runs_here = if cfg!(windows) {
         Sandbox::for_host().is_ok()
     } else if cfg!(target_os = "macos") {
@@ -1088,15 +1239,24 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
     if !runs_here {
         return;
     }
-    const TOKEN: &str = "sk-ant-oat01-testtokenTESTTOKEN0123456789abcdefghijklmnop_-";
     let mut fx = fixture(true);
+    let paths = fx.runs.paths.clone();
+    let access = signed_in_person_home(&paths);
+    let home = paths.person_home.clone().unwrap();
     let install = fx._dir.path().join("claude-install");
     std::fs::create_dir_all(&install).unwrap();
+    // A stand-in `claude` that prints its sign-in, as a careless command
+    // might, and keeps a file of its own beside it, as Claude Code does
+    // when it refreshes its tokens.
     let program = if cfg!(windows) {
         let program = install.join("claude.cmd");
         std::fs::write(
             &program,
-            "@echo claude here with %CLAUDE_CODE_OAUTH_TOKEN%\r\n",
+            "@echo claude here\r\n\
+             @type \"%CLAUDE_CONFIG_DIR%\\.credentials.json\"\r\n\
+             @type \"%CLAUDE_CONFIG_DIR%\\.credentials.json\" 1>&2\r\n\
+             @echo.\r\n\
+             @echo refreshed> \"%CLAUDE_CONFIG_DIR%\\refreshed\"\r\n",
         )
         .unwrap();
         program
@@ -1104,7 +1264,9 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         let program = install.join("claude");
         std::fs::write(
             &program,
-            "#!/bin/sh\necho \"claude here with $CLAUDE_CODE_OAUTH_TOKEN\"\n",
+            "#!/bin/sh\necho claude here\ncat \"$HOME/.claude/.credentials.json\"\necho\n\
+             cat \"$HOME/.claude/.credentials.json\" >&2\necho >&2\n\
+             cat \"$HOME/.claude.json\"\necho\necho refreshed > \"$HOME/.claude/refreshed\"\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -1114,7 +1276,6 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         }
         program
     };
-    fx.config.secret_store = Some("file".into());
     fx.config.roots[0].network = true;
     fx.config.roots[0].bots.push(crate::config::BotLoan {
         id: "42".into(),
@@ -1123,11 +1284,6 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         claude_code: true,
     });
     fx.config.coding.claude = Some(program);
-    fx.config.coding.claude_signed_in = true;
-    let paths = fx.runs.paths.clone();
-    crate::coding::store(&fx.config, &paths)
-        .set(crate::coding::TOKEN_NAME, TOKEN)
-        .unwrap();
     // Claude Code needs the network; where the sandbox can't give one (CI's
     // Ubuntu refuses network namespaces), there's nothing to check.
     let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
@@ -1136,45 +1292,79 @@ fn only_a_bot_allowed_it_gets_claude_code_and_its_token_never_prints() {
         return;
     }
 
-    let (line, echo) = if cfg!(windows) {
-        (
-            "claude; \"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"; [Console]::Error.WriteLine($env:CLAUDE_CODE_OAUTH_TOKEN)",
-            "\"env:$env:CLAUDE_CODE_OAUTH_TOKEN\"",
-        )
-    } else {
-        (
-            "claude; echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"; echo \"$CLAUDE_CODE_OAUTH_TOKEN\" >&2",
-            "echo \"env:$CLAUDE_CODE_OAUTH_TOKEN\"",
-        )
+    let real = crate::roots::canonical(&home).unwrap();
+    let ssh = real.join(".ssh").join("id_ed25519");
+    let credentials = real
+        .join(crate::coding::CONFIG_DIR)
+        .join(crate::coding::CREDENTIALS_FILE);
+    let reads = |path: &Path| {
+        if cfg!(windows) {
+            format!(
+                "if (Test-Path -LiteralPath '{0}') {{ \"read:$(Get-Content -Raw -LiteralPath '{0}')\" }} else {{ 'hidden' }}",
+                path.display()
+            )
+        } else {
+            format!(
+                "if cat '{}' >/dev/null 2>&1; then echo read; else echo hidden; fi",
+                path.display()
+            )
+        }
     };
+    let line = format!("claude; {}", reads(&ssh));
     let bot = Request {
         bot: Some("42".into()),
-        ..shell(line)
+        ..shell(&line)
     };
     let status = fx.runs.start(&fx.config, &bot).unwrap();
     let done = wait(&fx.runs, &status.id);
     assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(done.stdout.contains("claude here"), "{done:?}");
+    // The sign-in was read, with its tokens taken out.
+    assert!(done.stdout.contains("claudeAiOauth"), "{done:?}");
+    assert!(done.stdout.contains("[claude-code-token]"), "{done:?}");
+    assert!(done.stderr.contains("[claude-code-token]"), "{done:?}");
+    if !cfg!(windows) {
+        assert!(
+            done.stdout.contains("oauthAccount"),
+            "~/.claude.json: {done:?}"
+        );
+    }
+    // Nothing else of the home folder.
     assert!(
-        done.stdout.contains("claude here with [claude-code-token]"),
+        done.stdout.trim_end().ends_with("hidden"),
+        "~/.ssh: {done:?}"
+    );
+    // What it wrote there is in the person's own folder.
+    assert!(
+        real.join(crate::coding::CONFIG_DIR)
+            .join("refreshed")
+            .is_file(),
         "{done:?}"
     );
-    assert!(done.stdout.contains("env:[claude-code-token]"), "{done:?}");
-    assert!(done.stderr.contains("[claude-code-token]"), "{done:?}");
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
     for text in [&done.stdout, &done.stderr, &window.text] {
-        assert!(!text.contains("testtokenTESTTOKEN"), "the token printed");
+        assert!(
+            !text.contains("testtokenTESTTOKEN"),
+            "the access token printed"
+        );
+        assert!(
+            !text.contains("refreshTESTREFRESH"),
+            "the refresh token printed"
+        );
     }
+    assert!(!done.stdout.contains(access));
 
+    // A person's run, and another bot's, see none of it.
     for request in [
-        shell(echo),
+        shell(&reads(&credentials)),
         Request {
             bot: Some("7".into()),
-            ..shell(echo)
+            ..shell(&reads(&credentials))
         },
     ] {
         let status = fx.runs.start(&fx.config, &request).unwrap();
         let done = wait(&fx.runs, &status.id);
-        assert_eq!(done.stdout.trim(), "env:", "{request:?}");
+        assert_eq!(done.stdout.trim(), "hidden", "{request:?}: {done:?}");
     }
 }
 
@@ -1245,19 +1435,21 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
 }
 
 /// The real Claude Code, found as `cww coding setup` finds it, answers from
-/// the sandbox with a token from `claude setup-token`, as a bot's run gets
-/// it. Needs the network and `CWW_TEST_CLAUDE_TOKEN`; spends a few tokens
-/// of that subscription. Its failures never print the output, which would
-/// hold the token if it leaked.
+/// the sandbox with this computer's own Claude Code sign-in, as a bot's run
+/// gets it. Needs Claude Code signed in here and the network; spends a few
+/// tokens of that subscription. Its failures never print what the run
+/// printed if a token leaked.
 #[test]
-#[ignore = "needs Claude Code, the network, and CWW_TEST_CLAUDE_TOKEN"]
+#[ignore = "needs Claude Code signed in on this computer, and the network"]
 fn real_claude_code_answers_from_the_sandbox() {
-    let token = std::env::var("CWW_TEST_CLAUDE_TOKEN").expect("CWW_TEST_CLAUDE_TOKEN");
-    assert!(crate::coding::valid_token(&token), "not a setup token");
     let program = crate::coding::setup::find_claude().expect("Claude Code installed");
     let mut fx = fixture(true);
+    let mut paths = fx.runs.paths.clone();
+    paths.person_home = crate::paths::home_dir().ok();
+    let login = crate::coding::Login::find(paths.person_home.as_deref().unwrap());
+    assert!(login.signed_in(), "run `claude` once and sign in");
+    fx.runs = Runs::new(paths);
     fx.config.limits.command_timeout_seconds = 180;
-    fx.config.secret_store = Some("file".into());
     fx.config.roots[0].network = true;
     fx.config.roots[0].bots.push(crate::config::BotLoan {
         id: "42".into(),
@@ -1266,11 +1458,6 @@ fn real_claude_code_answers_from_the_sandbox() {
         claude_code: true,
     });
     fx.config.coding.claude = Some(program);
-    fx.config.coding.claude_signed_in = true;
-    let paths = fx.runs.paths.clone();
-    crate::coding::store(&fx.config, &paths)
-        .set(crate::coding::TOKEN_NAME, &token)
-        .unwrap();
     let ask = Request {
         bot: Some("42".into()),
         ..request("claude -p 'Reply with the word ready.' --max-turns 1")
@@ -1278,15 +1465,83 @@ fn real_claude_code_answers_from_the_sandbox() {
     let status = fx.runs.start(&fx.config, &ask).unwrap();
     let done = wait_for(&fx.runs, &status.id, Duration::from_secs(190));
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
-    for text in [&done.stdout, &done.stderr, &window.text] {
-        assert!(!text.contains(&token), "the token printed");
-    }
+    let leaked = [&done.stdout, &done.stderr, &window.text]
+        .iter()
+        .any(|text| login.secrets.iter().any(|s| text.contains(s.expose())));
+    assert!(!leaked, "a token printed");
     eprintln!(
         "state {} exit {:?}\nstdout: {}\nstderr: {}",
         done.status.state, done.status.exit_code, done.stdout, done.stderr
     );
     assert_eq!(done.status.exit_code, Some(0));
     assert!(done.stdout.to_lowercase().contains("ready"));
+}
+
+/// A bot's run allowed Claude Code reads and writes exactly Claude Code's
+/// sign-in beyond its folder and home, and on macOS reaches the keychain
+/// only when Claude Code keeps it there; a run without it gets neither.
+#[test]
+fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
+    let fx = fixture(true);
+    let mut plan = plan(
+        &fx.config,
+        &fx.runs.paths,
+        &request("claude"),
+        "000000000000",
+    )
+    .unwrap();
+    let writable = |plan: &Plan, sandbox| -> (Vec<String>, serde_json::Value) {
+        let json: serde_json::Value =
+            serde_json::from_str(&plan.request_json(None, sandbox)).unwrap();
+        let paths = json["filesystem"]["readwritePaths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        (paths, json["seatbelt"]["keychainAccess"].clone())
+    };
+    let own = vec![
+        plan.folder.to_string_lossy().into_owned(),
+        plan.home.to_string_lossy().into_owned(),
+    ];
+    assert_eq!(writable(&plan, Sandbox::Bubblewrap).0, own);
+    assert_eq!(
+        writable(&plan, Sandbox::Seatbelt).1,
+        serde_json::Value::Bool(false)
+    );
+
+    let dir = Path::new("/home/u/.claude").to_path_buf();
+    let file = Path::new("/home/u/.claude.json").to_path_buf();
+    plan.coding.claude = Some(crate::coding::Claude {
+        program: "/x/claude".into(),
+        real: "/x/claude".into(),
+        read: "/x".into(),
+        entry: None,
+        login: crate::coding::Login {
+            dir: Some(dir.clone()),
+            file: Some(file.clone()),
+            keychain: false,
+            secrets: Vec::new(),
+        },
+    });
+    let mut expected = own.clone();
+    expected.extend([
+        "/home/u/.claude".to_string(),
+        "/home/u/.claude.json".to_string(),
+    ]);
+    assert_eq!(writable(&plan, Sandbox::Bubblewrap).0, expected);
+    assert_eq!(writable(&plan, Sandbox::Landlock).0, expected);
+    let (seatbelt, keychain) = writable(&plan, Sandbox::Seatbelt);
+    assert_eq!(seatbelt, expected);
+    assert_eq!(keychain, serde_json::Value::Bool(false));
+    if let Some(claude) = plan.coding.claude.as_mut() {
+        claude.login.keychain = true;
+    }
+    assert_eq!(
+        writable(&plan, Sandbox::Seatbelt).1,
+        serde_json::Value::Bool(true)
+    );
 }
 
 /// A run reads Claude Code's folder where it really is: Bubblewrap can't
@@ -1319,7 +1574,7 @@ fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
         program,
         read,
         entry: None,
-        token: crate::coding::Secret::new("x".into()),
+        login: Default::default(),
     });
     let real = real.canonicalize().unwrap().to_string_lossy().into_owned();
     assert_eq!(plan.coding_readable(), [real]);

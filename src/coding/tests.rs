@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::repositories::{check_url, name_from_url};
 use super::*;
@@ -32,20 +32,68 @@ fn loan(claude_code: bool) -> BotLoan {
 fn ready_coding() -> CodingConfig {
     CodingConfig {
         claude: Some(PathBuf::from("/home/u/.local/bin/claude")),
-        claude_signed_in: true,
-        repositories: vec![],
+        ..Default::default()
     }
 }
 
+/// A home folder signed in to Claude Code as Claude Code leaves it on
+/// Linux and Windows: `~/.claude/.credentials.json` with its tokens, and
+/// `~/.claude.json`.
+fn signed_in_home(home: &Path) {
+    std::fs::create_dir_all(home.join(CONFIG_DIR)).unwrap();
+    std::fs::write(
+        home.join(CONFIG_DIR).join(CREDENTIALS_FILE),
+        serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": TOKEN,
+                "refreshToken": "sk-ant-ort01-refreshREFRESH0123456789",
+                "expiresAt": 1,
+                "scopes": ["user:inference"],
+                "subscriptionType": "max",
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(home.join(CONFIG_FILE), "{}").unwrap();
+}
+
 #[test]
-fn tokens_look_like_setup_tokens() {
-    assert!(valid_token(TOKEN));
-    assert!(!valid_token(
-        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"
-    ));
-    assert!(!valid_token("sk-ant-oat01-short"));
-    assert!(!valid_token(&format!("{TOKEN} rm -rf")));
-    assert!(!valid_token(&format!("{TOKEN}\n")));
+fn the_login_is_found_where_claude_code_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let none = Login::find(&home);
+    assert!(!none.signed_in());
+    assert_eq!(none.paths().count(), 0);
+
+    signed_in_home(&home);
+    let login = Login::find(&home);
+    assert!(login.signed_in());
+    let real = crate::roots::canonical(&home).unwrap();
+    assert_eq!(login.dir, Some(real.join(CONFIG_DIR)));
+    assert_eq!(login.file, Some(real.join(CONFIG_FILE)));
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    assert!(secrets.contains(&TOKEN), "the access token");
+    assert!(
+        secrets.contains(&"sk-ant-ort01-refreshREFRESH0123456789"),
+        "the refresh token"
+    );
+    assert_eq!(secrets.len(), 2, "never the other fields");
+    assert!(!format!("{login:?}").contains("oat01"));
+
+    // A `~/.claude` that leads to a folder not named so is left out.
+    #[cfg(unix)]
+    {
+        let other = dir.path().join("home2");
+        std::fs::create_dir_all(other.join(".ssh")).unwrap();
+        std::os::unix::fs::symlink(other.join(".ssh"), other.join(CONFIG_DIR)).unwrap();
+        assert_eq!(Login::find(&other).dir, None);
+    }
+
+    // Folders Claude Code keeps elsewhere aren't the computer's sign-in.
+    std::fs::remove_file(home.join(CONFIG_DIR).join(CREDENTIALS_FILE)).unwrap();
+    assert!(!Login::find(&home).signed_in());
 }
 
 #[test]
@@ -57,7 +105,10 @@ fn a_secret_never_prints() {
         real: "/y/claude".into(),
         read: "/y".into(),
         entry: None,
-        token: secret,
+        login: Login {
+            secrets: vec![secret],
+            ..Default::default()
+        },
     };
     assert!(!format!("{claude:?}").contains("oat01"));
 }
@@ -89,14 +140,6 @@ fn claude_is_ready_only_for_a_bot_allowed_it_where_commands_reach_the_network() 
         claude_state(&coding, &no_commands, "42"),
         ClaudeState::NotAllowed
     );
-    let signed_out = CodingConfig {
-        claude_signed_in: false,
-        ..ready_coding()
-    };
-    assert_eq!(
-        claude_state(&signed_out, &root(Some(loan(true))), "42"),
-        ClaudeState::NotSignedIn
-    );
     assert_eq!(
         claude_state(&CodingConfig::default(), &root(Some(loan(true))), "42"),
         ClaudeState::NotInstalled
@@ -120,7 +163,7 @@ fn a_bot_sees_whether_claude_is_ready_and_repository_names_only() {
 }
 
 #[test]
-fn only_an_allowed_bot_run_reads_the_token() {
+fn only_an_allowed_bot_run_gets_the_login() {
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("claude");
     std::fs::write(&program, "").unwrap();
@@ -133,7 +176,9 @@ fn only_an_allowed_bot_run_reads_the_token() {
         ..Default::default()
     };
     config.roots.push(root(Some(loan(true))));
-    let token = || Some(Secret::new(TOKEN.into()));
+    let home = dir.path().join("home");
+    signed_in_home(&home);
+    let login = || Login::find(&home);
 
     let person = for_run(&config, &paths, "bots", None, || {
         panic!("read for a person")
@@ -143,10 +188,11 @@ fn only_an_allowed_bot_run_reads_the_token() {
         panic!("read for bot 7")
     });
     assert_eq!(other.claude, None);
-    let bot = for_run(&config, &paths, "bots", Some("42"), token);
+    let bot = for_run(&config, &paths, "bots", Some("42"), login);
     let claude = bot.claude.expect("the bot's run gets Claude Code");
     assert_eq!(claude.program, program);
-    assert_eq!(claude.token.expose(), TOKEN);
+    assert!(claude.login.signed_in());
+    assert_eq!(claude.login.paths().count(), 2);
 
     config.roots[0].bots[0].claude_code = false;
     let withdrawn = for_run(&config, &paths, "bots", Some("42"), || {
