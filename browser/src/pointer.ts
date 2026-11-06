@@ -72,7 +72,10 @@ function hitTarget(target: Element, point: Point, control: Element = target): st
   const tag = hit?.localName ?? "viewport";
   const role = hit?.getAttribute("role")?.slice(0, 40);
   const label = hit?.getAttribute("aria-label")?.replace(/\s+/g, " ").slice(0, 120);
-  return `something else is drawn over that element: <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}; read the page again`;
+  // Usually a cookie or consent banner, a sticky header, or an element still
+  // off-screen: say how to clear it, so a model doesn't click the same spot
+  // again (one chat in production retried ten times).
+  return `Something is drawn over that element: scroll it into view or close the overlay, then read the page again and try again. It's covered by <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}`;
 }
 
 export interface PointerState {
