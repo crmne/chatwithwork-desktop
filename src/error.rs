@@ -117,6 +117,7 @@ impl ErrorCode {
                 | Self::OutsideRoot
                 | Self::Denied
                 | Self::RateLimited
+                | Self::Busy
                 | Self::Paused
                 | Self::NotWritable
                 | Self::NotChangeable

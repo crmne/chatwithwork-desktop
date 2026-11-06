@@ -1,5 +1,7 @@
-//! Bots' requests to run their commands unattended in a folder lent to them
-//! (PROTOCOL.md 7.2.1, `ask_unattended`).
+//! Bots' requests about a folder lent to them (PROTOCOL.md 7.2.1): to run
+//! their commands there unattended (`ask_unattended`), or to run Claude Code
+//! there with this computer's own sign-in (`ask_claude_code`,
+//! docs/coding-computers.md).
 //!
 //! The server can only queue a request here; it never changes what the
 //! computer allows. Only the person on this computer answers one: in the
@@ -26,12 +28,35 @@ pub const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// real computer has far fewer.
 const MAX_PENDING: usize = 64;
 
-/// One request: the folder's ID and the bot's, and when it was made and
-/// ends, in Unix seconds.
+/// What a bot asks for in a folder lent to it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AskKind {
+    /// Its commands there start without anyone approving each one.
+    #[default]
+    Unattended,
+    /// Its runs there use this computer's Claude Code sign-in.
+    ClaudeCode,
+}
+
+impl AskKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unattended => "unattended",
+            Self::ClaudeCode => "claude_code",
+        }
+    }
+}
+
+/// One request: the folder's ID and the bot's, what it asks for, and when
+/// it was made and ends, in Unix seconds.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Ask {
     pub root: String,
     pub bot: String,
+    /// Before 0.14.0 every request was for unattended commands.
+    #[serde(default)]
+    pub kind: AskKind,
     /// The pairing it came through ([`pairing`]): another server's bots
     /// have other numbers, so a request never outlives its pairing.
     #[serde(default)]
@@ -43,7 +68,14 @@ pub struct Ask {
 impl Ask {
     /// The system notification's ID for it.
     pub fn notice_id(&self) -> String {
-        format!("unattended:{}:{}", self.root, self.bot)
+        match self.kind {
+            AskKind::Unattended => format!("unattended:{}:{}", self.root, self.bot),
+            AskKind::ClaudeCode => format!("claude_code:{}:{}", self.root, self.bot),
+        }
+    }
+
+    fn is(&self, root: &str, bot: &str, kind: AskKind) -> bool {
+        self.root == root && self.bot == bot && self.kind == kind
     }
 }
 
@@ -54,6 +86,8 @@ pub struct AskView {
     pub root: String,
     pub folder: String,
     pub bot: String,
+    #[serde(default)]
+    pub kind: AskKind,
     pub name: String,
     pub asked_at: String,
     pub expires_at: String,
@@ -170,11 +204,12 @@ impl Asks {
         (result, saved)
     }
 
-    /// Queue a request from `bot` for folder `root`, unless the same one
-    /// waits or too many do. A request that can't be saved isn't queued.
-    pub fn ask(&self, root: &str, bot: &str) -> anyhow::Result<Asked> {
+    /// Queue a request of `kind` from `bot` for folder `root`, unless the
+    /// same one waits or too many do. A request that can't be saved isn't
+    /// queued.
+    pub fn ask(&self, root: &str, bot: &str, kind: AskKind) -> anyhow::Result<Asked> {
         let (asked, saved) = self.edit(|pending| {
-            if pending.iter().any(|ask| ask.root == root && ask.bot == bot) {
+            if pending.iter().any(|ask| ask.is(root, bot, kind)) {
                 return Asked::Already;
             }
             if pending.len() >= MAX_PENDING {
@@ -184,6 +219,7 @@ impl Asks {
             pending.push(Ask {
                 root: root.into(),
                 bot: bot.into(),
+                kind,
                 pairing: self
                     .pairing
                     .lock()
@@ -197,7 +233,7 @@ impl Asks {
         if asked == Asked::Queued {
             if let Err(e) = saved {
                 // Not kept in memory either: the bot is told it failed.
-                let _ = self.edit(|pending| pending.retain(|a| !(a.root == root && a.bot == bot)));
+                let _ = self.edit(|pending| pending.retain(|a| !a.is(root, bot, kind)));
                 return Err(e);
             }
             self.asked.notify_one();
@@ -205,14 +241,24 @@ impl Asks {
         Ok(asked)
     }
 
-    /// Take the request from `bot` for `root` off the list, if one waits
-    /// and `config` still leaves it something to answer for: the folder
-    /// still lent to that bot, with commands, not unattended yet.
-    pub fn take(&self, root: &str, bot: &str, config: &Config) -> Option<Ask> {
+    /// Take the request of `kind` from `bot` for `root` off the list, if
+    /// one waits and `config` still leaves it something to answer for: the
+    /// folder still lent to that bot, with commands, and what it asks for
+    /// not given yet. With `asked_at`, only the request shown as made then.
+    pub fn take(
+        &self,
+        root: &str,
+        bot: &str,
+        kind: AskKind,
+        asked_at: Option<&str>,
+        config: &Config,
+    ) -> Option<Ask> {
         self.edit(|pending| {
-            let index = pending
-                .iter()
-                .position(|ask| ask.root == root && ask.bot == bot && open(config, ask))?;
+            let index = pending.iter().position(|ask| {
+                ask.is(root, bot, kind)
+                    && open(config, ask)
+                    && asked_at.is_none_or(|shown| shown == rfc3339(ask.asked_at))
+            })?;
             Some(pending.remove(index))
         })
         .0
@@ -221,10 +267,7 @@ impl Asks {
     /// Put back a request taken for an answer that didn't go through.
     pub fn restore(&self, ask: Ask) {
         let _ = self.edit_all(|pending| {
-            if !pending
-                .iter()
-                .any(|a| a.root == ask.root && a.bot == ask.bot)
-            {
+            if !pending.iter().any(|a| a.is(&ask.root, &ask.bot, ask.kind)) {
                 pending.push(ask);
             }
         });
@@ -272,6 +315,7 @@ impl Asks {
                     root: ask.root.clone(),
                     folder: root.label.clone(),
                     bot: ask.bot.clone(),
+                    kind: ask.kind,
                     name: loan.name.clone(),
                     asked_at: rfc3339(ask.asked_at),
                     expires_at: rfc3339(ask.expires_at),
@@ -293,8 +337,8 @@ impl Asks {
 
 /// Whether a request still has something to answer: it came through the
 /// pairing `config` names (another server's bot can have the same number),
-/// the folder is lent to the bot, allows commands, and its loan isn't
-/// unattended yet.
+/// the folder is lent to the bot, allows commands, and its loan doesn't
+/// give what it asks for yet.
 pub fn open(config: &Config, ask: &Ask) -> bool {
     ask.pairing == pairing(config)
         && config
@@ -302,19 +346,45 @@ pub fn open(config: &Config, ask: &Ask) -> bool {
             .iter()
             .find(|root| root.id == ask.root)
             .is_some_and(|root| {
-                root.runs_commands() && root.loan(&ask.bot).is_some_and(|loan| !loan.unattended)
+                root.runs_commands()
+                    && root.loan(&ask.bot).is_some_and(|loan| match ask.kind {
+                        AskKind::Unattended => !loan.unattended,
+                        AskKind::ClaudeCode => !loan.claude_code,
+                    })
             })
 }
 
 /// What the person is asked, from this computer's own names for the bot
 /// and the folder, never the server's words.
 pub fn question(ask: &AskView) -> String {
-    format!(
-        "{} asks to run commands in {} without asking each time. They still run in the \
-         folder's sandbox and are recorded. Allow?",
-        bot_name(ask),
-        ask.folder
-    )
+    match ask.kind {
+        AskKind::Unattended => format!(
+            "{} asks to run commands in {} without asking each time. They still run in the \
+             folder's sandbox and are recorded. Allow?",
+            bot_name(ask),
+            ask.folder
+        ),
+        AskKind::ClaudeCode => format!(
+            "Let {} run Claude Code in {}? Its runs there use this computer's Claude Code \
+             sign-in: they can read and change ~/.claude and ~/.claude.json{}, where a setting \
+             they change runs the next time you start `claude` yourself.",
+            bot_name(ask),
+            ask.folder,
+            if cfg!(target_os = "macos") {
+                " and reach your login keychain"
+            } else {
+                ""
+            }
+        ),
+    }
+}
+
+/// The dialog's title for a request.
+pub fn title(kind: AskKind) -> &'static str {
+    match kind {
+        AskKind::Unattended => "Allow unattended commands",
+        AskKind::ClaudeCode => "Allow Claude Code",
+    }
 }
 
 /// The loan's name for the bot, or its number when it has none.
@@ -353,12 +423,88 @@ mod tests {
         }
     }
 
+    /// A bot's request for Claude Code is its own: it waits beside one for
+    /// unattended commands, says what it gives, and is open until the loan
+    /// gets Claude Code.
+    #[test]
+    fn a_request_for_claude_code_is_its_own() {
+        let asks = Asks::in_memory();
+        assert_eq!(
+            asks.ask("app", "42", AskKind::Unattended).unwrap(),
+            Asked::Queued
+        );
+        assert_eq!(
+            asks.ask("app", "42", AskKind::ClaudeCode).unwrap(),
+            Asked::Queued
+        );
+        assert_eq!(
+            asks.ask("app", "42", AskKind::ClaudeCode).unwrap(),
+            Asked::Already
+        );
+        let list = asks.list(&config(true, false));
+        assert_eq!(list.len(), 2);
+        let claude = list.iter().find(|a| a.kind == AskKind::ClaudeCode).unwrap();
+        assert!(
+            question(claude).starts_with("Let Issue fixer run Claude Code in App?"),
+            "{}",
+            question(claude)
+        );
+        let mut given = config(true, true);
+        given.roots[0].bots[0].claude_code = true;
+        assert!(
+            asks.take("app", "42", AskKind::ClaudeCode, None, &given)
+                .is_none()
+        );
+        assert!(
+            asks.take("app", "42", AskKind::ClaudeCode, None, &config(true, true))
+                .is_some(),
+            "unattended already, but not Claude Code"
+        );
+        // An answer reaches only the request it was shown.
+        asks.ask("app", "42", AskKind::ClaudeCode).unwrap();
+        assert!(
+            asks.take(
+                "app",
+                "42",
+                AskKind::ClaudeCode,
+                Some("then"),
+                &config(true, true)
+            )
+            .is_none()
+        );
+        let shown = asks
+            .list(&config(true, true))
+            .into_iter()
+            .find(|a| a.kind == AskKind::ClaudeCode)
+            .unwrap()
+            .asked_at;
+        assert!(
+            asks.take(
+                "app",
+                "42",
+                AskKind::ClaudeCode,
+                Some(&shown),
+                &config(true, true)
+            )
+            .is_some()
+        );
+        // A request saved before kinds existed is for unattended commands.
+        let old: Ask = serde_json::from_value(serde_json::json!({
+            "root": "app", "bot": "42", "asked_at": 1, "expires_at": 2
+        }))
+        .unwrap();
+        assert_eq!(old.kind, AskKind::Unattended);
+    }
+
     #[test]
     fn asks_once_until_answered() {
         let asks = Asks::in_memory();
-        assert_eq!(asks.ask("app", "42").unwrap(), Asked::Queued);
         assert_eq!(
-            asks.ask("app", "42").unwrap(),
+            asks.ask("app", "42", AskKind::Unattended).unwrap(),
+            Asked::Queued
+        );
+        assert_eq!(
+            asks.ask("app", "42", AskKind::Unattended).unwrap(),
             Asked::Already,
             "a repeat raises no second question"
         );
@@ -371,10 +517,16 @@ mod tests {
             "Issue fixer asks to run commands in App without asking each time. They still \
              run in the folder's sandbox and are recorded. Allow?"
         );
-        assert!(asks.take("app", "42", &config(true, false)).is_some());
-        assert!(asks.take("app", "42", &config(true, false)).is_none());
+        assert!(
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
+                .is_some()
+        );
+        assert!(
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
+                .is_none()
+        );
         assert_eq!(
-            asks.ask("app", "42").unwrap(),
+            asks.ask("app", "42", AskKind::Unattended).unwrap(),
             Asked::Queued,
             "asks again after an answer"
         );
@@ -383,15 +535,27 @@ mod tests {
     #[test]
     fn a_request_whose_loan_went_away_cant_be_answered() {
         let asks = Asks::in_memory();
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         let mut withdrawn = config(true, false);
         withdrawn.roots[0].bots.clear();
-        assert!(asks.take("app", "42", &withdrawn).is_none());
         assert!(
-            asks.take("app", "42", &config(false, false)).is_none(),
+            asks.take("app", "42", AskKind::Unattended, None, &withdrawn)
+                .is_none()
+        );
+        assert!(
+            asks.take(
+                "app",
+                "42",
+                AskKind::Unattended,
+                None,
+                &config(false, false)
+            )
+            .is_none(),
             "commands stopped"
         );
-        let ask = asks.take("app", "42", &config(true, false)).unwrap();
+        let ask = asks
+            .take("app", "42", AskKind::Unattended, None, &config(true, false))
+            .unwrap();
         asks.restore(ask);
         assert_eq!(asks.pending().len(), 1, "put back when the answer failed");
         assert_eq!(asks.clear(String::new()).len(), 1);
@@ -402,9 +566,16 @@ mod tests {
     fn a_full_queue_says_so() {
         let asks = Asks::in_memory();
         for bot in 0..MAX_PENDING {
-            assert_eq!(asks.ask("app", &bot.to_string()).unwrap(), Asked::Queued);
+            assert_eq!(
+                asks.ask("app", &bot.to_string(), AskKind::Unattended)
+                    .unwrap(),
+                Asked::Queued
+            );
         }
-        assert_eq!(asks.ask("app", "999").unwrap(), Asked::Full);
+        assert_eq!(
+            asks.ask("app", "999", AskKind::Unattended).unwrap(),
+            Asked::Full
+        );
     }
 
     #[test]
@@ -414,21 +585,21 @@ mod tests {
         let file = dir.path().join("asks.json");
         std::fs::create_dir(&file).unwrap();
         let asks = Asks::load(file, String::new());
-        assert!(asks.ask("app", "42").is_err());
+        assert!(asks.ask("app", "42", AskKind::Unattended).is_err());
         assert!(asks.pending().is_empty());
     }
 
     #[test]
     fn drops_what_nothing_is_left_to_answer_for() {
         let asks = Asks::in_memory();
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         assert!(asks.prune(&config(true, false)).is_empty());
         assert_eq!(
             asks.prune(&config(true, true)).len(),
             1,
             "already unattended"
         );
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         assert!(asks.list(&config(false, false)).is_empty());
         assert_eq!(
             asks.prune(&config(false, false)).len(),
@@ -443,7 +614,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("asks.json");
         let asks = Asks::load(file.clone(), String::new());
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         let again = Asks::load(file.clone(), String::new());
         assert_eq!(again.pending().len(), 1);
         let mut old = again.pending();
@@ -455,7 +626,7 @@ mod tests {
     #[test]
     fn a_request_is_never_answered_for_another_pairing() {
         let asks = Asks::in_memory();
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         // Paired meanwhile, before the reload dropped the request: the
         // new server's bot 42 is another bot.
         let mut paired = config(true, false);
@@ -463,9 +634,15 @@ mod tests {
             url: "https://two.example".into(),
             device_id: "9".into(),
         });
-        assert!(asks.take("app", "42", &paired).is_none());
+        assert!(
+            asks.take("app", "42", AskKind::Unattended, None, &paired)
+                .is_none()
+        );
         assert!(asks.list(&paired).is_empty());
-        assert!(asks.take("app", "42", &config(true, false)).is_some());
+        assert!(
+            asks.take("app", "42", AskKind::Unattended, None, &config(true, false))
+                .is_some()
+        );
     }
 
     #[test]
@@ -473,7 +650,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("asks.json");
         let asks = Asks::load(file.clone(), "https://one.example 7".into());
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         // Paired again while the daemon was stopped.
         let again = Asks::load(file.clone(), "https://two.example 9".into());
         assert!(again.pending().is_empty());
@@ -483,9 +660,9 @@ mod tests {
                 .is_empty()
         );
         // Paired again while it ran.
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         assert_eq!(asks.clear("https://two.example 9".into()).len(), 1);
-        asks.ask("app", "42").unwrap();
+        asks.ask("app", "42", AskKind::Unattended).unwrap();
         assert_eq!(asks.pending()[0].pairing, "https://two.example 9");
     }
 }

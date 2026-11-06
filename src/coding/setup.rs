@@ -204,21 +204,13 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
         return Ok(());
     }
 
-    // 2. The bot.
-    let bot = match options.bot.clone() {
-        Some(bot) => bot,
-        None => match ask.text(
-            "Which bot? The number in its address in Chat with Work (/bots/42):",
-            None,
-        )? {
-            Some(bot) => bot,
-            None => bail!("say which bot with --bot <number>"),
-        },
-    };
-    let bot = bot.trim().trim_start_matches('#').to_string();
+    // 2. The bot, by name: picked from the bots this computer's person can
+    // read, or given as a name or an ID.
+    let (bot, picked_name) = pick_bot(paths, &ask, options.bot.as_deref())?;
     let bot_name = options
         .bot_name
         .clone()
+        .or(picked_name)
         .or_else(|| {
             config
                 .roots
@@ -226,12 +218,7 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
                 .find_map(|r| r.loan(&bot))
                 .map(|l| l.name.clone())
         })
-        .filter(|n| !n.is_empty())
-        .or_else(|| {
-            ask.text("Its name, to recognize it here:", None)
-                .ok()
-                .flatten()
-        });
+        .filter(|n| !n.is_empty());
     Step::Ok(format!(
         "bot {bot}{}",
         bot_name
@@ -454,29 +441,79 @@ pub fn find_claude() -> Option<PathBuf> {
     find_claude_outside(&[])
 }
 
-/// As [`find_claude`], passing over any candidate a command could change:
-/// one inside a shared folder that allows changes. Probing it would run what
-/// a bot wrote, as the person, outside the sandbox.
-pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
+/// Whether `path` is in a shared folder that allows changes, where a command
+/// could change it.
+fn changeable(roots: &[crate::config::Root], path: &Path) -> bool {
+    let real = crate::roots::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    roots.iter().any(|root| {
+        root.writable
+            && crate::roots::canonical(&root.path).is_ok_and(|shared| real.starts_with(shared))
+    })
+}
+
+/// The `claude` a run uses: the one setup recorded while it's there, else the
+/// first of the places it's installed. Only looks: whoever starts runs never
+/// runs a program to find it, outside the sandbox, and a run uses it only in
+/// there. Never one in a shared folder that allows changes.
+pub fn claude_for_run(
+    coding: &crate::config::CodingConfig,
+    roots: &[crate::config::Root],
+) -> Option<PathBuf> {
+    if let Some(recorded) = coding.claude.as_ref().filter(|p| p.is_file()) {
+        return Some(recorded.clone());
+    }
     let home = crate::paths::home_dir().ok()?;
     let exe = if cfg!(windows) {
         "claude.exe"
     } else {
         "claude"
     };
+    which("claude")
+        .into_iter()
+        .chain([
+            home.join(".local").join("bin").join(exe),
+            home.join(".local/share/mise/installs/claude/latest")
+                .join(exe),
+            PathBuf::from("/opt/homebrew/bin/claude"),
+            PathBuf::from("/usr/local/bin/claude"),
+            home.join(".npm-global").join("bin").join("claude"),
+            home.join(".claude").join("local").join(exe),
+        ])
+        .find(|p| p.is_file() && !changeable(roots, p))
+}
+
+/// As [`find_claude`], passing over any candidate a command could change:
+/// one inside a shared folder that allows changes. Probing it would run what
+/// a bot wrote, as the person, outside the sandbox.
+pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
+    let home = crate::paths::home_dir().ok()?;
+    // Commands given the sign-in can change anything in `~/.claude`, whose
+    // `local` is one of the places below.
+    let lent_login = roots
+        .iter()
+        .any(|root| root.bots.iter().any(|l| l.claude_code));
+    let login = crate::roots::canonical(&home.join(super::CONFIG_DIR)).ok();
+    let exe = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
     let mise = || {
-        let mut command = Command::new("mise");
+        let program = which("mise").filter(|p| !changeable(roots, p))?;
+        let mut command = Command::new(program);
         command.args(["which", "claude"]);
         output_within(command, PROBE_LIMIT)
             .map(PathBuf::from)
             .filter(|p| p.is_file())
     };
     let writable = |p: &PathBuf| {
-        let real = crate::roots::canonical(p).unwrap_or_else(|_| p.clone());
-        roots.iter().any(|root| {
-            root.writable
-                && crate::roots::canonical(&root.path).is_ok_and(|path| real.starts_with(path))
-        })
+        changeable(roots, p)
+            || (lent_login
+                && login.as_ref().is_some_and(|login| {
+                    crate::roots::canonical(p)
+                        .unwrap_or_else(|_| p.clone())
+                        .starts_with(login)
+                }))
     };
     let runs = |p: &PathBuf| p.is_file() && !writable(p) && version(p).is_some();
     // Each asked only when the one before didn't give a `claude` that runs.
@@ -605,6 +642,138 @@ fn claude_step(config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> 
     }
     Step::Ok(format!("{version}, at {}", program.display())).print("Claude Code");
     Ok(true)
+}
+
+/// One bot the person can read: its ID, name, project and organization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotChoice {
+    pub id: String,
+    pub name: String,
+    pub project: String,
+    pub organization: String,
+}
+
+impl BotChoice {
+    fn line(&self) -> String {
+        format!("{} ({}, {})", self.name, self.project, self.organization)
+    }
+}
+
+/// The bots in `cww bots list`'s answer.
+pub fn bot_choices(answer: &Value) -> Vec<BotChoice> {
+    let organization = answer["account"]["name"].as_str().unwrap_or_default();
+    answer["bots"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|bot| {
+            let id = match &bot["id"] {
+                Value::Number(n) => n.to_string(),
+                Value::String(s) => s.clone(),
+                _ => return None,
+            };
+            Some(BotChoice {
+                id,
+                name: bot["name"].as_str().unwrap_or_default().to_string(),
+                project: bot["project"]["name"]
+                    .as_str()
+                    .unwrap_or("Private")
+                    .to_string(),
+                organization: organization.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Whether `query`'s letters come in order in `text`, ignoring case and
+/// spaces: "isfx" finds "Issue fixer".
+fn fuzzy(query: &str, text: &str) -> bool {
+    let text = text.to_lowercase();
+    let mut letters = text.chars();
+    query
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .all(|q| letters.any(|t| t == q))
+}
+
+/// The bots `query` names: by ID exactly, by name exactly (ignoring case),
+/// or else every one whose name, project and organization it fuzzily finds.
+pub fn matching<'a>(choices: &'a [BotChoice], query: &str) -> Vec<&'a BotChoice> {
+    let query = query.trim().trim_start_matches('#');
+    if let Some(one) = choices.iter().find(|c| c.id == query) {
+        return vec![one];
+    }
+    let exact: Vec<_> = choices
+        .iter()
+        .filter(|c| c.name.eq_ignore_ascii_case(query))
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    choices.iter().filter(|c| fuzzy(query, &c.line())).collect()
+}
+
+/// The bot to lend this computer to, and its name: `given` (a name or an
+/// ID), or picked from the bots the person can read, typing part of a name
+/// until one is left.
+fn pick_bot(paths: &Paths, ask: &Asker, given: Option<&str>) -> Result<(String, Option<String>)> {
+    let digits = |s: &str| {
+        let s = s.trim().trim_start_matches('#');
+        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+    };
+    // An ID is that bot, listed or not: it can be in another organization
+    // than the one a list shows. Listing could also ask for access to bots,
+    // which an ID doesn't need, so it isn't asked; `--name` names it here.
+    if let Some(id) = given.filter(|id| digits(id)) {
+        return Ok((id.trim().trim_start_matches('#').to_string(), None));
+    }
+    let choices = crate::bots::Bots::connect(paths, None)
+        .and_then(|bots| bots.list())
+        .map(|answer| bot_choices(&answer))
+        .map_err(|e| {
+            e.context("listing your bots, to pick one by name (or give its ID with --bot)")
+        })?;
+    let mut query = match given {
+        Some(given) => given.to_string(),
+        None => {
+            if choices.is_empty() {
+                bail!("you have no bots in Chat with Work yet");
+            }
+            println!("Your bots:");
+            for choice in &choices {
+                println!("  {}", choice.line());
+            }
+            ask.text("Which bot? Type part of its name:", None)?
+                .context("say which bot with --bot <name or ID>")?
+        }
+    };
+    loop {
+        let found = matching(&choices, &query);
+        match found.as_slice() {
+            [one] => return Ok((one.id.clone(), Some(one.name.clone()))),
+            [] if !ask.interactive() || ask.yes => bail!("no bot matches {query:?}"),
+            [] => println!("No bot matches {query:?}."),
+            several if !ask.interactive() || ask.yes => bail!(
+                "{query:?} matches {} bots: {}",
+                several.len(),
+                several
+                    .iter()
+                    .map(|c| c.line())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+            several => {
+                println!("{query:?} matches:");
+                for choice in several {
+                    println!("  {}", choice.line());
+                }
+            }
+        }
+        query = ask
+            .text("Type more of its name:", None)?
+            .context("say which bot with --bot <name or ID>")?;
+    }
 }
 
 /// Claude Code's sign-in on this computer, where Claude Code keeps it.
@@ -1071,9 +1240,13 @@ fn proof_step(
 /// What each folder lent to a bot has, as `cww coding status` prints it.
 pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     let stored = login(paths).signed_in();
-    match &config.coding.claude {
+    let program = installed(config);
+    match &program {
         Some(p) => println!("Claude Code: {}", p.display()),
-        None => println!("Claude Code: not set up (`cww coding setup`)"),
+        None => println!(
+            "Claude Code: not installed (`curl -fsSL https://claude.ai/install.sh | bash`, or \
+             `cww coding setup`)"
+        ),
     }
     println!(
         "Sign-in: {}",
@@ -1088,7 +1261,7 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
             if only_bot.is_some_and(|b| b != loan.id) {
                 continue;
             }
-            let state = effective_state(&config.coding, root, &loan.id, stored);
+            let state = effective_state(&config.coding, root, &loan.id, stored, program.is_some());
             println!(
                 "Bot {}{} in {}: {}{}",
                 loan.id,
@@ -1125,15 +1298,22 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     }
 }
 
-/// The state as a run would find it: ready only when Claude Code is signed
-/// in on this computer, which the config doesn't say.
+/// The `claude` a run would use.
+fn installed(config: &Config) -> Option<PathBuf> {
+    claude_for_run(&config.coding, &config.roots)
+}
+
+/// The state as a run would find it: ready only when Claude Code is
+/// installed and signed in on this computer, which the config doesn't say.
 fn effective_state(
     coding: &crate::config::CodingConfig,
     root: &crate::config::Root,
     bot: &str,
     signed_in: bool,
+    installed: bool,
 ) -> ClaudeState {
     match super::claude_state(coding, root, bot) {
+        ClaudeState::Ready if !installed => ClaudeState::NotInstalled,
         ClaudeState::Ready if !signed_in => ClaudeState::NotSignedIn,
         state => state,
     }
@@ -1143,6 +1323,8 @@ fn effective_state(
 /// would see, and per repository, its fetch. No token, ever.
 pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Value {
     let stored = login(paths).signed_in();
+    let program = installed(config);
+    let found = program.is_some();
     let loans: Vec<Value> = config
         .roots
         .iter()
@@ -1156,7 +1338,7 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
                         "bot": loan.id,
                         "name": loan.name,
                         "unattended": loan.unattended,
-                        "claude_code": effective_state(&config.coding, root, &loan.id, stored).name(),
+                        "claude_code": effective_state(&config.coding, root, &loan.id, stored, found).name(),
                     })
                 })
         })
@@ -1179,7 +1361,7 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
         })
         .collect();
     serde_json::json!({
-        "claude": config.coding.claude,
+        "claude": program,
         "signed_in": stored,
         "loans": loans,
         "repositories": repos,

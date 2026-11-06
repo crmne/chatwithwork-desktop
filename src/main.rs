@@ -466,7 +466,8 @@ enum CodingCommand {
     /// Set this computer up for a coding bot, one step at a time. Asks
     /// before each thing it allows or runs; run again, it skips what's done.
     Setup {
-        /// The bot's number, from its address in Chat with Work (/bots/42).
+        /// The bot, by name (part of it is enough when only one bot has
+        /// it) or by its ID. Without it, setup lists your bots to pick from.
         #[arg(long)]
         bot: Option<String>,
         /// The bot's name, to recognize it here.
@@ -587,16 +588,26 @@ enum RootsCommand {
     /// Stop sharing a folder with a bot.
     #[command(name = "unshare", alias = "stop-lending")]
     StopLending { root: String, bot: String },
-    /// List the bots asking to run their commands unattended in a folder
-    /// shared with them.
+    /// List the bots asking, about a folder shared with them, to run their
+    /// commands unattended or to run Claude Code.
     Requests,
-    /// Allow a bot's request to run its commands unattended in a folder,
-    /// through the daemon, which records it. It lasts until the folder's
-    /// sharing changes.
-    Allow { root: String, bot: String },
-    /// Turn down a bot's request to run its commands unattended in a
-    /// folder.
-    Decline { root: String, bot: String },
+    /// Allow a bot's request to run its commands unattended in a folder
+    /// (or with --claude-code, to run Claude Code with this computer's
+    /// sign-in there), through the daemon, which records it. It lasts
+    /// until the folder's sharing changes.
+    Allow {
+        root: String,
+        bot: String,
+        #[arg(long)]
+        claude_code: bool,
+    },
+    /// Turn down a bot's request about a folder.
+    Decline {
+        root: String,
+        bot: String,
+        #[arg(long)]
+        claude_code: bool,
+    },
     /// Set how many characters a chat may read from a shared folder in an
     /// hour, when `[limits]` sets an hourly read limit: from that limit to
     /// 20,000,000, for a folder worked in a lot, such as code. All chats
@@ -1130,33 +1141,53 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 .cloned()
                 .unwrap_or_default();
             if asks.is_empty() {
-                println!("No bot is asking to run its commands unattended.");
+                println!("No bot is asking anything of this computer.");
             }
             for ask in asks {
                 println!("{}", describe_ask(&ask));
             }
         }
-        RootsCommand::Allow { root, bot } => {
+        RootsCommand::Allow {
+            root,
+            bot,
+            claude_code,
+        } => {
             let request = ControlRequest::RootsUnattendedAnswer {
                 root,
                 bot: bot.clone(),
                 allow: true,
+                kind: ask_kind(claude_code),
+                asked_at: None,
             };
             if control::request(&paths.socket_path(), request)?.is_none() {
                 anyhow::bail!("the daemon is not running, so no request is waiting");
             }
-            println!("Bot {bot}'s commands there now run without asking each time.");
+            if claude_code {
+                println!("Bot {bot}'s runs there now use this computer's Claude Code sign-in.");
+            } else {
+                println!("Bot {bot}'s commands there now run without asking each time.");
+            }
         }
-        RootsCommand::Decline { root, bot } => {
+        RootsCommand::Decline {
+            root,
+            bot,
+            claude_code,
+        } => {
             let request = ControlRequest::RootsUnattendedAnswer {
                 root,
                 bot: bot.clone(),
                 allow: false,
+                kind: ask_kind(claude_code),
+                asked_at: None,
             };
             if control::request(&paths.socket_path(), request)?.is_none() {
                 anyhow::bail!("the daemon is not running, so no request is waiting");
             }
-            println!("Bot {bot}'s commands there still wait for approval in Chat with Work.");
+            if claude_code {
+                println!("Bot {bot}'s runs there don't get Claude Code's sign-in.");
+            } else {
+                println!("Bot {bot}'s commands there still wait for approval in Chat with Work.");
+            }
         }
         RootsCommand::Add {
             path,
@@ -1563,8 +1594,8 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|ask| ask["root"] == r["id"] && ask["bot"] == loan["id"]);
-            if let Some(ask) = asking {
+                .filter(|ask| ask["root"] == r["id"] && ask["bot"] == loan["id"]);
+            for ask in asking {
                 println!("      {}", describe_ask(ask));
             }
         }
@@ -1572,12 +1603,29 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// A bot's request for unattended commands, and how to answer it.
+fn ask_kind(claude_code: bool) -> cww::unattended_asks::AskKind {
+    if claude_code {
+        cww::unattended_asks::AskKind::ClaudeCode
+    } else {
+        cww::unattended_asks::AskKind::Unattended
+    }
+}
+
+/// A bot's request, and how to answer it.
 fn describe_ask(ask: &Value) -> String {
     let (root, bot) = (str(&ask["root"]), str(&ask["bot"]));
     let name = Some(str(&ask["name"]))
         .filter(|n| !n.trim().is_empty())
         .map_or_else(|| format!("Bot {bot}"), str::to_string);
+    if ask["kind"] == "claude_code" {
+        return format!(
+            "{name} asks to run Claude Code in {} with this computer's Claude Code sign-in; the \
+             request waits until {}. `cww roots allow {root} {bot} --claude-code` allows it, \
+             `cww roots decline {root} {bot} --claude-code` doesn't.",
+            str(&ask["folder"]),
+            str(&ask["expires_at"])
+        );
+    }
     format!(
         "{name} asks to run commands in {} without asking each time; the request waits \
          until {}. `cww roots allow {root} {bot}` allows it until you change the folder's \

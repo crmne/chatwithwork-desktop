@@ -140,9 +140,7 @@ impl Login {
     fn narrowed(mut self, config: &Config, paths: &Paths) -> Self {
         let holds = |outer: &PathBuf| {
             let inner = |p: &Path| crate::roots::canonical(p).is_ok_and(|p| p.starts_with(outer));
-            [&paths.config_dir, &paths.data_dir, &paths.state_dir]
-                .iter()
-                .any(|own| inner(own))
+            paths.all_dirs().iter().any(|own| inner(own))
                 || config.roots.iter().any(|r| inner(&r.path))
         };
         if self.dir.as_ref().is_some_and(holds) {
@@ -310,10 +308,12 @@ impl ClaudeState {
     }
 }
 
-pub fn claude_state(coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
-    if coding.claude.is_none() {
-        ClaudeState::NotInstalled
-    } else if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
+/// The state as the config says it: a loan's yes, and the network. Whether
+/// Claude Code is installed and signed in, the config can't say (a run finds
+/// `claude` itself when no setup recorded one), so only `cww coding status`,
+/// which looks, says `not_installed` and `not_signed_in`.
+pub fn claude_state(_coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
+    if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
         ClaudeState::NotAllowed
     } else if !root.network {
         ClaudeState::NoNetwork
@@ -450,7 +450,9 @@ pub fn for_run(
         if claude_state(&config.coding, root, bot) != ClaudeState::Ready {
             return None;
         }
-        let program = config.coding.claude.clone()?;
+        // The one setup recorded while it's there, else the one this computer
+        // has: a bot allowed Claude Code needs no `cww coding setup`.
+        let program = setup::claude_for_run(&config.coding, &config.roots)?;
         // Without Windows' `\\?\` prefix, which a run's PATH and grants can't use.
         let real = crate::roots::canonical(&program)
             .ok()

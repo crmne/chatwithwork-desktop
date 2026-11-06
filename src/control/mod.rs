@@ -154,15 +154,26 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unattended: bool,
     },
-    /// The person's answer to a bot's request to run its commands
-    /// unattended in a folder lent to it (`ask_unattended`, PROTOCOL.md
-    /// 7.2.1): `allow` does what `roots_bot` with `unattended: true` does,
-    /// and otherwise the request is dropped. Refused when no request from
+    /// The person's answer to a bot's request about a folder lent to it
+    /// (`ask_unattended` or `ask_claude_code`, PROTOCOL.md 7.2.1): `allow`
+    /// does what `roots_bot` with `unattended: true` does, or gives the
+    /// bot's runs there Claude Code's sign-in, and otherwise the request is
+    /// dropped. Refused when no request from
     /// that bot waits for that folder.
     RootsUnattendedAnswer {
         root: String,
         bot: String,
         allow: bool,
+        /// What the request asks for: `unattended` (the default) or
+        /// `claude_code` (`ask_claude_code`), where `allow` does what `cww
+        /// coding allow` does.
+        #[serde(default)]
+        kind: crate::unattended_asks::AskKind,
+        /// The `asked_at` of the request the person was shown, where a
+        /// dialog showed one: an answer never reaches another that took its
+        /// place (the computer paired again, another bot with that number).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_at: Option<String>,
     },
     /// Give a shared folder a read budget of its own: characters a chat
     /// may read from it per rolling hour (all chats together twice that),

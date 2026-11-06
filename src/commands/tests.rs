@@ -590,10 +590,9 @@ fn no_secret_goes_on_a_command_line() {
         assert_eq!(mode & 0o777, 0o600);
         let read = std::process::Command::new("sh")
             .arg("-c")
-            .arg(format!(
-                ". '{}'; printf '%s|%s' \"$API_TOKEN\" \"$QUOTED\"",
-                plan.values_file().display()
-            ))
+            .arg(". \"$1\"; printf '%s|%s' \"$API_TOKEN\" \"$QUOTED\"")
+            .arg("sh")
+            .arg(plan.values_file())
             .output()
             .unwrap();
         assert_eq!(

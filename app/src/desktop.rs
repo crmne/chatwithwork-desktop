@@ -249,20 +249,29 @@ impl Desktop {
                     } else {
                         ask.name.clone()
                     };
+                    let view = cww::unattended_asks::AskView {
+                        root: ask.root.clone(),
+                        folder: ask.folder.clone(),
+                        bot: ask.bot.clone(),
+                        kind: ask.kind,
+                        name: name.clone(),
+                        asked_at: String::new(),
+                        expires_at: String::new(),
+                    };
+                    let claude_code = ask.kind == cww::unattended_asks::AskKind::ClaudeCode;
                     let question = crate::computer::Question {
-                        title: "Allow unattended commands".into(),
-                        message: format!(
-                            "{name} asks to run commands in {} without asking each time. They \
-                             still run in the folder's sandbox and are recorded. Allow?",
-                            ask.folder
-                        ),
+                        title: cww::unattended_asks::title(ask.kind).into(),
+                        message: cww::unattended_asks::question(&view),
                         yes: "Allow".into(),
                     };
-                    let allow = crate::bridge::confirm_or(&desktop.app(), "", &question, "Not now");
+                    let no = if claude_code { "Deny" } else { "Not now" };
+                    let allow = crate::bridge::confirm_or(&desktop.app(), "", &question, no);
                     let answer = cww::control::ControlRequest::RootsUnattendedAnswer {
                         root: ask.root.clone(),
                         bot: ask.bot.clone(),
                         allow,
+                        kind: ask.kind,
+                        asked_at: Some(ask.asked_at.clone()),
                     };
                     if let Err(e) = desktop.client.request(&answer) {
                         // Not answered: asked again when a status lists it

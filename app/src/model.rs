@@ -33,8 +33,9 @@ pub struct Status {
     /// Whether commands can run here: only on Windows, where it depends on
     /// the version of Windows (docs/commands.md); `None` elsewhere.
     pub commands: Option<CommandsHost>,
-    /// Bots asking to run their commands unattended in a folder lent to
-    /// them, waiting for the person here (CONTROL.md, `status`).
+    /// Bots asking, about a folder lent to them, to run their commands
+    /// unattended or to run Claude Code, waiting for the person here
+    /// (CONTROL.md, `status`).
     pub unattended_asks: Vec<UnattendedAsk>,
 }
 
@@ -46,6 +47,9 @@ pub struct UnattendedAsk {
     pub root: String,
     pub folder: String,
     pub bot: String,
+    /// What it asks for: unattended commands (the default), or Claude
+    /// Code with this computer's sign-in.
+    pub kind: cww::unattended_asks::AskKind,
     pub name: String,
     pub asked_at: String,
     pub expires_at: String,
