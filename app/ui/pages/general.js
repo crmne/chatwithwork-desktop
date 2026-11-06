@@ -266,7 +266,7 @@ export function updatesSection(app) {
       row({ title: "Version", text: updateText(u), actions: action }),
       u.phase === "unsupported" ? null : row({
         title: "Install updates automatically",
-        text: "A new version on this major version installs the next time Chat with Work starts, never while a command runs. Off, you restart to update.",
+        text: "A new version installs the next time Chat with Work starts, never while a command runs. Off, you restart to update.",
         actions: switchInput(u.installs_updates !== false, async (on) => {
           try {
             view.update = await call("set_automatic_updates", { enabled: on });

@@ -642,6 +642,7 @@ pub fn run(
         }
         other => other.clone(),
     };
+    let newest_run = crate::update::remember_run(&paths);
     // A newer release's notice, dismissed once per version.
     let app_state = crate::state::AppState::load(&paths);
     let dismissed_update = app_state.dismissed_update.clone();
@@ -670,11 +671,10 @@ pub fn run(
         connect_episode: Default::default(),
         connect_quiet: AtomicBool::new(matches!(first_open, Open::Settings(Some("welcome")))),
         answered_asks: Mutex::new(std::collections::HashSet::new()),
-        updates: Arc::new(crate::update::Updates::new(
-            update_error,
-            dismissed_update,
-            installs_updates,
-        )),
+        updates: Arc::new(
+            crate::update::Updates::new(update_error, dismissed_update, installs_updates)
+                .with_newest_run(newest_run),
+        ),
     });
 
     let mut builder = tauri::Builder::default();
@@ -814,6 +814,7 @@ pub fn run(
                     &desktop.paths,
                     &desktop.client,
                     !matches!(first_open, Open::Nothing),
+                    desktop.updates.newest_run().as_deref(),
                 )
             {
                 std::process::exit(0);
