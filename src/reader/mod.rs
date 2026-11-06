@@ -489,22 +489,13 @@ impl Reader {
                 ),
             ));
         }
-        let key: CacheKey = (
-            path.to_string(),
-            opened.identity,
-            opened.modified,
-            opened.size,
-        );
-        let text = match self.cached(&key) {
-            Some(text) => text,
-            None => {
-                let bytes = extract::read_capped(&mut opened.file, state.limits.max_file_bytes)?;
-                let name = path.rel.file_name().unwrap_or_default();
-                let text = Arc::new(extract::extract(name, &bytes, MAX_EXTRACTED_CHARS)?);
-                self.store(key, Arc::clone(&text));
-                text
-            }
-        };
+        let text = self.extracted(
+            &path.to_string(),
+            path.rel.file_name().unwrap_or_default(),
+            &mut opened,
+            state.limits.max_file_bytes,
+            None,
+        )?;
 
         let total_chars = text.chars().count();
         if offset > total_chars {
@@ -635,6 +626,47 @@ impl Reader {
     pub fn any_writable(&self) -> bool {
         let state = self.state.read().expect("reader state");
         state.configured.iter().any(|r| r.writable)
+    }
+
+    /// The text of the file opened as `opened`, at `path` (`root:rel`) and
+    /// called `name`: from the cache when this version of it was turned into
+    /// text already, else read (at most `max_bytes`), extracted and cached. `read` and
+    /// `grep` share it, so a document searched is not converted again when
+    /// it is read, nor the other way round.
+    pub(crate) fn extracted(
+        &self,
+        path: &str,
+        name: &str,
+        opened: &mut safe_fs::OpenedFile,
+        max_bytes: u64,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Arc<String>, ToolError> {
+        // Asked of this version: the file may have changed since the caller
+        // looked at its size, and its text may be in the cache.
+        if opened.size > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!("{path} is over the {max_bytes} bytes this reads"),
+            ));
+        }
+        let key: CacheKey = (
+            path.to_string(),
+            opened.identity,
+            opened.modified,
+            opened.size,
+        );
+        if let Some(text) = self.cached(&key) {
+            return Ok(text);
+        }
+        let bytes = extract::read_capped(&mut opened.file, max_bytes)?;
+        let text = Arc::new(extract::extract_until(
+            name,
+            &bytes,
+            MAX_EXTRACTED_CHARS,
+            deadline,
+        )?);
+        self.store(key, Arc::clone(&text));
+        Ok(text)
     }
 
     fn cached(&self, key: &CacheKey) -> Option<Arc<String>> {

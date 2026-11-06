@@ -8,6 +8,11 @@
 //! folder inside it. Files are found by name in the walk and opened through
 //! the root handle with the same policy as `read`, so a swap between the
 //! walk and the open can't escape the folder. Both stop at a time budget.
+//!
+//! `grep` also searches the documents `read` turns into text (PDF, Word,
+//! PowerPoint, spreadsheets), in that text and through the same cache:
+//! line numbers and context are lines of what `read` returns for them.
+//! Other binary files are skipped.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -508,21 +513,44 @@ fn bounded(value: Option<usize>, name: &str, min: usize, max: usize) -> Result<(
     }
 }
 
+/// The text `grep` searches in a file: its bytes, or for a document the
+/// text extracted from it.
+enum Body {
+    Raw(Vec<u8>),
+    Extracted(Arc<String>),
+}
+
+impl Body {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Body::Raw(bytes) => bytes,
+            Body::Extracted(text) => text.as_bytes(),
+        }
+    }
+}
+
 /// What one file holds that a `grep` returns.
 enum FileHits {
-    Lines(Vec<GrepMatch>),
+    /// How many matching lines it passed over, and the ones after them.
+    Lines(usize, Vec<GrepMatch>),
     Count(usize),
 }
 
-/// Search `bytes`, the text of `path`. `None` when nothing matches.
+/// Search `bytes`, the text of `path`: past the first `skip` matching lines,
+/// which are only counted, at most `most`, as a document's text can be
+/// millions of them. `None` when nothing matches,
+/// which is always so of no text at all (`read` gives it no lines), whatever
+/// the pattern.
 fn search_file(
     matcher: &RegexMatcher,
     path: &str,
     bytes: &[u8],
     output: GrepOutput,
     context: usize,
+    skip: usize,
+    most: usize,
 ) -> Option<FileHits> {
-    if !matcher.is_match(bytes).unwrap_or(false) {
+    if bytes.is_empty() || !matcher.is_match(bytes).unwrap_or(false) {
         return None;
     }
     let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
@@ -543,19 +571,28 @@ fn search_file(
             })
             .collect::<Vec<_>>()
     };
-    let hits: Vec<GrepMatch> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| is_match(line))
-        .map(|(i, line)| GrepMatch {
+    let mut skipped = 0;
+    let mut hits = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if hits.len() == most {
+            break;
+        }
+        if !is_match(line) {
+            continue;
+        }
+        if skipped < skip {
+            skipped += 1;
+            continue;
+        }
+        hits.push(GrepMatch {
             path: path.to_string(),
             line: i + 1,
             text: line_text(line),
             before: (context > 0).then(|| around(i.saturating_sub(context), i)),
             after: (context > 0).then(|| around(i + 1, (i + 1 + context).min(lines.len()))),
-        })
-        .collect();
-    (!hits.is_empty()).then_some(FileHits::Lines(hits))
+        });
+    }
+    (skipped > 0 || !hits.is_empty()).then_some(FileHits::Lines(skipped, hits))
 }
 
 impl super::Reader {
@@ -601,9 +638,12 @@ impl super::Reader {
         let mut more = false;
         let mut files_searched = 0usize;
         let mut timed_out = false;
+        let ran_out = std::cell::Cell::new(false);
         let mut search = |start: &Start, found: Found| -> bool {
+            let Some(format) = format_for(found.rel.file_name().unwrap_or_default()) else {
+                return true;
+            };
             if found.size > max_bytes
-                || format_for(found.rel.file_name().unwrap_or_default()) != Some(Format::Text)
                 || (!start.is_file
                     && glob
                         .as_ref()
@@ -614,18 +654,49 @@ impl super::Reader {
             let Ok(mut opened) = start.root.open_file(&found.rel, policy) else {
                 return true;
             };
-            let Ok(bytes) = read_capped(&mut opened.file, max_bytes) else {
-                return true;
-            };
-            // Binary files are skipped, as ripgrep does: a NUL byte.
-            if bytes.contains(&0) {
-                return true;
-            }
-            files_searched += 1;
             let path = ToolPath::display(&start.root.id, &found.rel);
-            match search_file(&matcher, &path, &bytes, req.output, context) {
+            // A document (PDF, Word, PowerPoint, a spreadsheet) is searched
+            // in the text `read` returns for it, through the same cache, so
+            // its line numbers are lines of that text.
+            let text = if format == Format::Text {
+                let Ok(bytes) = read_capped(&mut opened.file, max_bytes) else {
+                    return true;
+                };
+                // Binary files are skipped, as ripgrep does: a NUL byte.
+                if bytes.contains(&0) {
+                    return true;
+                }
+                Body::Raw(bytes)
+            } else {
+                let name = found.rel.file_name().unwrap_or_default();
+                match self.extracted(&path, name, &mut opened, max_bytes, Some(deadline)) {
+                    Ok(text) => Body::Extracted(text),
+                    // A converter that stopped for the clock says so, as
+                    // the walk does; a damaged document is only skipped.
+                    Err(_) if Instant::now() >= deadline => {
+                        ran_out.set(true);
+                        return false;
+                    }
+                    Err(_) => return true,
+                }
+            };
+            files_searched += 1;
+            // What's left before the page, and what the page still needs
+            // with one more, to say there's more.
+            let skip = offset.saturating_sub(seen);
+            let most = (limit + 1).saturating_sub(matches.len());
+            match search_file(
+                &matcher,
+                &path,
+                text.bytes(),
+                req.output,
+                context,
+                skip,
+                most,
+            ) {
                 None => true,
-                Some(FileHits::Lines(hits)) => {
+                Some(FileHits::Lines(skipped, hits)) => {
+                    seen += skipped;
                     for hit in hits {
                         seen += 1;
                         if seen <= offset {
@@ -689,6 +760,7 @@ impl super::Reader {
                 break;
             }
         }
+        let timed_out = timed_out || ran_out.get();
         let output = req.output;
         Ok(GrepResponse {
             output,
@@ -698,7 +770,7 @@ impl super::Reader {
             files_searched,
             truncated: more,
             timed_out,
-            next_offset: more.then_some(offset + limit),
+            next_offset: more.then_some(offset.saturating_add(limit)),
             note: timed_out.then(|| {
                 "The search stopped at its time budget; these are the results found until \
                  then. Search a narrower path."
@@ -980,6 +1052,183 @@ mod tests {
         let json = serde_json::to_value(grep(&f, req("helper"))).unwrap();
         assert!(json["matches"][0].get("before").is_none());
         assert_eq!(json["next_offset"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn greps_documents_in_their_text() {
+        use crate::reader::extract::fixtures;
+        let f = fixture();
+        let contracts = f.app.join("contracts");
+        fs::create_dir_all(&contracts).unwrap();
+        fs::write(
+            contracts.join("msa.pdf"),
+            fixtures::pdf_pages(&[
+                "Definitions",
+                "Termination for convenience: 90 days notice",
+                "Late payment interest: 9 percent",
+            ]),
+        )
+        .unwrap();
+        fs::write(
+            contracts.join("plan.docx"),
+            fixtures::docx(&["Intro", "Termination by either party"]),
+        )
+        .unwrap();
+        // Binary files that aren't documents stay skipped, by extension or
+        // by a NUL byte.
+        fs::write(contracts.join("scan.png"), "Termination").unwrap();
+        fs::write(contracts.join("blob.dat"), "Termination ").unwrap();
+
+        let content = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts".into()),
+                context: Some(2),
+                ..req("Termination")
+            },
+        );
+        assert_eq!(content.files_searched, 2);
+        let hits = content.matches.as_ref().unwrap();
+        assert_eq!(
+            lines(&content),
+            ["app:contracts/msa.pdf:3", "app:contracts/plan.docx:2"]
+        );
+        // Lines and context are lines of the text `read` returns.
+        let pdf = &hits[0];
+        assert_eq!(pdf.text, "Termination for convenience: 90 days notice");
+        let text = |l: &Option<Vec<Line>>| {
+            l.as_ref()
+                .unwrap()
+                .iter()
+                .map(|l| (l.line, l.text.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            text(&pdf.before),
+            [(1, "Definitions".to_string()), (2, String::new())]
+        );
+        assert_eq!(
+            text(&pdf.after),
+            [
+                (4, String::new()),
+                (5, "Late payment interest: 9 percent".to_string())
+            ]
+        );
+        let read = f
+            .reader
+            .read(&crate::reader::ReadRequest {
+                path: "app:contracts/msa.pdf".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            read.text.lines().nth(2),
+            Some("Termination for convenience: 90 days notice")
+        );
+        // The search converted each document once, into the cache `read`
+        // uses.
+        let mut cached: Vec<String> = f
+            .reader
+            .cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.0.clone())
+            .collect();
+        cached.sort();
+        assert_eq!(cached, ["app:contracts/msa.pdf", "app:contracts/plan.docx"]);
+
+        let files = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts".into()),
+                output: GrepOutput::Files,
+                ignore_case: true,
+                ..req("termination|interest")
+            },
+        );
+        assert_eq!(
+            files.files.unwrap(),
+            ["app:contracts/msa.pdf", "app:contracts/plan.docx"]
+        );
+        let counts = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:contracts/msa.pdf".into()),
+                output: GrepOutput::Count,
+                ..req("Termination|interest")
+            },
+        );
+        assert_eq!(
+            counts.counts.unwrap(),
+            [FileCount {
+                path: "app:contracts/msa.pdf".into(),
+                count: 2
+            }]
+        );
+        // A glob narrows documents as it does text files.
+        let glob = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:".into()),
+                glob: Some("*.pdf".into()),
+                ..req("Termination")
+            },
+        );
+        assert_eq!(lines(&glob), ["app:contracts/msa.pdf:3"]);
+    }
+
+    /// A blank or image-only document has no text, so nothing matches in
+    /// it, even a pattern that matches nothing at all.
+    #[test]
+    fn a_document_without_text_never_matches() {
+        use crate::reader::extract::fixtures;
+        let f = fixture();
+        fs::write(f.app.join("blank.pdf"), fixtures::pdf("")).unwrap();
+        let found = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:blank.pdf".into()),
+                ..req("^$")
+            },
+        );
+        assert_eq!(found.files_searched, 1);
+        assert!(found.matches.unwrap().is_empty());
+    }
+
+    /// One file's lines stop at what the page needs, not the file's.
+    #[test]
+    fn a_file_gives_only_the_lines_a_page_needs() {
+        let matcher = matcher(&req("x")).unwrap();
+        let text = "x\n".repeat(1000);
+        let Some(FileHits::Lines(skipped, hits)) = search_file(
+            &matcher,
+            "app:a",
+            text.as_bytes(),
+            GrepOutput::Content,
+            0,
+            990,
+            3,
+        ) else {
+            panic!("three lines");
+        };
+        assert_eq!(skipped, 990, "only counted");
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].line, 991);
+        let f = fixture();
+        fs::write(f.app.join("many.txt"), &text).unwrap();
+        let page = grep(
+            &f,
+            GrepRequest {
+                path: Some("app:many.txt".into()),
+                limit: Some(2),
+                offset: Some(5),
+                ..req("x")
+            },
+        );
+        assert_eq!(page.matches.unwrap().len(), 2);
+        assert!(page.truncated, "and says there's more");
+        assert_eq!(page.next_offset, Some(7));
     }
 
     #[test]

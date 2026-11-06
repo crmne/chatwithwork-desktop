@@ -1644,7 +1644,7 @@ fn read_tools() -> Vec<Tool> {
             "Search code",
             "Search the text of files in the shared folders for lines matching a regular \
              expression (ripgrep's syntax), as ripgrep does: files Git ignores, hidden files and \
-             binary files are skipped. `output: \"content\"` (the default) answers the matching \
+             PDFs and Office documents are searched in the text `read` returns, and other binary files are skipped. `output: \"content\"` (the default) answers the matching \
              lines, with `context` lines before and after each; `\"files\"` the files that \
              match; `\"count\"` how many lines match in each. `path` narrows it to a folder or \
              a file, `glob` to file names (`*.rb`) or paths (`app/**/*.rb`). Pass `next_offset` \
