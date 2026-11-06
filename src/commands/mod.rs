@@ -416,10 +416,20 @@ fn tail_text(tail: &VecDeque<u8>, total: u64, chars: usize) -> (String, usize) {
 #[derive(Clone)]
 pub struct Runs {
     inner: Arc<Mutex<Inner>>,
-    /// Held from counting what runs to adding this run, so two starting at
-    /// once never both take the last place.
-    starting: Arc<Mutex<()>>,
+    /// Runs that hold a place while they're made ready, which can be slow (a
+    /// keychain's answer), so two starting at once never both take the last
+    /// place, and neither waits for the other.
+    starting: Arc<Mutex<usize>>,
     paths: Paths,
+}
+
+/// A run's place among those starting, given up when it's added or refused.
+struct Place<'a>(&'a Mutex<usize>);
+
+impl Drop for Place<'_> {
+    fn drop(&mut self) {
+        *lock(self.0) -= 1;
+    }
 }
 
 struct Inner {
@@ -437,7 +447,7 @@ impl Runs {
                 finished: VecDeque::new(),
                 limits: Limits::from_config(&crate::config::Limits::default()),
             })),
-            starting: Arc::new(Mutex::new(())),
+            starting: Arc::new(Mutex::new(0)),
             paths,
         }
     }
@@ -451,8 +461,8 @@ impl Runs {
                 "this computer is paused; resume it to run commands",
             ));
         }
-        let starting = lock(&self.starting);
-        let running = self.running();
+        let mut starting = lock(&self.starting);
+        let running = self.running() + *starting;
         let most = config.limits.commands_running;
         if most > 0 && running >= most {
             return Err(RunError::new(
@@ -464,6 +474,9 @@ impl Runs {
                 ),
             ));
         }
+        *starting += 1;
+        drop(starting);
+        let place = Place(&self.starting);
         let id = new_id();
         let mut plan = plan(config, &self.paths, request, &id)?;
         // Read here, by whoever starts the run, never by the worker that
@@ -495,7 +508,7 @@ impl Runs {
             inner.limits = plan.limits;
             inner.runs.insert(id.clone(), cell.clone());
         }
-        drop(starting);
+        drop(place);
         self.launch(plan, cell.clone());
         let status = lock(&cell).status();
         Ok(status)

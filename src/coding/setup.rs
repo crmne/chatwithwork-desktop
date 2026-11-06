@@ -722,23 +722,18 @@ fn pick_bot(paths: &Paths, ask: &Asker, given: Option<&str>) -> Result<(String, 
         let s = s.trim().trim_start_matches('#');
         !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
     };
+    // An ID is that bot, listed or not: it can be in another organization
+    // than the one a list shows. Listing could also ask for access to bots,
+    // which an ID doesn't need, so it isn't asked; `--name` names it here.
+    if let Some(id) = given.filter(|id| digits(id)) {
+        return Ok((id.trim().trim_start_matches('#').to_string(), None));
+    }
     let choices = crate::bots::Bots::connect(paths, None)
         .and_then(|bots| bots.list())
-        .map(|answer| bot_choices(&answer));
-    // An ID is that bot, listed or not: it can be in another organization
-    // than the one this lists. The list only gives its name.
-    if let Some(id) = given.filter(|id| digits(id)) {
-        let id = id.trim().trim_start_matches('#').to_string();
-        let name = choices
-            .iter()
-            .flatten()
-            .find(|choice| choice.id == id)
-            .map(|choice| choice.name.clone());
-        return Ok((id, name));
-    }
-    let choices = choices.map_err(|e| {
-        e.context("listing your bots, to pick one by name (or give its ID with --bot)")
-    })?;
+        .map(|answer| bot_choices(&answer))
+        .map_err(|e| {
+            e.context("listing your bots, to pick one by name (or give its ID with --bot)")
+        })?;
     let mut query = match given {
         Some(given) => given.to_string(),
         None => {
