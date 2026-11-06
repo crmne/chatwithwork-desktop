@@ -38,22 +38,31 @@ impl SavedOrganization {
     }
 
     pub fn credentials(&self, paths: &Paths) -> Result<Credentials> {
+        self.saved_credentials(paths)?
+            .context("Sign in to this organization again.")
+    }
+
+    /// The credentials, or `None` when only signing in again gets them back:
+    /// the key is gone, damaged, or another's. An error is a store that
+    /// couldn't answer, which may answer later.
+    pub fn saved_credentials(&self, paths: &Paths) -> Result<Option<Credentials>> {
         self.validate(paths)?;
         let store = self.store(paths)?;
-        let stored = store
-            .get(DEVICE_KEY)?
-            .context("Sign in to this organization again.")?;
-        let key = DeviceKey::from_stored(&stored)?;
-        ensure!(
-            key.public_key() == self.id,
-            "This organization's saved key does not match."
-        );
-        Ok(Credentials {
+        let Some(stored) = store.get(DEVICE_KEY)? else {
+            return Ok(None);
+        };
+        let Ok(key) = DeviceKey::from_stored(&stored) else {
+            return Ok(None);
+        };
+        if key.public_key() != self.id {
+            return Ok(None);
+        }
+        Ok(Some(Credentials {
             server: ServerUrl::parse(&self.server.url)?,
             device_id: self.server.device_id.clone(),
             key,
             store,
-        })
+        }))
     }
 
     fn store(&self, paths: &Paths) -> Result<SecretStore> {

@@ -1890,6 +1890,52 @@ async fn serves_tools_and_enforces_policy_over_the_wire() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pairing_without_its_credentials_has_to_sign_in_again() {
+    let fx = fixture();
+    let server = FakeServer::start().await;
+    pair(&fx, &server);
+    std::fs::remove_file(fx.paths.secrets_file()).unwrap();
+
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        assert!(Instant::now() < deadline, "never saw revoked");
+        let socket = fx.paths.socket_path();
+        let answer =
+            tokio::task::spawn_blocking(move || control::request(&socket, ControlRequest::Status))
+                .await
+                .unwrap();
+        // Not listening yet.
+        let Ok(Some(status)) = answer else {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            continue;
+        };
+        if status["connection"]["connection"] == "revoked" {
+            break status;
+        }
+        assert_ne!(
+            status["connection"]["connection"], "not_paired",
+            "a computer with a pairing never reads as unpaired: {status}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        status["connection"]["last_error"],
+        cww::auth::client::SIGN_IN_AGAIN
+    );
+    // Signing in again goes back to the same server.
+    assert_eq!(status["server"], server.origin.as_str());
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nothing_sensitive_leaves_the_machine() {
     let fx = fixture();
     let mut server = FakeServer::start().await;

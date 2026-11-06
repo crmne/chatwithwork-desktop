@@ -593,6 +593,12 @@ async fn run_with_notifications(
     if organization.is_none() && config.browser.enabled {
         crate::browsing::engine::prewarm(shutdown.clone());
     }
+    // Reading the keychain can take a moment, and the control channel answers
+    // before it has: a computer with a pairing starts out connecting.
+    let status = SharedStatus::new(changes.clone());
+    if organization.is_some() || config.server.is_some() {
+        status.set(Connection::Connecting, None);
+    }
     let daemon = Arc::new(Daemon {
         organization,
         runner,
@@ -602,7 +608,7 @@ async fn run_with_notifications(
         config: Mutex::new(config),
         reader,
         audit,
-        status: SharedStatus::new(changes.clone()),
+        status,
         browser,
         tunnel_token: Mutex::new(shutdown.child_token()),
         reloaded: Notify::new(),
@@ -856,31 +862,59 @@ impl Daemon {
 
     /// Keep a tunnel running whenever the computer is paired.
     async fn supervise(self: &Arc<Self>, shutdown: &CancellationToken) {
+        let mut unreadable = 0;
         while !shutdown.is_cancelled() {
             let config = self.config.lock().await.clone();
             let paths = self.paths.clone();
             let organization = self.organization.clone();
+            let configured = organization.is_some() || config.server.is_some();
+            // A pairing made while running comes back here connecting: it
+            // isn't unpaired, which the app asks people about.
+            if configured && self.status.get().connection == Connection::NotPaired {
+                self.status.set(Connection::Connecting, None);
+            }
             let credentials = tokio::task::spawn_blocking(move || match organization {
-                Some(context) => context.profile.credentials(&context.primary).map(Some),
+                Some(context) => context.profile.saved_credentials(&context.primary),
                 None => load_credentials(&config, &paths),
             })
             .await;
-            let credentials = match credentials {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
-                    tracing::error!("can't load credentials: {e:#}");
-                    self.status
-                        .set(Connection::NotPaired, Some(format!("{e:#}")));
-                    None
-                }
+            let credentials = match credentials
+                .map_err(anyhow::Error::from)
+                .and_then(|answer| answer)
+            {
+                Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("credential task failed: {e}");
-                    None
+                    // The store couldn't answer, a locked keychain say, or
+                    // the read itself failed. That says nothing of the
+                    // pairing, and nothing else would try again: retry,
+                    // quietly.
+                    tracing::error!("can't load credentials: {e:#}");
+                    self.status.set(Connection::Offline, Some(format!("{e:#}")));
+                    let wait = credentials_retry(unreadable);
+                    unreadable += 1;
+                    tokio::select! {
+                        () = shutdown.cancelled() => return,
+                        () = self.reloaded.notified() => {}
+                        () = tokio::time::sleep(wait) => {}
+                    }
+                    continue;
                 }
             };
+            unreadable = 0;
             let Some(credentials) = credentials else {
                 *self.chat_client.lock().await = None;
-                if self.status.get().connection != Connection::NotPaired {
+                if configured {
+                    // Paired once, with nothing left to sign in with: the
+                    // keychain was reset, or something deleted its entries.
+                    // Only signing in again gets it back, so this says what
+                    // a refused sign-in says, and the app asks.
+                    tracing::warn!("this computer's pairing has no credentials");
+                    self.runner.stop_everything().await;
+                    self.status.set(
+                        Connection::Revoked,
+                        Some(crate::auth::client::SIGN_IN_AGAIN.into()),
+                    );
+                } else if self.status.get().connection != Connection::NotPaired {
                     self.status.set(Connection::NotPaired, None);
                 }
                 self.wait_for_reload(shutdown).await;
@@ -2422,9 +2456,25 @@ async fn wait_for_signal() {
     }
 }
 
+/// How long to wait before reading credentials again after the store failed
+/// `failures` times in a row: from five seconds up to five minutes, so a
+/// keychain that asks the person doesn't ask every few seconds.
+fn credentials_retry(failures: u32) -> Duration {
+    Duration::from_secs(5u64.saturating_mul(1 << failures.min(6)).min(300))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_credentials_are_retried_ever_more_slowly() {
+        assert_eq!(credentials_retry(0), Duration::from_secs(5));
+        assert_eq!(credentials_retry(1), Duration::from_secs(10));
+        assert_eq!(credentials_retry(5), Duration::from_secs(160));
+        assert_eq!(credentials_retry(6), Duration::from_secs(300));
+        assert_eq!(credentials_retry(40), Duration::from_secs(300));
+    }
 
     #[test]
     fn uploaded_names_lose_their_directories_and_control_characters() {

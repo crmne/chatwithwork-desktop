@@ -354,8 +354,90 @@ pub struct TrayView {
     /// `Some(true)` offers Resume Using the Browser, `Some(false)` Stop
     /// Using the Browser, `None` neither: the browser is off.
     pub browser_stopped: Option<bool>,
-    /// This computer has to sign in again, even while it's paused.
-    pub reconnects: bool,
+    /// What the person has to do for this computer to be connected, which
+    /// the menu's first line offers and the app asks about.
+    pub prompt: Option<ConnectionPrompt>,
+}
+
+/// A connection that won't come back without the person. A running app is
+/// never silently not connected (docs/desktop-app.md, "Never silently not
+/// connected"). Retrying through a blip isn't one of these: an offline
+/// computer stays quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionPrompt {
+    /// Never paired, or disconnected.
+    Connect,
+    /// Paired, but its sign-in was refused or is gone.
+    Reconnect,
+    /// The background agent isn't running.
+    Start,
+}
+
+impl ConnectionPrompt {
+    pub fn of(status: Option<&Status>) -> Option<Self> {
+        let Some(status) = status else {
+            return Some(Self::Start);
+        };
+        match status.connection.connection.as_str() {
+            _ if !status.is_paired() => Some(Self::Connect),
+            "revoked" | "not_paired" => Some(Self::Reconnect),
+            _ => None,
+        }
+    }
+
+    /// The menu's first line, as an action.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "Connect to Chat with Work…",
+            Self::Reconnect => "Reconnect…",
+            Self::Start => "Start the Background Agent…",
+        }
+    }
+
+    /// How long this has to last before the app asks: the agent restarts
+    /// itself whenever its folders change, and a status can be a moment old.
+    pub fn patience(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Self::Connect | Self::Reconnect => 5,
+            Self::Start => 30,
+        })
+    }
+
+    /// The settings page that does it. Reconnecting starts the sign-in at
+    /// once, with the server this computer already uses; connecting first
+    /// lets the person name a self-hosted one.
+    pub fn page(self) -> &'static str {
+        match self {
+            Self::Reconnect => "reconnect",
+            Self::Connect | Self::Start => "account",
+        }
+    }
+
+    /// The question the app asks, in a dialog it draws.
+    pub fn question(self) -> crate::computer::Question {
+        let (title, message, yes) = match self {
+            Self::Connect => (
+                "Connect this computer to Chat with Work?",
+                "Chat with Work can't use this computer until you connect it. You approve it in your browser.",
+                "Connect…",
+            ),
+            Self::Reconnect => (
+                "Reconnect this computer to Chat with Work?",
+                "This computer has to sign in to Chat with Work again before it can be used. You approve it in your browser.",
+                "Reconnect…",
+            ),
+            Self::Start => (
+                "Start the background agent?",
+                "The agent that connects this computer to Chat with Work isn't running.",
+                "Open Settings…",
+            ),
+        };
+        crate::computer::Question {
+            title: title.into(),
+            message: message.into(),
+            yes: yes.into(),
+        }
+    }
 }
 
 impl TrayView {
@@ -395,7 +477,7 @@ impl TrayView {
             detail,
             paused,
             dimmed: !health.is_serving(),
-            reconnects: status.is_some_and(|s| s.connection.connection == "revoked"),
+            prompt: ConnectionPrompt::of(status),
             browser_stopped: status
                 .filter(|s| s.browser.enabled)
                 .map(|s| s.browser.stopped),
@@ -499,6 +581,65 @@ mod tests {
         assert_eq!(s.server_host().as_deref(), Some("chatwithwork.com"));
         assert_eq!(s.roots[0].indexed_files, Some(12));
         assert_eq!(Health::of(Some(&s)), Health::Online);
+    }
+
+    #[test]
+    fn a_connection_that_needs_the_person_prompts() {
+        use ConnectionPrompt::{Connect, Reconnect, Start};
+        assert_eq!(ConnectionPrompt::of(None), Some(Start));
+        let unpaired = status(json!({ "connection": { "connection": "not_paired" } }));
+        assert!(!unpaired.is_paired());
+        assert_eq!(ConnectionPrompt::of(Some(&unpaired)), Some(Connect));
+        for connection in ["revoked", "not_paired"] {
+            let s = status(json!({
+                "server": "https://chatwithwork.com",
+                "connection": { "connection": connection }
+            }));
+            assert_eq!(
+                ConnectionPrompt::of(Some(&s)),
+                Some(Reconnect),
+                "{connection}"
+            );
+        }
+        let revoked_and_paused = status(json!({
+            "server": "https://chatwithwork.com",
+            "paused": true,
+            "connection": { "connection": "revoked" }
+        }));
+        assert_eq!(
+            ConnectionPrompt::of(Some(&revoked_and_paused)),
+            Some(Reconnect)
+        );
+    }
+
+    #[test]
+    fn a_blip_stays_quiet() {
+        for connection in ["connected", "connecting", "offline"] {
+            let s = status(json!({
+                "server": "https://chatwithwork.com",
+                "connection": { "connection": connection }
+            }));
+            assert_eq!(ConnectionPrompt::of(Some(&s)), None, "{connection}");
+        }
+    }
+
+    #[test]
+    fn the_menu_never_says_not_connected_with_nothing_to_press() {
+        let unpaired = status(json!({ "connection": { "connection": "not_paired" } }));
+        let view = TrayView::new(Some(&unpaired));
+        assert_eq!(view.health, Health::NotPaired);
+        assert_eq!(
+            view.prompt.map(ConnectionPrompt::label),
+            Some("Connect to Chat with Work…")
+        );
+    }
+
+    #[test]
+    fn each_prompt_leads_to_pairing_or_the_agent() {
+        assert_eq!(ConnectionPrompt::Reconnect.page(), "reconnect");
+        assert_eq!(ConnectionPrompt::Connect.page(), "account");
+        assert_eq!(ConnectionPrompt::Start.page(), "account");
+        assert!(ConnectionPrompt::Start.patience() > ConnectionPrompt::Connect.patience());
     }
 
     #[test]

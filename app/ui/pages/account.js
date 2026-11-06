@@ -32,10 +32,27 @@ export async function listen(app, on) {
   });
 }
 
+// What the sidebar's foot offers about the connection: the app is never
+// quietly not connected. Nothing while the agent isn't running, whose own
+// card says so.
+export function connectionAction(status) {
+  if (!status) return null;
+  if (!status.server) return "connect";
+  return ["revoked", "not_paired"].includes(status.connection?.connection) ? "reconnect" : null;
+}
+
 // One click, wherever it's offered: the same sign-in as pairing.
 export function reconnect(app) {
   app.go("account");
   if (!pairing(app).active) pair(app, app.status?.server);
+}
+
+// Asked to reconnect, from the menu or the app's own question: now if the
+// status is known, which is all a computer that stays signed out ever sends,
+// or as soon as it is.
+export function reconnectWhenKnown(app) {
+  app.reconnecting = !app.status;
+  if (app.status) reconnect(app);
 }
 
 export async function pair(app, server) {

@@ -37,10 +37,15 @@ pub fn load_credentials(config: &Config, paths: &Paths) -> Result<Option<Credent
     let Some(stored_key) = store.get(DEVICE_KEY)? else {
         return Ok(None);
     };
+    // A damaged key can't come back by itself: as good as none.
+    let Ok(key) = DeviceKey::from_stored(&stored_key) else {
+        tracing::warn!("this computer's device key can't be read");
+        return Ok(None);
+    };
     Ok(Some(Credentials {
         server: ServerUrl::parse(&server.url)?,
         device_id: server.device_id.clone(),
-        key: DeviceKey::from_stored(&stored_key)?,
+        key,
         store,
     }))
 }

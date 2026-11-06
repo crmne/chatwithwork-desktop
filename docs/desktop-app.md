@@ -96,6 +96,19 @@ welcome page keeps the choice and shows the error so it can be retried.
 
 Organizations, people, notification preferences, models and templates are in the web app's Settings, in the Chat with Work window, and so are this computer's folders, pausing and native notifications (This computer, above), through the bridge rather than this allow-list.
 
+## Never silently not connected
+
+A running app is never silently not connected to Chat with Work. Carmine's words: "There should never be any instance of an app not connected to Chat with Work. And if there is, the user gets a prompt."
+
+- `ConnectionPrompt` (`model.rs`) says what a status needs from the person: **Connect** (never paired, or disconnected), **Reconnect** (a pairing whose sign-in was refused or is gone), or **Start** (the background agent isn't running).
+- The menu's first line is that action, never a greyed-out "Not connected", and the settings sidebar's foot offers it too.
+- The app asks in a dialog it draws: at launch and whenever the connection is lost for good, once each time, after a moment's patience (`patience`), since the agent restarts itself when folders change. "Not Now" holds until the next launch. The welcome page offers pairing itself, so a first launch doesn't ask as well, and disconnecting from Account doesn't ask until the next launch.
+- Yes leads straight to pairing through the same `cww login` device flow and DPoP key as ever (`docs/secrets.md`): **Reconnect** starts it for the server this computer already uses, **Connect** opens Account first, where a self-hosted server can be named. Approval is always in the browser. A page of the server can only open Account, never start a sign-in.
+- Retrying stays quiet: offline, a server that can't be reached, or a store that can't answer right now (a locked keychain, read again from five seconds up to every five minutes).
+- A pairing with nothing left to sign in with, because the keychain was reset or its entries deleted, reports `revoked` (CONTROL.md), as a refused sign-in does. Before it did, the status said `paired: true` with `connection: not_paired`, the menu showed "Not connected", and the server's settings retried for ever.
+
+The same code runs on macOS, Windows and Linux. Linux without a tray library still gets the dialog.
+
 ## The scan window
 
 Scan… in the tray, `cww-app --scan`, or the composer's attach menu in the Chat with Work window (the bridge's `scan()`) opens it. Its page gets its own commands (`capabilities/scan.json`, for the `scan` window and no remote URL; each command in `scan.rs` checks its caller again), never the settings' `control`: the scanner goes through a helper process the app starts while the window is open, the daemon is asked only for which bots take scans and to send one to a bot (`scan_destinations`, `scan_send`), a scan for a chat goes to the Chat with Work window's composer (`scan_attach`, then the bridge's `scan_file`), and Save to Computer writes the PDF where the person picks in the system's save dialog, without the daemon. Pages are kept in a private folder under the app's state directory and deleted on Rescan, when the window closes, and when the app starts. The details are in [scanning.md](scanning.md).
