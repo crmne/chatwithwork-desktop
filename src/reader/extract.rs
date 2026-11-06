@@ -352,6 +352,7 @@ fn xlsx_text<RS: Read + std::io::Seek>(
     let mut out = String::new();
     let mut cells_read = 0usize;
     'sheets: for name in workbook.sheet_names() {
+        in_time(deadline)?;
         let Ok(mut cells) = workbook.worksheet_cells_reader(&name) else {
             continue;
         };
@@ -394,6 +395,7 @@ fn xlsx_text<RS: Read + std::io::Seek>(
         }
         out.push('\n');
     }
+    in_time(deadline)?;
     Ok(truncate_chars(out.trim_end(), max_chars).to_string())
 }
 
@@ -650,7 +652,8 @@ mod tests {
         let past = Some(Instant::now() - std::time::Duration::from_secs(1));
         assert!(extract_until("a.pdf", &fixtures::pdf("x"), 100, past).is_err());
         assert!(extract_until("a.docx", &fixtures::docx(&["x"]), 100, past).is_err());
-        // An xlsx is asked between cells; a small one ends before it asks.
+        // However small, an xlsx past its deadline says so.
+        assert!(extract_until("terms.xlsx", &xlsx, 100_000, past).is_err());
         assert_eq!(
             extract_until("b.pdf", &fixtures::pdf("x"), 100, None).unwrap(),
             "x"

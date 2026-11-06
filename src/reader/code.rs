@@ -531,12 +531,14 @@ impl Body {
 
 /// What one file holds that a `grep` returns.
 enum FileHits {
-    Lines(Vec<GrepMatch>),
+    /// How many matching lines it passed over, and the ones after them.
+    Lines(usize, Vec<GrepMatch>),
     Count(usize),
 }
 
-/// Search `bytes`, the text of `path`: at most `most` matching lines, as a
-/// document's text can be millions of them. `None` when nothing matches,
+/// Search `bytes`, the text of `path`: past the first `skip` matching lines,
+/// which are only counted, at most `most`, as a document's text can be
+/// millions of them. `None` when nothing matches,
 /// which is always so of no text at all (`read` gives it no lines), whatever
 /// the pattern.
 fn search_file(
@@ -545,6 +547,7 @@ fn search_file(
     bytes: &[u8],
     output: GrepOutput,
     context: usize,
+    skip: usize,
     most: usize,
 ) -> Option<FileHits> {
     if bytes.is_empty() || !matcher.is_match(bytes).unwrap_or(false) {
@@ -568,20 +571,28 @@ fn search_file(
             })
             .collect::<Vec<_>>()
     };
-    let hits: Vec<GrepMatch> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| is_match(line))
-        .take(most)
-        .map(|(i, line)| GrepMatch {
+    let mut skipped = 0;
+    let mut hits = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if hits.len() == most {
+            break;
+        }
+        if !is_match(line) {
+            continue;
+        }
+        if skipped < skip {
+            skipped += 1;
+            continue;
+        }
+        hits.push(GrepMatch {
             path: path.to_string(),
             line: i + 1,
             text: line_text(line),
             before: (context > 0).then(|| around(i.saturating_sub(context), i)),
             after: (context > 0).then(|| around(i + 1, (i + 1 + context).min(lines.len()))),
-        })
-        .collect();
-    (!hits.is_empty()).then_some(FileHits::Lines(hits))
+        });
+    }
+    (skipped > 0 || !hits.is_empty()).then_some(FileHits::Lines(skipped, hits))
 }
 
 impl super::Reader {
@@ -670,11 +681,22 @@ impl super::Reader {
                 }
             };
             files_searched += 1;
-            // What this page still needs, and one more to say there's more.
-            let most = (offset + limit + 1).saturating_sub(seen).max(1);
-            match search_file(&matcher, &path, text.bytes(), req.output, context, most) {
+            // What's left before the page, and what the page still needs
+            // with one more, to say there's more.
+            let skip = offset.saturating_sub(seen);
+            let most = (limit + 1).saturating_sub(matches.len());
+            match search_file(
+                &matcher,
+                &path,
+                text.bytes(),
+                req.output,
+                context,
+                skip,
+                most,
+            ) {
                 None => true,
-                Some(FileHits::Lines(hits)) => {
+                Some(FileHits::Lines(skipped, hits)) => {
+                    seen += skipped;
                     for hit in hits {
                         seen += 1;
                         if seen <= offset {
@@ -748,7 +770,7 @@ impl super::Reader {
             files_searched,
             truncated: more,
             timed_out,
-            next_offset: more.then_some(offset + limit),
+            next_offset: more.then_some(offset.saturating_add(limit)),
             note: timed_out.then(|| {
                 "The search stopped at its time budget; these are the results found until \
                  then. Search a narrower path."
@@ -1179,17 +1201,20 @@ mod tests {
     fn a_file_gives_only_the_lines_a_page_needs() {
         let matcher = matcher(&req("x")).unwrap();
         let text = "x\n".repeat(1000);
-        let Some(FileHits::Lines(hits)) = search_file(
+        let Some(FileHits::Lines(skipped, hits)) = search_file(
             &matcher,
             "app:a",
             text.as_bytes(),
             GrepOutput::Content,
             0,
+            990,
             3,
         ) else {
             panic!("three lines");
         };
+        assert_eq!(skipped, 990, "only counted");
         assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].line, 991);
         let f = fixture();
         fs::write(f.app.join("many.txt"), &text).unwrap();
         let page = grep(
