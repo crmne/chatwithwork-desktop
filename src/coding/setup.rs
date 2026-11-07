@@ -185,6 +185,10 @@ fn wait_for_worker(paths: &Paths, before: Option<u64>) -> Result<()> {
 
 /// `cww coding setup`.
 pub fn setup(paths: &Paths, options: Options) -> Result<()> {
+    // Before anything is shared, lent or saved.
+    if let Some(why) = options.agent.and_then(Agent::unavailable) {
+        bail!("{why}");
+    }
     let ask = Asker { yes: options.yes };
     let mut config = Config::load(paths)?;
     seen(&config);
@@ -246,9 +250,6 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
 
     // 4. The agent, installed.
     let agent = options.agent.unwrap_or(Agent::ClaudeCode);
-    if let Some(why) = agent.unavailable() {
-        bail!("{why}");
-    }
     let installed = agent_step(agent, &mut config, paths, &ask)?;
 
     // 5. Signed in, and this bot's runs here allowed to use it.

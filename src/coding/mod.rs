@@ -758,7 +758,14 @@ fn sqlite_rows(db: &[u8], wal: Option<&[u8]>) -> Vec<Vec<u8>> {
     if let Some(wal) = wal.filter(|w| w.len() >= 32) {
         let frame_size = u32::from_be_bytes([wal[8], wal[9], wal[10], wal[11]]) as usize;
         if frame_size == size {
+            // Only the frames of the log as it is now: after a checkpoint
+            // SQLite writes it again from the start with new salts, and the
+            // frames left past them, an older log's, end it.
+            let salts = &wal[16..24];
             for frame in wal[32..].chunks_exact(24 + size) {
+                if &frame[8..16] != salts {
+                    break;
+                }
                 let number = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
                 if number > 0 {
                     pages.insert(number, &frame[24..]);
@@ -946,8 +953,8 @@ fn long_strings(value: &Value) -> Vec<Secret> {
 }
 
 /// The values a `.env` file gives the variables `names`, as dotenv reads
-/// them: `export` or not, quoted (to the closing quote) or bare (to a
-/// ` #` comment).
+/// them: `export` or not, quoted with `"`, `'` or a backtick (to the closing
+/// one), or bare (to a `#`).
 fn env_values(text: &str, names: &[&str]) -> Vec<Secret> {
     text.lines()
         .filter_map(|line| {
@@ -959,8 +966,10 @@ fn env_values(text: &str, names: &[&str]) -> Vec<Secret> {
             }
             let value = value.trim_start();
             let value = match value.chars().next() {
-                Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
-                _ => value.split(" #").next().unwrap_or_default().trim_end(),
+                Some(quote @ ('"' | '\'' | '`')) => {
+                    value[1..].split(quote).next().unwrap_or_default()
+                }
+                _ => value.split('#').next().unwrap_or_default().trim_end(),
             };
             Some(value.to_string())
         })

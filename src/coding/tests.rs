@@ -1112,6 +1112,8 @@ fn a_dotenv_key_is_read_without_its_quotes_or_comment() {
         format!("GEMINI_API_KEY={GEMINI_KEY} # personal"),
         format!("export GEMINI_API_KEY = '{GEMINI_KEY}' # personal"),
         format!("GEMINI_API_KEY=\"{GEMINI_KEY}\"#x"),
+        format!("GEMINI_API_KEY={GEMINI_KEY}#personal"),
+        format!("GEMINI_API_KEY=`{GEMINI_KEY}` # personal"),
     ] {
         assert_eq!(read(&line), [GEMINI_KEY], "{line}");
     }
@@ -1143,6 +1145,16 @@ fn a_long_opencode_sign_in_split_across_sqlite_pages_is_found() {
         );
     }
     assert!(sqlite_rows(b"not a database", None).is_empty());
+    // A log whose frames carry another log's salts, as one left past a
+    // checkpoint's restart does, puts none of its pages over the database's.
+    let mut stale = vec![0u8; 32];
+    stale[8..12].copy_from_slice(&4096u32.to_be_bytes());
+    stale[16..24].copy_from_slice(b"newsalts");
+    let mut frame = vec![0u8; 24 + 4096];
+    frame[0..4].copy_from_slice(&2u32.to_be_bytes());
+    frame[8..16].copy_from_slice(b"oldsalts");
+    stale.extend_from_slice(&frame);
+    assert_eq!(sqlite_rows(db, Some(&stale)), sqlite_rows(db, None));
     let mut torn = db.to_vec();
     torn.truncate(5000);
     let _ = sqlite_rows(&torn, Some(&torn));
