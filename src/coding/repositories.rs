@@ -286,10 +286,16 @@ pub fn private_copy(mirror: &Path, to: &Path) -> Result<()> {
             "core.hooksPath=/dev/null",
             "clone",
             "--quiet",
-            "--no-hardlinks",
+            "--depth",
+            "1",
             "--",
         ])
-        .arg(mirror)
+        // A shallow clone takes a file:// address, which Git reads percent-encoded.
+        .arg(
+            url::Url::from_file_path(mirror)
+                .map_err(|()| anyhow::anyhow!("the mirror's path isn't absolute"))?
+                .as_str(),
+        )
         .arg(to);
     run(clone, Duration::from_secs(600)).context("copying the repository")
 }

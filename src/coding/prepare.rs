@@ -830,6 +830,13 @@ impl Work {
         let id = status.id;
         loop {
             let status = self.runs.status(&id).map_err(|e| e.message)?;
+            // Unlent, paused or stopped meanwhile: the step stops with it.
+            if status.state == "running"
+                && let Err(why) = self.config().and_then(|config| self.still_allowed(&config))
+            {
+                let _ = self.runs.stop(&id);
+                return Err(why);
+            }
             if status.state != "running" {
                 let finished = self.runs.finished(&id).map_err(|e| e.message)?;
                 if status.state == "exited" && status.exit_code == Some(0) {

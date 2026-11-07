@@ -387,58 +387,65 @@ pub async fn coding_setup_answer(
             let _ = sender.send(Answer::Declined);
             return Ok(json!({ "declined": true }));
         }
-        // The bot again, as the server says it to this device now: still
-        // lent this computer, and still allowed commands.
-        let context = desktop.client.request(&ControlRequest::SettingsContext {
-            bot: Some(request.bot.clone()),
-        });
-        let still = context.as_ref().is_ok_and(|c| {
-            c["bot"]["name"].as_str().map(str::trim) == Some(name.as_str())
-                && c["commands_allowed"] != false
-        });
-        let look = look(&desktop, &request).inspect_err(|_| reopen())?;
-        let home = cww::paths::home_dir().map_err(|e| e.to_string())?;
-        let shared = shared_folders(&desktop);
-        let shown = view(
-            &request,
-            &name,
-            commands_allowed && still,
-            &look,
-            &home,
-            &shared,
-        );
-        if shown["can_allow"] != true || before.as_ref() != Some(&shown) {
-            reopen();
-            return Err("Something changed. Check again.".to_string());
-        }
-        let agent = chosen(&look, request.agent.as_deref())
-            .and_then(|a| a["agent"].as_str())
-            .and_then(Agent::from_key)
-            .ok_or("No coding agent to use.")?;
-        let root = look["root"]["id"].as_str().map(str::to_string);
-        let folder = match root {
-            Some(_) => None,
-            None => {
-                let folder = new_folder(&home, &shared).ok_or("No free folder.")?;
-                std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-                Some(folder)
+        // Whatever stops Allow here leaves the window's buttons to press again.
+        let allowed = (|| -> Result<(), String> {
+            // The bot again, as the server says it to this device now: still
+            // lent this computer, and still allowed commands.
+            let context = desktop.client.request(&ControlRequest::SettingsContext {
+                bot: Some(request.bot.clone()),
+            });
+            let still = context.as_ref().is_ok_and(|c| {
+                c["bot"]["name"].as_str().map(str::trim) == Some(name.as_str())
+                    && c["commands_allowed"] != false
+            });
+            let look = look(&desktop, &request)?;
+            let home = cww::paths::home_dir().map_err(|e| e.to_string())?;
+            let shared = shared_folders(&desktop);
+            let shown = view(
+                &request,
+                &name,
+                commands_allowed && still,
+                &look,
+                &home,
+                &shared,
+            );
+            if shown["can_allow"] != true || before.as_ref() != Some(&shown) {
+                return Err("Something changed. Check again.".to_string());
             }
-        };
-        desktop
-            .client
-            .request(&ControlRequest::CodingAllow {
-                root,
-                folder,
-                bot: request.bot.clone(),
-                name: Some(name),
-                agent,
-                owner: request
-                    .repository
-                    .as_deref()
-                    .and_then(|r| r.split_once('/'))
-                    .map(|(owner, _)| owner.to_string()),
-            })
-            .map_err(|e| e.to_string())?;
+            let agent = chosen(&look, request.agent.as_deref())
+                .and_then(|a| a["agent"].as_str())
+                .and_then(Agent::from_key)
+                .ok_or("No coding agent to use.")?;
+            let root = look["root"]["id"].as_str().map(str::to_string);
+            let folder = match root {
+                Some(_) => None,
+                None => {
+                    let folder = new_folder(&home, &shared).ok_or("No free folder.")?;
+                    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+                    Some(folder)
+                }
+            };
+            desktop
+                .client
+                .request(&ControlRequest::CodingAllow {
+                    root,
+                    folder,
+                    bot: request.bot.clone(),
+                    name: Some(name),
+                    agent,
+                    owner: request
+                        .repository
+                        .as_deref()
+                        .and_then(|r| r.split_once('/'))
+                        .map(|(owner, _)| owner.to_string()),
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        if let Err(e) = allowed {
+            reopen();
+            return Err(e);
+        }
         let _ = sender.send(Answer::Allowed);
         Ok(json!({ "ready": true }))
     })
