@@ -3939,6 +3939,7 @@ fn listed(id: &str, command: &str, state: &str, exit_code: Option<i32>) -> Liste
                 error: None,
                 limit: None,
                 blocked: Vec::new(),
+                network_access: None,
             },
             root: "app".into(),
             dir: "api".into(),

@@ -154,6 +154,12 @@ pub struct Status {
     /// write or read (those from what it printed, so a best guess).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<Blocked>,
+    /// How far this run reached (`none`, `local`, `internet`), once its
+    /// sandbox is known: what its folder allows, as far as the sandbox holds
+    /// it, with its "Allow once". Between whoever runs it and the tools,
+    /// which say it as the result's own `network_access`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_access: Option<String>,
 }
 
 /// Most entries a run's `blocked` lists.
@@ -284,6 +290,8 @@ struct Cell {
     /// Its folder and home, whose paths are never "outside".
     folder: std::path::PathBuf,
     home: std::path::PathBuf,
+    /// How far it reaches, once its sandbox is known.
+    access: Option<crate::reach::Level>,
 }
 
 impl Cell {
@@ -318,11 +326,13 @@ impl Cell {
             host: Default::default(),
             folder: plan.folder.clone(),
             home: plan.home.clone(),
+            access: None,
         }
     }
 
     /// Follow what `plan`'s sandbox blocks, once its networks are known.
-    fn watch_blocked(&mut self, plan: &Plan) {
+    fn watch_blocked(&mut self, plan: &Plan, sandbox: Sandbox) {
+        self.access = Some(plan.network_access(sandbox));
         self.host = plan.networks.host.clone();
         self.blocked_log = plan.networks.log.clone().map(|log| (log, 0));
     }
@@ -460,6 +470,7 @@ impl Cell {
             error,
             limit: self.limit.map(String::from),
             blocked: self.blocked.clone(),
+            network_access: self.access.map(|level| level.as_str().to_string()),
         }
     }
 

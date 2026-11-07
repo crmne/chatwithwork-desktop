@@ -298,16 +298,29 @@ fn interfaces() -> Vec<(String, IpAddr, u8)> {
 /// program only. A container's published port is Docker's (root's), so it
 /// stays, whatever its number.
 pub fn loopback_services() -> Vec<u16> {
-    let own = own_listening_ports();
-    let ephemeral = ephemeral_ports();
-    let mut ports: BTreeSet<u16> = listening()
+    let closed = closed_ports();
+    let ports: BTreeSet<u16> = listening()
         .into_iter()
         .filter(|l| l.address.is_loopback() || l.address.is_unspecified())
-        .filter(|l| !(l.mine && ephemeral.contains(&l.port)))
         .map(|l| l.port)
+        .filter(|port| !excluded(*port) && !closed.contains(port))
         .collect();
-    ports.retain(|port| !excluded(*port) && !own.contains(port));
     ports.into_iter().collect()
+}
+
+/// Ports this computer listens on that a command never reaches, on any of
+/// its addresses, besides [`EXCLUDED_PORTS`]: Desktop's own listeners, and
+/// the person's own programs' on a port the system picked for them.
+pub fn closed_ports() -> BTreeSet<u16> {
+    let ephemeral = ephemeral_ports();
+    let mut closed = own_listening_ports();
+    closed.extend(
+        listening()
+            .into_iter()
+            .filter(|l| l.mine && ephemeral.contains(&l.port))
+            .map(|l| l.port),
+    );
+    closed
 }
 
 /// A listening TCP socket on this computer.
@@ -610,6 +623,23 @@ pub fn parse_reach(text: &str) -> Result<SocketAddrV4, String> {
     Ok(address)
 }
 
+/// What this computer's sandbox can give for an address at `place`: on
+/// Linux exactly that; on macOS an address on the local network only with
+/// the internet (Seatbelt names no address but this machine's); on Windows
+/// the local network only with the internet, and this computer's own
+/// services not at all. `None` when it can't.
+pub fn grantable(place: Where) -> Option<Where> {
+    grantable_on(place, cfg!(target_os = "macos"), cfg!(windows))
+}
+
+fn grantable_on(place: Where, macos: bool, windows: bool) -> Option<Where> {
+    match place {
+        Where::ThisComputer if windows => None,
+        Where::LocalNetwork if macos || windows => Some(Where::Internet),
+        other => Some(other),
+    }
+}
+
 /// The address a host names, as this computer finds it: an IP literal
 /// (bracketed or not), `localhost`, or a name it looks up itself (a blocked
 /// lookup's), its IPv4 address first.
@@ -652,6 +682,10 @@ pub fn describe(host: &str, port: u16) -> String {
 pub struct Grant {
     pub host: IpAddr,
     pub port: u16,
+    /// The internet for that command, where this computer's sandbox can
+    /// give the address no other way ([`grantable`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internet: bool,
 }
 
 /// How long an unused "Allow once" waits for its command.
@@ -662,6 +696,16 @@ pub const ONCE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(30
 /// command takes them, and they end with it, or after [`ONCE_LIFETIME`].
 #[derive(Clone, Default)]
 pub struct OnceGrants(std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>);
+
+/// What a command took from [`OnceGrants`].
+#[derive(Default)]
+pub struct Taken(Vec<Waiting>);
+
+impl Taken {
+    pub fn grants(&self) -> Vec<Grant> {
+        self.0.iter().map(|w| w.grant.clone()).collect()
+    }
+}
 
 struct Waiting {
     root: String,
@@ -687,23 +731,36 @@ impl OnceGrants {
     }
 
     /// The grants a command in `root` (a bot's, or a person's) takes, which
-    /// no other command gets after it.
-    pub fn take(&self, root: &str, bot: Option<&str>) -> Vec<Grant> {
+    /// no other command gets after it. [`OnceGrants::restore`] puts them
+    /// back, as they were, for a command that didn't start.
+    pub fn take(&self, root: &str, bot: Option<&str>) -> Taken {
         let mut waiting = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = std::time::Instant::now();
         waiting.retain(|w| w.until > now);
-        let mut taken = Vec::new();
-        waiting.retain(|w| {
-            let mine = w.root == root && (w.bot.is_none() || w.bot.as_deref() == bot);
-            if mine {
-                taken.push(w.grant.clone());
-            }
-            !mine
-        });
-        taken
+        let (mine, others): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut *waiting)
+            .into_iter()
+            .partition(|w| w.root == root && (w.bot.is_none() || w.bot.as_deref() == bot));
+        *waiting = others;
+        Taken(mine)
+    }
+
+    /// Put back what a command that didn't start took.
+    pub fn restore(&self, taken: Taken) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(taken.0);
+    }
+
+    /// Forget every one: this computer was paired again.
+    pub fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Forget a folder's, when its commands stop.
@@ -745,6 +802,17 @@ mod tests {
         assert_eq!(at("fe80::1"), Where::LocalNetwork);
         assert_eq!(at("151.101.1.227"), Where::Internet);
         assert_eq!(at("2a00:1450::1"), Where::Internet);
+    }
+
+    #[test]
+    fn only_what_this_systems_sandbox_holds_is_granted() {
+        use Where::*;
+        assert_eq!(grantable_on(LocalNetwork, false, false), Some(LocalNetwork));
+        assert_eq!(grantable_on(LocalNetwork, true, false), Some(Internet));
+        assert_eq!(grantable_on(ThisComputer, true, false), Some(ThisComputer));
+        assert_eq!(grantable_on(ThisComputer, false, true), None);
+        assert_eq!(grantable_on(LocalNetwork, false, true), Some(Internet));
+        assert_eq!(grantable_on(Internet, false, true), Some(Internet));
     }
 
     #[test]
@@ -804,14 +872,22 @@ mod tests {
         let grant = Grant {
             host: "172.17.0.4".parse().unwrap(),
             port: 5432,
+            internet: false,
         };
         grants.add("app", Some("42"), grant.clone());
-        assert!(grants.take("docs", Some("42")).is_empty());
-        assert!(grants.take("app", Some("7")).is_empty());
-        assert_eq!(grants.take("app", Some("42")), vec![grant.clone()]);
-        assert!(grants.take("app", Some("42")).is_empty());
+        assert!(grants.take("docs", Some("42")).grants().is_empty());
+        assert!(grants.take("app", Some("7")).grants().is_empty());
+        let taken = grants.take("app", Some("42"));
+        assert_eq!(taken.grants(), vec![grant.clone()]);
+        assert!(grants.take("app", Some("42")).grants().is_empty());
+        // A command that didn't start gives it back.
+        grants.restore(taken);
+        assert_eq!(grants.take("app", Some("42")).grants(), vec![grant.clone()]);
         grants.add("app", None, grant.clone());
-        assert_eq!(grants.take("app", None), vec![grant]);
+        assert_eq!(grants.take("app", None).grants(), vec![grant.clone()]);
+        grants.add("app", None, grant);
+        grants.clear();
+        assert!(grants.take("app", None).grants().is_empty());
     }
 
     #[test]

@@ -1109,6 +1109,10 @@ impl Daemon {
         self.configure_browser(&new);
         let pairing = crate::unattended_asks::pairing(&new);
         let paired_again = crate::unattended_asks::pairing(&config) != pairing;
+        if paired_again {
+            // An "Allow once" was the person's answer for this pairing's bots.
+            self.once.clear();
+        }
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
@@ -1298,6 +1302,27 @@ impl Daemon {
             )
             .into());
         }
+        // The dialog named the bot from the folder's loans: one that's gone
+        // since gets nothing.
+        if let Some(bot) = bot.as_deref()
+            && root.loan(bot).is_none()
+        {
+            return Err(Refusal::new(
+                "not_allowed",
+                format!("{} isn't lent to that bot", root.label),
+            )
+            .into());
+        }
+        // What this computer's sandbox can give: an address on the local
+        // network only with the internet on macOS and Windows, and none of
+        // this computer's own services on Windows.
+        let Some(place) = crate::reach::grantable(place) else {
+            return Err(Refusal::new(
+                "not_allowed",
+                "commands can't reach this computer's own services on this system",
+            )
+            .into());
+        };
         let mut entry = AuditEntry::event(if allow {
             "root_reach_allowed"
         } else {
@@ -1324,6 +1349,7 @@ impl Daemon {
                 crate::reach::Grant {
                     host: address,
                     port,
+                    internet: place == crate::reach::Where::Internet,
                 },
             );
             self.audit.append(&entry);
@@ -2407,7 +2433,8 @@ impl ControlHandler for Daemon {
                     None => command.clone(),
                 });
                 self.audit.append(&entry);
-                let once = self.once.take(&root, bot.as_deref());
+                let taken = self.once.take(&root, bot.as_deref());
+                let once = taken.grants();
                 let started = self
                     .runner
                     .start(crate::commands::Request {
@@ -2418,6 +2445,9 @@ impl ControlHandler for Daemon {
                         once,
                     })
                     .await;
+                if started.is_err() {
+                    self.once.restore(taken);
+                }
                 let status = match started {
                     Ok(status) => status,
                     Err(refused) => {

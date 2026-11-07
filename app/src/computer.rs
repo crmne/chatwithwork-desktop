@@ -210,7 +210,7 @@ impl Change {
                     ask(
                         "Allow Commands",
                         format!(
-                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it.",
+                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. It reaches this computer’s own services, like a database, but not the local network or the internet unless you allow them.",
                             root.label
                         ),
                         "Allow Commands",
@@ -338,6 +338,12 @@ impl Reach {
             return Ok(ReachPlan::Refused);
         }
         let place = place(address);
+        // What this system's sandbox can give for it: nothing of this
+        // computer's own on Windows, and the local network only with the
+        // internet on macOS and Windows, which the question then says.
+        let Some(given) = cww::reach::grantable(place) else {
+            return Ok(ReachPlan::Refused);
+        };
         let who = match &self.bot {
             Some(bot) => root
                 .bots
@@ -349,7 +355,13 @@ impl Reach {
             None => "Chat with Work".to_string(),
         };
         let what = cww::reach::describe(&address.to_string(), self.port);
-        let after = match (self.once, place) {
+        let after = match (self.once, given) {
+            (true, Where::Internet) if place != Where::Internet => {
+                "This computer can only allow that with the internet: its next command there gets the internet, for that command alone."
+            }
+            (false, Where::Internet) if place != Where::Internet => {
+                "This computer can only allow that with the internet: commands in that folder can then reach the internet and the local network."
+            }
             (true, Where::Internet) => {
                 "Only its next command there gets it: the internet, for that command alone."
             }

@@ -362,6 +362,7 @@ mod tests {
                     error: None,
                     limit: limit.map(String::from),
                     blocked: Vec::new(),
+                    network_access: None,
                 },
                 root: "app".into(),
                 dir: String::new(),

@@ -240,6 +240,10 @@ pub struct Networks {
     /// TCP ports this computer serves on its loopback, less those a command
     /// never reaches.
     pub loopback: Vec<u16>,
+    /// Ports it listens on that a command never reaches on any address
+    /// (`reach::closed_ports`), refused on its own addresses and its
+    /// containers' networks like `reach::EXCLUDED_PORTS`.
+    pub closed: Vec<u16>,
     /// Where the sandbox logs the connections it blocked, when it can
     /// (Bubblewrap with a network of the run's own).
     pub log: Option<PathBuf>,
@@ -257,12 +261,14 @@ impl Networks {
             Sandbox::Bubblewrap if own_network_available() => Self {
                 host: crate::reach::HostNetwork::current(),
                 loopback: crate::reach::loopback_services(),
+                closed: crate::reach::closed_ports().into_iter().collect(),
                 log: Some(log),
                 own_network: true,
             },
             Sandbox::Seatbelt => Self {
                 host: crate::reach::HostNetwork::current(),
                 loopback: crate::reach::loopback_services(),
+                closed: crate::reach::closed_ports().into_iter().collect(),
                 log: None,
                 own_network: true,
             },
@@ -519,9 +525,9 @@ impl Plan {
 
     /// Whether an "Allow once" for this run names an internet address.
     fn once_internet(&self) -> bool {
-        self.once
-            .iter()
-            .any(|g| self.networks.host.classify(g.host) == crate::reach::Where::Internet)
+        self.once.iter().any(|g| {
+            g.internet || self.networks.host.classify(g.host) == crate::reach::Where::Internet
+        })
     }
 
     /// Where the sandbox logs what it blocked for this run.
@@ -571,6 +577,8 @@ impl Plan {
             if rules && !this_computer.is_empty() {
                 let excluded: Vec<serde_json::Value> = crate::reach::EXCLUDED_PORTS
                     .iter()
+                    .copied()
+                    .chain(self.networks.closed.iter().map(|port| (*port, *port)))
                     .map(|(start, end)| {
                         if start == end {
                             json!({ "protocol": "tcp", "port": start })
@@ -596,7 +604,8 @@ impl Plan {
             );
         }
         for grant in &self.once {
-            if crate::reach::excluded(grant.port) {
+            // An "Allow once" never opens what no command reaches.
+            if crate::reach::excluded(grant.port) || self.networks.closed.contains(&grant.port) {
                 continue;
             }
             match host.classify(grant.host) {
@@ -616,6 +625,11 @@ impl Plan {
                     }));
                 }
             }
+        }
+        // slirp's name server forwarder is the internet's, even where a
+        // container network this computer runs covers its address.
+        if rules && level != Level::Internet && !allow.is_empty() {
+            deny.insert(0, json!({ "to": [{ "cidr": "10.0.2.3/32" }] }));
         }
         ports.sort_unstable();
         ports.dedup();

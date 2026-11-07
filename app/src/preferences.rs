@@ -267,6 +267,7 @@ pub fn has_inline_confirmation(request: &cww::control::ControlRequest) -> bool {
             | cww::control::ControlRequest::RootsCommands {
                 commands: true,
                 network: false,
+                local_services: None,
                 ..
             }
     )
@@ -1415,6 +1416,13 @@ mod tests {
                 commands: true,
                 network: true,
                 local_services: None,
+            },
+            // A network level chosen in the pane keeps its native dialog.
+            R::RootsCommands {
+                root: "work".into(),
+                commands: true,
+                network: false,
+                local_services: Some(true),
             },
             R::BrowserAllSites { all_sites: true },
             R::DenyExtra {

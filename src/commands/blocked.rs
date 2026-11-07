@@ -67,6 +67,9 @@ const REFUSALS: &[(&str, Option<&str>)] = &[
     ("EPERM", None),
     ("Permission denied", None),
     ("EACCES", None),
+    // Windows.
+    ("Access to the path", None),
+    ("Access is denied", None),
 ];
 
 /// Words in the same line that make an unclear refusal a write.
@@ -120,14 +123,19 @@ pub(super) fn paths(
 }
 
 /// The absolute paths in a line of output, without the quotes, colons and
-/// brackets around them.
+/// brackets around them: `/home/ana/.cache`, and on Windows
+/// `C:\Users\ana\secret.txt` or `C:/Users/ana`.
 fn absolute_paths(line: &str) -> Vec<String> {
     line.split(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '(' | ')' | ','))
         .filter_map(|word| {
             let word = word.trim_end_matches([':', '.', ';', ']']);
-            let start = word.find('/')?;
-            let path = &word[start..];
-            (start == 0 && path.len() > 1 && !path.starts_with("//")).then(|| path.to_string())
+            let unix = word.len() > 1 && word.starts_with('/') && !word.starts_with("//");
+            let bytes = word.as_bytes();
+            let drive = bytes.len() > 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/');
+            (unix || drive).then(|| word.to_string())
         })
         .collect()
 }
@@ -203,6 +211,21 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn windows_paths_are_found_too() {
+        assert_eq!(
+            absolute_paths(
+                r"Remove-Item : Access to the path 'C:\Users\ana\secret.txt' is denied."
+            ),
+            vec![r"C:\Users\ana\secret.txt".to_string()]
+        );
+        assert_eq!(
+            absolute_paths("EPERM: operation not permitted, lstat 'C:/Users/ana'"),
+            vec!["C:/Users/ana".to_string()]
+        );
+        assert!(absolute_paths("a:b and C: alone").is_empty());
     }
 
     #[test]

@@ -2059,6 +2059,7 @@ fn a_runs_network_follows_its_folders_level() {
             bridges: vec![(std::net::Ipv4Addr::new(172, 17, 0, 0), 16)],
         },
         loopback: vec![5432, 6379],
+        closed: vec![41234],
         log: Some("/x/cww/runs/0123456789ab.blocked".into()),
         own_network: true,
     };
@@ -2072,9 +2073,21 @@ fn a_runs_network_follows_its_folders_level() {
         egress["allow"][0]["to"],
         serde_json::json!([{ "cidr": "192.168.8.20/32" }, { "cidr": "172.17.0.0/16" }])
     );
+    // slirp's name server stays the internet's; then the ports that lead
+    // out of the sandbox, a listener of Desktop's or a random one included.
     assert_eq!(
-        egress["deny"][0]["ports"][0],
+        egress["deny"][0],
+        serde_json::json!({ "to": [{ "cidr": "10.0.2.3/32" }] })
+    );
+    assert_eq!(
+        egress["deny"][1]["ports"][0],
         serde_json::json!({ "protocol": "tcp", "port": 2375, "endPort": 2376 })
+    );
+    assert!(
+        egress["deny"][1]["ports"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!({ "protocol": "tcp", "port": 41234 }))
     );
     assert_eq!(egress["blocked"], "reject");
     assert_eq!(egress["blockedLog"], "/x/cww/runs/0123456789ab.blocked");
@@ -2095,10 +2108,23 @@ fn a_runs_network_follows_its_folders_level() {
     assert_eq!(plan.network_access(Sandbox::ProcessContainer), Level::None);
     // An exact local-network address, and an "Allow once".
     plan.reach = vec!["192.168.8.31:5432".parse().unwrap()];
-    plan.once = vec![Grant {
-        host: "192.168.8.40".parse().unwrap(),
-        port: 6379,
-    }];
+    plan.once = vec![
+        Grant {
+            host: "192.168.8.40".parse().unwrap(),
+            port: 6379,
+            internet: false,
+        },
+        // Never reopens a closed listener.
+        Grant {
+            host: "127.0.0.1".parse().unwrap(),
+            port: 41234,
+            internet: false,
+        },
+    ];
+    assert_eq!(
+        plan.network_json(Sandbox::Bubblewrap)["egress"]["hostLoopbackPorts"],
+        serde_json::json!([5432, 6379])
+    );
     let allowed = plan.network_json(Sandbox::Bubblewrap)["egress"]["allow"].clone();
     assert_eq!(
         allowed[1],
@@ -2109,6 +2135,7 @@ fn a_runs_network_follows_its_folders_level() {
     plan.once = vec![Grant {
         host: "151.101.1.227".parse().unwrap(),
         port: 443,
+        internet: false,
     }];
     assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::Internet);
     assert_eq!(

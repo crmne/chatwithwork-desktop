@@ -29,6 +29,11 @@ pub struct Service {
     pub place: Where,
     /// The file that says so: `docker-compose.yml`.
     pub from: String,
+    /// The address this computer found for a name that isn't one (`db.lan`),
+    /// which an exact `reach` entry needs. Never sent: only this computer
+    /// uses it.
+    #[serde(skip)]
+    pub address: Option<IpAddr>,
 }
 
 /// What the code reaches.
@@ -101,7 +106,16 @@ fn top_level(mirror: &Path) -> Vec<String> {
 }
 
 fn show(mirror: &Path, name: &str) -> Option<String> {
-    git(mirror, &["show", &format!("HEAD:{name}")])
+    let object = format!("HEAD:{name}");
+    // Its size first, so a large file is never read into memory at all.
+    let size: usize = git(mirror, &["cat-file", "-s", &object])?
+        .trim()
+        .parse()
+        .ok()?;
+    if size > MAX_READ {
+        return None;
+    }
+    git(mirror, &["show", &object])
 }
 
 /// `git` on the bare mirror, reading only: no hooks, no filters run by
@@ -198,10 +212,11 @@ pub fn read(names: &[String], file: impl Fn(&str) -> Option<String>, host: &Host
     // Placed last: a Compose service's name is this computer's.
     let mut placed = Vec::new();
     for mut service in std::mem::take(&mut needs.services) {
-        let Some(place) = place(&service.host, &compose_services, host) else {
+        let Some((place, address)) = place(&service.host, &compose_services, host) else {
             continue;
         };
         service.place = place;
+        service.address = address;
         if !placed.iter().any(|s: &Service| {
             s.name == service.name && s.host == service.host && s.port == service.port
         }) {
@@ -229,25 +244,30 @@ fn add(needs: &mut Needs, name: &str, host: &str, port: u16, from: &str) {
         port,
         place: Where::ThisComputer,
         from: from.to_string(),
+        address: None,
     });
 }
 
 /// Where `host` is: this computer for `localhost` and Compose's services,
 /// else as its address says. A name that isn't either is looked up; one
 /// that doesn't resolve is left out.
-fn place(host: &str, compose: &[String], network: &HostNetwork) -> Option<Where> {
+fn place(host: &str, compose: &[String], network: &HostNetwork) -> Option<(Where, Option<IpAddr>)> {
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     if bare.eq_ignore_ascii_case("localhost") || compose.iter().any(|s| s == bare) {
-        return Some(Where::ThisComputer);
+        return Some((Where::ThisComputer, None));
     }
     if let Ok(address) = bare.parse::<IpAddr>() {
-        return Some(network.classify(address));
+        return Some((network.classify(address), Some(address)));
     }
     if bare.is_empty() || bare.contains(['<', '%', '$', '{']) {
         return None;
     }
-    let address = (bare, 0).to_socket_addrs().ok()?.next()?.ip();
-    Some(network.classify(address))
+    let found: Vec<IpAddr> = (bare, 0).to_socket_addrs().ok()?.map(|a| a.ip()).collect();
+    let address = *found
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| found.first())?;
+    Some((network.classify(address), Some(address)))
 }
 
 fn is_compose(name: &str) -> bool {
@@ -343,22 +363,44 @@ fn database_yml(text: &str, from: &str, needs: &mut Needs) {
     }
 }
 
+/// A `database.yml` value, plain or ERB. For ERB, the default it falls back
+/// to: the last quoted string that isn't an environment variable's name
+/// (`ENV.fetch("DB_HOST", "db")`, `ENV.fetch("DB_HOST") { "db" }`,
+/// `ENV["DB_HOST"] || "db"`), else its last number (`ENV.fetch("DB_PORT",
+/// 5432)`), else `localhost`.
 fn erb_value(value: &str) -> Option<String> {
     let value = value.trim();
     if !value.contains("<%") {
         let plain = value.trim_matches(['"', '\'']);
         return (!plain.is_empty()).then(|| plain.to_string());
     }
-    for quote in ['"', '\''] {
-        let mut parts = value.split(quote);
-        if let (Some(_), Some(inner)) = (parts.next(), parts.next())
-            && let Some(rest) = parts.next()
-            && (rest.contains('}') || rest.contains("%>"))
-            && !inner.is_empty()
-            && !inner.chars().all(|c| c.is_ascii_uppercase() || c == '_')
-        {
-            return Some(inner.to_string());
-        }
+    let mut quoted: Vec<&str> = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find(['"', '\'']) {
+        let quote = rest[start..].chars().next()?;
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(quote) else {
+            break;
+        };
+        quoted.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    let default = quoted.iter().rev().find(|inner| {
+        !inner.is_empty()
+            && !inner
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    });
+    if let Some(default) = default {
+        return Some(default.to_string());
+    }
+    let number: String = rest
+        .split(|c: char| !c.is_ascii_digit())
+        .rfind(|n| !n.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    if !number.is_empty() {
+        return Some(number);
     }
     Some("localhost".to_string())
 }
@@ -433,9 +475,7 @@ pub fn allowed(root: &Root, needs: &Needs) -> bool {
         Where::ThisComputer => cfg!(windows) || level != Level::None,
         Where::LocalNetwork => {
             level == Level::Internet
-                || root
-                    .reach
-                    .contains(&format!("{}:{}", service.host, service.port))
+                || reach_entry(service).is_some_and(|entry| root.reach.contains(&entry))
         }
         Where::Internet => level == Level::Internet,
     })
@@ -447,9 +487,20 @@ pub fn reach_entries(needs: &Needs) -> Vec<String> {
         .services
         .iter()
         .filter(|s| s.place == Where::LocalNetwork)
-        .filter_map(|s| crate::reach::parse_reach(&format!("{}:{}", s.host, s.port)).ok())
-        .map(|a| a.to_string())
+        .filter_map(reach_entry)
         .collect()
+}
+
+/// A local-network service's `reach` entry: its address, the one this
+/// computer found for its name when it has one.
+fn reach_entry(service: &Service) -> Option<String> {
+    let host = match service.address {
+        Some(address) => address.to_string(),
+        None => service.host.clone(),
+    };
+    crate::reach::parse_reach(&format!("{host}:{}", service.port))
+        .ok()
+        .map(|a| a.to_string())
 }
 
 /// What the setup's one Allow says of it: "It can reach PostgreSQL and
@@ -540,6 +591,24 @@ mod tests {
             .collect();
         let names: Vec<String> = map.keys().cloned().collect();
         read(&names, |n| map.get(n).cloned(), &chalk())
+    }
+
+    #[test]
+    fn erb_defaults_are_read_in_each_form() {
+        for (value, default) in [
+            (r#"<%= ENV.fetch("DB_HOST", "db") %>"#, "db"),
+            (
+                r#"<%= ENV.fetch("DB_HOST") { "192.168.8.31" } %>"#,
+                "192.168.8.31",
+            ),
+            (r#"<%= ENV["DB_HOST"] || "db" %>"#, "db"),
+            (r#"<%= ENV.fetch("DB_PORT", 5432) %>"#, "5432"),
+            (r#"<%= ENV.fetch("DB_PORT") { 6543 } %>"#, "6543"),
+            (r#"<%= ENV["DB_HOST"] %>"#, "localhost"),
+            ("db.internal", "db.internal"),
+        ] {
+            assert_eq!(erb_value(value).as_deref(), Some(default), "{value}");
+        }
     }
 
     #[test]

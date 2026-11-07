@@ -154,6 +154,7 @@ c=socket.create_connection((\"127.0.0.1\", 8765)); print(c.recv(3).decode())'";
         vec![Grant {
             host: lan_host.parse().unwrap(),
             port: lan_port,
+            internet: false,
         }],
     );
     assert_eq!(done.stdout.trim(), "connected", "{done:?}");

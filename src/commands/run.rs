@@ -68,7 +68,7 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
         }
     };
     plan.networks = super::plan::Networks::current(sandbox, plan.blocked_log());
-    lock(cell).watch_blocked(plan);
+    lock(cell).watch_blocked(plan, sandbox);
     if let Some(e) = sandbox.refuses(plan) {
         tracing::info!(run = %plan.id, code = %e.code, "the sandbox refused a command");
         return State::Failed(e.message);
