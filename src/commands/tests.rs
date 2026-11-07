@@ -1758,6 +1758,104 @@ fn real_claude_code_answers_from_the_sandbox() {
     assert!(done.stdout.to_lowercase().contains("ready"));
 }
 
+/// OpenCode, Gemini CLI and pi each get their own sign-in in a bot's run,
+/// and its tokens never print, on stdout, stderr or the output window: a
+/// stand-in program prints them, as a careless command might. Where
+/// Bubblewrap runs, and on macOS with `CWW_TEST_SEATBELT=1`.
+#[cfg(unix)]
+#[test]
+fn opencode_gemini_and_pis_tokens_never_print_from_a_bots_run() {
+    let runs_here = if cfg!(target_os = "macos") {
+        std::env::var("CWW_TEST_SEATBELT").as_deref() == Ok("1")
+    } else {
+        sandbox_works() && !on_landlock()
+    };
+    if !runs_here {
+        return;
+    }
+    use crate::coding::Agent;
+    const TOKEN: &str = "tok-standin-SECRETsecretSECRET-0123456789";
+    for agent in [Agent::OpenCode, Agent::Gemini, Agent::Pi] {
+        if agent.unavailable().is_some() {
+            continue;
+        }
+        let mut fx = fixture(true);
+        let paths = fx.runs.paths.clone();
+        let home = paths.person_home.clone().unwrap();
+        let dir = agent.config_dir_in(&home);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, text) = match agent {
+            Agent::OpenCode => (
+                crate::coding::OPENCODE_DB_FILE,
+                format!(r#"SQLite format 3..{{"type":"key","key":"{TOKEN}"}}.."#),
+            ),
+            Agent::Gemini => (".env", format!("GEMINI_API_KEY={TOKEN} # mine\n")),
+            _ => (
+                crate::coding::PI_AUTH_FILE,
+                format!(r#"{{"openai":{{"type":"api_key","key":"{TOKEN}"}}}}"#),
+            ),
+        };
+        std::fs::write(dir.join(file), &text).unwrap();
+        let relative = agent.config_dir();
+        let program = fx._dir.path().join(agent.program());
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho {name} here\ncat \"$HOME/{relative}/{file}\"\necho\ncat \"$HOME/{relative}/{file}\" >&2\n",
+                name = agent.program()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::coding::setup::record_program(&mut fx.config.coding, agent, program);
+        let mut loan = crate::config::BotLoan {
+            id: "42".into(),
+            name: String::new(),
+            unattended: false,
+            claude_code: false,
+            codex: false,
+            opencode: false,
+            gemini: false,
+            pi: false,
+            owners: Vec::new(),
+        };
+        agent.allow(&mut loan, true);
+        fx.config.roots[0].network = true;
+        fx.config.roots[0].bots.push(loan);
+        let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+        if wait(&fx.runs, &probe.id).status.state == "failed" {
+            eprintln!("no network for commands here");
+            return;
+        }
+        let ask = Request {
+            bot: Some("42".into()),
+            ..request(agent.program())
+        };
+        let status = fx.runs.start(&fx.config, &ask).unwrap();
+        let done = wait(&fx.runs, &status.id);
+        let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+        assert!(done.stdout.contains("here"), "{agent:?}: {}", done.stderr);
+        for printed in [&done.stdout, &done.stderr, &window.text] {
+            assert!(!printed.contains(TOKEN), "{agent:?} printed its token");
+            assert!(printed.contains(agent.redacted()), "{agent:?}: {printed}");
+        }
+        // A person's run there gets none of it.
+        let person = fx
+            .runs
+            .start(
+                &fx.config,
+                &request(&format!("cat \"$HOME/{relative}/{file}\"")),
+            )
+            .unwrap();
+        assert_ne!(
+            wait(&fx.runs, &person.id).status.exit_code,
+            Some(0),
+            "{agent:?}"
+        );
+    }
+}
+
 /// The real agent `CWW_TEST_AGENT` names (`opencode`, `gemini`, `pi`...),
 /// found as a run finds it, answers from the sandbox with the sign-in in the
 /// home folder `CWW_TEST_PERSON_HOME` (a test home holding a copy, never a

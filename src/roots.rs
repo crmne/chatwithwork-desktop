@@ -317,6 +317,9 @@ pub fn set_bot_agent(
     agent: crate::coding::Agent,
     allowed: bool,
 ) -> Result<Root> {
+    if allowed && let Some(why) = agent.unavailable() {
+        bail!("{why}");
+    }
     let index = find_root(config, which)?;
     let root = &mut config.roots[index];
     if allowed && !root.runs_commands() {

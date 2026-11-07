@@ -827,6 +827,10 @@ fn opencodes_sign_in_is_its_data_folder_and_every_credential_in_its_database() {
             "expires": 1794046518405_u64,
         })],
     );
+    assert_eq!(
+        Login::find_for(Agent::OpenCode, &home).billing,
+        Billing::Plan
+    );
     let wal = Agent::OpenCode.config_dir_in(&home).join("opencode.db-wal");
     std::fs::write(
         &wal,
@@ -834,7 +838,11 @@ fn opencodes_sign_in_is_its_data_folder_and_every_credential_in_its_database() {
     )
     .unwrap();
     let login = Login::find_for(Agent::OpenCode, &home);
-    assert_eq!(login.billing, Billing::Plan);
+    assert_eq!(
+        login.billing,
+        Billing::Unknown,
+        "a plan and a key: it can't tell"
+    );
     let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
     assert!(secrets.contains(&OPENCODE_REFRESH) && secrets.contains(&OPENCODE_KEY));
     assert!(!format!("{login:?}").contains(OPENCODE_REFRESH));
@@ -943,10 +951,20 @@ fn pis_sign_in_is_its_agent_folder_and_every_token_in_its_auth_file() {
     .unwrap();
     let login = Login::find_for(Agent::Pi, &home);
     assert!(login.signed_in());
-    assert_eq!(login.billing, Billing::Plan);
+    assert_eq!(
+        login.billing,
+        Billing::Unknown,
+        "a plan for one provider and a key for another: which pays depends on the model"
+    );
     assert_eq!(login.dir, Some(crate::roots::canonical(&pi).unwrap()));
     assert_eq!(login.secrets.len(), 3);
     assert!(!format!("{login:?}").contains(PI_ACCESS));
+    std::fs::write(
+        pi.join(PI_AUTH_FILE),
+        serde_json::json!({ "openai-codex": { "type": "oauth", "access": PI_ACCESS } }).to_string(),
+    )
+    .unwrap();
+    assert_eq!(Login::find_for(Agent::Pi, &home).billing, Billing::Plan);
 }
 
 #[cfg(unix)]

@@ -36,6 +36,8 @@ use crate::paths::Paths;
 pub enum Agent {
     ClaudeCode,
     Codex,
+    // Its key on the wire, never Serde's `open_code`.
+    #[serde(rename = "opencode", alias = "open_code")]
     OpenCode,
     Gemini,
     Pi,
@@ -426,13 +428,11 @@ impl Login {
             .into_iter()
             .flat_map(|m| m.values())
             .collect();
-        let billing = if entries.iter().any(|e| e["type"] == "oauth") {
-            Billing::Plan
-        } else if entries.iter().any(|e| e["type"] == "api_key") {
-            Billing::ApiKey
-        } else {
-            Billing::Unknown
-        };
+        let billing = billing_of(entries.iter().map(|e| {
+            e["type"]
+                .as_str()
+                .map(|kind| if kind == "api_key" { "key" } else { kind })
+        }));
         Self {
             dir,
             file: None,
@@ -447,19 +447,36 @@ impl Login {
     /// Its config folder (`~/.config/opencode`, with its plugins and the
     /// background service's password) is never lent: a run uses its own.
     fn find_opencode(home: &Path) -> Self {
-        let dir = Self::own_dir(Agent::OpenCode, home);
-        let credentials = dir
+        // Never lent when it's too big to read whole: a token past what was
+        // read would print as it is.
+        let dir = Self::own_dir(Agent::OpenCode, home).filter(|d| {
+            [
+                OPENCODE_DB_FILE.to_string(),
+                format!("{OPENCODE_DB_FILE}-wal"),
+            ]
+            .iter()
+            .all(|name| {
+                std::fs::metadata(d.join(name)).map_or(true, |m| m.len() <= MAX_OPENCODE_DB_BYTES)
+            })
+        });
+        let (live, credentials) = dir
             .as_ref()
             .map(|d| opencode_credentials(d))
             .unwrap_or_default();
-        let billing = if credentials.iter().any(|c| c["type"] == "oauth") {
-            Billing::Plan
-        } else if credentials.iter().any(|c| c["type"] == "key") {
-            Billing::ApiKey
-        } else {
-            Billing::Unknown
-        };
-        let secrets = long_strings(&Value::Array(credentials));
+        // Who pays, from the rows its database holds, and only when they
+        // agree: with a plan for one provider and a key for another, which
+        // a run uses depends on the model. What the pages alone hold counts
+        // only where no row could be read.
+        let counted = if live.is_empty() { &credentials } else { &live };
+        let billing = billing_of(counted.iter().map(|c| c["type"].as_str()));
+        // Signed in by what its rows hold; every value found, an old one a
+        // page still has included, is taken out of output.
+        let mut secrets = long_strings(&Value::Array(live));
+        for secret in long_strings(&Value::Array(credentials)) {
+            if !secrets.contains(&secret) {
+                secrets.push(secret);
+            }
+        }
         let env = opencode_model(home)
             .map(|model| {
                 vec![(
@@ -644,22 +661,36 @@ const MAX_OPENCODE_DB_BYTES: u64 = 256 * 1024 * 1024;
 /// ([`sqlite_rows`]), where a long sign-in's value is split; the files'
 /// bytes are searched as they are too, for one a page left behind. An old
 /// value found that way only takes more out of output.
-fn opencode_credentials(dir: &Path) -> Vec<Value> {
+fn opencode_credentials(dir: &Path) -> (Vec<Value>, Vec<Value>) {
     let db = read_regular(&dir.join(OPENCODE_DB_FILE), MAX_OPENCODE_DB_BYTES);
     let wal = read_regular(
         &dir.join(format!("{OPENCODE_DB_FILE}-wal")),
         MAX_OPENCODE_DB_BYTES,
     );
-    let mut found = Vec::new();
+    let mut live = Vec::new();
     if let Some(db) = &db {
         for row in sqlite_rows(db, wal.as_deref()) {
-            credentials_in(&row, &mut found);
+            credentials_in(&row, &mut live);
         }
     }
+    let mut found = live.clone();
     for bytes in db.iter().chain(wal.iter()) {
         credentials_in(bytes, &mut found);
     }
-    found
+    (live, found)
+}
+
+/// A plan when every sign-in is one (`oauth`), an API key when every one is
+/// a key, else it can't tell.
+fn billing_of<'a>(kinds: impl Iterator<Item = Option<&'a str>>) -> Billing {
+    let kinds: Vec<Option<&str>> = kinds.collect();
+    if !kinds.is_empty() && kinds.iter().all(|k| *k == Some("oauth")) {
+        Billing::Plan
+    } else if !kinds.is_empty() && kinds.iter().all(|k| *k == Some("key")) {
+        Billing::ApiKey
+    } else {
+        Billing::Unknown
+    }
 }
 
 /// The credentials whose JSON `bytes` hold whole, added to `found` once each.
@@ -1344,8 +1375,11 @@ fn agent_for_run(
     // A program that's a script in an npm package (Gemini CLI's
     // `bundle/gemini.js`, pi's `dist/cli.js` from `npm install -g`) reads the
     // package's own files, its dependencies too: the package's folder.
-    let package = npm_package_entry(&real);
-    let read = grant(package.as_deref().unwrap_or(&real), config, paths)?;
+    // Where the package's folder is too broad to read, the script alone.
+    let read = npm_package_entry(&real)
+        .and_then(|entry| grant(&entry, config, paths))
+        .filter(|read| read.is_dir())
+        .or_else(|| grant(&real, config, paths))?;
     let entry = if cfg!(windows) {
         let named = crate::roots::canonical(program.parent()?)
             .ok()?

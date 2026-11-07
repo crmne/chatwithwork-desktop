@@ -246,6 +246,9 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
 
     // 4. The agent, installed.
     let agent = options.agent.unwrap_or(Agent::ClaudeCode);
+    if let Some(why) = agent.unavailable() {
+        bail!("{why}");
+    }
     let installed = agent_step(agent, &mut config, paths, &ask)?;
 
     // 5. Signed in, and this bot's runs here allowed to use it.

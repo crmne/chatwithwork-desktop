@@ -473,7 +473,7 @@ enum CodingCommand {
         /// The bot's name, to recognize it here.
         #[arg(long)]
         name: Option<String>,
-        /// The coding agent it uses: claude (the default), codex or opencode.
+        /// The coding agent it uses: claude (the default), codex, opencode, gemini or pi.
         #[arg(long)]
         agent: Option<String>,
         /// The folder it works in (default ~/bots).
@@ -516,7 +516,7 @@ enum CodingCommand {
         bot: String,
         #[arg(long)]
         off: bool,
-        /// The coding agent: claude (the default), codex or opencode.
+        /// The coding agent: claude (the default), codex, opencode, gemini or pi.
         #[arg(long)]
         agent: Option<String>,
         /// Let this bot's first runs here prepare repositories of this GitHub
