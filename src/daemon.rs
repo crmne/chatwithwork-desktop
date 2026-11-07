@@ -1614,13 +1614,8 @@ impl Daemon {
     ) -> Result<T> {
         let _editing = self.config_edits.lock().await;
         let paths = self.paths.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut config = Config::load(&paths)?;
-            let edited = edit(&mut config, &paths)?;
-            config.save(&paths)?;
-            Ok(edited)
-        })
-        .await?
+        tokio::task::spawn_blocking(move || Config::edit(&paths, |config| edit(config, &paths)))
+            .await?
     }
 
     fn configure_browser(&self, config: &Config) {
@@ -1901,6 +1896,8 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
                     | ControlRequest::RootsBot { .. }
+                    | ControlRequest::CodingAllow { .. }
+                    | ControlRequest::CodingLook { .. }
                     | ControlRequest::Printers
                     | ControlRequest::PrintersAdd { .. }
                     | ControlRequest::PrintersRemove { .. }
@@ -2243,10 +2240,16 @@ impl ControlHandler for Daemon {
                     .roots
                     .iter()
                     .find(|root| root.loan(&bot).is_some() && root.runs_commands());
+                let commands = crate::commands::Sandbox::for_host().is_ok();
                 Ok(json!({
                     "agents": look.agents,
                     "reaches": look.reaches,
-                    "root": lent.map(|root| json!({ "id": root.id, "label": root.label })),
+                    "commands": commands,
+                    "root": lent.map(|root| json!({
+                        "id": root.id,
+                        "label": root.label,
+                        "unattended": root.loan(&bot).is_some_and(|loan| loan.unattended),
+                    })),
                 }))
             }
             ControlRequest::CodingAllow {

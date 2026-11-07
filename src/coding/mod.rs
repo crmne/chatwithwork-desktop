@@ -607,7 +607,16 @@ impl AgentRun {
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with("codex-"))
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("codex-")
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.'))
+            })
+            // A program of its own beside it, never a link that leads elsewhere.
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
             .map(|entry| entry.path())
             .collect()
     }

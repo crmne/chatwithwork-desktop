@@ -14,8 +14,25 @@ pub struct Need {
     pub install: Option<String>,
 }
 
+/// Whether the checkout has `name` as a file of its own: never a link, which
+/// a repository could point anywhere on this computer.
 fn has(dir: &Path, name: &str) -> bool {
-    dir.join(name).exists()
+    std::fs::symlink_metadata(dir.join(name)).is_ok_and(|meta| !meta.file_type().is_symlink())
+}
+
+/// Most of a file read to tell what a checkout needs.
+const MAX_READ: u64 = 256 * 1024;
+
+/// A file of the checkout's own, at most [`MAX_READ`] bytes of it.
+fn read_own(dir: &Path, name: &str) -> String {
+    use std::io::Read;
+    let path = dir.join(name);
+    let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+    let mut text = String::new();
+    if regular && let Ok(file) = std::fs::File::open(&path) {
+        let _ = file.take(MAX_READ).read_to_string(&mut text);
+    }
+    text
 }
 
 /// What `checkout` needs, in the order to set it up: the toolchain first.
@@ -95,7 +112,7 @@ pub fn needs(checkout: &Path) -> Vec<Need> {
 
 /// The command that most likely runs the checkout's tests.
 pub fn test_command(checkout: &Path) -> Option<String> {
-    let read = |name: &str| std::fs::read_to_string(checkout.join(name)).unwrap_or_default();
+    let read = |name: &str| read_own(checkout, name);
     let mise = read("mise.toml") + &read(".mise.toml");
     if mise.contains("[tasks.test]") || mise.contains("[tasks.\"test\"]") {
         return Some("mise run test".into());

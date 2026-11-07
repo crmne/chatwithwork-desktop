@@ -588,6 +588,27 @@ impl Config {
         }
     }
 
+    /// Load, change and save the file while holding a lock every process
+    /// that edits it this way takes, so two edits never save over each other:
+    /// the daemon's, and a repository a run prepared (`crate::coding::prepare`).
+    pub fn edit<T>(paths: &Paths, edit: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+        let lock_path = paths.config_file().with_extension("toml.lock");
+        if let Some(dir) = lock_path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .context("opening the settings' lock")?;
+        lock.lock().context("waiting for the settings' lock")?;
+        let mut config = Config::load(paths)?;
+        let edited = edit(&mut config)?;
+        config.save(paths)?;
+        Ok(edited)
+    }
+
     pub fn save(&self, paths: &Paths) -> Result<()> {
         let text = toml::to_string_pretty(self).context("serializing config")?;
         let header = "# Chat with Work Desktop (cww) configuration.\n\

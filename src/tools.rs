@@ -663,10 +663,16 @@ impl LocalFiles {
                 done,
             })
             .map_err(|_| unavailable())?;
-        heard
-            .await
-            .map_err(|_| unavailable())?
-            .map_err(|message| ToolError::new(ErrorCode::NotWritable, message))?;
+        heard.await.map_err(|_| unavailable())?.map_err(|message| {
+            // What the person reads here; the server hears only that it
+            // couldn't, never a path on this computer.
+            tracing::warn!("a card's Always allow wasn't applied: {message}");
+            ToolError::new(
+                ErrorCode::NotWritable,
+                "This computer couldn't allow it: the folder may not be lent to this bot with \
+                     commands any more.",
+            )
+        })?;
         Ok(Output::Ask(json!({ "status": "allowed" })))
     }
 

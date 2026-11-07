@@ -1564,7 +1564,8 @@ fn the_first_run_prepares_a_repository_by_itself_and_names_a_step_that_fails() {
     } else {
         sandbox_works() && !on_landlock()
     };
-    if !runs_here {
+    let git = std::process::Command::new("git").arg("--version").output();
+    if !runs_here || !git.is_ok_and(|o| o.status.success()) {
         return;
     }
     let mut fx = fixture(true);
@@ -1591,7 +1592,7 @@ fn the_first_run_prepares_a_repository_by_itself_and_names_a_step_that_fails() {
         fx._dir.path(),
         &[(
             "Makefile",
-            "test:\n\t@echo \"$$HOME\" > .ran; test ! -e \"$$HOME/.claude\"; test ! -e failing\n",
+            "test:\n\t@echo \"$$HOME\" > .ran && test ! -e \"$$HOME/.claude\" && test ! -e failing\n",
         )],
     );
     fx.config

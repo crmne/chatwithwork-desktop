@@ -218,6 +218,9 @@ fn yes() -> bool {
 #[derive(Clone, Default)]
 pub struct Preparations {
     going: Arc<Mutex<HashMap<String, Arc<Mutex<View>>>>>,
+    /// Bumped when every run is stopped (the worker restarted, the computer
+    /// was signed out): a preparation started before then stops too.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -292,7 +295,13 @@ fn choose(config: &Config, paths: &Paths, ask: &Ask) -> Result<(Root, Agent), Bo
         .iter()
         .filter(|root| root.runs_commands() && root.loan(&ask.bot).is_some())
         .collect();
-    let named = ask.agent.as_deref().and_then(Agent::from_key);
+    let named = match ask.agent.as_deref() {
+        Some(key) => Some(
+            Agent::from_key(key)
+                .ok_or_else(|| Box::new(View::needs(&ask.repository, "not_available", None)))?,
+        ),
+        None => None,
+    };
     if let Some(agent) = named.filter(|agent| agent.unavailable().is_some()) {
         return Err(Box::new(View::needs(
             &ask.repository,
@@ -309,12 +318,26 @@ fn choose(config: &Config, paths: &Paths, ask: &Ask) -> Result<(Root, Agent), Bo
         },
         |agent| vec![agent],
     );
-    let found = lent.iter().find_map(|root| {
+    // The folder that holds this repository already, else one whose loan
+    // names its owner, else any: a ready folder later on is never passed over.
+    let owner = split_repository(&ask.repository).map(|(owner, _)| owner);
+    let eligible = |root: &Root| {
+        recorded(config, &root.id, &ask.repository).is_some()
+            || root.loan(&ask.bot).is_some_and(|loan| {
+                owner.is_some_and(|owner| loan.owners.iter().any(|o| o.eq_ignore_ascii_case(owner)))
+            })
+    };
+    let ready = |root: &&Root| {
         wanted
             .iter()
             .find(|agent| super::agent_state(**agent, root, &ask.bot) == AgentState::Ready)
             .map(|agent| ((*root).clone(), *agent))
-    });
+    };
+    let found = lent
+        .iter()
+        .filter(|root| eligible(root))
+        .find_map(ready)
+        .or_else(|| lent.iter().find_map(ready));
     let Some((root, agent)) = found else {
         let need = if lent.iter().any(|root| {
             wanted
@@ -387,6 +410,11 @@ fn checkout_name(config: &Config, root: &Root, owner: &str, name: &str) -> Optio
 }
 
 impl Preparations {
+    /// Stop every preparation going on, at its next step.
+    pub fn stop_all(&self) {
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn key(ask: &Ask) -> String {
         format!("{}\n{}", ask.bot, ask.repository.to_ascii_lowercase())
     }
@@ -430,11 +458,13 @@ impl Preparations {
         if existing.is_none() && !allowed {
             return Ok(View::needs(&ask.repository, "other_owner", Some(agent)));
         }
-        let billing = paths
-            .person_home
-            .as_deref()
-            .map(|home| Login::find_for(agent, home).billing)
-            .unwrap_or_default();
+        let billing = folder_billing(config, paths, &root.id, agent).unwrap_or_else(|| {
+            paths
+                .person_home
+                .as_deref()
+                .map(|home| Login::find_for(agent, home).billing)
+                .unwrap_or_default()
+        });
         if let Some(repo) = &existing
             && let Some(view) = already_prepared(paths, repo, &root, ask, agent, billing)
         {
@@ -475,6 +505,10 @@ impl Preparations {
             root,
             existing,
             cell,
+            epoch: (
+                Arc::clone(&self.epoch),
+                self.epoch.load(std::sync::atomic::Ordering::SeqCst),
+            ),
         };
         std::thread::Builder::new()
             .name("cww-prepare".into())
@@ -482,6 +516,19 @@ impl Preparations {
             .map_err(|_| RunError::new("unavailable", "couldn't start preparing"))?;
         Ok(view)
     }
+}
+
+/// An API key the folder's own environment gives runs (`cww roots env`)
+/// takes over from the sign-in, so who pays says so.
+fn folder_billing(config: &Config, paths: &Paths, root: &str, agent: Agent) -> Option<Billing> {
+    let key = match agent {
+        Agent::ClaudeCode => "ANTHROPIC_API_KEY",
+        Agent::Codex => "OPENAI_API_KEY",
+    };
+    crate::commands::env::names_for(config, paths, root)
+        .iter()
+        .any(|name| name == key)
+        .then_some(Billing::ApiKey)
 }
 
 /// A repository's answer when it needs no work: one a run prepared before, or
@@ -502,7 +549,14 @@ fn already_prepared(
     if repo.github.is_some() && kept.is_none() {
         return None;
     }
-    std::fs::symlink_metadata(root.path.join(&repo.name)).ok()?;
+    if !mirror.join("HEAD").is_file() {
+        return None;
+    }
+    let folder = crate::roots::canonical(&root.path).ok()?;
+    let checkout = crate::roots::canonical(&root.path.join(&repo.name)).ok()?;
+    if !checkout.starts_with(&folder) || !checkout.is_dir() {
+        return None;
+    }
     Some(View {
         state: "ready".into(),
         repository: ask.repository.clone(),
@@ -533,6 +587,7 @@ struct Work {
     root: Root,
     existing: Option<Repository>,
     cell: Arc<Mutex<View>>,
+    epoch: (Arc<std::sync::atomic::AtomicU64>, u64),
 }
 
 impl Work {
@@ -639,10 +694,16 @@ impl Work {
             test_command,
             tests: outcome.into(),
         };
-        let _ = crate::paths::write_private_file(
+        crate::paths::write_private_file(
             &mirror.join(PREPARED),
             &serde_json::to_vec(&kept).unwrap_or_default(),
-        );
+        )
+        .map_err(|e| {
+            (
+                tests.clone(),
+                format!("couldn't keep that it's prepared: {e:#}"),
+            )
+        })?;
         let mut view = lock(&self.cell);
         view.tests = Some(outcome.into());
         view.state = "ready".into();
@@ -683,13 +744,38 @@ impl Work {
         })
     }
 
+    /// Keep the repository, under the settings' lock, and only while the
+    /// person still lends this folder to the bot for it.
     fn record(&self, repo: &Repository) -> Result<(), String> {
-        let mut config = self.config()?;
-        if !config.coding.repositories.contains(repo) {
-            config.coding.repositories.push(repo.clone());
-            config.save(&self.paths).map_err(|e| format!("{e:#}"))?;
+        Config::edit(&self.paths, |config| {
+            self.still_allowed(config).map_err(anyhow::Error::msg)?;
+            if !config.coding.repositories.contains(repo) {
+                config.coding.repositories.push(repo.clone());
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("{e:#}"))
+    }
+
+    /// Whether the person still lends the folder to this bot with commands, the
+    /// network and an agent, as when it started: checked before every step.
+    fn still_allowed(&self, config: &Config) -> Result<(), String> {
+        let lent = config
+            .roots
+            .iter()
+            .find(|root| root.id == self.root.id)
+            .filter(|root| root.runs_commands() && root.network)
+            .and_then(|root| root.loan(&self.ask.bot))
+            .is_some_and(|loan| Agent::ALL.into_iter().any(|agent| agent.allowed(loan)));
+        if self.epoch.0.load(std::sync::atomic::Ordering::SeqCst) != self.epoch.1 {
+            Err("this computer stopped its commands".into())
+        } else if config.paused {
+            Err("this computer was paused".into())
+        } else if lent {
+            Ok(())
+        } else {
+            Err("the folder isn't lent to this bot for that any more".into())
         }
-        Ok(())
     }
 
     fn read_needs(
@@ -702,7 +788,15 @@ impl Work {
             .data_dir
             .join("staging")
             .join(&repo.root)
-            .join(format!("{}-{}", repo.name, std::process::id()));
+            .join(format!(
+                "{}-{}-{}",
+                repo.name,
+                self.ask.bot,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ));
         let _ = std::fs::remove_dir_all(&staging);
         let result = repositories::private_copy(mirror, &staging)
             .map(|()| (detect::needs(&staging), detect::test_command(&staging)))
@@ -724,6 +818,7 @@ impl Work {
         let waited = Instant::now();
         let status = loop {
             let config = self.config()?;
+            self.still_allowed(&config)?;
             match self.runs.start(&config, &request) {
                 Ok(status) => break status,
                 Err(e) if e.code == "busy" && waited.elapsed() < ROOM_WAIT => {

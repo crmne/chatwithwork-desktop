@@ -56,6 +56,10 @@ struct Showing {
     name: String,
     commands_allowed: bool,
     answer: mpsc::Sender<Answer>,
+    /// What the window last showed: Allow does only that.
+    shown: Option<Value>,
+    /// Set once Allow or Cancel was pressed, so only the first counts.
+    answered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,9 +77,11 @@ pub struct CodingSetups {
 /// where something of the person's is there already, the next free name. Never
 /// a folder that has anything in it that isn't shared yet.
 pub fn new_folder(home: &Path, shared: &[PathBuf]) -> Option<PathBuf> {
+    // Only a folder that isn't there or is empty, and isn't shared: never
+    // another bot's, or the person's own.
     let free = |path: &Path| {
-        shared.iter().any(|s| s == path)
-            || std::fs::read_dir(path)
+        !shared.iter().any(|s| s == path)
+            && std::fs::read_dir(path)
                 .map_or(!path.exists(), |mut entries| entries.next().is_none())
     };
     std::iter::once("bots".to_string())
@@ -158,6 +164,9 @@ pub fn view(
         (None, None) => checks
             .push(json!({ "ok": false, "text": "Your home folder has no free folder named bots" })),
     }
+    if look["commands"] == false {
+        checks.push(json!({ "ok": false, "text": "Commands can't run on this computer" }));
+    }
     if !commands_allowed {
         checks.push(
             json!({ "ok": false, "text": "Your organization doesn't allow commands on computers" }),
@@ -173,12 +182,21 @@ pub fn view(
         "computer": hostname(),
         "checks": checks,
         "note": format!(
-            "Its commands get the network and your {agent_name} sign-in, and can read that sign-in. They can't reach your SSH keys or other projects. You approve each one."
+            "Its commands get the network and your {agent_name} sign-in, and can read that sign-in. They can't reach your SSH keys or other projects. {}",
+            if look["root"]["unattended"] == true {
+                "In this folder they already run without asking."
+            } else {
+                "You approve each one."
+            }
         ),
         "repositories": owner.map(|owner| format!(
             "The first run on each {owner} repository copies it with your Git login, then installs and tests it in the sandbox."
         )),
-        "can_allow": ready && reached && commands_allowed && (lent.is_some() || folder.is_some()),
+        "can_allow": ready
+            && reached
+            && commands_allowed
+            && look["commands"] != false
+            && (lent.is_some() || folder.is_some()),
     })
 }
 
@@ -249,6 +267,8 @@ pub fn ask(
         name,
         commands_allowed: context["commands_allowed"] != false,
         answer,
+        shown: None,
+        answered: false,
     });
     let opened = show(app);
     if let Err(e) = opened {
@@ -314,14 +334,18 @@ pub async fn coding_setup_state(
         };
         let look = look(&desktop, &request)?;
         let home = cww::paths::home_dir().map_err(|e| e.to_string())?;
-        Ok(view(
+        let shown = view(
             &request,
             &name,
             commands_allowed,
             &look,
             &home,
             &shared_folders(&desktop),
-        ))
+        );
+        if let Some(showing) = setups.showing.lock().expect("coding setup").as_mut() {
+            showing.shown = Some(shown.clone());
+        }
+        Ok(shown)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -339,25 +363,52 @@ pub async fn coding_setup_answer(
     window_only(&webview)?;
     let (desktop, setups) = (desktop.inner().clone(), setups.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
-        let (request, name, commands_allowed, sender) = {
-            let showing = setups.showing.lock().expect("coding setup");
-            let showing = showing.as_ref().ok_or("Nothing is waiting.")?;
+        let (request, name, commands_allowed, sender, before) = {
+            let mut showing = setups.showing.lock().expect("coding setup");
+            let showing = showing.as_mut().ok_or("Nothing is waiting.")?;
+            if showing.answered {
+                return Err("It's already being answered.".to_string());
+            }
+            showing.answered = true;
             (
                 showing.request.clone(),
                 showing.name.clone(),
                 showing.commands_allowed,
                 showing.answer.clone(),
+                showing.shown.clone(),
             )
+        };
+        let reopen = || {
+            if let Some(showing) = setups.showing.lock().expect("coding setup").as_mut() {
+                showing.answered = false;
+            }
         };
         if !allow {
             let _ = sender.send(Answer::Declined);
             return Ok(json!({ "declined": true }));
         }
-        let look = look(&desktop, &request)?;
+        // The bot again, as the server says it to this device now: still
+        // lent this computer, and still allowed commands.
+        let context = desktop.client.request(&ControlRequest::SettingsContext {
+            bot: Some(request.bot.clone()),
+        });
+        let still = context.as_ref().is_ok_and(|c| {
+            c["bot"]["name"].as_str().map(str::trim) == Some(name.as_str())
+                && c["commands_allowed"] != false
+        });
+        let look = look(&desktop, &request).inspect_err(|_| reopen())?;
         let home = cww::paths::home_dir().map_err(|e| e.to_string())?;
         let shared = shared_folders(&desktop);
-        let shown = view(&request, &name, commands_allowed, &look, &home, &shared);
-        if shown["can_allow"] != true {
+        let shown = view(
+            &request,
+            &name,
+            commands_allowed && still,
+            &look,
+            &home,
+            &shared,
+        );
+        if shown["can_allow"] != true || before.as_ref() != Some(&shown) {
+            reopen();
             return Err("Something changed. Check again.".to_string());
         }
         let agent = chosen(&look, request.agent.as_deref())
@@ -533,7 +584,8 @@ mod tests {
         let shared = vec![home.path().join("bots")];
         assert_eq!(
             new_folder(home.path(), &shared),
-            Some(home.path().join("bots"))
+            Some(home.path().join("bots-2")),
+            "never one already shared"
         );
     }
 }

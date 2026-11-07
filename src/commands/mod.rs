@@ -580,6 +580,7 @@ impl Runs {
 
     /// Stop every run (the worker restarted, or the daemon stops).
     pub fn stop_all(&self) {
+        self.preparations.stop_all();
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             lock(&cell).stop = true;

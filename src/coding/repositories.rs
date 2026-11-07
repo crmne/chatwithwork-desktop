@@ -281,8 +281,15 @@ pub fn private_copy(mirror: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to.parent().unwrap_or(to))?;
     let mut clone = git();
     clone
-        .args(["clone", "--quiet", "--no-hardlinks", "--depth", "1", "--"])
-        .arg(format!("file://{}", mirror.display()))
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "--",
+        ])
+        .arg(mirror)
         .arg(to);
     run(clone, Duration::from_secs(600)).context("copying the repository")
 }

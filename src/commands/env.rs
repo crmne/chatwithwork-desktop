@@ -571,6 +571,14 @@ pub fn delete(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<()> 
 /// The variables of folder `root` for a run: none, without reading the
 /// store, where `config` notes no list. A noted list that can't be read,
 /// or reads with a mistake, stops the run: it would run without them.
+/// The names the folder's environment sets, never their values; none when it
+/// can't be read.
+pub fn names_for(config: &Config, paths: &Paths, root: &str) -> Vec<String> {
+    for_run(config, paths, root)
+        .map(|variables| variables.into_iter().map(|v| v.name).collect())
+        .unwrap_or_default()
+}
+
 pub fn for_run(config: &Config, paths: &Paths, root: &str) -> Result<Vec<Variable>, String> {
     if !config.folder_env.iter().any(|id| id == root) {
         return Ok(Vec::new());

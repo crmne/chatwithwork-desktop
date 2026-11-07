@@ -565,6 +565,11 @@ impl Plan {
             ),
         ]);
         env.extend(self.coding_environment());
+        // Where a run prepared a repository here, its caches in the folder's
+        // own place, as on Linux and macOS.
+        let tools = self.tools_environment();
+        env.retain(|(name, _)| !tools.iter().any(|(own, _)| own == name));
+        env.extend(tools);
         // The run's own home has no `.claude` or `.codex`, and Windows can't
         // link one there without Developer Mode: the agent's own variable
         // names the person's, where its sign-in is.

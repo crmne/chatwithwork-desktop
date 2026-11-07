@@ -427,6 +427,26 @@ fn expand_home(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Every place on the person's `PATH` with a program `name`, in order.
+fn which_all(name: &str) -> Vec<PathBuf> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let names: Vec<String> = if cfg!(windows) {
+        vec![
+            format!("{name}.exe"),
+            format!("{name}.cmd"),
+            name.to_string(),
+        ]
+    } else {
+        vec![name.to_string()]
+    };
+    std::env::split_paths(&path)
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .filter(|p| p.is_file())
+        .collect()
+}
+
 /// Where `name` would run from the person's `PATH`.
 fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -508,7 +528,8 @@ pub fn program_for_run(
     coding: &crate::config::CodingConfig,
     roots: &[crate::config::Root],
 ) -> Option<PathBuf> {
-    if let Some(recorded) = recorded(agent, coding).filter(|p| p.is_file()) {
+    if let Some(recorded) = recorded(agent, coding).filter(|p| p.is_file() && !changeable(roots, p))
+    {
         return Some(recorded.clone());
     }
     let home = crate::paths::home_dir().ok()?;
@@ -533,43 +554,43 @@ pub fn program_for_run(
 /// would run what a bot wrote, as the person, outside the sandbox.
 pub fn find_outside(agent: Agent, roots: &[crate::config::Root]) -> Option<PathBuf> {
     let home = crate::paths::home_dir().ok()?;
-    // Commands given a sign-in can change anything in the agent's folder,
-    // where `~/.claude/local` is one of the places below.
-    let lent_login = roots
-        .iter()
-        .any(|root| root.bots.iter().any(|l| agent.allowed(l)));
-    let login = crate::roots::canonical(&home.join(agent.config_dir())).ok();
+    // Commands given a sign-in can change anything in that agent's folder,
+    // where `~/.claude/local` is one of the places below: never a program in
+    // any agent's folder that a loan lends.
+    let lent_logins: Vec<PathBuf> = super::Agent::ALL
+        .into_iter()
+        .filter(|each| {
+            roots
+                .iter()
+                .any(|root| root.bots.iter().any(|l| each.allowed(l)))
+        })
+        .filter_map(|each| crate::roots::canonical(&home.join(each.config_dir())).ok())
+        .collect();
+    let writable = |p: &PathBuf| {
+        let real = crate::roots::canonical(p).unwrap_or_else(|_| p.clone());
+        changeable(roots, p) || lent_logins.iter().any(|login| real.starts_with(login))
+    };
     let mise = || {
-        let program = which("mise").filter(|p| !changeable(roots, p))?;
+        let program = which("mise").filter(|p| !writable(p))?;
         let mut command = Command::new(program);
         command.args(["which", agent.program()]);
         output_within(command, PROBE_LIMIT)
             .map(PathBuf::from)
             .filter(|p| p.is_file())
     };
-    let writable = |p: &PathBuf| {
-        changeable(roots, p)
-            || (lent_login
-                && login.as_ref().is_some_and(|login| {
-                    crate::roots::canonical(p)
-                        .unwrap_or_else(|_| p.clone())
-                        .starts_with(login)
-                }))
-    };
     let runs = |p: &PathBuf| p.is_file() && !writable(p) && version(p).is_some();
-    // Each asked only when the one before didn't give a program that runs.
-    let on_path = || {
-        which(agent.program()).and_then(|found| {
-            let text = found.to_string_lossy();
-            if text.contains("mise") && text.contains("shims") {
-                mise()
-            } else {
-                Some(found)
-            }
-        })
-    };
-    if let Some(found) = on_path().filter(runs) {
-        return Some(found);
+    // Each asked only when the one before didn't give a program that runs: every
+    // one on the PATH in turn, a writable one passed over, a mise shim followed.
+    for found in which_all(agent.program()) {
+        let text = found.to_string_lossy();
+        let found = if text.contains("mise") && text.contains("shims") {
+            mise()
+        } else {
+            Some(found)
+        };
+        if let Some(found) = found.filter(runs) {
+            return Some(found);
+        }
     }
     if let Some(found) = mise().filter(runs) {
         return Some(found);
@@ -627,11 +648,20 @@ fn output_within(mut command: Command, limit: Duration) -> Option<String> {
 
 fn install_command(agent: Agent) -> (&'static str, Vec<&'static str>, &'static str) {
     if agent == Agent::Codex {
-        return (
-            "npm",
-            vec!["install", "-g", "@openai/codex"],
-            "npm install -g @openai/codex",
-        );
+        // npm is a .cmd on Windows, which only cmd starts.
+        return if cfg!(windows) {
+            (
+                "cmd",
+                vec!["/C", "npm", "install", "-g", "@openai/codex"],
+                "npm install -g @openai/codex",
+            )
+        } else {
+            (
+                "npm",
+                vec!["install", "-g", "@openai/codex"],
+                "npm install -g @openai/codex",
+            )
+        };
     }
     if cfg!(windows) {
         (
@@ -1378,6 +1408,7 @@ fn effective_state(
     installed: bool,
 ) -> AgentState {
     match super::agent_state(agent, root, bot) {
+        AgentState::Ready if agent.unavailable().is_some() => AgentState::NotInstalled,
         AgentState::Ready if !installed => AgentState::NotInstalled,
         AgentState::Ready if !signed_in => AgentState::NotSignedIn,
         state => state,
