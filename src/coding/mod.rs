@@ -750,7 +750,7 @@ fn sqlite_rows(db: &[u8], wal: Option<&[u8]>) -> Vec<Vec<u8>> {
     if !size.is_power_of_two() || !(512..=65536).contains(&size) || usable < 480 {
         return Vec::new();
     }
-    let mut pages: std::collections::HashMap<u32, &[u8]> = db
+    let mut pages: std::collections::BTreeMap<u32, &[u8]> = db
         .chunks_exact(size)
         .zip(1u32..)
         .map(|(page, number)| (number, page))
@@ -801,7 +801,7 @@ fn sqlite_row(
     page: &[u8],
     offset: usize,
     usable: usize,
-    pages: &std::collections::HashMap<u32, &[u8]>,
+    pages: &std::collections::BTreeMap<u32, &[u8]>,
 ) -> Option<Vec<u8>> {
     let (length, read) = sqlite_varint(page.get(offset..)?)?;
     let (_rowid, read_rowid) = sqlite_varint(page.get(offset + read..)?)?;
