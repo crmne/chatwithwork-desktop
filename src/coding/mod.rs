@@ -550,7 +550,13 @@ pub fn coding_for_bot(coding: &CodingConfig, root: &Root, bot: &str) -> Value {
         "claude_code": agent_state(Agent::ClaudeCode, root, bot).name(),
         "agents": Agent::ALL
             .iter()
-            .map(|agent| (agent.key().to_string(), json!(agent_state(*agent, root, bot).name())))
+            .map(|agent| {
+                let state = match agent.unavailable() {
+                    Some(_) => "not_available",
+                    None => agent_state(*agent, root, bot).name(),
+                };
+                (agent.key().to_string(), json!(state))
+            })
             .collect::<serde_json::Map<_, _>>(),
         "prepares": true,
         "owners": root.loan(bot).map(|loan| loan.owners.clone()).unwrap_or_default(),
