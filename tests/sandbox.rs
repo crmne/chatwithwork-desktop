@@ -252,6 +252,8 @@ fn only_folders_that_allow_changes_are_writable_on_macos() {
         writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     Config {

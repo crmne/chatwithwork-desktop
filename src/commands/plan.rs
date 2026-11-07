@@ -241,8 +241,12 @@ pub struct Networks {
     /// never reaches.
     pub loopback: Vec<u16>,
     /// Where the sandbox logs the connections it blocked, when it can
-    /// (Bubblewrap with slirp4netns).
+    /// (Bubblewrap with a network of the run's own).
     pub log: Option<PathBuf>,
+    /// Whether the run can have a network of its own, which local services
+    /// need on Linux (Bubblewrap with slirp4netns and unprivileged network
+    /// namespaces; Seatbelt always).
+    pub own_network: bool,
 }
 
 impl Networks {
@@ -250,27 +254,54 @@ impl Networks {
     /// `log` where the sandbox can say them.
     pub fn current(sandbox: Sandbox, log: PathBuf) -> Self {
         match sandbox {
-            Sandbox::Bubblewrap => Self {
+            Sandbox::Bubblewrap if own_network_available() => Self {
                 host: crate::reach::HostNetwork::current(),
                 loopback: crate::reach::loopback_services(),
-                log: slirp_available().then_some(log),
+                log: Some(log),
+                own_network: true,
             },
             Sandbox::Seatbelt => Self {
                 host: crate::reach::HostNetwork::current(),
                 loopback: crate::reach::loopback_services(),
                 log: None,
+                own_network: true,
             },
-            Sandbox::Landlock | Sandbox::ProcessContainer => Self::default(),
+            Sandbox::Bubblewrap | Sandbox::Landlock | Sandbox::ProcessContainer => Self::default(),
         }
     }
 }
 
-/// Whether `slirp4netns`, which a network of a run's own needs, is on the
-/// `PATH`: without it a run with no network at all still starts, unlogged.
-fn slirp_available() -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join("slirp4netns").is_file())
-    })
+/// Whether a run on Bubblewrap can have a network of its own: slirp4netns,
+/// util-linux and iptables there, and unprivileged user and network
+/// namespaces allowed (Ubuntu 23.10 and later refuse them to `unshare` with
+/// AppArmor, though not to Bubblewrap itself). Without it a run with no
+/// network still starts, unlogged and without local services; one with
+/// the internet fails and says why, as before. Asked of MXC, at most once a
+/// minute.
+#[cfg(target_os = "linux")]
+fn own_network_available() -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static KNOWN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    let mut known = KNOWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, answer)) = *known
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return answer;
+    }
+    let answer = mxc_sdk::bwrap_common::proxy_network::probe_proxy_enforcement().is_ok();
+    if !answer {
+        tracing::info!("commands get no network of their own here: no local services");
+    }
+    *known = Some((Instant::now(), answer));
+    answer
+}
+
+#[cfg(not(target_os = "linux"))]
+fn own_network_available() -> bool {
+    false
 }
 
 /// A language toolchain a command may use: folders it reads, where its
@@ -474,7 +505,15 @@ impl Plan {
                     Level::None
                 }
             }
-            Sandbox::Bubblewrap | Sandbox::Seatbelt => Level::of(self.local_services, internet),
+            Sandbox::Bubblewrap | Sandbox::Seatbelt => {
+                if internet {
+                    Level::Internet
+                } else if self.local_services && self.networks.own_network {
+                    Level::Local
+                } else {
+                    Level::None
+                }
+            }
         }
     }
 

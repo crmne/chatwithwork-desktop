@@ -2060,6 +2060,7 @@ fn a_runs_network_follows_its_folders_level() {
         },
         loopback: vec![5432, 6379],
         log: Some("/x/cww/runs/0123456789ab.blocked".into()),
+        own_network: true,
     };
     // Local services, by default.
     assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::Local);
@@ -2084,6 +2085,11 @@ fn a_runs_network_follows_its_folders_level() {
         serde_json::json!([5432, 6379])
     );
     assert!(mac["egress"].get("allow").is_none() && mac["egress"].get("blockedLog").is_none());
+    // Where a run can't have a network of its own, local services give
+    // nothing, and it runs with none rather than failing.
+    plan.networks.own_network = false;
+    assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::None);
+    plan.networks.own_network = true;
     // Landlock and Windows hold no local services.
     assert_eq!(plan.network_access(Sandbox::Landlock), Level::None);
     assert_eq!(plan.network_access(Sandbox::ProcessContainer), Level::None);
