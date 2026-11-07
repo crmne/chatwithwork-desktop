@@ -132,6 +132,55 @@ pub async fn computer_change(
     .map_err(|e| e.to_string())?
 }
 
+/// A page's `computer.allowReach`: asks the person, in the app's own
+/// dialog, to let a folder's commands reach one address a command was
+/// refused, placed and named by this computer (computer.rs, [`Reach`]).
+/// Answers `{ "allowed": true }` or `{ "declined": true }`, and nothing
+/// else.
+///
+/// [`Reach`]: crate::computer::Reach
+#[tauri::command]
+pub async fn computer_allow_reach(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    request: Value,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let reach: crate::computer::Reach = serde_json::from_value(request)
+        .map_err(|_| "Chat with Work Desktop can't do that.".to_string())?;
+    let desktop = desktop.inner().clone();
+    let label = webview.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = desktop.client.status().map_err(|e| e.to_string())?;
+        let network = cww::reach::HostNetwork::current();
+        let (question, answer) = match reach.plan(&status, |address| network.classify(address))? {
+            crate::computer::ReachPlan::Refused => return Ok(json!({ "declined": true })),
+            crate::computer::ReachPlan::Ask { question, answer } => (question, *answer),
+        };
+        let Some(_asking) = desktop.asking.start() else {
+            return Err("Answer the question Chat with Work Desktop is asking first.".to_string());
+        };
+        let allowed = confirm_or(&app, &label, &question, "Don't Allow");
+        let request = if allowed {
+            answer
+        } else {
+            crate::computer::declined(&answer)
+        };
+        desktop
+            .client
+            .request(&request)
+            .map_err(|e| e.to_string())?;
+        Ok(if allowed {
+            json!({ "allowed": true })
+        } else {
+            json!({ "declined": true })
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Asks the person, in the app's own window, to let a bot code on this
 /// computer (coding_setup.rs). The page hears only how it ended.
 #[tauri::command]

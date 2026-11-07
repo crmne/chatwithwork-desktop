@@ -668,7 +668,7 @@ impl Plan {
                 "readonlyPaths": self.windows_readable(host),
                 "deniedPaths": [],
             },
-            "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
+            "network": { "egress": { "default": if self.network_access(super::Sandbox::ProcessContainer) == crate::reach::Level::Internet { "allow" } else { "deny" } } },
             "resources": resources,
             // The UI subsystem, which PowerShell needs to start, held to
             // the run's own windows.
@@ -1035,6 +1035,10 @@ mod tests {
             folder: folder.to_path_buf(),
             cwd: folder.join("src"),
             network,
+            local_services: true,
+            reach: Vec::new(),
+            once: Vec::new(),
+            networks: Default::default(),
             // As Windows gets them; a Mac's leave out memory and processes.
             limits: super::super::Limits {
                 cpu_seconds: 600,

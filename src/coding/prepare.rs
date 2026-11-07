@@ -152,7 +152,9 @@ pub struct View {
     /// what's missing.
     pub state: String,
     pub repository: String,
-    /// `not_allowed`, `no_network`, `not_installed`, `not_signed_in`,
+    /// `not_allowed`, `no_network`, `network` (the folder's commands don't
+    /// reach what the code does: `services` and `internet` say what),
+    /// `not_installed`, `not_signed_in`,
     /// `not_reached` (the person's Git login doesn't reach it) or
     /// `other_owner` (the person hasn't said yes to its owner here), or
     /// `not_available` (the agent can't run in the sandbox on this system).
@@ -183,6 +185,21 @@ pub struct View {
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<Repository>,
+    /// What the code reaches when it runs, read from its files
+    /// (`needs.rs`): services on this computer or the local network.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<super::needs::Service>,
+    /// Whether its installs need the internet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internet: Option<bool>,
+}
+
+impl View {
+    /// Say what the code reaches.
+    fn reaching(&mut self, needs: &super::needs::Needs) {
+        self.services = needs.services.clone();
+        self.internet = Some(needs.internet);
+    }
 }
 
 impl View {
@@ -235,6 +252,11 @@ pub struct Look {
     pub agents: Vec<AgentLook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reaches: Option<bool>,
+    /// What the repository's code reaches, when this computer has its mirror
+    /// already (it was prepared here before): read from its files, for the
+    /// one Allow to say and give.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<super::needs::Needs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,7 +293,24 @@ pub fn look(config: &Config, paths: &Paths, repository: Option<&str>) -> Look {
     let reaches = repository
         .and_then(split_repository)
         .map(|(owner, name)| reachable_url(owner, name, LOOK_LIMIT).is_some());
-    Look { agents, reaches }
+    let needs = repository.and_then(|repository| {
+        let repo = config.coding.repositories.iter().find(|repo| {
+            repo.github
+                .as_deref()
+                .is_some_and(|g| g.eq_ignore_ascii_case(repository))
+                || github_name(&repo.url).is_some_and(|g| g.eq_ignore_ascii_case(repository))
+        })?;
+        let mirror = repositories::mirror_dir(paths, repo);
+        mirror
+            .join("HEAD")
+            .is_file()
+            .then(|| super::needs::from_mirror(&mirror, &crate::reach::HostNetwork::current()))
+    });
+    Look {
+        agents,
+        reaches,
+        needs,
+    }
 }
 
 /// The address the person's Git login reaches `owner/name` by, SSH first:
@@ -554,7 +593,14 @@ fn already_prepared(
     if !checkout.starts_with(&folder) || !checkout.is_dir() {
         return None;
     }
-    Some(View {
+    let needs = super::needs::from_mirror(&mirror, &crate::reach::HostNetwork::current());
+    if !super::needs::allowed(root, &needs) {
+        let mut view = View::needs(&ask.repository, "network", Some(agent));
+        view.root = Some(root.id.clone());
+        view.reaching(&needs);
+        return Some(view);
+    }
+    let mut view = View {
         state: "ready".into(),
         repository: ask.repository.clone(),
         agent: Some(agent.key().to_string()),
@@ -565,7 +611,9 @@ fn already_prepared(
         tests: kept.map(|k| k.tests),
         record: Some(repo.clone()),
         ..Default::default()
-    })
+    };
+    view.reaching(&needs);
+    Some(view)
 }
 
 /// What a mirror keeps of how it was prepared.
@@ -636,6 +684,25 @@ impl Work {
         let line = repositories::checkout_command(&repo.name, &mirror, exists, cfg!(windows));
         self.command("", &line).map_err(|e| (copy.clone(), e))?;
         self.set_step(&copy, "done");
+
+        // What its code reaches, from the mirror's files: if the folder
+        // doesn't allow it, the person is asked again before anything is
+        // installed or run, rather than the tests failing on it.
+        let reaching = super::needs::from_mirror(&mirror, &crate::reach::HostNetwork::current());
+        {
+            let config = self.config().map_err(|e| (copy.clone(), e))?;
+            let root = config
+                .root(&self.root.id)
+                .cloned()
+                .unwrap_or_else(|| self.root.clone());
+            let mut view = lock(&self.cell);
+            view.reaching(&reaching);
+            if !super::needs::allowed(&root, &reaching) {
+                view.state = "needs_setup".into();
+                view.need = Some("network".into());
+                return Ok(());
+            }
+        }
 
         // What it needs, read from a private copy: never the checkout in the
         // shared folder, whose files a command could have changed.
@@ -811,6 +878,7 @@ impl Work {
             dir: dir.to_string(),
             command: line.to_string(),
             bot: None,
+            once: Vec::new(),
         };
         let waited = Instant::now();
         let status = loop {
@@ -975,6 +1043,8 @@ mod tests {
                 writable: true,
                 commands: true,
                 network: true,
+                local_services: true,
+                reach: Vec::new(),
                 read_budget: None,
                 bots: vec![BotLoan {
                     id: "42".into(),

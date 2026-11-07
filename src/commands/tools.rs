@@ -31,7 +31,10 @@ const PROGRESS_CHARS: usize = 200;
 pub struct CommandRoot {
     pub id: String,
     pub label: String,
+    /// The internet, as `network` has always said.
     pub network: bool,
+    /// How far its commands reach (`network_access`).
+    pub access: crate::reach::Level,
 }
 
 /// What the command tools need: where commands run, and which folders
@@ -39,6 +42,8 @@ pub struct CommandRoot {
 #[derive(Clone)]
 pub struct CommandTools {
     pub runner: Runner,
+    /// "Allow once" answers, taken by the next command in their folder.
+    pub once: crate::reach::OnceGrants,
     pub roots: Vec<CommandRoot>,
     pub limits: Limits,
 }
@@ -82,6 +87,8 @@ pub struct RunResult {
     pub folder: String,
     pub command: String,
     pub network: bool,
+    /// `none`, `local` or `internet`: what this run got.
+    pub network_access: String,
     #[serde(flatten)]
     pub status: Status,
     /// The end of what it printed, while it's running too.
@@ -146,16 +153,19 @@ impl CommandTools {
                         "command": command,
                         "shell": shell(),
                         "network": root.network,
+                        "network_access": root.access.as_str(),
                         "background": args.background,
                         "limits": self.limits,
                     });
                     return Ok((preview, Some(command)));
                 }
+                let once = self.once.take(&root.id, bot.as_deref());
                 let request = Request {
                     root: root.id.clone(),
                     dir: path.rel.as_string(),
                     command: command.clone(),
                     bot,
+                    once,
                 };
                 let status = self.runner.start(request).await.map_err(tool_error)?;
                 let wait = if args.background {
@@ -177,6 +187,7 @@ impl CommandTools {
                     folder: root.label,
                     command,
                     network: root.network,
+                    network_access: root.access.as_str().to_string(),
                     status: finished.status,
                     stdout: finished.stdout,
                     stderr: finished.stderr,
@@ -442,6 +453,7 @@ mod tests {
             output_bytes: 0,
             error: None,
             limit: None,
+            blocked: Vec::new(),
         };
         assert_eq!(ended(&status("exited", Some(0)), "make"), "exit 0 · make");
         let at_limit = Status {
@@ -461,10 +473,12 @@ mod tests {
     async fn a_dry_run_says_where_and_how_without_running() {
         let tools = CommandTools {
             runner: Runner::Off("not here".into()),
+            once: Default::default(),
             roots: vec![CommandRoot {
                 id: "app".into(),
                 label: "App".into(),
                 network: false,
+                access: crate::reach::Level::of(false, false),
             }],
             limits: Limits::from_config(&crate::config::Limits::default()),
         };

@@ -445,6 +445,7 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .permission("allow-computer-add-folder")
             .permission("allow-computer-notifications")
             .permission("allow-computer-set-up-coding")
+            .permission("allow-computer-allow-reach")
             .permission("allow-scan")
             .permission("allow-scan-file")
             .permission("allow-scan-pending")
@@ -735,6 +736,7 @@ pub fn run(
             crate::bridge::computer_add_folder,
             crate::bridge::computer_notifications,
             crate::bridge::computer_set_up_coding,
+            crate::bridge::computer_allow_reach,
             crate::coding_setup::coding_setup_state,
             crate::coding_setup::coding_setup_answer,
             crate::bridge::scan,

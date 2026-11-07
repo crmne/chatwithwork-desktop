@@ -2847,7 +2847,10 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 ("r", "rename the selected folder"),
                 ("w", "allow or stop changes in the selected folder"),
                 ("m", "allow or stop commands in the selected folder"),
-                ("i", "let its commands use the network, or not"),
+                (
+                    "i",
+                    "its commands' network: none, local services, or the internet too",
+                ),
                 ("d", "stop sharing the selected folder"),
             ],
         ),

@@ -34,6 +34,7 @@ pub mod policy;
 pub mod printing;
 pub mod projects;
 pub mod proxy;
+pub mod reach;
 pub mod reader;
 pub mod roots;
 pub mod sandbox;

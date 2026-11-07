@@ -62,6 +62,8 @@ fn status_and_sandbox_restart_work_during_a_large_index_scan() {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         }],
         ..Config::default()

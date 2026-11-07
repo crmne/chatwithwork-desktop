@@ -135,10 +135,22 @@ pub struct RootStatus {
     pub writable: bool,
     /// The user allowed commands in it (`run`).
     pub allows_commands: bool,
-    /// Those commands may use the network.
+    /// Those commands may reach the internet (and the local network).
     pub network: bool,
+    /// How far they reach: `none`, `local` (this computer's own services) or
+    /// `internet`, while commands are allowed.
+    pub network_access: Option<String>,
+    /// Exact local-network addresses (`ip:port`) they may reach besides.
+    pub reach: Vec<String>,
     /// The Chat with Work bots it is lent to (`roots_bot`).
     pub bots: Vec<BotLoan>,
+}
+
+impl RootStatus {
+    /// Whether its commands reach this computer's own services.
+    pub fn local_services(&self) -> bool {
+        matches!(self.network_access.as_deref(), Some("local" | "internet"))
+    }
 }
 
 /// A printer Chat with Work may use: for the owner's chats, for the bots it's

@@ -113,6 +113,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
+- `allows_commands` is there when commands run in the folder (see `roots_commands`), with `network` (the internet and the local network) and `network_access`: `none`, `local` (this computer's own services) or `internet` (everything, local services included). On Windows a folder is `none` or `internet`. `reach` lists the exact local-network addresses (`ip:port`) its commands may reach besides, only here, never to the server (see `roots_reach`).
 - `unattended_asks` lists the bots asking, about a folder lent to them, to run their commands unattended (`"kind": "unattended"`) or to run Claude Code with this computer's sign-in (`"kind": "claude_code"`), waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "kind": "unattended", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
 - `read_budget` is there when the folder has a read budget of its own that counts (see `roots_read_budget`): the characters a chat may read from it per rolling hour. It's absent while no hourly read limit is set.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
@@ -229,11 +230,39 @@ Answers with the updated `root` and writes a `root_changes_allowed` or `root_cha
 
 ```json
 {"cmd": "roots_commands", "root": "app", "commands": true, "network": false}
+{"cmd": "roots_commands", "root": "app", "commands": true, "network": false, "local_services": false}
 ```
 
 Allows commands in a shared folder that allows changes (`commands: true`), or stops them (`false`), and whether they may use the network. Refused in a folder that doesn't allow changes, and on a Windows without the process containers commands run in (Windows 11 24H2 with the August 2026 update and later; `status` says, in `commands`). While a folder allows commands, Chat with Work can run one line of shell there with `run` (PROTOCOL.md section 8.15), in a sandbox that can change only that folder ([docs/commands.md](docs/commands.md)): each command approved by the person in Chat with Work (the web or its apps, never on this computer), or run without asking in a chat where they chose "Allow everything" as the permission mode. A compromised server could run commands in folders that allow them. Clients should say that, and ask, before turning it on; turning it off, and switching the network, need no question. Stopping commands stops those running there. Making the folder read-only (`roots_writable`) stops its commands too. Only this channel and `config.toml` can change it, never the server.
 
-Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
+`network` is the folder's internet: the internet and the local network, this computer's own services with them. `local_services` (from 0.16.0) lets its commands reach this computer's own services without the internet: its loopback, its own addresses and its containers' networks, never the ports that would let a command out of its sandbox ([docs/commands.md](docs/commands.md)). It's on by default, also for folders that allowed commands before 0.16.0; absent keeps it as it is. Together they make the folder's level, `none`, `local` or `internet` (`network_access` in `status`), which the app and `cww` call None, Local services, and Local services and the internet. Turning either on widens what commands reach, so clients ask first; turning one off needs no question.
+
+Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry, naming the level; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network|--internet] [--no-local-services]` and `cww roots deny-commands <root>` do the same from the command line.
+
+### `roots_local_services`
+
+```json
+{"cmd": "roots_local_services", "root": "app", "on": true}
+```
+
+Lets a folder's commands reach this computer's own services (`on: true`), or not. Refused where commands aren't allowed. Answers with the updated `root` and writes a `root_local_services_changed` audit entry. `cww roots local-services <root> on|off` does the same. Clients ask before turning it on.
+
+### `roots_reach`
+
+```json
+{"cmd": "roots_reach", "root": "app", "address": "192.168.1.20:5432"}
+{"cmd": "roots_reach", "root": "app", "address": "192.168.1.20:5432", "remove": true}
+```
+
+Lets a folder's commands reach one exact address and port on the local network besides its level (`reach` in `status`), or stops (`remove: true`). Only private, link-local, shared (100.64.0.0/10) and unique local addresses: this computer's own need local services, and an internet address the internet. Ports that would let a command out of its sandbox are refused. Adding is refused where commands aren't allowed. Answers with the updated `root` and writes `root_reach_allowed` or `root_reach_removed`. `cww roots reach <root> <ip:port> [--remove]` does the same; `cww roots` and `cww status` list the entries. Never sent to the server.
+
+### `roots_reach_answer`
+
+```json
+{"cmd": "roots_reach_answer", "root": "app", "host": "172.17.0.4", "port": 5432, "bot": "42", "once": false, "allow": true}
+```
+
+The person's answer, in the app's own dialog, to a page's `computer.allowReach` ([docs/desktop-app.md](docs/desktop-app.md#this-computer)). The daemon places `host` itself, from this computer's own networks: this computer (its loopback, its own addresses, its containers' networks), the local network, or the internet. With `allow: true` and `once: false` it widens the folder for good: this computer turns `local_services` on, the local network adds `host:port` to `reach`, and the internet turns the folder's `network` on. With `once: true` the next command in the folder (the bot's, when `bot` is given) gets that destination alone, or the internet for an internet address, held in memory until that command ends or for 30 minutes. With `allow: false` it changes nothing. Answers `{"allowed": true}` or `{"declined": true}` and writes `root_reach_allowed` or `root_reach_declined`. Refused where commands aren't allowed, and for a port that would let a command out of its sandbox.
 
 ### `coding_look`
 
@@ -241,15 +270,15 @@ Answers with the updated `root` and writes a `root_commands_allowed` or `root_co
 {"cmd": "coding_look", "bot": "42", "repository": "acme/app"}
 ```
 
-What the app's window shows before it asks to let a bot code here (`docs/coding-computers.md`, "One yes"): `agents`, each with `agent`, `name`, `installed`, `signed_in`, `billing` and `sign_in_hint`; `reaches`, whether the person's Git login reaches `repository`; and `root`, a folder already lent to the bot with commands on. Changes nothing, and holds no token.
+What the app's window shows before it asks to let a bot code here (`docs/coding-computers.md`, "One yes"): `agents`, each with `agent`, `name`, `installed`, `signed_in`, `billing` and `sign_in_hint`; `reaches`, whether the person's Git login reaches `repository`; `needs` (from 0.16.0, only when this computer has the repository's copy already), what its code reaches: `services` (`name`, `host`, `port`, `where`, `from`), `internet`, `installs` and `internet_from`; and `root`, a folder already lent to the bot with commands on. Changes nothing, and holds no token.
 
 ### `coding_allow`
 
 ```json
-{"cmd": "coding_allow", "folder": "/home/ana/bots", "bot": "42", "name": "Issue fixer", "agent": "codex", "owner": "acme"}
+{"cmd": "coding_allow", "folder": "/home/ana/bots", "bot": "42", "name": "Issue fixer", "agent": "codex", "owner": "acme", "repository": "acme/app"}
 ```
 
-The person's Allow in that window. With `folder` (or `root`, one already shared), it shares it with changes, commands and the network, lends it to `bot`, gives its runs `agent`'s sign-in, and records `owner` on the loan. Writes `root_bot_coding_allowed`. Only a same-user client reaches it, never the server.
+The person's Allow in that window. With `folder` (or `root`, one already shared), it shares it with changes, commands, local services and the internet, lends it to `bot`, gives its runs `agent`'s sign-in, and records `owner` on the loan. With `repository` (from 0.16.0), it also adds each local-network address that repository's files name to the folder's `reach`, read by this computer from its copy of the repository, if it has one. Writes `root_bot_coding_allowed`. Only a same-user client reaches it, never the server.
 
 ### `coding_check`
 

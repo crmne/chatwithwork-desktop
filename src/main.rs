@@ -568,9 +568,33 @@ enum RootsCommand {
     /// and run in a sandbox that can change only that folder.
     AllowCommands {
         root: String,
-        /// Let those commands use the network (installing packages).
-        #[arg(long)]
+        /// Let those commands reach the internet and the local network
+        /// (installing packages), this computer's own services with them.
+        #[arg(long, visible_alias = "internet")]
         network: bool,
+        /// Keep them from this computer's own services (a database in
+        /// Docker, a development server), which they reach by default.
+        #[arg(long, conflicts_with = "local_services")]
+        no_local_services: bool,
+        /// Let them reach this computer's own services (the default).
+        #[arg(long)]
+        local_services: bool,
+    },
+    /// Let a folder's commands reach this computer's own services, or not:
+    /// its loopback, its own addresses, and its containers' networks, never
+    /// the local network or the internet.
+    LocalServices {
+        root: String,
+        #[arg(value_parser = ["on", "off"])]
+        on: String,
+    },
+    /// Let a folder's commands reach one exact address on the local network
+    /// (`192.168.1.20:5432`), or stop with `--remove`.
+    Reach {
+        root: String,
+        address: String,
+        #[arg(long)]
+        remove: bool,
     },
     /// Stop running commands in a shared folder.
     DenyCommands { root: String },
@@ -1254,14 +1278,23 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                     "{:<24} {:<24} {:<12} {}",
                     root.id,
                     root.label,
-                    match (root.writable, root.runs_commands(), root.network) {
-                        (true, true, true) => "commands+net",
-                        (true, true, false) => "commands",
-                        (true, false, _) => "changes",
-                        (false, _, _) => "read-only",
+                    match (root.writable, root.runs_commands()) {
+                        (true, true) => "commands",
+                        (true, false) => "changes",
+                        (false, _) => "read-only",
                     },
                     root.path.display()
                 );
+                if root.runs_commands() {
+                    println!(
+                        "{:<24} network: {}",
+                        "",
+                        cww::commands::network_access(root).words()
+                    );
+                    for address in &root.reach {
+                        println!("{:<24} also reaches {address}", "");
+                    }
+                }
             }
         }
         RootsCommand::Remove { root } => {
@@ -1280,21 +1313,64 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         RootsCommand::DenyChanges { root } => {
             allow_changes(paths, &mut config, &root, false, false)?
         }
-        RootsCommand::AllowCommands { root, network } => {
-            let root = cww::roots::set_commands(&mut config, &root, true, network)?;
+        RootsCommand::AllowCommands {
+            root,
+            network,
+            no_local_services,
+            local_services,
+        } => {
+            let local = if no_local_services {
+                Some(false)
+            } else if local_services {
+                Some(true)
+            } else {
+                None
+            };
+            let root = cww::roots::set_commands_reaching(&mut config, &root, true, network, local)?;
             config.save(paths)?;
             println!(
-                "Chat with Work can now run commands in {} ({}), {}. Each command is approved in \
-                 Chat with Work, or runs without asking in a chat where you chose Allow \
-                 everything, in a sandbox that can change only this folder.",
+                "Chat with Work can now run commands in {} ({}), network: {}. Each command is \
+                 approved in Chat with Work, or runs without asking in a chat where you chose \
+                 Allow everything, in a sandbox that can change only this folder.",
                 root.label,
                 root.path.display(),
-                if root.network {
-                    "with the network"
-                } else {
-                    "without the network"
-                }
+                cww::commands::network_access(&root).words()
             );
+            notify_daemon(paths, "");
+        }
+        RootsCommand::LocalServices { root, on } => {
+            let root = cww::roots::set_local_services(&mut config, &root, on == "on")?;
+            config.save(paths)?;
+            println!(
+                "Commands in {} ({}) now reach: {}.",
+                root.label,
+                root.path.display(),
+                cww::commands::network_access(&root).words()
+            );
+            notify_daemon(paths, "");
+        }
+        RootsCommand::Reach {
+            root,
+            address,
+            remove,
+        } => {
+            let root = cww::roots::set_reach(&mut config, &root, &address, !remove)?;
+            config.save(paths)?;
+            if remove {
+                println!("Commands in {} no longer reach {address}.", root.label);
+            } else {
+                println!(
+                    "Commands in {} can reach {} on the local network now.",
+                    root.label,
+                    cww::reach::describe(
+                        address.rsplit_once(':').map_or(&address, |(host, _)| host),
+                        address
+                            .rsplit_once(':')
+                            .and_then(|(_, port)| port.parse().ok())
+                            .unwrap_or(0)
+                    )
+                );
+            }
             notify_daemon(paths, "");
         }
         RootsCommand::Lend {
@@ -1600,6 +1676,17 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
             },
             str(&r["local_path"]),
         );
+        if let Some(access) = r["network_access"].as_str() {
+            let level: Option<cww::reach::Level> =
+                serde_json::from_value(Value::String(access.to_string())).ok();
+            println!(
+                "    commands allowed, network: {}",
+                level.map_or(access, |l| l.words())
+            );
+            for address in r["reach"].as_array().into_iter().flatten() {
+                println!("    also reaches {}", str(address));
+            }
+        }
         for loan in r["bots"].as_array().cloned().unwrap_or_default() {
             println!(
                 "    shared with bot {}{}{}",

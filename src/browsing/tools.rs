@@ -984,6 +984,8 @@ mod bridge_tests {
                 writable: true,
                 commands: false,
                 network: false,
+                local_services: true,
+                reach: Vec::new(),
                 follow_symlinks: false,
                 bots: vec![],
                 read_budget: None,

@@ -17,6 +17,7 @@
 //! [`Runs::output`] (what a running command printed so far), and the end of
 //! each stream for the result.
 
+mod blocked;
 #[cfg(unix)]
 pub mod channel;
 mod channel_call;
@@ -51,6 +52,20 @@ pub fn toolchain_dirs() -> Vec<std::path::PathBuf> {
     {
         plan::toolchain_dirs(crate::paths::home_dir().ok().as_deref())
     }
+}
+
+/// How far a folder's commands reach on this computer: its setting, as far
+/// as this computer's kind of sandbox holds it. Windows's process container
+/// can't reach this computer's own services, so there a folder has the
+/// internet or nothing. (A Linux computer whose commands run on Landlock
+/// gives local services nothing either, which only a command's start finds
+/// out: docs/commands.md says so.)
+pub fn network_access(root: &crate::config::Root) -> crate::reach::Level {
+    let level = root.network_level();
+    if cfg!(windows) && level == crate::reach::Level::Local {
+        return crate::reach::Level::None;
+    }
+    level
 }
 
 /// Longest command line accepted, in characters.
@@ -134,6 +149,35 @@ pub struct Status {
     /// an error). Its wall clock is `timed_out`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<String>,
+    /// What the sandbox refused it, at most [`MAX_BLOCKED`], each once:
+    /// connections it blocked, and paths outside its folder it couldn't
+    /// write or read (those from what it printed, so a best guess).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<Blocked>,
+}
+
+/// Most entries a run's `blocked` lists.
+pub const MAX_BLOCKED: usize = 5;
+
+/// One thing the sandbox refused a run (PROTOCOL.md 8.15).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Blocked {
+    Network {
+        host: String,
+        port: u16,
+        protocol: String,
+        #[serde(rename = "where")]
+        place: crate::reach::Where,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service: Option<String>,
+    },
+    Path {
+        /// The home folder shown as `~`.
+        path: String,
+        /// `write` or `read`.
+        access: String,
+    },
 }
 
 impl Status {
@@ -231,6 +275,15 @@ struct Cell {
     /// Take the run's secrets, if it has any, out of each stream.
     redact_out: crate::coding::Redactor,
     redact_err: crate::coding::Redactor,
+    /// What the sandbox refused it so far.
+    blocked: Vec<Blocked>,
+    /// Where its sandbox logs the connections it blocked, how far that's
+    /// read, and this computer's networks to place them.
+    blocked_log: Option<(std::path::PathBuf, u64)>,
+    host: crate::reach::HostNetwork,
+    /// Its folder and home, whose paths are never "outside".
+    folder: std::path::PathBuf,
+    home: std::path::PathBuf,
 }
 
 impl Cell {
@@ -260,6 +313,82 @@ impl Cell {
             tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
             redact_out: plan.redactor(),
             redact_err: plan.redactor(),
+            blocked: Vec::new(),
+            blocked_log: None,
+            host: Default::default(),
+            folder: plan.folder.clone(),
+            home: plan.home.clone(),
+        }
+    }
+
+    /// Follow what `plan`'s sandbox blocks, once its networks are known.
+    fn watch_blocked(&mut self, plan: &Plan) {
+        self.host = plan.networks.host.clone();
+        self.blocked_log = plan.networks.log.clone().map(|log| (log, 0));
+    }
+
+    /// Read what the sandbox logged since last time.
+    fn read_blocked(&mut self) {
+        let Some((log, read)) = self.blocked_log.as_mut() else {
+            return;
+        };
+        let Ok(text) = std::fs::read(&*log) else {
+            return;
+        };
+        let start = usize::try_from(*read).unwrap_or(usize::MAX).min(text.len());
+        let Some(end) = text[start..].iter().rposition(|b| *b == b'\n') else {
+            return;
+        };
+        let end = start + end + 1;
+        *read = end as u64;
+        let lines = String::from_utf8_lossy(&text[start..end]).into_owned();
+        for line in lines.lines() {
+            if let Some(blocked) = blocked::network(line, &self.host) {
+                self.add_blocked(blocked);
+            }
+        }
+    }
+
+    fn add_blocked(&mut self, blocked: Blocked) {
+        // A lookup retried with the search domain ("rubygems.org.lan") says
+        // nothing the first didn't.
+        let retried = |b: &Blocked| match (b, &blocked) {
+            (
+                Blocked::Network {
+                    host: first,
+                    port: 53,
+                    ..
+                },
+                Blocked::Network {
+                    host: next,
+                    port: 53,
+                    ..
+                },
+            ) => next
+                .strip_prefix(first.as_str())
+                .is_some_and(|rest| rest.starts_with('.')),
+            _ => false,
+        };
+        if self.blocked.len() < MAX_BLOCKED
+            && !self.blocked.contains(&blocked)
+            && !self.blocked.iter().any(retried)
+        {
+            self.blocked.push(blocked);
+        }
+    }
+
+    /// Paths outside its folder the sandbox refused, from what it printed.
+    fn find_blocked_paths(&mut self) {
+        let person = crate::paths::home_dir().ok();
+        let printed: String = [&self.out, &self.err]
+            .iter()
+            .map(|tail| {
+                String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<u8>>()).into_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for found in blocked::paths(&printed, &self.folder, &self.home, person.as_deref()) {
+            self.add_blocked(found);
         }
     }
 
@@ -305,6 +434,8 @@ impl Cell {
         let err = self.redact_err.finish();
         self.keep(Stream::Out, &out);
         self.keep(Stream::Err, &err);
+        self.read_blocked();
+        self.find_blocked_paths();
         if self.state == State::Running {
             self.state = state;
             self.ended = Some(Instant::now());
@@ -328,6 +459,7 @@ impl Cell {
             output_bytes: self.total,
             error,
             limit: self.limit.map(String::from),
+            blocked: self.blocked.clone(),
         }
     }
 

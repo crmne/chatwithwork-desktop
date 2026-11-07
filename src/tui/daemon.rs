@@ -202,6 +202,9 @@ fn offline(paths: &Paths, error: Option<String>) -> DaemonMsg {
             writable: r.writable,
             allows_commands: r.runs_commands(),
             network: r.runs_commands() && r.network,
+            network_access: r
+                .runs_commands()
+                .then(|| crate::commands::network_access(r).as_str().to_string()),
         })
         .collect();
     let suggestion = crate::paths::documents_dir().map(|path| Suggestion {
@@ -407,17 +410,20 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
             id,
             commands,
             network,
+            local_services,
         } => {
             let request = ControlRequest::RootsCommands {
                 root: id.clone(),
                 commands: *commands,
                 network: *network,
+                local_services: *local_services,
             };
-            let done = |label: &str| match (*commands, *network) {
-                (true, true) => format!("Commands in {label} can use the network now."),
-                (true, false) => format!(
-                    "Chat with Work can run commands in {label} now, without the network, each \
-                     approved in Chat with Work unless a chat allows everything."
+            let done = |label: &str, level: crate::reach::Level| match (*commands, local_services) {
+                (true, Some(_)) => format!("Commands in {label} reach: {}.", level.words()),
+                (true, None) => format!(
+                    "Chat with Work can run commands in {label} now (network: {}), each \
+                     approved in Chat with Work unless a chat allows everything.",
+                    level.words()
                 ),
                 (false, _) => format!("{label} runs no commands now."),
             };
@@ -426,13 +432,25 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
                     .as_str()
                     .unwrap_or(id.as_str())
                     .to_string();
-                return Ok((done(&label), false));
+                let level = serde_json::from_value::<crate::config::Root>(v["root"].clone())
+                    .map(|root| crate::commands::network_access(&root))
+                    .unwrap_or(crate::reach::Level::None);
+                return Ok((done(&label, level), false));
             }
             let mut config = Config::load(paths)?;
-            let root = crate::roots::set_commands(&mut config, id, *commands, *network)?;
+            let root = crate::roots::set_commands_reaching(
+                &mut config,
+                id,
+                *commands,
+                *network,
+                *local_services,
+            )?;
             config.save(paths)?;
             Ok((
-                format!("{} Saved for when the daemon starts.", done(&root.label)),
+                format!(
+                    "{} Saved for when the daemon starts.",
+                    done(&root.label, crate::commands::network_access(&root))
+                ),
                 true,
             ))
         }

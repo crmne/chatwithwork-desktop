@@ -20,6 +20,7 @@ fn command(runs: &Runs, config: &Config, script: String) -> Finished {
                 dir: String::new(),
                 command: script,
                 bot: None,
+                once: Vec::new(),
             },
         )
         .unwrap();
@@ -121,6 +122,8 @@ fn commands_and_worker_remain_confined_under_the_packaged_unit() {
             writable: true,
             commands: true,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         }],
         ..Config::default()

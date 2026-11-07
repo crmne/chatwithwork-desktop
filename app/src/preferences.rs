@@ -480,6 +480,7 @@ pub fn question(
             root,
             commands,
             network,
+            local_services,
         } => {
             let previous = status
                 .roots
@@ -491,13 +492,23 @@ pub fn question(
                     folder: root.clone(),
                     on: true,
                 })
+            } else if *local_services == Some(true) && !*network && !previous.local_services() {
+                Some(Change::LocalServices {
+                    folder: root.clone(),
+                    on: true,
+                })
             } else {
+                // Asks only when the internet is turned on.
                 Some(Change::Network {
                     folder: root.clone(),
                     on: *network,
                 })
             }
         }
+        R::RootsLocalServices { root, on } => Some(Change::LocalServices {
+            folder: root.clone(),
+            on: *on,
+        }),
         _ => None,
     };
     if let Some(change) = change {
@@ -607,6 +618,12 @@ pub fn grant_context(
             | R::RootsWritable { writable: true, .. }
             | R::RootsCommands { commands: true, .. }
             | R::RootsCommands { network: true, .. }
+            | R::RootsCommands {
+                local_services: Some(true),
+                ..
+            }
+            | R::RootsLocalServices { on: true, .. }
+            | R::RootsReach { remove: false, .. }
             | R::BrowserSite { allowed: true, .. }
             | R::BrowserAllSites { all_sites: true }
             | R::BrowserAskBeforeActions { ask: false }
@@ -1198,6 +1215,7 @@ mod tests {
             root: "work".into(),
             commands: true,
             network: false,
+            local_services: None,
         };
         assert!(
             panels
@@ -1314,6 +1332,56 @@ mod tests {
     }
 
     #[test]
+    fn the_network_choice_asks_only_when_it_widens() {
+        use cww::control::ControlRequest as R;
+        let mut status = crate::model::Status {
+            roots: vec![crate::model::RootStatus {
+                id: "work".into(),
+                label: "Work".into(),
+                writable: true,
+                allows_commands: true,
+                network_access: Some("none".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let pick = |network: bool, local: bool| R::RootsCommands {
+            root: "work".into(),
+            commands: true,
+            network,
+            local_services: Some(local),
+        };
+        let asked = |status: &crate::model::Status, request: R| {
+            question(&request, status, &Value::Null)
+                .unwrap()
+                .map(|q| q.yes)
+        };
+        assert_eq!(
+            asked(&status, pick(false, true)).as_deref(),
+            Some("Allow Local Services")
+        );
+        assert_eq!(
+            asked(&status, pick(true, true)).as_deref(),
+            Some("Allow the Internet")
+        );
+        assert_eq!(asked(&status, pick(false, false)), None);
+        status.roots[0].network_access = Some("internet".into());
+        status.roots[0].network = true;
+        assert_eq!(asked(&status, pick(false, true)), None);
+        assert_eq!(asked(&status, pick(false, false)), None);
+        assert_eq!(
+            asked(
+                &status,
+                R::RootsLocalServices {
+                    root: "work".into(),
+                    on: true
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn inline_confirmation_does_not_replace_remote_or_other_local_questions() {
         use cww::control::ControlRequest as R;
         let status = crate::model::Status {
@@ -1346,6 +1414,7 @@ mod tests {
                 root: "work".into(),
                 commands: true,
                 network: true,
+                local_services: None,
             },
             R::BrowserAllSites { all_sites: true },
             R::DenyExtra {

@@ -15,6 +15,8 @@ fn root(bot: Option<BotLoan>) -> Root {
         writable: true,
         commands: true,
         network: true,
+        local_services: true,
+        reach: Vec::new(),
         bots: bot.into_iter().collect(),
         read_budget: None,
     }

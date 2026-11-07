@@ -54,6 +54,8 @@ fn fixture(limits: Limits, app_budget: Option<usize>) -> Fixture {
         writable: true,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     let mut app_root = root("app", &app);
@@ -560,6 +562,8 @@ fn ask_fixture(
             writable: true,
             commands,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         }],
         ..Config::default()

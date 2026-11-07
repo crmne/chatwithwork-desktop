@@ -50,6 +50,8 @@ fn fixture_with(limits: Limits) -> Fixture {
         writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     let mut config = Config {
@@ -693,6 +695,8 @@ fn refuses_folders_that_hold_a_shared_folder() {
         writable: true,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     let mut config = Config {
@@ -730,6 +734,8 @@ fn folders_shared_read_only_stay_read_only_inside_writable_ones() {
         writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     let mut config = Config {
@@ -833,6 +839,8 @@ fn moves_across_filesystems_by_copying() {
         writable: true,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     fs::write(f.docs.join("sub/a.md"), "a").unwrap();
@@ -981,6 +989,8 @@ fn folders_shared_read_only_stay_read_only_whatever_name_reaches_them() {
         writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     let mut config = Config {

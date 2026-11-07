@@ -361,6 +361,7 @@ mod tests {
                     output_bytes: 0,
                     error: None,
                     limit: limit.map(String::from),
+                    blocked: Vec::new(),
                 },
                 root: "app".into(),
                 dir: String::new(),

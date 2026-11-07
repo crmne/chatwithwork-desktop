@@ -13,6 +13,7 @@
 //! fetching one with the person's credentials runs nothing a bot wrote.
 
 pub mod detect;
+pub mod needs;
 pub mod prepare;
 pub mod repositories;
 pub mod setup;

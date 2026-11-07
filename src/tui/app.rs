@@ -87,8 +87,23 @@ pub struct RootState {
     pub writable: bool,
     /// The user allowed commands in it (`run`).
     pub allows_commands: bool,
-    /// Those commands may use the network.
+    /// Those commands may reach the internet (and the local network).
     pub network: bool,
+    /// How far they reach: `none`, `local` or `internet`.
+    pub network_access: Option<String>,
+}
+
+impl RootState {
+    /// How far its commands reach.
+    pub fn level(&self) -> crate::reach::Level {
+        match self.network_access.as_deref() {
+            Some("internet") => crate::reach::Level::Internet,
+            Some("local") => crate::reach::Level::Local,
+            Some(_) => crate::reach::Level::None,
+            None if self.network => crate::reach::Level::Internet,
+            None => crate::reach::Level::None,
+        }
+    }
 }
 
 impl Default for RootState {
@@ -103,6 +118,7 @@ impl Default for RootState {
             writable: false,
             allows_commands: false,
             network: false,
+            network_access: None,
         }
     }
 }
@@ -356,6 +372,8 @@ pub enum DaemonCommand {
         id: String,
         commands: bool,
         network: bool,
+        /// This computer's own services; `None` keeps them.
+        local_services: Option<bool>,
     },
     /// Look for the daemon again now.
     Retry,
@@ -1880,6 +1898,7 @@ impl App {
                 id: root.id,
                 commands: false,
                 network: false,
+                local_services: None,
             })];
         }
         self.modal = Some(Modal::ConfirmCommands {
@@ -1889,8 +1908,9 @@ impl App {
         Vec::new()
     }
 
-    /// `i` on a folder that allows commands: let them use the network, or
-    /// not.
+    /// `i` on a folder that allows commands: the next of its network
+    /// levels, None, Local services, Local services and the internet, and
+    /// round again.
     fn toggle_network(&mut self) -> Vec<Effect> {
         let Some(root) = self.daemon.roots().get(self.selected_root).cloned() else {
             return Vec::new();
@@ -1902,10 +1922,18 @@ impl App {
             );
             return Vec::new();
         }
+        use crate::reach::Level;
+        let next = match root.level() {
+            Level::None if cfg!(windows) => Level::Internet,
+            Level::None => Level::Local,
+            Level::Local => Level::Internet,
+            Level::Internet => Level::None,
+        };
         vec![Effect::Daemon(DaemonCommand::SetCommands {
             id: root.id,
             commands: true,
-            network: !root.network,
+            network: next == Level::Internet,
+            local_services: Some(next != Level::None),
         })]
     }
 
@@ -2119,6 +2147,7 @@ impl App {
                         id,
                         commands: true,
                         network: false,
+                        local_services: None,
                     })];
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {}

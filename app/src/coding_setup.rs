@@ -167,6 +167,13 @@ pub fn view(
     if look["commands"] == false {
         checks.push(json!({ "ok": false, "text": "Commands can't run on this computer" }));
     }
+    // What its code reaches, read from the repository's files where this
+    // computer has them already (a first run reads them, and asks again here
+    // if the folder doesn't give them).
+    let needs = serde_json::from_value::<cww::coding::needs::Needs>(look["needs"].clone()).ok();
+    if let Some(sentence) = needs.as_ref().and_then(cww::coding::needs::sentence) {
+        checks.push(json!({ "ok": true, "text": sentence }));
+    }
     if !commands_allowed {
         checks.push(
             json!({ "ok": false, "text": "Your organization doesn't allow commands on computers" }),
@@ -182,7 +189,7 @@ pub fn view(
         "computer": hostname(),
         "checks": checks,
         "note": format!(
-            "Its commands get the network and your {agent_name} sign-in, and can read that sign-in. They can't reach your SSH keys or other projects. {}",
+            "Its commands reach this computer's services, the internet, and your {agent_name} sign-in, and can read that sign-in. They can't reach your SSH keys or other projects. {}",
             if look["root"]["unattended"] == true {
                 "In this folder they already run without asking."
             } else {
@@ -438,6 +445,7 @@ pub async fn coding_setup_answer(
                         .as_deref()
                         .and_then(|r| r.split_once('/'))
                         .map(|(owner, _)| owner.to_string()),
+                    repository: request.repository.clone(),
                 })
                 .map_err(|e| e.to_string())?;
             Ok(())

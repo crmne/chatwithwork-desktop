@@ -8,12 +8,14 @@
 //! is the server's code, so the app treats what it asks as a suggestion:
 //!
 //! - Narrowing happens at once: pausing, stopping sharing a folder, turning
-//!   changes, commands or their network off. A compromised server could make
-//!   the computer share less, never more.
+//!   changes, commands, their local services or the internet off. A
+//!   compromised server could make the computer share less, never more.
 //! - Widening happens only after the person says yes in a dialog the app
 //!   draws, which no page can see or answer: resuming, allowing changes,
-//!   commands, or the network for commands. A folder is added only through
-//!   the system's folder picker, where the person picks it.
+//!   commands, local services or the internet for commands, or one address
+//!   a command was refused (`allowReach`, placed by this computer, never by
+//!   the page). A folder is added only through the system's folder picker,
+//!   where the person picks it.
 //! - One question at a time, so a page can't stack dialogs.
 //! - Pages never see where a folder is on this computer (`local_path`), the
 //!   activity log, the deny list, the config file or the proxy. Those, and
@@ -22,6 +24,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cww::control::ControlRequest;
+use cww::reach::Where;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -70,6 +73,7 @@ fn folder(root: &RootStatus) -> Value {
         "changes": root.writable,
         "commands": root.allows_commands,
         "network": root.network,
+        "local_services": root.local_services(),
         "bots": root.bots.len(),
     })
 }
@@ -107,6 +111,7 @@ pub enum Change {
     Changes { folder: String, on: bool },
     Commands { folder: String, on: bool },
     Network { folder: String, on: bool },
+    LocalServices { folder: String, on: bool },
 }
 
 /// A question the person answers in the app's own dialog before a change
@@ -219,6 +224,7 @@ impl Change {
                         commands: *on,
                         // Asking again for what's allowed keeps its network as it is.
                         network: *on && root.allows_commands && root.network,
+                        local_services: None,
                     },
                     question,
                 )
@@ -230,12 +236,12 @@ impl Change {
                 }
                 let question = if *on && !root.network {
                     ask(
-                        "Allow the Network",
+                        "Allow the Internet",
                         format!(
-                            "Let commands in “{}” use the network? They can then reach the internet, to install packages or fetch dependencies.",
+                            "Let commands in “{}” reach the internet and the local network? They can then install packages or fetch dependencies, and reach this computer's own services too.",
                             root.label
                         ),
-                        "Allow the Network",
+                        "Allow the Internet",
                     )
                 } else {
                     None
@@ -245,12 +251,155 @@ impl Change {
                         root: root.id.clone(),
                         commands: true,
                         network: *on,
+                        local_services: None,
+                    },
+                    question,
+                )
+            }
+            Change::LocalServices { folder, on } => {
+                let root = find(folder)?;
+                if !root.allows_commands {
+                    return Err("Allow commands in this folder first.".into());
+                }
+                let question = if *on && !root.local_services() {
+                    ask(
+                        "Allow Local Services",
+                        format!(
+                            "Let commands in “{}” reach this computer's own services, such as a database in Docker? They still can't reach the local network or the internet.",
+                            root.label
+                        ),
+                        "Allow Local Services",
+                    )
+                } else {
+                    None
+                };
+                (
+                    ControlRequest::RootsLocalServices {
+                        root: root.id.clone(),
+                        on: *on,
                     },
                     question,
                 )
             }
         })
     }
+}
+
+/// A page's `computer.allowReach`: a command in `folder` was refused
+/// `host:port`, and the page asks to allow it, for its next command
+/// (`once`) or for good. The page's words name nothing the person reads:
+/// this computer places the address, and names the folder, the bot and the
+/// service itself.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reach {
+    pub folder: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub bot: Option<String>,
+    #[serde(default)]
+    pub once: bool,
+}
+
+/// What to do with a [`Reach`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReachPlan {
+    /// Never reachable from commands (a port that leads out of the
+    /// sandbox): declined without asking.
+    Refused,
+    /// Ask `question`; the person's answer goes to the daemon as `answer`
+    /// with `allow` set.
+    Ask {
+        question: Question,
+        answer: Box<ControlRequest>,
+    },
+}
+
+impl Reach {
+    /// `place` says where an address is, from this computer's own networks
+    /// (`cww::reach::HostNetwork::classify`).
+    pub fn plan(
+        &self,
+        status: &Status,
+        place: impl Fn(std::net::IpAddr) -> Where,
+    ) -> Result<ReachPlan, String> {
+        let root = status
+            .roots
+            .iter()
+            .find(|root| root.id == self.folder)
+            .ok_or_else(|| "That folder isn't shared on this computer.".to_string())?;
+        if !root.allows_commands {
+            return Err("Allow commands in this folder first.".into());
+        }
+        let address = cww::reach::resolve(&self.host, self.port)
+            .ok_or_else(|| "That isn't an address this computer can find.".to_string())?;
+        if self.port == 0 || cww::reach::excluded(self.port) {
+            return Ok(ReachPlan::Refused);
+        }
+        let place = place(address);
+        let who = match &self.bot {
+            Some(bot) => root
+                .bots
+                .iter()
+                .find(|loan| loan.id == *bot)
+                .map(|loan| loan.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| "That bot isn't lent this folder.".to_string())?,
+            None => "Chat with Work".to_string(),
+        };
+        let what = cww::reach::describe(&address.to_string(), self.port);
+        let after = match (self.once, place) {
+            (true, Where::Internet) => {
+                "Only its next command there gets it: the internet, for that command alone."
+            }
+            (true, _) => "Only its next command there gets it.",
+            (false, Where::ThisComputer) => {
+                "Commands in that folder can then reach this computer's own services."
+            }
+            (false, Where::LocalNetwork) => {
+                "Commands in that folder can then reach this address, and nothing else on the local network."
+            }
+            (false, Where::Internet) => {
+                "Commands in that folder can then reach the internet and the local network."
+            }
+        };
+        let question = Question {
+            title: "Allow a Connection".into(),
+            message: format!(
+                "Let {who} reach {what} from {} {}? {after}",
+                root.label,
+                place_words(place)
+            ),
+            yes: "Allow".into(),
+        };
+        let answer = ControlRequest::RootsReachAnswer {
+            root: root.id.clone(),
+            host: address.to_string(),
+            port: self.port,
+            bot: self.bot.clone(),
+            once: self.once,
+            allow: true,
+        };
+        Ok(ReachPlan::Ask {
+            question,
+            answer: Box::new(answer),
+        })
+    }
+}
+
+/// "on this computer", "on the local network", "on the internet".
+fn place_words(place: Where) -> String {
+    format!("on {}", place.words())
+}
+
+/// The same answer, declined.
+pub fn declined(answer: &ControlRequest) -> ControlRequest {
+    let mut answer = answer.clone();
+    if let ControlRequest::RootsReachAnswer { allow, .. } = &mut answer {
+        *allow = false;
+    }
+    answer
 }
 
 /// Only one of the app's questions shows at a time.
@@ -402,6 +551,7 @@ mod tests {
             json!({ "action": "changes", "folder": "app", "on": false }),
             json!({ "action": "commands", "folder": "app", "on": false }),
             json!({ "action": "network", "folder": "app", "on": false }),
+            json!({ "action": "local_services", "folder": "app", "on": false }),
         ] {
             let (_, question) = change(asked.clone()).plan(&status).unwrap();
             assert_eq!(question, None, "{asked}");
@@ -453,8 +603,123 @@ mod tests {
             ControlRequest::RootsCommands {
                 root: "app".into(),
                 commands: true,
-                network: true
+                network: true,
+                local_services: None,
             }
+        );
+    }
+
+    #[test]
+    fn local_services_show_and_widen_only_after_a_question() {
+        let mut status = status();
+        assert_eq!(
+            view(Some(&status))["folders"][1]["local_services"],
+            json!(false)
+        );
+        let (request, question) =
+            change(json!({ "action": "local_services", "folder": "app", "on": true }))
+                .plan(&status)
+                .unwrap();
+        assert_eq!(
+            request,
+            ControlRequest::RootsLocalServices {
+                root: "app".into(),
+                on: true
+            }
+        );
+        assert_eq!(question.expect("a question").yes, "Allow Local Services");
+        status.roots[1].network_access = Some("local".into());
+        assert_eq!(
+            view(Some(&status))["folders"][1]["local_services"],
+            json!(true)
+        );
+        let (_, question) =
+            change(json!({ "action": "local_services", "folder": "app", "on": true }))
+                .plan(&status)
+                .unwrap();
+        assert!(question.is_none());
+        assert!(
+            change(json!({ "action": "local_services", "folder": "docs", "on": true }))
+                .plan(&status)
+                .is_err()
+        );
+    }
+
+    fn reach(json: Value) -> Reach {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_reach_is_asked_in_this_computers_words_never_the_pages() {
+        let status = status();
+        let asked = reach(json!({
+            "folder": "app", "host": "172.17.0.4", "port": 5432, "bot": "42", "once": false
+        }));
+        // The page can't say where the address is: this computer does.
+        let ReachPlan::Ask { question, answer } =
+            asked.plan(&status, |_| Where::ThisComputer).unwrap()
+        else {
+            panic!("a question");
+        };
+        assert_eq!(
+            question.message,
+            "Let Fixer reach PostgreSQL (172.17.0.4:5432) from App on this computer? \
+             Commands in that folder can then reach this computer's own services."
+        );
+        assert_eq!(question.yes, "Allow");
+        assert_eq!(
+            *answer,
+            ControlRequest::RootsReachAnswer {
+                root: "app".into(),
+                host: "172.17.0.4".into(),
+                port: 5432,
+                bot: Some("42".into()),
+                once: false,
+                allow: true,
+            }
+        );
+        assert!(matches!(
+            declined(&answer),
+            ControlRequest::RootsReachAnswer { allow: false, .. }
+        ));
+        let ReachPlan::Ask { question, .. } = reach(json!({
+            "folder": "app", "host": "192.168.1.20", "port": 6379, "once": true
+        }))
+        .plan(&status, |_| Where::LocalNetwork)
+        .unwrap() else {
+            panic!("a question");
+        };
+        assert!(question.message.starts_with(
+            "Let Chat with Work reach Redis (192.168.1.20:6379) from App on the local network?"
+        ));
+        let ReachPlan::Ask { question, .. } = reach(json!({
+            "folder": "app", "host": "151.101.1.227", "port": 443, "bot": "42", "once": true
+        }))
+        .plan(&status, |_| Where::Internet)
+        .unwrap() else {
+            panic!("a question");
+        };
+        assert!(question.message.contains("from App on the internet?"));
+    }
+
+    #[test]
+    fn a_reach_is_refused_where_it_would_leave_the_sandbox_or_names_nothing_real() {
+        let status = status();
+        let at = |json: Value| reach(json).plan(&status, |_| Where::ThisComputer);
+        assert_eq!(
+            at(json!({ "folder": "app", "host": "127.0.0.1", "port": 2375 })).unwrap(),
+            ReachPlan::Refused
+        );
+        assert!(at(json!({ "folder": "app", "host": "db.example", "port": 5432 })).is_err());
+        assert!(at(json!({ "folder": "docs", "host": "127.0.0.1", "port": 5432 })).is_err());
+        assert!(
+            at(json!({ "folder": "app", "host": "127.0.0.1", "port": 5432, "bot": "7" })).is_err()
+        );
+        assert!(
+            serde_json::from_value::<Reach>(json!({
+                "folder": "app", "host": "127.0.0.1", "port": 5432, "where": "this_computer"
+            }))
+            .is_err()
         );
     }
 

@@ -113,9 +113,10 @@ dirs = "7"
 # Commands run in a folder (`run`) go in a sandbox of their own, one per
 # run: Bubblewrap on Linux, or Landlock where Bubblewrap can't create its
 # namespaces, Seatbelt on macOS, and a process container (BaseContainer) on
-# Windows. Carmine's fork adds CPU time and memory limits and the Landlock
-# backend.
-mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "d57b0d1aa3a2d552001fa54ef4ac4baaa733c26d" }
+# Windows. Carmine's fork adds CPU time and memory limits, the Landlock
+# backend, and this computer's loopback services reached outbound with a log
+# of the connections a sandbox blocked (branch local-services).
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "bf823d5354e3d9db0091aee306ade7c32e0b16d4" }
 
 # Terminal UI (`cww tui`). crossterm works the same on Linux, macOS and Windows.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
@@ -123,6 +124,7 @@ crossterm = "0.29"
 
 # Safe resolution (openat2, O_NOFOLLOW, F_GETPATH), peer credentials, umask.
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 rustix = { version = "1.1", features = ["fs", "process", "system", "alloc"] }
 
 # The kernel sandbox for the daemon on Linux.
@@ -166,3 +168,4 @@ tempfile = "3.27"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+

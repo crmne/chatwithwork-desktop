@@ -24,6 +24,11 @@ pub struct Request {
     /// anything a person's run doesn't get (docs/coding-computers.md).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot: Option<String>,
+    /// Destinations the person allowed for this one command ("Allow once"),
+    /// taken from what waited for it in the worker. Placed again by whoever
+    /// starts the run, from this computer's own networks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub once: Vec<crate::reach::Grant>,
 }
 
 /// The sandbox MXC runs a command in on this computer.
@@ -97,16 +102,18 @@ impl Sandbox {
     /// (its local servers) and connections in included. Bubblewrap gives a
     /// command a network of its own instead.
     pub fn refuses(self, plan: &Plan) -> Option<RunError> {
-        (self == Self::Landlock && plan.network).then(|| {
-            RunError::new(
-                "network_unavailable",
-                "this folder allows commands the network, which this computer can't give them \
+        (self == Self::Landlock && plan.network_access(self) == crate::reach::Level::Internet).then(
+            || {
+                RunError::new(
+                    "network_unavailable",
+                    "this folder allows commands the internet, which this computer can't give them \
                  safely: Bubblewrap can't create a sandbox here, and Landlock, used instead, \
                  could only give the whole network, its local servers included. Turn the \
-                 network off for this folder, or allow unprivileged user namespaces for \
+                 internet off for this folder, or allow unprivileged user namespaces for \
                  Bubblewrap",
-            )
-        })
+                )
+            },
+        )
     }
 
     /// Processes in a run's tree, its first one included, that are the
@@ -131,7 +138,18 @@ pub struct Plan {
     pub folder: PathBuf,
     /// Where it starts, inside `folder`.
     pub cwd: PathBuf,
+    /// The folder's "Internet": the internet and the local network, its
+    /// local services with them.
     pub network: bool,
+    /// The folder's local services: this computer's own (`reach.rs`).
+    pub local_services: bool,
+    /// Exact local-network addresses the folder allows besides.
+    pub reach: Vec<std::net::SocketAddrV4>,
+    /// What the person allowed for this command alone.
+    pub once: Vec<crate::reach::Grant>,
+    /// This computer's networks when the run starts, filled in by its
+    /// thread ([`Networks::current`]).
+    pub networks: Networks,
     pub limits: Limits,
     /// Its own home and temporary folder, made for it and removed after.
     pub home: PathBuf,
@@ -199,10 +217,59 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
         folder,
         cwd,
         network: root.network,
+        local_services: root.local_services,
+        reach: root
+            .reach
+            .iter()
+            .filter_map(|entry| crate::reach::parse_reach(entry).ok())
+            .collect(),
+        once: request.once.clone(),
+        networks: Networks::default(),
         limits: Limits::from_config(&config.limits),
         home: paths.runs_dir().join(id),
         coding: Default::default(),
         env: Default::default(),
+    })
+}
+
+/// This computer's networks as one run's rules need them, read when it
+/// starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Networks {
+    pub host: crate::reach::HostNetwork,
+    /// TCP ports this computer serves on its loopback, less those a command
+    /// never reaches.
+    pub loopback: Vec<u16>,
+    /// Where the sandbox logs the connections it blocked, when it can
+    /// (Bubblewrap with slirp4netns).
+    pub log: Option<PathBuf>,
+}
+
+impl Networks {
+    /// Read now, for a run in `sandbox` whose blocked connections go to
+    /// `log` where the sandbox can say them.
+    pub fn current(sandbox: Sandbox, log: PathBuf) -> Self {
+        match sandbox {
+            Sandbox::Bubblewrap => Self {
+                host: crate::reach::HostNetwork::current(),
+                loopback: crate::reach::loopback_services(),
+                log: slirp_available().then_some(log),
+            },
+            Sandbox::Seatbelt => Self {
+                host: crate::reach::HostNetwork::current(),
+                loopback: crate::reach::loopback_services(),
+                log: None,
+            },
+            Sandbox::Landlock | Sandbox::ProcessContainer => Self::default(),
+        }
+    }
+}
+
+/// Whether `slirp4netns`, which a network of a run's own needs, is on the
+/// `PATH`: without it a run with no network at all still starts, unlogged.
+fn slirp_available() -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join("slirp4netns").is_file())
     })
 }
 
@@ -315,10 +382,15 @@ const TOOLCHAINS: &[Toolchain] = &[
     },
 ];
 
-/// The system resolver's socket, hidden when there's no network so a
-/// command can't ask it to look names up (`HOST_RESOLVER_SOCKETS` in the
-/// mxc gem).
-const RESOLVER_SOCKETS: &[&str] = &["/run/systemd/resolve"];
+/// The system resolver's sockets, hidden without the internet so a command
+/// can't ask it to look names up past its network (`HOST_RESOLVER_SOCKETS`
+/// in the mxc gem). Only the sockets: the stub's `resolv.conf` beside them
+/// stays, so MXC can point it at slirp's forwarder, where the firewall
+/// refuses the lookup and logs the name it asked for.
+const RESOLVER_SOCKETS: &[&str] = &[
+    "/run/systemd/resolve/io.systemd.Resolve",
+    "/run/systemd/resolve/io.systemd.Resolve.Monitor",
+];
 
 /// The paths, `PATH` and variables the toolchains that exist here add.
 struct Found {
@@ -386,6 +458,151 @@ fn shell_quote(text: &str) -> String {
 }
 
 impl Plan {
+    /// How far this run reaches in `sandbox`: its folder's level, as far as
+    /// the sandbox holds it, raised to the internet by an "Allow once" for an
+    /// internet address. Landlock can't tell addresses apart and the
+    /// process container can't reach this computer's own services, so there
+    /// a folder's local services alone give nothing.
+    pub fn network_access(&self, sandbox: Sandbox) -> crate::reach::Level {
+        use crate::reach::Level;
+        let internet = self.network || self.once_internet();
+        match sandbox {
+            Sandbox::Landlock | Sandbox::ProcessContainer => {
+                if internet {
+                    Level::Internet
+                } else {
+                    Level::None
+                }
+            }
+            Sandbox::Bubblewrap | Sandbox::Seatbelt => Level::of(self.local_services, internet),
+        }
+    }
+
+    /// Whether an "Allow once" for this run names an internet address.
+    fn once_internet(&self) -> bool {
+        self.once
+            .iter()
+            .any(|g| self.networks.host.classify(g.host) == crate::reach::Where::Internet)
+    }
+
+    /// Where the sandbox logs what it blocked for this run.
+    pub fn blocked_log(&self) -> PathBuf {
+        let mut name = self.home.clone().into_os_string();
+        name.push(".blocked");
+        PathBuf::from(name)
+    }
+
+    /// The MXC `network` section for this run in `sandbox` (not Windows,
+    /// whose request says only on or off).
+    ///
+    /// - `none`: nothing. On Bubblewrap with slirp4netns the run still gets
+    ///   a network of its own that blocks everything, so what it tried is
+    ///   logged.
+    /// - `local`: this computer's loopback services (as the run's own
+    ///   `localhost:<port>`), its own addresses and its containers'
+    ///   networks, never the ports in `reach::EXCLUDED_PORTS`.
+    /// - `internet`: everything, the same ports of this computer aside.
+    ///
+    /// The folder's `reach` entries and this run's "Allow once" add exact
+    /// destinations. A blocked connection is refused
+    /// at once.
+    pub fn network_json(&self, sandbox: Sandbox) -> serde_json::Value {
+        use crate::reach::{Level, Where};
+        let level = self.network_access(sandbox);
+        let host = &self.networks.host;
+        let mut ports: Vec<u16> = Vec::new();
+        let mut allow: Vec<serde_json::Value> = Vec::new();
+        let mut deny: Vec<serde_json::Value> = Vec::new();
+        let this_computer: Vec<serde_json::Value> = host
+            .addresses
+            .iter()
+            .filter_map(|a| match a {
+                std::net::IpAddr::V4(v4) => Some(json!({ "cidr": format!("{v4}/32") })),
+                std::net::IpAddr::V6(_) => None,
+            })
+            .chain(
+                host.bridges
+                    .iter()
+                    .map(|(net, prefix)| json!({ "cidr": format!("{net}/{prefix}") })),
+            )
+            .collect();
+        let rules = sandbox == Sandbox::Bubblewrap;
+        if level != Level::None {
+            ports.extend(&self.networks.loopback);
+            if rules && !this_computer.is_empty() {
+                let excluded: Vec<serde_json::Value> = crate::reach::EXCLUDED_PORTS
+                    .iter()
+                    .map(|(start, end)| {
+                        if start == end {
+                            json!({ "protocol": "tcp", "port": start })
+                        } else {
+                            json!({ "protocol": "tcp", "port": start, "endPort": end })
+                        }
+                    })
+                    .collect();
+                deny.push(json!({ "to": this_computer, "ports": excluded }));
+                if level == Level::Local {
+                    allow.push(json!({ "to": this_computer }));
+                }
+            }
+        }
+        let mut exact: Vec<(std::net::IpAddr, u16)> = Vec::new();
+        // A folder's exact addresses hold at every level below the internet,
+        // which has them already: each was allowed by name.
+        if level != Level::Internet {
+            exact.extend(
+                self.reach
+                    .iter()
+                    .map(|a| (std::net::IpAddr::V4(*a.ip()), a.port())),
+            );
+        }
+        for grant in &self.once {
+            if crate::reach::excluded(grant.port) {
+                continue;
+            }
+            match host.classify(grant.host) {
+                Where::ThisComputer if grant.host.is_loopback() => ports.push(grant.port),
+                Where::ThisComputer | Where::LocalNetwork if level != Level::Internet => {
+                    exact.push((grant.host, grant.port))
+                }
+                _ => {}
+            }
+        }
+        if rules {
+            for (ip, port) in exact {
+                if let std::net::IpAddr::V4(v4) = ip {
+                    allow.push(json!({
+                        "to": [{ "cidr": format!("{v4}/32") }],
+                        "ports": [{ "protocol": "tcp", "port": port }],
+                    }));
+                }
+            }
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        let mut egress = json!({
+            "default": if level == Level::Internet { "allow" } else { "deny" },
+        });
+        let logged = rules && self.networks.log.is_some();
+        let walled = level != Level::None || !allow.is_empty() || !ports.is_empty() || logged;
+        if matches!(sandbox, Sandbox::Bubblewrap | Sandbox::Seatbelt) && walled {
+            if !allow.is_empty() {
+                egress["allow"] = allow.into();
+            }
+            if !deny.is_empty() {
+                egress["deny"] = deny.into();
+            }
+            if !ports.is_empty() {
+                egress["hostLoopbackPorts"] = ports.into();
+            }
+            egress["blocked"] = "reject".into();
+            if let (true, Some(log)) = (rules, self.networks.log.as_ref()) {
+                egress["blockedLog"] = display(log).into();
+            }
+        }
+        json!({ "egress": egress })
+    }
+
     /// Where a run on Bubblewrap finds its folder's values: Bubblewrap
     /// takes a run's environment on its own command line (`--setenv NAME
     /// VALUE`), which any user of this computer can read (`ps`,
@@ -664,7 +881,7 @@ impl Plan {
             });
         }
         let mut denied: Vec<String> = Vec::new();
-        if !self.network {
+        if self.network_access(sandbox) != crate::reach::Level::Internet {
             denied.extend(
                 RESOLVER_SOCKETS
                     .iter()
@@ -704,7 +921,7 @@ impl Plan {
                 "readonlyPaths": found.read,
                 "deniedPaths": denied,
             },
-            "network": { "egress": { "default": if self.network { "allow" } else { "deny" } } },
+            "network": self.network_json(sandbox),
             "resources": { "priority": "low" },
         });
         // 0 is no CPU limit, which MXC takes as the field left out.

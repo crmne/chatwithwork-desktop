@@ -33,6 +33,8 @@ fn only_shared_folders_are_readable() {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         }],
         secret_store: Some("file".into()),
@@ -106,6 +108,8 @@ fn only_folders_that_allow_changes_are_writable() {
         writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     Config {

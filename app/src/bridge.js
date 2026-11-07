@@ -34,6 +34,20 @@
     allowChanges: (folder, on) => change("changes", { folder: String(folder), on: Boolean(on) }),
     allowCommands: (folder, on) => change("commands", { folder: String(folder), on: Boolean(on) }),
     allowNetwork: (folder, on) => change("network", { folder: String(folder), on: Boolean(on) }),
+    allowLocalServices: (folder, on) => change("local_services", { folder: String(folder), on: Boolean(on) }),
+    // Asks the person, in the app's own dialog, to let a folder's commands
+    // reach one address a command was refused. The app places the address
+    // and names the bot, folder and service itself. It resolves
+    // { allowed: true } or { declined: true }, and nothing else.
+    allowReach: ({ folder, host, port, bot, once }) => invoke("computer_allow_reach", {
+      request: {
+        folder: String(folder),
+        host: String(host),
+        port: Number(port),
+        ...(bot ? { bot: String(bot) } : {}),
+        once: Boolean(once),
+      },
+    }),
     notifications: () => invoke("computer_notifications", { ask: false }),
     allowNotifications: () => invoke("computer_notifications", { ask: true }),
     // Asks the person, in the app's own window, to let a bot code here. It
