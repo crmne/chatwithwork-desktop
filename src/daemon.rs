@@ -400,6 +400,11 @@ fn command_tools(
 }
 
 /// The folders that allow changes.
+/// The shared folders, by id: what `roots` lists.
+fn shared_roots(config: &Config) -> Vec<String> {
+    config.roots.iter().map(|r| r.id.clone()).collect()
+}
+
 fn writable_roots(config: &Config) -> Vec<PathBuf> {
     config
         .roots
@@ -1104,10 +1109,13 @@ impl Daemon {
         self.paused.store(new.paused, Ordering::SeqCst);
         let mut config = self.config.lock().await;
         // A new set of folders that allow changes changes the tools offered:
-        // reconnect, so the server lists them again.
+        // reconnect, so the server lists them again. A new set of shared
+        // folders reconnects too, so the server asks what this computer
+        // shares (its guide to connecting a computer ticks by it).
         let pairing_changed = config.server != new.server
             || config.secret_store != new.secret_store
             || config.proxy != new.proxy
+            || shared_roots(&config) != shared_roots(&new)
             || writable_roots(&config) != writable_roots(&new)
             || command_roots(&config) != command_roots(&new)
             || crate::printing::settings::offered(&config)
