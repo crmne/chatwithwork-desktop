@@ -37,14 +37,15 @@ function render(state) {
         h("button", { class: "btn btn-primary", onclick: () => answer(true) }, "Allow") ]
     : [ h("button", { class: "btn", onclick: () => answer(false) }, "Cancel"),
         h("button", { class: "btn btn-primary", onclick: load }, "Check again") ];
-  main.replaceChildren(
+  main.replaceChildren(...[
     h("div", { class: "coding-setup__where" }, `Chat with Work Desktop · ${state.computer}`),
     h("h1", {}, state.title),
     checks,
     h("p", { class: "coding-setup__note" }, state.note),
     state.repositories ? h("p", { class: "coding-setup__note" }, state.repositories) : null,
     shownError ? h("p", { class: "coding-setup__error", role: "alert" }, shownError) : null,
-    h("div", { class: "coding-setup__actions" }, ...buttons));
+    h("div", { class: "coding-setup__actions" }, ...buttons),
+  ].filter(Boolean));
 }
 
 async function load() {
