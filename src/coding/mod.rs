@@ -1,5 +1,6 @@
 //! Coding bots on this computer (docs/coding-computers.md): the coding
-//! agents' sign-ins a bot's commands get ([`Agent`]: Claude Code and Codex),
+//! agents' sign-ins a bot's commands get ([`Agent`]: Claude Code, Codex,
+//! OpenCode, Gemini CLI and pi),
 //! the repositories Desktop mirrors for them, and what a bot's `roots` says
 //! is ready.
 //!
@@ -35,16 +36,31 @@ use crate::paths::Paths;
 pub enum Agent {
     ClaudeCode,
     Codex,
+    // Its key on the wire, never Serde's `open_code`.
+    #[serde(rename = "opencode", alias = "open_code")]
+    OpenCode,
+    Gemini,
+    Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+    pub const ALL: [Self; 5] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Gemini,
+        Self::Pi,
+    ];
 
-    /// Its name on the wire: `claude_code`, `codex`.
+    /// Its name on the wire: `claude_code`, `codex`, `opencode`, `gemini`,
+    /// `pi`.
     pub fn key(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
+            Self::Gemini => "gemini",
+            Self::Pi => "pi",
         }
     }
 
@@ -52,12 +68,20 @@ impl Agent {
         Self::ALL.into_iter().find(|agent| agent.key() == key)
     }
 
-    /// Why it can't run in a bot's sandbox on this system, if it can't. Codex
-    /// on macOS stops at "Failed to synchronize managed preferences" in
-    /// Seatbelt, and Desktop doesn't loosen the sandbox for it.
+    /// Why it can't run in a bot's sandbox on this system, if it can't, and
+    /// Desktop doesn't loosen the sandbox for it. On macOS, Codex stops at
+    /// "Failed to synchronize managed preferences" in Seatbelt, and OpenCode
+    /// at its own server, which must listen on a local port Seatbelt doesn't
+    /// give a run.
     pub fn unavailable(self) -> Option<&'static str> {
-        (self == Self::Codex && cfg!(target_os = "macos"))
-            .then_some("Codex can't run in this computer's sandbox on macOS yet")
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        match self {
+            Self::Codex => Some("Codex can't run in this computer's sandbox on macOS yet"),
+            Self::OpenCode => Some("OpenCode can't run in this computer's sandbox on macOS yet"),
+            _ => None,
+        }
     }
 
     /// What people call it.
@@ -65,6 +89,9 @@ impl Agent {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
+            Self::Gemini => "Gemini CLI",
+            Self::Pi => "pi",
         }
     }
 
@@ -73,23 +100,48 @@ impl Agent {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
+            Self::Gemini => "gemini",
+            Self::Pi => "pi",
         }
     }
 
-    /// Its folder in the home folder.
+    /// Its folder in the home folder, as a path relative to it with `/`
+    /// between folders: OpenCode's is `.local/share/opencode` everywhere,
+    /// Windows too.
     pub fn config_dir(self) -> &'static str {
         match self {
             Self::ClaudeCode => CONFIG_DIR,
             Self::Codex => CODEX_DIR,
+            Self::OpenCode => OPENCODE_DIR,
+            Self::Gemini => GEMINI_DIR,
+            Self::Pi => PI_DIR,
         }
     }
 
-    /// The variable that names that folder for it, on Windows, which can't
-    /// link one into a run's home without Developer Mode.
-    pub fn config_variable(self) -> &'static str {
+    /// That folder in the home folder `home`.
+    pub fn config_dir_in(self, home: &Path) -> PathBuf {
+        self.config_dir()
+            .split('/')
+            .fold(home.to_path_buf(), |path, part| path.join(part))
+    }
+
+    /// The variable that names its sign-in for it on Windows, which can't
+    /// link one into a run's home without Developer Mode, and its value for
+    /// the folder `dir`: the folder itself, or for OpenCode the database in
+    /// it, which holds its credentials.
+    pub fn config_variable(self, dir: &Path) -> (&'static str, PathBuf) {
         match self {
-            Self::ClaudeCode => "CLAUDE_CONFIG_DIR",
-            Self::Codex => "CODEX_HOME",
+            Self::ClaudeCode => ("CLAUDE_CONFIG_DIR", dir.to_path_buf()),
+            Self::Codex => ("CODEX_HOME", dir.to_path_buf()),
+            Self::OpenCode => ("OPENCODE_DB", dir.join(OPENCODE_DB_FILE)),
+            // The folder that holds its `.gemini`, which it reads as its home.
+            Self::Gemini => (
+                "GEMINI_CLI_HOME",
+                dir.parent()
+                    .map_or_else(|| dir.to_path_buf(), Path::to_path_buf),
+            ),
+            Self::Pi => ("PI_CODING_AGENT_DIR", dir.to_path_buf()),
         }
     }
 
@@ -98,6 +150,9 @@ impl Agent {
         match self {
             Self::ClaudeCode => REDACTED,
             Self::Codex => CODEX_REDACTED,
+            Self::OpenCode => OPENCODE_REDACTED,
+            Self::Gemini => GEMINI_REDACTED,
+            Self::Pi => PI_REDACTED,
         }
     }
 
@@ -106,6 +161,20 @@ impl Agent {
         match self {
             Self::ClaudeCode => loan.claude_code,
             Self::Codex => loan.codex,
+            Self::OpenCode => loan.opencode,
+            Self::Gemini => loan.gemini,
+            Self::Pi => loan.pi,
+        }
+    }
+
+    /// Let `loan` use it, or stop.
+    pub fn allow(self, loan: &mut crate::config::BotLoan, allowed: bool) {
+        match self {
+            Self::ClaudeCode => loan.claude_code = allowed,
+            Self::Codex => loan.codex = allowed,
+            Self::OpenCode => loan.opencode = allowed,
+            Self::Gemini => loan.gemini = allowed,
+            Self::Pi => loan.pi = allowed,
         }
     }
 
@@ -114,8 +183,71 @@ impl Agent {
         match self {
             Self::ClaudeCode => "run `claude` once and sign in",
             Self::Codex => "run `codex login`",
+            Self::OpenCode => "run `opencode auth login`",
+            Self::Gemini => "run `gemini` once and sign in",
+            Self::Pi => "run `pi`, then /login",
         }
     }
+
+    /// What a run allowed it gets in its environment: no self-updates, as
+    /// a run can't write its program's folder.
+    pub fn environment(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::ClaudeCode => &[("DISABLE_AUTOUPDATER", "1")],
+            Self::Codex => &[],
+            Self::OpenCode => &[("OPENCODE_DISABLE_AUTOUPDATE", "1")],
+            // Its own sandbox can't start inside this one, which already
+            // holds it to the folder.
+            Self::Gemini => &[("GEMINI_SANDBOX", "false")],
+            Self::Pi => &[("PI_SKIP_VERSION_CHECK", "1")],
+        }
+    }
+
+    /// The variables that give it an API key, which a folder's own
+    /// environment (`cww roots env`) can set, and which then bill instead.
+    pub fn api_key_variables(self) -> &'static [&'static str] {
+        match self {
+            Self::ClaudeCode => &["ANTHROPIC_API_KEY"],
+            Self::Codex => &["OPENAI_API_KEY"],
+            Self::OpenCode => &[
+                "OPENCODE_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "OPENROUTER_API_KEY",
+            ],
+            Self::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            Self::Pi => &[
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "GEMINI_API_KEY",
+                "OPENROUTER_API_KEY",
+            ],
+        }
+    }
+
+    /// One word from it, run as a bot's run starts it: proves it's found,
+    /// signed in, and reaches its provider from the sandbox.
+    pub fn ready_probe(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude -p 'Reply with the word ready.' --max-turns 1",
+            Self::Codex => {
+                "codex exec --sandbox danger-full-access --skip-git-repo-check 'Reply with the word ready.'"
+            }
+            Self::OpenCode => "opencode run --standalone --auto 'Reply with the word ready.'",
+            Self::Gemini => {
+                "gemini -p 'Reply with the word ready.' --approval-mode yolo --skip-trust"
+            }
+            Self::Pi => "pi -p --no-session 'Reply with the word ready.'",
+        }
+    }
+}
+
+/// Every one of Desktop's agents with a loan's switch cleared: what a folder
+/// that stops commands does to its loans.
+pub fn disallow_all(loan: &mut crate::config::BotLoan) {
+    Agent::ALL
+        .into_iter()
+        .for_each(|agent| agent.allow(loan, false));
 }
 
 /// Who pays for a run of an agent, as its sign-in says.
@@ -138,6 +270,30 @@ pub const CODEX_DIR: &str = ".codex";
 pub const CODEX_AUTH_FILE: &str = "auth.json";
 /// What a run's output says where a Codex token was.
 pub const CODEX_REDACTED: &str = "[codex-token]";
+
+/// OpenCode's data folder in the home folder (`xdg-basedir`'s, on every
+/// system): its database, whose `credential` table holds its sign-ins and
+/// keys, with its sessions, logs and snapshots.
+pub const OPENCODE_DIR: &str = ".local/share/opencode";
+/// OpenCode's database, in [`OPENCODE_DIR`].
+pub const OPENCODE_DB_FILE: &str = "opencode.db";
+/// What a run's output says where an OpenCode token was.
+pub const OPENCODE_REDACTED: &str = "[opencode-token]";
+
+/// Gemini CLI's folder in the home folder: its settings, history and
+/// sign-in (`oauth_creds.json`, or an API key in its `.env`).
+pub const GEMINI_DIR: &str = ".gemini";
+/// Where Gemini CLI keeps a Google sign-in's tokens, in [`GEMINI_DIR`].
+pub const GEMINI_OAUTH_FILE: &str = "oauth_creds.json";
+/// What a run's output says where a Gemini CLI token was.
+pub const GEMINI_REDACTED: &str = "[gemini-token]";
+/// pi's folder in the home folder: its settings, sessions, extensions and
+/// sign-ins (`auth.json`).
+pub const PI_DIR: &str = ".pi/agent";
+/// Where pi keeps its sign-ins and keys, in [`PI_DIR`].
+pub const PI_AUTH_FILE: &str = "auth.json";
+/// What a run's output says where a pi token was.
+pub const PI_REDACTED: &str = "[pi-token]";
 
 /// Claude Code's folder in the home folder: its settings, sessions and, on
 /// Linux and Windows, its sign-in (`.credentials.json`).
@@ -195,6 +351,9 @@ pub struct Login {
     pub secrets: Vec<Secret>,
     /// Whose bill a run goes on, as the sign-in says.
     pub billing: Billing,
+    /// What the agent's own settings, outside the folder a run gets, tell a
+    /// run's environment: OpenCode's chosen model, and nothing else of them.
+    pub env: Vec<(String, String)>,
 }
 
 impl Login {
@@ -203,6 +362,136 @@ impl Login {
         match agent {
             Agent::ClaudeCode => Self::find(home),
             Agent::Codex => Self::find_codex(home),
+            Agent::OpenCode => Self::find_opencode(home),
+            Agent::Gemini => Self::find_gemini(home),
+            Agent::Pi => Self::find_pi(home),
+        }
+    }
+
+    /// An agent's folder in `home`, where it really is: never one a link
+    /// makes something else (`~/.ssh`), or broad (the home folder, a drive).
+    fn own_dir(agent: Agent, home: &Path) -> Option<PathBuf> {
+        let wanted = agent.config_dir().rsplit('/').next().unwrap_or_default();
+        crate::roots::canonical(&agent.config_dir_in(home))
+            .ok()
+            .filter(|p| p.is_dir())
+            .filter(|p| p.file_name().is_some_and(|name| is_named(name, wanted)))
+            .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)))
+    }
+
+    /// Gemini CLI's: its folder, with a Google sign-in's tokens in
+    /// `oauth_creds.json`, or an API key in its `.env`. One kept in the
+    /// system's keychain (`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE`) reads as not
+    /// signed in here.
+    fn find_gemini(home: &Path) -> Self {
+        let dir = Self::own_dir(Agent::Gemini, home);
+        let oauth = dir
+            .as_ref()
+            .and_then(|d| read_small(&d.join(GEMINI_OAUTH_FILE)))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or_default();
+        let mut secrets = long_strings(&oauth);
+        let keys: Vec<Secret> = dir
+            .as_ref()
+            .and_then(|d| read_small(&d.join(".env")))
+            .map(|text| env_values(&text, Agent::Gemini.api_key_variables()))
+            .unwrap_or_default();
+        let billing = if !secrets.is_empty() {
+            Billing::Plan
+        } else if !keys.is_empty() {
+            Billing::ApiKey
+        } else {
+            Billing::Unknown
+        };
+        secrets.extend(keys);
+        Self {
+            dir,
+            file: None,
+            keychain: false,
+            secrets,
+            billing,
+            env: Vec::new(),
+        }
+    }
+
+    /// pi's: its folder, whose `auth.json` holds a sign-in per provider
+    /// (`{"type":"oauth",...}`) or a key (`{"type":"api_key","key":...}`).
+    fn find_pi(home: &Path) -> Self {
+        let dir = Self::own_dir(Agent::Pi, home);
+        let auth = dir
+            .as_ref()
+            .and_then(|d| read_small(&d.join(PI_AUTH_FILE)))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or_default();
+        let entries: Vec<&Value> = auth
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.values())
+            .collect();
+        let billing = billing_of(entries.iter().map(|e| {
+            e["type"]
+                .as_str()
+                .map(|kind| if kind == "api_key" { "key" } else { kind })
+        }));
+        Self {
+            dir,
+            file: None,
+            keychain: false,
+            secrets: long_strings(&auth),
+            billing,
+            env: Vec::new(),
+        }
+    }
+
+    /// OpenCode's: its data folder, whose database holds its credentials.
+    /// Its config folder (`~/.config/opencode`, with its plugins and the
+    /// background service's password) is never lent: a run uses its own.
+    fn find_opencode(home: &Path) -> Self {
+        // Never lent when it's too big to read whole: a token past what was
+        // read would print as it is.
+        let dir = Self::own_dir(Agent::OpenCode, home).filter(|d| {
+            [
+                OPENCODE_DB_FILE.to_string(),
+                format!("{OPENCODE_DB_FILE}-wal"),
+            ]
+            .iter()
+            .all(|name| {
+                std::fs::metadata(d.join(name)).map_or(true, |m| m.len() <= MAX_OPENCODE_DB_BYTES)
+            })
+        });
+        let (live, credentials) = dir
+            .as_ref()
+            .map(|d| opencode_credentials(d))
+            .unwrap_or_default();
+        // Who pays, from the rows its database holds, and only when they
+        // agree: with a plan for one provider and a key for another, which
+        // a run uses depends on the model. What the pages alone hold counts
+        // only where no row could be read.
+        let counted = if live.is_empty() { &credentials } else { &live };
+        let billing = billing_of(counted.iter().map(|c| c["type"].as_str()));
+        // Signed in by what its rows hold; every value found, an old one a
+        // page still has included, is taken out of output.
+        let mut secrets = long_strings(&Value::Array(live));
+        for secret in long_strings(&Value::Array(credentials)) {
+            if !secrets.contains(&secret) {
+                secrets.push(secret);
+            }
+        }
+        let env = opencode_model(home)
+            .map(|model| {
+                vec![(
+                    "OPENCODE_CONFIG_CONTENT".to_string(),
+                    json!({ "model": model }).to_string(),
+                )]
+            })
+            .unwrap_or_default();
+        Self {
+            dir,
+            file: None,
+            keychain: false,
+            secrets,
+            billing,
+            env,
         }
     }
 
@@ -224,6 +513,7 @@ impl Login {
             keychain: false,
             secrets: codex_secrets(&auth),
             billing: codex_billing(&auth),
+            env: Vec::new(),
         }
     }
 
@@ -274,6 +564,7 @@ impl Login {
             keychain,
             secrets,
             billing,
+            env: Vec::new(),
         }
     }
 
@@ -356,6 +647,365 @@ fn codex_secrets(auth: &Value) -> Vec<Secret> {
         .filter(|token| token.len() >= 20)
         .map(|token| Secret::new(token.to_string()))
         .collect()
+}
+
+/// Most of OpenCode's database Desktop reads for its credentials, per file.
+const MAX_OPENCODE_DB_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Each credential's value in OpenCode's database and its write-ahead log:
+/// the JSON it stores (`{"type":"key","key":...}`, `{"type":"oauth",
+/// "access":...,"refresh":...}`, `{"type":"external",...}`). Without opening
+/// it as a database: a run allowed OpenCode can write it, so it's only read,
+/// a regular file, at most [`MAX_OPENCODE_DB_BYTES`] of each. Every row of
+/// every table is put back together from its pages, overflow pages included
+/// ([`sqlite_rows`]), where a long sign-in's value is split; the files'
+/// bytes are searched as they are too, for one a page left behind. An old
+/// value found that way only takes more out of output.
+fn opencode_credentials(dir: &Path) -> (Vec<Value>, Vec<Value>) {
+    let db = read_regular(&dir.join(OPENCODE_DB_FILE), MAX_OPENCODE_DB_BYTES);
+    let wal = read_regular(
+        &dir.join(format!("{OPENCODE_DB_FILE}-wal")),
+        MAX_OPENCODE_DB_BYTES,
+    );
+    let mut live = Vec::new();
+    if let Some(db) = &db {
+        for row in sqlite_rows(db, wal.as_deref()) {
+            credentials_in(&row, &mut live);
+        }
+    }
+    let mut found = live.clone();
+    for bytes in db.iter().chain(wal.iter()) {
+        credentials_in(bytes, &mut found);
+    }
+    (live, found)
+}
+
+/// A plan when every sign-in is one (`oauth`), an API key when every one is
+/// a key, else it can't tell.
+fn billing_of<'a>(kinds: impl Iterator<Item = Option<&'a str>>) -> Billing {
+    let kinds: Vec<Option<&str>> = kinds.collect();
+    if !kinds.is_empty() && kinds.iter().all(|k| *k == Some("oauth")) {
+        Billing::Plan
+    } else if !kinds.is_empty() && kinds.iter().all(|k| *k == Some("key")) {
+        Billing::ApiKey
+    } else {
+        Billing::Unknown
+    }
+}
+
+/// The credentials whose JSON `bytes` hold whole, added to `found` once each.
+fn credentials_in(bytes: &[u8], found: &mut Vec<Value>) {
+    const KINDS: [&[u8]; 3] = [
+        br#""type":"key""#,
+        br#""type":"oauth""#,
+        br#""type":"external""#,
+    ];
+    let mut at = 0;
+    while let Some(offset) = bytes[at..].windows(7).position(|w| w == br#""type":"#) {
+        let mark = at + offset;
+        at = mark + 1;
+        if !KINDS.iter().any(|kind| bytes[mark..].starts_with(kind)) {
+            continue;
+        }
+        // The object it's in: the nearest `{` before it that starts one whose
+        // own `type` is this.
+        let floor = mark.saturating_sub(16 * 1024);
+        let value = (floor..mark)
+            .rev()
+            .filter(|&i| bytes[i] == b'{')
+            .take(16)
+            .find_map(|start| {
+                let value = serde_json::Deserializer::from_slice(&bytes[start..])
+                    .into_iter::<Value>()
+                    .next()?
+                    .ok()?;
+                matches!(value["type"].as_str(), Some("key" | "oauth" | "external"))
+                    .then_some(value)
+            });
+        if let Some(value) = value
+            && !found.contains(&value)
+        {
+            found.push(value);
+        }
+    }
+}
+
+/// Most bytes of one row [`sqlite_rows`] puts back together.
+const MAX_SQLITE_ROW: usize = 1024 * 1024;
+
+/// Every row of every table in a SQLite database's bytes, with the pages its
+/// write-ahead log holds in place of the database's (the last of each), each
+/// row's record whole however many overflow pages it took. Only reads what
+/// the file format says (sqlite.org/fileformat2.html); anything that doesn't
+/// fit it is passed over, never trusted: a malformed file gives fewer rows.
+fn sqlite_rows(db: &[u8], wal: Option<&[u8]>) -> Vec<Vec<u8>> {
+    if db.len() < 100 || !db.starts_with(b"SQLite format 3\0") {
+        return Vec::new();
+    }
+    let size = match u16::from_be_bytes([db[16], db[17]]) {
+        1 => 65536,
+        n => usize::from(n),
+    };
+    let usable = size.saturating_sub(usize::from(db[20]));
+    if !size.is_power_of_two() || !(512..=65536).contains(&size) || usable < 480 {
+        return Vec::new();
+    }
+    let mut pages: std::collections::BTreeMap<u32, &[u8]> = db
+        .chunks_exact(size)
+        .zip(1u32..)
+        .map(|(page, number)| (number, page))
+        .collect();
+    if let Some(wal) = wal.filter(|w| w.len() >= 32) {
+        let frame_size = u32::from_be_bytes([wal[8], wal[9], wal[10], wal[11]]) as usize;
+        if frame_size == size {
+            // Only the frames of the log as it is now: after a checkpoint
+            // SQLite writes it again from the start with new salts, and the
+            // frames left past them, an older log's, end it.
+            let salts = &wal[16..24];
+            for frame in wal[32..].chunks_exact(24 + size) {
+                if &frame[8..16] != salts {
+                    break;
+                }
+                let number = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+                if number > 0 {
+                    pages.insert(number, &frame[24..]);
+                }
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    for (&number, page) in &pages {
+        let header = if number == 1 { 100 } else { 0 };
+        // A table's leaf page, which holds its rows.
+        if page.get(header) != Some(&0x0d) || page.len() < header + 8 {
+            continue;
+        }
+        let cells = usize::from(u16::from_be_bytes([page[header + 3], page[header + 4]]));
+        for cell in 0..cells {
+            let at = header + 8 + cell * 2;
+            let Some(pointer) = page.get(at..at + 2) else {
+                break;
+            };
+            let offset = usize::from(u16::from_be_bytes([pointer[0], pointer[1]]));
+            if let Some(row) = sqlite_row(page, offset, usable, &pages) {
+                rows.push(row);
+            }
+        }
+    }
+    rows
+}
+
+/// One table leaf cell's record at `offset` of `page`, followed through its
+/// overflow pages.
+fn sqlite_row(
+    page: &[u8],
+    offset: usize,
+    usable: usize,
+    pages: &std::collections::BTreeMap<u32, &[u8]>,
+) -> Option<Vec<u8>> {
+    let (length, read) = sqlite_varint(page.get(offset..)?)?;
+    let (_rowid, read_rowid) = sqlite_varint(page.get(offset + read..)?)?;
+    let length = usize::try_from(length).ok()?.min(MAX_SQLITE_ROW);
+    let start = offset + read + read_rowid;
+    let most = usable - 35;
+    let least = (usable - 12) * 32 / 255 - 23;
+    let local = if length <= most {
+        length
+    } else {
+        let k = least + (length - least) % (usable - 4);
+        if k <= most { k } else { least }
+    };
+    let mut row = page.get(start..start + local)?.to_vec();
+    if local == length {
+        return Some(row);
+    }
+    let next = page.get(start + local..start + local + 4)?;
+    let mut next = u32::from_be_bytes([next[0], next[1], next[2], next[3]]);
+    let mut hops = 0;
+    while row.len() < length && next != 0 && hops < pages.len() {
+        let overflow = pages.get(&next)?;
+        let take = (length - row.len()).min(usable - 4);
+        row.extend_from_slice(overflow.get(4..4 + take)?);
+        next = u32::from_be_bytes([overflow[0], overflow[1], overflow[2], overflow[3]]);
+        hops += 1;
+    }
+    Some(row)
+}
+
+/// A SQLite varint and how many bytes it took.
+fn sqlite_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (i, &byte) in bytes.iter().take(9).enumerate() {
+        if i == 8 {
+            return Some(((value << 8) | u64::from(byte), 9));
+        }
+        value = (value << 7) | u64::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+    }
+    None
+}
+
+/// The model the person chose in OpenCode's own config
+/// (`~/.config/opencode/opencode.json` or `.jsonc`, its top-level `model`),
+/// which a run uses as their own `opencode run` would. Only that: the
+/// config folder holds plugins and the background service's password, and
+/// is never lent.
+fn opencode_model(home: &Path) -> Option<String> {
+    let dir = home.join(".config").join("opencode");
+    ["opencode.json", "opencode.jsonc", "config.json"]
+        .iter()
+        .filter_map(|name| read_small(&dir.join(name)))
+        .find_map(|text| {
+            let value: Value = serde_json::from_str(&without_comments(&text)).ok()?;
+            let model = value["model"].as_str()?.to_string();
+            let valid = !model.is_empty()
+                && model.len() <= 200
+                && model.contains('/')
+                && model
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/._-:@#+".contains(&b));
+            valid.then_some(model)
+        })
+}
+
+/// JSON with comments (`//`, `/* */`) and trailing commas made plain JSON,
+/// leaving strings as they are.
+fn without_comments(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            out.push(b);
+            if b == b'\\' && i + 1 < bytes.len() {
+                out.push(bytes[i + 1]);
+                i += 1;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else if b == b'"' {
+            in_string = true;
+            out.push(b);
+        } else if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        } else if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        } else {
+            out.push(b);
+        }
+        i += 1;
+    }
+    without_trailing_commas(&out)
+}
+
+/// `bytes`, JSON but for commas before a `}` or `]`, without them.
+fn without_trailing_commas(bytes: &[u8]) -> String {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if b == b'\\' && i + 1 < bytes.len() {
+                out.extend_from_slice(&bytes[i..i + 2]);
+                i += 2;
+                continue;
+            }
+            in_string = b != b'"';
+        } else if b == b'"' {
+            in_string = true;
+        } else if b == b',' {
+            let next = bytes[i + 1..].iter().find(|c| !c.is_ascii_whitespace());
+            if matches!(next, Some(b'}') | Some(b']')) {
+                i += 1;
+                continue;
+            }
+        }
+        out.push(b);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Every string of at least 20 characters in `value`, once each: a sign-in
+/// file's tokens and keys, whatever they're called. What else is that long
+/// (an account's id, a provider's name) is only taken out of output too.
+fn long_strings(value: &Value) -> Vec<Secret> {
+    let mut found: Vec<Secret> = Vec::new();
+    strings_in(value, &mut |text| {
+        if text.len() >= 20 && !found.iter().any(|s| s.expose() == text) {
+            found.push(Secret::new(text.to_string()));
+        }
+    });
+    found
+}
+
+/// The values a `.env` file gives the variables `names`, as dotenv reads
+/// them: `export` or not, quoted with `"`, `'` or a backtick (to the closing
+/// one), or bare (to a `#`).
+fn env_values(text: &str, names: &[&str]) -> Vec<Secret> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+            let (name, value) = line.split_once('=')?;
+            if !names.contains(&name.trim()) {
+                return None;
+            }
+            let value = value.trim_start();
+            let value = match value.chars().next() {
+                Some(quote @ ('"' | '\'' | '`')) => {
+                    value[1..].split(quote).next().unwrap_or_default()
+                }
+                _ => value.split('#').next().unwrap_or_default().trim_end(),
+            };
+            Some(value.to_string())
+        })
+        .filter(|value| value.len() >= 20)
+        .map(Secret::new)
+        .collect()
+}
+
+/// Every string in `value`, wherever it is.
+fn strings_in(value: &Value, each: &mut impl FnMut(&str)) {
+    match value {
+        Value::String(s) => each(s),
+        Value::Array(items) => items.iter().for_each(|v| strings_in(v, each)),
+        Value::Object(map) => map.values().for_each(|v| strings_in(v, each)),
+        _ => {}
+    }
+}
+
+/// A regular file's bytes, at most `limit` of them; never a FIFO or a link's
+/// target that isn't a regular file.
+fn read_regular(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = options.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 /// Largest credentials file Desktop reads: Claude Code's is under 1 KiB.
@@ -731,7 +1381,14 @@ fn agent_for_run(
     let real = crate::roots::canonical(&program)
         .ok()
         .filter(|p| p.is_file())?;
-    let read = grant(&real, config, paths)?;
+    // A program that's a script in an npm package (Gemini CLI's
+    // `bundle/gemini.js`, pi's `dist/cli.js` from `npm install -g`) reads the
+    // package's own files, its dependencies too: the package's folder.
+    // Where the package's folder is too broad to read, the script alone.
+    let read = npm_package_entry(&real)
+        .and_then(|entry| grant(&entry, config, paths))
+        .filter(|read| read.is_dir())
+        .or_else(|| grant(&real, config, paths))?;
     let entry = if cfg!(windows) {
         let named = crate::roots::canonical(program.parent()?)
             .ok()?
@@ -748,6 +1405,23 @@ fn agent_for_run(
         entry,
         login: login(agent).narrowed(config, paths),
     })
+}
+
+/// For a program that's a JavaScript file in an npm package, a path whose
+/// folder is that package's (what [`grant`] reads): the nearest folder above
+/// it, at most three up, with a `package.json`.
+fn npm_package_entry(real: &Path) -> Option<PathBuf> {
+    let script = real
+        .extension()
+        .is_some_and(|e| e == "js" || e == "mjs" || e == "cjs");
+    if !script {
+        return None;
+    }
+    real.ancestors()
+        .skip(1)
+        .take(3)
+        .find(|dir| dir.join("package.json").is_file())
+        .map(|dir| dir.join("package.json"))
 }
 
 /// Takes secrets' exact text out of a stream as it passes, across the

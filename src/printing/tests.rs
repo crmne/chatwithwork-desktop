@@ -203,6 +203,9 @@ fn the_supervisor_checks_every_job_again() {
         unattended: false,
         claude_code: false,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     };
     assert_eq!(
@@ -406,6 +409,9 @@ mod tools_for_callers {
             unattended,
             claude_code: false,
             codex: false,
+            opencode: false,
+            gemini: false,
+            pi: false,
             owners: Vec::new(),
         };
         PrintTools {

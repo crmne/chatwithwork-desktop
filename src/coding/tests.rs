@@ -27,6 +27,9 @@ fn loan(claude_code: bool) -> BotLoan {
         unattended: false,
         claude_code,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     }
 }
@@ -773,4 +776,386 @@ fn a_cards_always_allow_widens_only_a_loan_with_commands() {
     let mut expected = before;
     expected.bots[0].unattended = true;
     assert_eq!(config.roots[0], expected, "nothing else changed");
+}
+
+const OPENCODE_KEY: &str = "sk-ant-api03-opencodeKEYopencodeKEY0123456789";
+const OPENCODE_REFRESH: &str = "rt_opencodeREFRESHopencodeREFRESH0123456789";
+
+/// OpenCode as 2.x leaves itself: its credentials are JSON in its SQLite
+/// database's `credential` table, which SQLite keeps whole in the file's
+/// bytes, here among other bytes as a page would hold them.
+fn opencode_home(home: &Path, values: &[serde_json::Value]) {
+    let dir = Agent::OpenCode.config_dir_in(home);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut bytes = b"SQLite format 3\0\x10\x00{\"not\":\"a credential\"}".to_vec();
+    for value in values {
+        bytes.extend_from_slice(b"\x00\x0dcww-test\x0danthropic");
+        bytes.extend_from_slice(value.to_string().as_bytes());
+        bytes.extend_from_slice(b"\x01\x02{broken");
+    }
+    std::fs::write(dir.join(OPENCODE_DB_FILE), bytes).unwrap();
+}
+
+#[test]
+fn opencodes_sign_in_is_its_data_folder_and_every_credential_in_its_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    opencode_home(
+        &home,
+        &[serde_json::json!({ "type": "key", "key": OPENCODE_KEY })],
+    );
+    let login = Login::find_for(Agent::OpenCode, &home);
+    assert!(login.signed_in());
+    assert_eq!(login.billing, Billing::ApiKey);
+    assert_eq!(
+        login.dir,
+        Some(crate::roots::canonical(&home.join(".local/share/opencode")).unwrap())
+    );
+    assert_eq!(login.paths().count(), 1, "only its data folder");
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    assert_eq!(secrets, [OPENCODE_KEY]);
+    assert!(login.env.is_empty(), "no model chosen");
+
+    // A ChatGPT or Copilot sign-in, beside an old key the write-ahead log
+    // still holds: both go.
+    opencode_home(
+        &home,
+        &[serde_json::json!({
+            "type": "oauth",
+            "access": "eyJhbGciOiJSUzI1NiJ9.opencode.accessTOKEN",
+            "refresh": OPENCODE_REFRESH,
+            "expires": 1794046518405_u64,
+        })],
+    );
+    assert_eq!(
+        Login::find_for(Agent::OpenCode, &home).billing,
+        Billing::Plan
+    );
+    let wal = Agent::OpenCode.config_dir_in(&home).join("opencode.db-wal");
+    std::fs::write(
+        &wal,
+        format!(r#"..{{"type":"key","key":"{OPENCODE_KEY}"}}.."#),
+    )
+    .unwrap();
+    let login = Login::find_for(Agent::OpenCode, &home);
+    assert_eq!(
+        login.billing,
+        Billing::Unknown,
+        "a plan and a key: it can't tell"
+    );
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    assert!(secrets.contains(&OPENCODE_REFRESH) && secrets.contains(&OPENCODE_KEY));
+    assert!(!format!("{login:?}").contains(OPENCODE_REFRESH));
+
+    opencode_home(&home, &[]);
+    std::fs::remove_file(&wal).unwrap();
+    assert!(!Login::find_for(Agent::OpenCode, &home).signed_in());
+}
+
+/// A run uses the model the person chose in OpenCode's own config, and only
+/// that of it: the config folder itself is never lent.
+#[test]
+fn opencodes_chosen_model_and_nothing_else_of_its_config_reaches_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    opencode_home(
+        &home,
+        &[serde_json::json!({ "type": "key", "key": OPENCODE_KEY })],
+    );
+    let config = home.join(".config/opencode");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("opencode.jsonc"),
+        "{\n  // mine\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"plugin\": [\"evil\"],\n  \"model\": \"anthropic/claude-haiku-4-5\", /* fast */\n}\n",
+    )
+    .unwrap();
+    let login = Login::find_for(Agent::OpenCode, &home);
+    assert_eq!(
+        login.env,
+        [(
+            "OPENCODE_CONFIG_CONTENT".to_string(),
+            r#"{"model":"anthropic/claude-haiku-4-5"}"#.to_string()
+        )]
+    );
+    assert!(!login.paths().any(|p| p.ends_with(".config/opencode")));
+
+    std::fs::write(
+        config.join("opencode.jsonc"),
+        r#"{"model": "x\" ; rm -rf ~"}"#,
+    )
+    .unwrap();
+    assert!(
+        Login::find_for(Agent::OpenCode, &home).env.is_empty(),
+        "never one that isn't a model's name"
+    );
+}
+
+const GEMINI_REFRESH: &str = "1//0gGeminiREFRESHgeminiREFRESH0123456789";
+const GEMINI_KEY: &str = "AIzaSyGeminiKEYgeminiKEY0123456789abcde";
+
+#[test]
+fn geminis_sign_in_is_its_folder_its_tokens_and_its_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let gemini = home.join(GEMINI_DIR);
+    std::fs::create_dir_all(&gemini).unwrap();
+    std::fs::write(
+        gemini.join(GEMINI_OAUTH_FILE),
+        serde_json::json!({
+            "access_token": "ya29.geminiACCESSgeminiACCESS0123456789",
+            "refresh_token": GEMINI_REFRESH,
+            "scope": "openid",
+            "token_type": "Bearer",
+            "expiry_date": 1794046518405_u64,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let login = Login::find_for(Agent::Gemini, &home);
+    assert!(login.signed_in());
+    assert_eq!(login.billing, Billing::Plan);
+    assert_eq!(login.paths().count(), 1);
+    assert!(login.secrets.iter().any(|s| s.expose() == GEMINI_REFRESH));
+
+    std::fs::remove_file(gemini.join(GEMINI_OAUTH_FILE)).unwrap();
+    std::fs::write(
+        gemini.join(".env"),
+        format!("# mine\nexport GEMINI_API_KEY=\"{GEMINI_KEY}\" # personal\nOTHER=not-a-key-but-quite-long-enough\n"),
+    )
+    .unwrap();
+    let login = Login::find_for(Agent::Gemini, &home);
+    assert_eq!(login.billing, Billing::ApiKey);
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    assert_eq!(secrets, [GEMINI_KEY]);
+
+    std::fs::remove_file(gemini.join(".env")).unwrap();
+    assert!(!Login::find_for(Agent::Gemini, &home).signed_in());
+}
+
+const PI_ACCESS: &str = "sk-ant-oat01-piACCESSpiACCESSpiACCESS0123456789";
+
+#[test]
+fn pis_sign_in_is_its_agent_folder_and_every_token_in_its_auth_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let pi = Agent::Pi.config_dir_in(&home);
+    std::fs::create_dir_all(&pi).unwrap();
+    std::fs::write(
+        pi.join(PI_AUTH_FILE),
+        serde_json::json!({
+            "openai-codex": { "type": "oauth", "access": PI_ACCESS, "refresh": "rt_piREFRESHpiREFRESH0123456789", "expires": 1 },
+            "openrouter": { "type": "api_key", "key": "sk-or-v1-piKEYpiKEYpiKEY0123456789" },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let login = Login::find_for(Agent::Pi, &home);
+    assert!(login.signed_in());
+    assert_eq!(
+        login.billing,
+        Billing::Unknown,
+        "a plan for one provider and a key for another: which pays depends on the model"
+    );
+    assert_eq!(login.dir, Some(crate::roots::canonical(&pi).unwrap()));
+    assert_eq!(login.secrets.len(), 3);
+    assert!(!format!("{login:?}").contains(PI_ACCESS));
+    std::fs::write(
+        pi.join(PI_AUTH_FILE),
+        serde_json::json!({ "openai-codex": { "type": "oauth", "access": PI_ACCESS } }).to_string(),
+    )
+    .unwrap();
+    assert_eq!(Login::find_for(Agent::Pi, &home).billing, Billing::Plan);
+}
+
+#[cfg(unix)]
+#[test]
+fn no_agents_folder_is_one_a_link_makes_something_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::create_dir_all(home.join(".local/share")).unwrap();
+    std::fs::create_dir_all(home.join(".pi")).unwrap();
+    for agent in [Agent::OpenCode, Agent::Gemini, Agent::Pi] {
+        std::os::unix::fs::symlink(home.join(".ssh"), agent.config_dir_in(&home)).unwrap();
+        assert_eq!(Login::find_for(agent, &home).dir, None, "{agent:?}");
+    }
+}
+
+/// Each new agent has its own switch, written as `<agent>_login`, which
+/// commands going off ends, and its program is the one a run gets.
+#[test]
+fn opencode_gemini_and_pi_each_have_their_own_switch_on_a_loan() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::paths::Paths::under(dir.path());
+    let home = dir.path().join("home");
+    opencode_home(
+        &home,
+        &[serde_json::json!({ "type": "key", "key": OPENCODE_KEY })],
+    );
+    for (agent, word) in [
+        (Agent::OpenCode, "opencode_login"),
+        (Agent::Gemini, "gemini_login"),
+        (Agent::Pi, "pi_login"),
+    ] {
+        let program = dir.path().join(agent.program());
+        std::fs::write(&program, "").unwrap();
+        let mut lent = loan(false);
+        agent.allow(&mut lent, true);
+        let saved = toml::to_string(&lent).unwrap();
+        assert!(saved.contains(&format!("{word} = true")), "{saved}");
+        assert_eq!(toml::from_str::<BotLoan>(&saved).unwrap(), lent);
+        let mut config = Config::default();
+        crate::coding::setup::record_program(&mut config.coding, agent, program.clone());
+        config.roots.push(root(Some(lent)));
+        for other in Agent::ALL {
+            let want = if other == agent {
+                AgentState::Ready
+            } else {
+                AgentState::NotAllowed
+            };
+            assert_eq!(agent_state(other, &config.roots[0], "42"), want);
+        }
+        let value = coding_for_bot(&config.coding, &config.roots[0], "42");
+        let said = if agent.unavailable().is_some() {
+            "not_available"
+        } else {
+            "ready"
+        };
+        assert_eq!(value["agents"][agent.key()], said);
+        let run = for_run(&config, &paths, "bots", Some("42"), |each| {
+            Login::find_for(each, &home)
+        });
+        if agent.unavailable().is_some() {
+            assert!(run.agents.is_empty());
+        } else {
+            assert_eq!(run.agents.len(), 1);
+            assert_eq!(run.agents[0].agent, agent);
+            assert_eq!(run.agents[0].program, program);
+        }
+        let mut off = config.clone();
+        crate::roots::set_commands(&mut off, "bots", false, false).unwrap();
+        assert!(
+            !agent.allowed(&off.roots[0].bots[0]),
+            "commands off ends it"
+        );
+        assert!(
+            agent.allowed(
+                &crate::roots::set_bot(&mut config, "bots", "42", None, true, false)
+                    .unwrap()
+                    .bots[0]
+            ),
+            "lending again keeps it"
+        );
+    }
+}
+
+/// A program that's a script in an npm package reads its whole package.
+#[test]
+fn an_npm_agents_package_is_what_a_run_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("lib/node_modules/@google/gemini-cli");
+    std::fs::create_dir_all(package.join("bundle")).unwrap();
+    std::fs::write(package.join("package.json"), "{}").unwrap();
+    let script = package.join("bundle/gemini.js");
+    std::fs::write(&script, "").unwrap();
+    assert_eq!(
+        npm_package_entry(&script),
+        Some(package.join("package.json"))
+    );
+    assert_eq!(
+        npm_package_entry(&dir.path().join("pi")),
+        None,
+        "a program of its own"
+    );
+}
+
+/// Windows can't link a sign-in into a run's home, so each agent's own
+/// variable names it where it is: the folder, OpenCode's database in it, or
+/// for Gemini CLI the folder that holds its `.gemini`.
+#[test]
+fn each_agents_variable_names_its_sign_in_where_it_is() {
+    let home = Path::new("/home/u");
+    let named = |agent: Agent| {
+        let (name, value) = agent.config_variable(&agent.config_dir_in(home));
+        (name, value.to_string_lossy().replace('\\', "/"))
+    };
+    assert_eq!(
+        named(Agent::ClaudeCode),
+        ("CLAUDE_CONFIG_DIR", "/home/u/.claude".into())
+    );
+    assert_eq!(named(Agent::Codex), ("CODEX_HOME", "/home/u/.codex".into()));
+    assert_eq!(
+        named(Agent::OpenCode),
+        (
+            "OPENCODE_DB",
+            "/home/u/.local/share/opencode/opencode.db".into()
+        )
+    );
+    assert_eq!(named(Agent::Gemini), ("GEMINI_CLI_HOME", "/home/u".into()));
+    assert_eq!(
+        named(Agent::Pi),
+        ("PI_CODING_AGENT_DIR", "/home/u/.pi/agent".into())
+    );
+}
+
+/// A dotenv value's quotes and comment aren't the key.
+#[test]
+fn a_dotenv_key_is_read_without_its_quotes_or_comment() {
+    let read = |text: &str| -> Vec<String> {
+        env_values(text, &["GEMINI_API_KEY"])
+            .iter()
+            .map(|s| s.expose().to_string())
+            .collect()
+    };
+    for line in [
+        format!("GEMINI_API_KEY={GEMINI_KEY}"),
+        format!("GEMINI_API_KEY={GEMINI_KEY} # personal"),
+        format!("export GEMINI_API_KEY = '{GEMINI_KEY}' # personal"),
+        format!("GEMINI_API_KEY=\"{GEMINI_KEY}\"#x"),
+        format!("GEMINI_API_KEY={GEMINI_KEY}#personal"),
+        format!("GEMINI_API_KEY=`{GEMINI_KEY}` # personal"),
+    ] {
+        assert_eq!(read(&line), [GEMINI_KEY], "{line}");
+    }
+}
+
+/// A sign-in too long for one of SQLite's pages is split across overflow
+/// pages, with their own bytes in between, in a real database (made with
+/// `sqlite3`, its tokens made up): it's put back together, and every token
+/// in it found.
+#[test]
+fn a_long_opencode_sign_in_split_across_sqlite_pages_is_found() {
+    let db = include_bytes!("testdata/opencode-overflow.db");
+    let mut raw = Vec::new();
+    credentials_in(db, &mut raw);
+    assert!(raw.is_empty(), "its bytes alone don't hold it whole");
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let data = Agent::OpenCode.config_dir_in(&home);
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join(OPENCODE_DB_FILE), db).unwrap();
+    let login = Login::find_for(Agent::OpenCode, &home);
+    assert_eq!(login.billing, Billing::Plan);
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    for end in [".overflowACCESS", "_overflowREFRESH", ".overflowID"] {
+        assert!(
+            secrets.iter().any(|s| s.len() > 3000 && s.ends_with(end)),
+            "{end}"
+        );
+    }
+    assert!(sqlite_rows(b"not a database", None).is_empty());
+    // A log whose frames carry another log's salts, as one left past a
+    // checkpoint's restart does, puts none of its pages over the database's.
+    let mut stale = vec![0u8; 32];
+    stale[8..12].copy_from_slice(&4096u32.to_be_bytes());
+    stale[16..24].copy_from_slice(b"newsalts");
+    let mut frame = vec![0u8; 24 + 4096];
+    frame[0..4].copy_from_slice(&2u32.to_be_bytes());
+    frame[8..16].copy_from_slice(b"oldsalts");
+    stale.extend_from_slice(&frame);
+    assert_eq!(sqlite_rows(db, Some(&stale)), sqlite_rows(db, None));
+    let mut torn = db.to_vec();
+    torn.truncate(5000);
+    let _ = sqlite_rows(&torn, Some(&torn));
 }

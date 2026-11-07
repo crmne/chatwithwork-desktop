@@ -185,6 +185,10 @@ fn wait_for_worker(paths: &Paths, before: Option<u64>) -> Result<()> {
 
 /// `cww coding setup`.
 pub fn setup(paths: &Paths, options: Options) -> Result<()> {
+    // Before anything is shared, lent or saved.
+    if let Some(why) = options.agent.and_then(Agent::unavailable) {
+        bail!("{why}");
+    }
     let ask = Asker { yes: options.yes };
     let mut config = Config::load(paths)?;
     seen(&config);
@@ -482,11 +486,25 @@ fn changeable(roots: &[crate::config::Root], path: &Path) -> bool {
     })
 }
 
+/// Record `program` as the one `agent`'s runs use.
+pub fn record_program(coding: &mut crate::config::CodingConfig, agent: Agent, program: PathBuf) {
+    match agent {
+        Agent::ClaudeCode => coding.claude = Some(program),
+        Agent::Codex => coding.codex = Some(program),
+        Agent::OpenCode => coding.opencode = Some(program),
+        Agent::Gemini => coding.gemini = Some(program),
+        Agent::Pi => coding.pi = Some(program),
+    }
+}
+
 /// The program setup recorded for `agent`.
 fn recorded(agent: Agent, coding: &crate::config::CodingConfig) -> Option<&PathBuf> {
     match agent {
         Agent::ClaudeCode => coding.claude.as_ref(),
         Agent::Codex => coding.codex.as_ref(),
+        Agent::OpenCode => coding.opencode.as_ref(),
+        Agent::Gemini => coding.gemini.as_ref(),
+        Agent::Pi => coding.pi.as_ref(),
     }
 }
 
@@ -505,6 +523,14 @@ fn installed_places(agent: Agent, home: &Path) -> Vec<PathBuf> {
             .join(&exe),
         Agent::Codex => home
             .join(".local/share/mise/installs/codex/latest/bin")
+            .join(&exe),
+        // Its own installer's place (`curl -fsSL https://opencode.ai/install | bash`).
+        Agent::OpenCode => home.join(".opencode").join("bin").join(&exe),
+        Agent::Gemini => home
+            .join(".local/share/mise/installs/gemini/latest/bin")
+            .join(&exe),
+        Agent::Pi => home
+            .join(".local/share/mise/installs/pi/latest/pi")
             .join(&exe),
     });
     places.extend([
@@ -564,7 +590,7 @@ pub fn find_outside(agent: Agent, roots: &[crate::config::Root]) -> Option<PathB
                 .iter()
                 .any(|root| root.bots.iter().any(|l| each.allowed(l)))
         })
-        .filter_map(|each| crate::roots::canonical(&home.join(each.config_dir())).ok())
+        .filter_map(|each| crate::roots::canonical(&each.config_dir_in(&home)).ok())
         .collect();
     let writable = |p: &PathBuf| {
         let real = crate::roots::canonical(p).unwrap_or_else(|_| p.clone());
@@ -646,7 +672,46 @@ fn output_within(mut command: Command, limit: Duration) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// OpenCode's package on npm, and the line that installs it.
+const OPENCODE_NPM: &str = "@opencode/cli";
+const OPENCODE_NPM_INSTALL: &str = "npm install -g @opencode/cli";
+/// pi's package on npm, and the line that installs it.
+const PI_NPM: &str = "@earendil-works/pi-coding-agent";
+const PI_NPM_INSTALL: &str = "npm install -g @earendil-works/pi-coding-agent";
+
 fn install_command(agent: Agent) -> (&'static str, Vec<&'static str>, &'static str) {
+    if let Some(package) = match agent {
+        Agent::Gemini => Some("@google/gemini-cli"),
+        Agent::Pi => Some(PI_NPM),
+        _ => None,
+    } {
+        let shown = match agent {
+            Agent::Gemini => "npm install -g @google/gemini-cli",
+            _ => PI_NPM_INSTALL,
+        };
+        // npm is a .cmd on Windows, which only cmd starts.
+        return if cfg!(windows) {
+            ("cmd", vec!["/C", "npm", "install", "-g", package], shown)
+        } else {
+            ("npm", vec!["install", "-g", package], shown)
+        };
+    }
+    if agent == Agent::OpenCode {
+        // Its own installer on Linux and macOS; npm's package elsewhere.
+        return if cfg!(windows) {
+            (
+                "cmd",
+                vec!["/C", "npm", "install", "-g", OPENCODE_NPM],
+                OPENCODE_NPM_INSTALL,
+            )
+        } else {
+            (
+                "sh",
+                vec!["-c", "curl -fsSL https://opencode.ai/install | bash"],
+                "curl -fsSL https://opencode.ai/install | bash",
+            )
+        };
+    }
     if agent == Agent::Codex {
         // npm is a .cmd on Windows, which only cmd starts.
         return if cfg!(windows) {
@@ -707,10 +772,7 @@ fn agent_step(agent: Agent, config: &mut Config, paths: &Paths, ask: &Asker) -> 
         return Ok(false);
     };
     if recorded(agent, &config.coding) != Some(&program) {
-        match agent {
-            Agent::ClaudeCode => config.coding.claude = Some(program.clone()),
-            Agent::Codex => config.coding.codex = Some(program.clone()),
-        }
+        record_program(&mut config.coding, agent, program.clone());
         save(config, paths)?;
     }
     Step::Ok(format!("{version}, at {}", program.display())).print(name);
@@ -892,6 +954,9 @@ fn sign_in_step(
                 },
             ),
             Agent::Codex => ("~/.codex", ""),
+            Agent::OpenCode => ("~/.local/share/opencode", ""),
+            Agent::Gemini => ("~/.gemini", ""),
+            Agent::Pi => ("~/.pi/agent", ""),
         };
         println!(
             "Bot {bot}'s coding runs in {label} would use your {name} sign-in on this computer: \
@@ -1298,12 +1363,7 @@ fn proof_step(
         paths,
         root,
         dir,
-        match agent {
-            Agent::ClaudeCode => "claude -p 'Reply with the word ready.' --max-turns 1",
-            Agent::Codex => {
-                "codex exec --sandbox danger-full-access --skip-git-repo-check 'Reply with the word ready.'"
-            }
-        },
+        agent.ready_probe(),
         bot,
         Duration::from_secs(180),
     )
@@ -1458,8 +1518,9 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
                             "name": loan.name,
                             "unattended": loan.unattended,
                         });
-                        entry["claude_code"] = states["claude_code"].clone();
-                        entry["codex"] = states["codex"].clone();
+                        for (key, state) in states {
+                            entry[key] = state;
+                        }
                         entry
                     }
                 })
@@ -1485,8 +1546,14 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
     serde_json::json!({
         "claude": program,
         "codex": installed(Agent::Codex, config),
+        "opencode": installed(Agent::OpenCode, config),
         "signed_in": stored,
         "codex_signed_in": login(Agent::Codex, paths).signed_in(),
+        "opencode_signed_in": login(Agent::OpenCode, paths).signed_in(),
+        "gemini": installed(Agent::Gemini, config),
+        "gemini_signed_in": login(Agent::Gemini, paths).signed_in(),
+        "pi": installed(Agent::Pi, config),
+        "pi_signed_in": login(Agent::Pi, paths).signed_in(),
         "loans": loans,
         "repositories": repos,
     })

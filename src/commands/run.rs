@@ -518,10 +518,14 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
             }
         }
         // The sign-in where the agent looks for it, in the run's home: links
-        // to the person's `~/.claude` and `~/.claude.json`, or `~/.codex`,
-        // which the sandbox lets it read and write.
+        // to the person's `~/.claude` and `~/.claude.json`, `~/.codex`, or
+        // `~/.local/share/opencode`, which the sandbox lets it read and write.
         if let Some(dir) = &run.login.dir {
-            std::os::unix::fs::symlink(dir, plan.home.join(run.agent.config_dir()))?;
+            let link = run.agent.config_dir_in(&plan.home);
+            if let Some(parent) = link.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::os::unix::fs::symlink(dir, link)?;
         }
         if let Some(file) = &run.login.file {
             std::os::unix::fs::symlink(file, plan.home.join(crate::coding::CONFIG_FILE))?;

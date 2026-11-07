@@ -125,6 +125,9 @@ pub fn set_bot(
             unattended,
             claude_code: false,
             codex: false,
+            opencode: false,
+            gemini: false,
+            pi: false,
             owners: Vec::new(),
         });
     }

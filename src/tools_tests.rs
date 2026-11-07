@@ -64,6 +64,9 @@ fn fixture(limits: Limits, app_budget: Option<usize>) -> Fixture {
         unattended: false,
         claude_code: false,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     });
     let mut config = Config {
@@ -545,6 +548,9 @@ fn ask_fixture(
                 unattended,
                 claude_code: false,
                 codex: false,
+                opencode: false,
+                gemini: false,
+                pi: false,
                 owners: Vec::new(),
             }],
             id: "app".into(),

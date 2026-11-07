@@ -521,13 +521,10 @@ impl Preparations {
 /// An API key the folder's own environment gives runs (`cww roots env`)
 /// takes over from the sign-in, so who pays says so.
 fn folder_billing(config: &Config, paths: &Paths, root: &str, agent: Agent) -> Option<Billing> {
-    let key = match agent {
-        Agent::ClaudeCode => "ANTHROPIC_API_KEY",
-        Agent::Codex => "OPENAI_API_KEY",
-    };
+    let keys = agent.api_key_variables();
     crate::commands::env::names_for(config, paths, root)
         .iter()
-        .any(|name| name == key)
+        .any(|name| keys.contains(&name.as_str()))
         .then_some(Billing::ApiKey)
 }
 
@@ -985,6 +982,9 @@ mod tests {
                     unattended: false,
                     claude_code,
                     codex: false,
+                    opencode: false,
+                    gemini: false,
+                    pi: false,
                     owners: owners.iter().map(|o| o.to_string()).collect(),
                 }],
             }],
