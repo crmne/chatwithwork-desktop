@@ -12,6 +12,8 @@ use crate::policy::{self, Decision};
 pub const MAIN: &str = "main";
 /// The bundled scan page (scan.rs).
 pub const SCAN: &str = "scan";
+/// The bundled page that asks whether a bot may code here (coding_setup.rs).
+pub const CODING_SETUP: &str = "coding-setup";
 /// Windows the web app opens for itself (`target="_blank"` on its own pages).
 pub const POPUP_PREFIX: &str = "page-";
 

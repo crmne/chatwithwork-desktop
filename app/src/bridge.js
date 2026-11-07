@@ -36,6 +36,11 @@
     allowNetwork: (folder, on) => change("network", { folder: String(folder), on: Boolean(on) }),
     notifications: () => invoke("computer_notifications", { ask: false }),
     allowNotifications: () => invoke("computer_notifications", { ask: true }),
+    // Asks the person, in the app's own window, to let a bot code here. It
+    // resolves { ready: true } or { declined: true }, and nothing else.
+    setUpCoding: ({ bot, agent, repository }) => invoke("computer_set_up_coding", {
+      request: { bot: String(bot), ...(agent ? { agent: String(agent) } : {}), ...(repository ? { repository: String(repository) } : {}) },
+    }),
   });
 
   // A scan for the composer: the scan window opens, and once the person

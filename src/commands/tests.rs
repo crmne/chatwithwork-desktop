@@ -1281,6 +1281,8 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
         name: String::new(),
         unattended: false,
         claude_code: true,
+        codex: false,
+        owners: Vec::new(),
     });
     fx.config.coding.claude = Some(program);
     // Claude Code needs the network; where the sandbox can't give one (CI's
@@ -1433,6 +1435,272 @@ fn a_folders_environment_reaches_its_commands_and_never_prints() {
     assert!(!done.stderr.contains("secretKEYvalue42"), "{done:?}");
 }
 
+/// A bot allowed Codex gets its `codex` first on `PATH` and `~/.codex`, to read
+/// and write, with the tokens in `auth.json` out of what it prints. Claude
+/// Code's sign-in, which it wasn't allowed, isn't there.
+#[cfg(unix)]
+#[test]
+fn only_a_bot_allowed_it_gets_codexs_sign_in_and_its_tokens_never_print() {
+    const ACCESS: &str = "eyJhbGciOiJSUzI1NiJ9.codex-access-token-value";
+    // Codex can't run in Seatbelt yet (`Agent::unavailable`): Linux only.
+    if cfg!(target_os = "macos") || !(sandbox_works() && !on_landlock()) {
+        return;
+    }
+    let mut fx = fixture(true);
+    let paths = fx.runs.paths.clone();
+    signed_in_person_home(&paths);
+    let home = paths.person_home.clone().unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::write(
+        home.join(".codex/auth.json"),
+        serde_json::json!({ "tokens": { "access_token": ACCESS } }).to_string(),
+    )
+    .unwrap();
+    let install = fx._dir.path().join("codex-install");
+    std::fs::create_dir_all(&install).unwrap();
+    let program = install.join("codex");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho codex here\ncat \"$HOME/.codex/auth.json\"\necho\n\
+         echo refreshed > \"$HOME/.codex/refreshed\"\nls -a \"$HOME\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: false,
+        codex: true,
+        owners: Vec::new(),
+    });
+    fx.config.coding.codex = Some(program);
+    fx.config.roots[0].network = true;
+    let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+    if wait(&fx.runs, &probe.id).status.state == "failed" {
+        eprintln!("no network for commands here");
+        return;
+    }
+    let as_bot = Request {
+        bot: Some("42".into()),
+        ..request("codex")
+    };
+    let started = fx.runs.start(&fx.config, &as_bot).unwrap();
+    let done = wait(&fx.runs, &started.id);
+    assert!(done.stdout.contains("codex here"), "{done:?}");
+    assert!(done.stdout.contains("[codex-token]"), "{done:?}");
+    assert!(!done.stdout.contains(ACCESS), "{done:?}");
+    assert!(
+        !done.stdout.contains(".claude"),
+        "not Claude Code's: {done:?}"
+    );
+    assert!(
+        home.join(".codex/refreshed").is_file(),
+        "it can write there"
+    );
+
+    let as_person = request("cat \"$HOME/.codex/auth.json\"; echo end");
+    let started = fx.runs.start(&fx.config, &as_person).unwrap();
+    let done = wait(&fx.runs, &started.id);
+    assert!(!done.stdout.contains(ACCESS), "{done:?}");
+}
+
+/// A bare repository with these files, as GitHub would hold it.
+#[cfg(unix)]
+fn bare_repository(base: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let work = base.join("origin-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let done = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{args:?}: {done:?}");
+    };
+    git(&work, &["init", "-q", "-b", "main"]);
+    for (name, text) in files {
+        std::fs::write(work.join(name), text).unwrap();
+    }
+    git(&work, &["add", "."]);
+    git(
+        &work,
+        &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "first"],
+    );
+    let bare = base.join("origin.git");
+    git(
+        base,
+        &["clone", "-q", "--bare", "origin-work", "origin.git"],
+    );
+    bare
+}
+
+#[cfg(unix)]
+fn prepared(fx: &Fixture, ask: &crate::coding::prepare::Ask) -> crate::coding::prepare::View {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let view = fx.runs.preparations.status(ask).expect("started");
+        if view.state != "running" || std::time::Instant::now() > deadline {
+            return view;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// A bot's first run on a repository prepares it by itself: a mirror only
+/// Desktop writes, a checkout with no credentials that can't push, its tests
+/// run once in the sandbox, with no agent's sign-in. Then it's prepared; a
+/// failing step says which, and running again carries on.
+#[cfg(unix)]
+#[test]
+fn the_first_run_prepares_a_repository_by_itself_and_names_a_step_that_fails() {
+    let runs_here = if cfg!(target_os = "macos") {
+        std::env::var("CWW_TEST_SEATBELT").as_deref() == Ok("1")
+    } else {
+        sandbox_works() && !on_landlock()
+    };
+    let git = std::process::Command::new("git").arg("--version").output();
+    if !runs_here || !git.is_ok_and(|o| o.status.success()) {
+        return;
+    }
+    let mut fx = fixture(true);
+    let paths = fx.runs.paths.clone();
+    signed_in_person_home(&paths);
+    let program = fx._dir.path().join("claude");
+    std::fs::write(&program, "").unwrap();
+    fx.config.coding.claude = Some(program);
+    fx.config.roots[0].network = true;
+    let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+    if wait(&fx.runs, &probe.id).status.state == "failed" {
+        eprintln!("no network for commands here");
+        return;
+    }
+    fx.config.roots[0].bots.push(crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: true,
+        codex: false,
+        owners: vec!["acme".into()],
+    });
+    let bare = bare_repository(
+        fx._dir.path(),
+        &[(
+            "Makefile",
+            "test:\n\t@echo \"$$HOME\" > .ran && test ! -e \"$$HOME/.claude\" && test ! -e failing\n",
+        )],
+    );
+    fx.config
+        .coding
+        .repositories
+        .push(crate::config::Repository {
+            root: "project".into(),
+            name: "app".into(),
+            url: format!("file://{}", bare.display()),
+            ssh_key: None,
+            github: Some("acme/app".into()),
+        });
+    fx.config.save(&paths).unwrap();
+    let ask = crate::coding::prepare::Ask {
+        bot: "42".into(),
+        repository: "acme/app".into(),
+        agent: None,
+        tests: true,
+    };
+
+    let started = fx
+        .runs
+        .preparations
+        .start(&fx.runs, &fx.config, &paths, &ask)
+        .unwrap();
+    assert_eq!(started.state, "running");
+    let view = prepared(&fx, &ask);
+    assert_eq!(view.state, "ready", "{view:?}");
+    assert_eq!(view.checkout.as_deref(), Some("app"));
+    assert_eq!(view.test_command.as_deref(), Some("make test"));
+    assert_eq!(view.tests.as_deref(), Some("passed"));
+    assert!(
+        view.steps.iter().all(|step| step.state == "done"),
+        "{view:?}"
+    );
+
+    let checkout = fx.folder.join("app");
+    let mirror = crate::coding::repositories::mirror_dir(&paths, &fx.config.coding.repositories[0]);
+    let origin = std::process::Command::new("git")
+        .args([
+            "-C",
+            checkout.to_str().unwrap(),
+            "remote",
+            "get-url",
+            "origin",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&origin.stdout).trim(),
+        mirror.to_str().unwrap(),
+        "its origin is the mirror"
+    );
+    assert!(
+        !std::fs::read_to_string(checkout.join(".git/config"))
+            .unwrap()
+            .contains(&bare.to_string_lossy().to_string())
+    );
+    assert!(checkout.join(".ran").is_file(), "its tests ran");
+
+    let again = fx
+        .runs
+        .preparations
+        .start(&fx.runs, &fx.config, &paths, &ask)
+        .unwrap();
+    assert_eq!(again.state, "ready", "once for each repository");
+    assert!(again.steps.is_empty(), "{again:?}");
+
+    let push = Request {
+        bot: Some("42".into()),
+        dir: "app".into(),
+        ..request(
+            "git -c commit.gpgsign=false -c user.name=x -c user.email=x@example.com commit -q --allow-empty -m x && git push origin HEAD:refs/heads/main",
+        )
+    };
+    let started = fx.runs.start(&fx.config, &push).unwrap();
+    assert_ne!(
+        wait(&fx.runs, &started.id).status.exit_code,
+        Some(0),
+        "a push fails"
+    );
+
+    // A failing step says which, and asks nothing of the mirror.
+    std::fs::remove_file(mirror.join("cww-prepared.json")).unwrap();
+    std::fs::write(checkout.join("failing"), "").unwrap();
+    fx.runs
+        .preparations
+        .start(&fx.runs, &fx.config, &paths, &ask)
+        .unwrap();
+    let view = prepared(&fx, &ask);
+    assert_eq!(view.state, "failed", "{view:?}");
+    assert_eq!(view.failed_step.as_deref(), Some("Running its tests once"));
+    assert!(view.detail.is_some());
+
+    // Going on without them, as the person chose, doesn't run them.
+    let without = crate::coding::prepare::Ask {
+        tests: false,
+        ..ask.clone()
+    };
+    fx.runs
+        .preparations
+        .start(&fx.runs, &fx.config, &paths, &without)
+        .unwrap();
+    let view = prepared(&fx, &without);
+    assert_eq!(view.state, "ready", "{view:?}");
+    assert_eq!(view.tests.as_deref(), Some("skipped"));
+}
+
 /// The real Claude Code, found as `cww coding setup` finds it, answers from
 /// the sandbox with this computer's own Claude Code sign-in, as a bot's run
 /// gets it. Needs Claude Code signed in here and the network; spends a few
@@ -1455,6 +1723,8 @@ fn real_claude_code_answers_from_the_sandbox() {
         name: String::new(),
         unattended: false,
         claude_code: true,
+        codex: false,
+        owners: Vec::new(),
     });
     fx.config.coding.claude = Some(program);
     let ask = Request {
@@ -1512,7 +1782,8 @@ fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
 
     let dir = Path::new("/home/u/.claude").to_path_buf();
     let file = Path::new("/home/u/.claude.json").to_path_buf();
-    plan.coding.claude = Some(crate::coding::Claude {
+    plan.coding.agents = vec![crate::coding::AgentRun {
+        agent: crate::coding::Agent::ClaudeCode,
         program: "/x/claude".into(),
         real: "/x/claude".into(),
         read: "/x".into(),
@@ -1522,8 +1793,9 @@ fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
             file: Some(file.clone()),
             keychain: false,
             secrets: Vec::new(),
+            billing: Default::default(),
         },
-    });
+    }];
     let mut expected = own.clone();
     expected.extend([
         "/home/u/.claude".to_string(),
@@ -1534,7 +1806,7 @@ fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
     let (seatbelt, keychain) = writable(&plan, Sandbox::Seatbelt);
     assert_eq!(seatbelt, expected);
     assert_eq!(keychain, serde_json::Value::Bool(false));
-    if let Some(claude) = plan.coding.claude.as_mut() {
+    if let Some(claude) = plan.coding.agents.first_mut() {
         claude.login.keychain = true;
     }
     assert_eq!(
@@ -1568,13 +1840,14 @@ fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
         "000000000000",
     )
     .unwrap();
-    plan.coding.claude = Some(crate::coding::Claude {
+    plan.coding.agents = vec![crate::coding::AgentRun {
+        agent: crate::coding::Agent::ClaudeCode,
         real: real_program,
         program,
         read,
         entry: None,
         login: Default::default(),
-    });
+    }];
     let real = real.canonicalize().unwrap().to_string_lossy().into_owned();
     assert_eq!(plan.coding_readable(), [real]);
 

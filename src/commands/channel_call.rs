@@ -39,6 +39,20 @@ pub enum Call {
     Print {
         request: crate::printing::Request,
     },
+    /// A bot's first run on a repository (`crate::coding::prepare`): start
+    /// preparing it, or say it's prepared or what's missing.
+    Prepare {
+        ask: crate::coding::prepare::Ask,
+    },
+    /// How preparing it stands.
+    Prepared {
+        ask: crate::coding::prepare::Ask,
+    },
+    /// What this computer has for the coding agents, and whether the
+    /// person's Git login reaches a repository, for the app's dialog only.
+    CodingLook {
+        repository: Option<String>,
+    },
 }
 
 /// Answer one call, as the supervisor does.
@@ -88,6 +102,15 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
             let _turn = crate::printing::one_job_at_a_time();
             to_value(crate::printing::print(paths, &config()?, &request)?)
         }
+        Call::Prepare { ask } => {
+            to_value(runs.preparations.start(runs, &config()?, paths, &ask)?)
+        }
+        Call::Prepared { ask } => to_value(runs.preparations.status(&ask)),
+        Call::CodingLook { repository } => to_value(crate::coding::prepare::look(
+            &config()?,
+            paths,
+            repository.as_deref(),
+        )),
     };
     Ok(value)
 }

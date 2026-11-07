@@ -124,6 +124,8 @@ pub fn set_bot(
             name,
             unattended,
             claude_code: false,
+            codex: false,
+            owners: Vec::new(),
         });
     }
     Ok(printer.clone())

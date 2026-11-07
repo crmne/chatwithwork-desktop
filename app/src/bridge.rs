@@ -132,6 +132,27 @@ pub async fn computer_change(
     .map_err(|e| e.to_string())?
 }
 
+/// Asks the person, in the app's own window, to let a bot code on this
+/// computer (coding_setup.rs). The page hears only how it ended.
+#[tauri::command]
+pub async fn computer_set_up_coding(
+    app: AppHandle,
+    webview: Webview,
+    desktop: State<'_, Arc<Desktop>>,
+    setups: State<'_, Arc<crate::coding_setup::CodingSetups>>,
+    request: Value,
+) -> Result<Value, String> {
+    server_page(&desktop, &webview)?;
+    let request: crate::coding_setup::Request = serde_json::from_value(request)
+        .map_err(|_| "Chat with Work Desktop can't do that.".to_string())?;
+    let (desktop, setups) = (desktop.inner().clone(), setups.inner().clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::coding_setup::ask(&app, &desktop, &setups, request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Shares a folder the person picks in the system's folder picker. The page
 /// can't name one. Answers the folder's label, or `null` if they picked none.
 #[tauri::command]

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "coding-setup",
+  "description": "The bundled page that asks whether a bot may code on this computer (coding_setup.rs): what the app checked, and the person's answer. Pages from the network never get this: it names no remote URL.",
+  "windows": ["coding-setup"],
+  "local": true,
+  "permissions": [
+    "allow-coding-setup-state",
+    "allow-coding-setup-answer"
+  ]
+}

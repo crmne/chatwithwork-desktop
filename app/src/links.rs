@@ -31,6 +31,10 @@ const SECTIONS: [(&str, Record); 4] = [
     ("projects", Record::Required),
 ];
 
+/// A bot's page, saying to ask whether it may code here (`computer.setUpCoding`,
+/// which asks in the app's own window). It moves the window and does nothing.
+const SET_UP: &str = "set_up=coding";
+
 #[derive(Clone, Copy, PartialEq)]
 enum Record {
     Required,
@@ -80,7 +84,11 @@ pub fn page(server: &Server, link: &str) -> Option<Url> {
         None => *kind != Record::Required,
         Some(number) => *kind != Record::Never && digits(number, 1, 18),
     };
-    if !shown || !query.is_none_or(|query| section == "decisions" && decision(query)) {
+    let query_ok = query.is_none_or(|query| {
+        (section == "decisions" && decision(query))
+            || (section == "bots" && record.is_some() && query == SET_UP)
+    });
+    if !shown || !query_ok {
         return None;
     }
     server.page(&format!("/{rest}"))
@@ -132,6 +140,7 @@ mod tests {
             "/482139075/decisions?decision=h7",
             "/482139075/bots",
             "/482139075/bots/3",
+            "/482139075/bots/3?set_up=coding",
             "/482139075/projects/12",
         ] {
             assert_eq!(
@@ -224,6 +233,9 @@ mod tests {
             "chatwithwork://work.example/482139075/chats/16/files/1",
             "chatwithwork://work.example/482139075/chats/16/edit",
             "chatwithwork://work.example/482139075/bots/new",
+            "chatwithwork://work.example/482139075/bots?set_up=coding",
+            "chatwithwork://work.example/482139075/bots/3?set_up=everything",
+            "chatwithwork://work.example/482139075/chats/3?set_up=coding",
             "chatwithwork://work.example/482139075/decisions/1",
             // Not an account, or not a record.
             "chatwithwork://work.example/482139/chats/16",

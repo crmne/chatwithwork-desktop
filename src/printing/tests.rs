@@ -202,6 +202,8 @@ fn the_supervisor_checks_every_job_again() {
         name: String::new(),
         unattended: false,
         claude_code: false,
+        codex: false,
+        owners: Vec::new(),
     };
     assert_eq!(
         code(
@@ -403,6 +405,8 @@ mod tools_for_callers {
             name: String::new(),
             unattended,
             claude_code: false,
+            codex: false,
+            owners: Vec::new(),
         };
         PrintTools {
             runner: Runner::Off("no spooler in these tests".into()),

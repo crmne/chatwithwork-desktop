@@ -63,6 +63,8 @@ fn fixture(limits: Limits, app_budget: Option<usize>) -> Fixture {
         name: "Fixer".into(),
         unattended: false,
         claude_code: false,
+        codex: false,
+        owners: Vec::new(),
     });
     let mut config = Config {
         roots: vec![app_root, root("docs", &docs)],
@@ -542,6 +544,8 @@ fn ask_fixture(
                 name: "Fixer".into(),
                 unattended,
                 claude_code: false,
+                codex: false,
+                owners: Vec::new(),
             }],
             id: "app".into(),
             label: "App".into(),
@@ -670,4 +674,60 @@ async fn only_a_bot_may_ask_and_only_for_its_folders_with_commands() {
     assert_eq!(code(&refused), "not_writable", "{refused}");
     assert!(refused.to_string().contains("allow commands"), "{refused}");
     assert!(asks.pending().is_empty());
+}
+
+async fn allow(files: &LocalFiles, root: &str, caller: Caller) -> rmcp::model::CallToolResult {
+    let Value::Object(args) = json!({ "root": root }) else {
+        unreachable!()
+    };
+    files
+        .call_as(
+            ALLOW_UNATTENDED,
+            Some(args),
+            Some("1".into()),
+            "r".into(),
+            None,
+            caller,
+        )
+        .await
+        .expect("a known tool")
+}
+
+/// A card's Always allow reaches the daemon only for a folder lent to that bot
+/// with commands on, and no model sees the tool.
+#[tokio::test]
+async fn a_cards_always_allow_is_only_for_a_loan_with_commands() {
+    let (_tmp, _audit, files, _asks) = ask_fixture(true, false);
+    let (grants, mut granted) = tokio::sync::mpsc::unbounded_channel();
+    let files = files.with_unattended_grants(grants);
+    assert!(
+        !files.tools().iter().any(|t| t.name == ALLOW_UNATTENDED),
+        "never listed"
+    );
+
+    let answering = tokio::spawn(async move {
+        let grant = granted.recv().await.unwrap();
+        assert_eq!((grant.root.as_str(), grant.bot.as_str()), ("app", "7"));
+        grant.done.send(Ok(())).unwrap();
+    });
+    let answer = allow(&files, "app", bot()).await;
+    assert_eq!(
+        answer.structured_content.unwrap(),
+        json!({ "status": "allowed" })
+    );
+    answering.await.unwrap();
+
+    let person = allow(&files, "app", Caller::Person).await;
+    assert_eq!(person.is_error, Some(true), "only a bot's chat");
+    let elsewhere = allow(&files, "nowhere", bot()).await;
+    assert_eq!(elsewhere.is_error, Some(true), "not lent");
+
+    let (_tmp, _audit, files, _asks) = ask_fixture(false, false);
+    let (grants, _granted) = tokio::sync::mpsc::unbounded_channel();
+    let files = files.with_unattended_grants(grants);
+    assert_eq!(
+        allow(&files, "app", bot()).await.is_error,
+        Some(true),
+        "commands off"
+    );
 }

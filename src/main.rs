@@ -473,6 +473,9 @@ enum CodingCommand {
         /// The bot's name, to recognize it here.
         #[arg(long)]
         name: Option<String>,
+        /// The coding agent it uses: claude (the default) or codex.
+        #[arg(long)]
+        agent: Option<String>,
         /// The folder it works in (default ~/bots).
         #[arg(long)]
         folder: Option<PathBuf>,
@@ -513,6 +516,13 @@ enum CodingCommand {
         bot: String,
         #[arg(long)]
         off: bool,
+        /// The coding agent: claude (the default) or codex.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Let this bot's first runs here prepare repositories of this GitHub
+        /// owner by themselves, with your Git login.
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// Fetch every repository's mirror now.
     Fetch,
@@ -1061,6 +1071,7 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
         CodingCommand::Setup {
             bot,
             name,
+            agent,
             folder,
             repo,
             ssh_key,
@@ -1074,6 +1085,7 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
             setup::Options {
                 bot,
                 bot_name: name,
+                agent: Some(coding_agent(agent.as_deref())?),
                 folder,
                 repo,
                 ssh_key,
@@ -1098,13 +1110,25 @@ fn coding(paths: &Paths, command: CodingCommand) -> Result<()> {
                 setup::summary(&config, paths, bot.as_deref());
             }
         }
-        CodingCommand::Allow { root, bot, off } => {
-            let root = cww::roots::set_bot_claude_code(&mut config, &root, &bot, !off)?;
+        CodingCommand::Allow {
+            root,
+            bot,
+            off,
+            agent,
+            owner,
+        } => {
+            let agent = coding_agent(agent.as_deref())?;
+            let root_id = root.clone();
+            let root = cww::roots::set_bot_agent(&mut config, &root, &bot, agent, !off)?;
+            if let Some(owner) = owner {
+                cww::roots::add_bot_owner(&mut config, &root_id, &bot, &owner)?;
+            }
             config.save(paths)?;
             println!(
-                "Bot {bot}'s commands in {} {} Claude Code's sign-in.",
+                "Bot {bot}'s commands in {} {} {}'s sign-in.",
                 root.label,
-                if off { "don't get" } else { "get" }
+                if off { "don't get" } else { "get" },
+                agent.name()
             );
             notify_daemon(paths, "");
         }
@@ -1601,6 +1625,16 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The agent a `--agent` names: Claude Code when it names none.
+fn coding_agent(name: Option<&str>) -> anyhow::Result<cww::coding::Agent> {
+    use cww::coding::Agent;
+    match name {
+        None | Some("claude") | Some("claude_code") | Some("claude-code") => Ok(Agent::ClaudeCode),
+        Some("codex") => Ok(Agent::Codex),
+        Some(other) => anyhow::bail!("{other:?} isn't a coding agent: use claude or codex"),
+    }
 }
 
 fn ask_kind(claude_code: bool) -> cww::unattended_asks::AskKind {

@@ -73,6 +73,8 @@ struct Daemon {
     notifications: Arc<crate::notification_delivery::Client>,
     /// Bots' requests for unattended commands, waiting for the person here.
     asks: Arc<crate::unattended_asks::Asks>,
+    /// Always allow pressed on a bot's command card (`allow_unattended`).
+    unattended_grants: tokio::sync::mpsc::UnboundedSender<crate::tools::UnattendedGrant>,
     /// Subscribers that answer those requests in a dialog of their own (the
     /// desktop app). While there are none, a system notification tells
     /// the person instead.
@@ -559,6 +561,7 @@ async fn run_with_notifications(
             .context("starting the reader")??
     };
     let reader = Arc::new(reader);
+    let (unattended_grants, granted) = tokio::sync::mpsc::unbounded_channel();
     let asks = {
         let file = paths.state_dir.join("unattended-asks.json");
         let pairing = crate::unattended_asks::pairing(&config);
@@ -623,10 +626,12 @@ async fn run_with_notifications(
         changes,
         shutdown: shutdown.clone(),
         asks: Arc::new(asks),
+        unattended_grants,
         answering: std::sync::atomic::AtomicUsize::new(0),
         paths,
     });
     tokio::spawn(Arc::clone(&daemon).tell_of_asks(shutdown.clone()));
+    tokio::spawn(Arc::clone(&daemon).apply_unattended_grants(granted, shutdown.clone()));
     tokio::spawn(Arc::clone(&daemon).publish_status(shutdown.clone()));
     tokio::spawn(crate::printing::purge_print_files(
         daemon.paths.state_dir.join("printing"),
@@ -673,6 +678,7 @@ impl Daemon {
         )
         .with_commands(command_tools(&config, &self.runner))
         .with_asks(Arc::clone(&self.asks))
+        .with_unattended_grants(self.unattended_grants.clone())
         .with_printing(crate::printing::tools::PrintTools {
             runner: self.runner.clone(),
             printers: crate::printing::settings::offered(&config),
@@ -688,6 +694,59 @@ impl Daemon {
                 )
             }),
         )
+    }
+
+    /// Always allow pressed on a bot's command card, one at a time.
+    async fn apply_unattended_grants(
+        self: Arc<Self>,
+        mut granted: tokio::sync::mpsc::UnboundedReceiver<crate::tools::UnattendedGrant>,
+        shutdown: CancellationToken,
+    ) {
+        loop {
+            let grant = tokio::select! {
+                () = shutdown.cancelled() => return,
+                grant = granted.recv() => grant,
+            };
+            let Some(grant) = grant else { return };
+            let answer = self
+                .allow_unattended_from_server(grant.root, grant.bot)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = grant.done.send(answer);
+        }
+    }
+
+    /// Its commands in that folder start unattended: audited here, and a
+    /// passive notice, no question. Everything it needs is checked again in the
+    /// same edit.
+    async fn allow_unattended_from_server(&self, which: String, bot: String) -> Result<()> {
+        let (id, folder) = (bot.clone(), which.clone());
+        let root = self
+            .edit_config(move |config, _| {
+                crate::roots::allow_bot_unattended_from_server(config, &folder, &bot)
+            })
+            .await?;
+        let mut entry = AuditEntry::event("root_bot_unattended_from_card");
+        entry.detail = Some(format!("{} ({}) for bot {id}", root.id, root.label));
+        self.audit.append(&entry);
+        let name = root
+            .loan(&id)
+            .map(|loan| loan.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Bot {id}"));
+        let body = format!(
+            "You chose Always allow in Chat with Work: {name}'s commands in {} now run without \
+             asking. Turn it off in this computer's Shared folders.",
+            root.label
+        );
+        if let Err(e) = self.notifications.notice(
+            &format!("unattended:{}:{id}", root.id),
+            "A bot's commands run without asking",
+            &body,
+        ) {
+            tracing::warn!("couldn't show that a bot's commands run unattended: {e:#}");
+        }
+        self.reload().await
     }
 
     /// When a bot asks for unattended commands: the status changes, so the
@@ -1212,6 +1271,73 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
+    /// The person's Allow in the app's dialog (docs/coding-computers.md, "One
+    /// yes"): each thing `cww coding setup` asks one by one, at once.
+    async fn coding_allow(
+        &self,
+        root: Option<String>,
+        folder: Option<PathBuf>,
+        bot: String,
+        name: Option<String>,
+        agent: crate::coding::Agent,
+        owner: Option<String>,
+    ) -> Result<Value> {
+        let (id, audited) = (bot.clone(), owner.clone());
+        let root = self
+            .edit_config(move |config, paths| {
+                let which = match (root, folder) {
+                    (Some(root), _) => root,
+                    (None, Some(folder)) => {
+                        let canonical = crate::roots::canonical(&folder)?;
+                        match config.roots.iter().find(|r| r.path == canonical) {
+                            Some(found) => found.id.clone(),
+                            None => {
+                                crate::roots::add_root(
+                                    config,
+                                    paths,
+                                    crate::roots::NewRoot {
+                                        path: &canonical,
+                                        label: None,
+                                        i_know: false,
+                                        follow_symlinks: false,
+                                        writable: false,
+                                    },
+                                )?
+                                .id
+                            }
+                        }
+                    }
+                    (None, None) => anyhow::bail!("no folder to share"),
+                };
+                crate::roots::set_writable(config, &which, true, false)?;
+                crate::roots::set_commands(config, &which, true, true)?;
+                let unattended = config
+                    .root(&which)
+                    .and_then(|r| r.loan(&bot))
+                    .is_some_and(|loan| loan.unattended);
+                crate::roots::set_bot(config, &which, &bot, name.as_deref(), true, unattended)?;
+                crate::roots::set_bot_agent(config, &which, &bot, agent, true)?;
+                if let Some(owner) = &owner {
+                    crate::roots::add_bot_owner(config, &which, &bot, owner)?;
+                }
+                config.root(&which).cloned().context("the folder")
+            })
+            .await?;
+        let mut entry = AuditEntry::event("root_bot_coding_allowed");
+        entry.detail = Some(format!(
+            "{} ({}) for bot {id}: {}{}",
+            root.id,
+            root.label,
+            agent.key(),
+            audited
+                .map(|owner| format!(", repositories of {owner}"))
+                .unwrap_or_default()
+        ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": { "id": root.id, "label": root.label } }))
+    }
+
     /// The system's printers beside what's allowed on each, and the pages
     /// left today, for this computer's own windows.
     async fn printers(&self) -> Result<Value> {
@@ -1488,13 +1614,8 @@ impl Daemon {
     ) -> Result<T> {
         let _editing = self.config_edits.lock().await;
         let paths = self.paths.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut config = Config::load(&paths)?;
-            let edited = edit(&mut config, &paths)?;
-            config.save(&paths)?;
-            Ok(edited)
-        })
-        .await?
+        tokio::task::spawn_blocking(move || Config::edit(&paths, |config| edit(config, &paths)))
+            .await?
     }
 
     fn configure_browser(&self, config: &Config) {
@@ -1775,6 +1896,8 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
                     | ControlRequest::RootsBot { .. }
+                    | ControlRequest::CodingAllow { .. }
+                    | ControlRequest::CodingLook { .. }
                     | ControlRequest::Printers
                     | ControlRequest::PrintersAdd { .. }
                     | ControlRequest::PrintersRemove { .. }
@@ -2105,6 +2228,40 @@ impl ControlHandler for Daemon {
                     }
                 };
                 Ok(serde_json::to_value(status)?)
+            }
+            ControlRequest::CodingLook { bot, repository } => {
+                let look = self
+                    .runner
+                    .coding_look(repository)
+                    .await
+                    .map_err(command_refusal)?;
+                let config = self.config.lock().await;
+                let lent = config
+                    .roots
+                    .iter()
+                    .find(|root| root.loan(&bot).is_some() && root.runs_commands());
+                let commands = crate::commands::Sandbox::for_host().is_ok();
+                Ok(json!({
+                    "agents": look.agents,
+                    "reaches": look.reaches,
+                    "commands": commands,
+                    "root": lent.map(|root| json!({
+                        "id": root.id,
+                        "label": root.label,
+                        "unattended": root.loan(&bot).is_some_and(|loan| loan.unattended),
+                    })),
+                }))
+            }
+            ControlRequest::CodingAllow {
+                root,
+                folder,
+                bot,
+                name,
+                agent,
+                owner,
+            } => {
+                self.coding_allow(root, folder, bot, name, agent, owner)
+                    .await
             }
             ControlRequest::AuditTail { lines } => {
                 let path = self.audit.path().to_path_buf();

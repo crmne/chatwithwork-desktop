@@ -444,6 +444,7 @@ fn add_remote_capability(app: &AppHandle, server: &Server) -> tauri::Result<()> 
             .permission("allow-computer-change")
             .permission("allow-computer-add-folder")
             .permission("allow-computer-notifications")
+            .permission("allow-computer-set-up-coding")
             .permission("allow-scan")
             .permission("allow-scan-file")
             .permission("allow-scan-pending")
@@ -711,6 +712,7 @@ pub fn run(
         .plugin(tauri_plugin_dialog::init())
         .manage(desktop.clone())
         .manage(scans.clone())
+        .manage(Arc::new(crate::coding_setup::CodingSetups::default()))
         // The microphone, for the composer's dictation, only for the
         // server's pages; the bundled pages and other sites ask nothing.
         .on_permission_request(|webview, kind| {
@@ -732,6 +734,9 @@ pub fn run(
             crate::bridge::computer_change,
             crate::bridge::computer_add_folder,
             crate::bridge::computer_notifications,
+            crate::bridge::computer_set_up_coding,
+            crate::coding_setup::coding_setup_state,
+            crate::coding_setup::coding_setup_answer,
             crate::bridge::scan,
             crate::bridge::scan_file,
             crate::bridge::scan_pending,

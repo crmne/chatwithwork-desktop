@@ -135,8 +135,8 @@ pub struct Plan {
     pub limits: Limits,
     /// Its own home and temporary folder, made for it and removed after.
     pub home: PathBuf,
-    /// The folder's repository mirrors, and Claude Code for a bot allowed
-    /// it. Set by whoever starts the run, after [`plan`].
+    /// The folder's repository mirrors, and the coding agents for a bot
+    /// allowed them. Set by whoever starts the run, after [`plan`].
     pub coding: crate::coding::RunCoding,
     /// The folder's environment (`env.rs`): read by whoever starts the run,
     /// its values worked out by the run's thread before the command starts.
@@ -445,18 +445,24 @@ impl Plan {
         options.open(&file)?.write_all(script.as_bytes())
     }
 
-    /// The folder in the run's home that holds only a link named `claude`
-    /// to the program setup checked (Linux and macOS).
-    pub fn claude_bin(&self) -> PathBuf {
+    /// The folder in the run's home that holds only a link to each agent's
+    /// program setup checked, by its name (Linux and macOS).
+    pub fn agents_bin(&self) -> PathBuf {
         self.home.join(".cww-bin")
     }
 
-    /// What a bot's run allowed Claude Code gets: no self-updates, whose
-    /// folder it can't write, and its temporary files in the run's own. Its
-    /// sign-in is where Claude Code keeps it ([`Plan::coding_writable`]).
+    /// What a bot's run allowed an agent gets: no self-updates, whose folder
+    /// it can't write, and its temporary files in the run's own. Its sign-in
+    /// is where the agent keeps it ([`Plan::coding_writable`]).
     pub fn coding_environment(&self) -> Vec<(String, String)> {
-        match &self.coding.claude {
-            Some(_) => vec![
+        let mut env = Vec::new();
+        if self
+            .coding
+            .agents
+            .iter()
+            .any(|a| a.agent == crate::coding::Agent::ClaudeCode)
+        {
+            env.extend([
                 ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
                 // Claude Code keeps its own files under /tmp otherwise,
                 // which Seatbelt and the process container don't give a
@@ -465,20 +471,39 @@ impl Plan {
                     "CLAUDE_CODE_TMPDIR".to_string(),
                     display(&self.home.join("tmp")),
                 ),
-            ],
-            None => Vec::new(),
+            ]);
         }
+        env
     }
 
-    /// What the run's output has taken out: the tokens of Claude Code's
-    /// sign-in Desktop could read when it started, and the folder's values.
+    /// Where a run prepared a repository in this folder, what tells package
+    /// managers to keep their files in the folder's own place. After the
+    /// toolchains' variables, which it takes over.
+    pub fn tools_environment(&self) -> Vec<(String, String)> {
+        self.coding
+            .tools
+            .iter()
+            .flat_map(|tools| {
+                let mut env = crate::coding::prepare::tools_env(tools);
+                env.extend(crate::coding::prepare::tools_mise_env(tools));
+                env
+            })
+            .collect()
+    }
+
+    /// What the run's output has taken out: the tokens of the agents'
+    /// sign-ins Desktop could read when it started, and the folder's values.
     pub fn redactor(&self) -> crate::coding::Redactor {
         crate::coding::Redactor::new(
             self.coding
-                .claude
+                .agents
                 .iter()
-                .flat_map(|c| c.login.secrets.iter())
-                .map(|secret| (secret, crate::coding::REDACTED.to_string()))
+                .flat_map(|run| {
+                    run.login
+                        .secrets
+                        .iter()
+                        .map(|secret| (secret, run.agent.redacted().to_string()))
+                })
                 .chain(
                     self.env
                         .values
@@ -488,13 +513,13 @@ impl Plan {
         )
     }
 
-    /// What a run allowed Claude Code reads and writes beyond its folder
-    /// and home: `~/.claude` and `~/.claude.json`, where they really are,
-    /// which its own home links to (`run.rs`). Claude Code refreshes its
-    /// tokens there. Nothing else of the person's home.
+    /// What a run allowed an agent reads and writes beyond its folder and
+    /// home: `~/.claude` and `~/.claude.json`, or `~/.codex`, where they
+    /// really are, which its own home links to (`run.rs`). The agent
+    /// refreshes its tokens there. Nothing else of the person's home.
     pub fn coding_writable(&self) -> Vec<String> {
         self.coding
-            .claude
+            .agents
             .iter()
             .flat_map(|c| c.login.paths())
             .map(|p| display(p))
@@ -502,16 +527,17 @@ impl Plan {
     }
 
     /// Folders a run reads beyond the toolchains: the folder's mirrors, and
-    /// the folder Claude Code's program really is in.
+    /// the folder each agent's program really is in.
     pub fn coding_readable(&self) -> Vec<String> {
         // Canonical, as the toolchains are: a sandbox binds a folder where
         // it is, and Bubblewrap can't start with a link (mise's
-        // `installs/claude/latest`) given as one. Claude Code's is only
-        // what `coding::grant` allowed: its own folder, or the program.
+        // `installs/claude/latest`) given as one. An agent's is only what
+        // `coding::grant` allowed: its own folder, or the program.
         let mut dirs: Vec<PathBuf> = self.coding.mirrors.iter().map(|(m, _)| m.clone()).collect();
-        if let Some(claude) = &self.coding.claude {
-            dirs.push(claude.read.clone());
-            dirs.extend(claude.entry.clone());
+        for run in &self.coding.agents {
+            dirs.push(run.read.clone());
+            dirs.extend(run.entry.clone());
+            dirs.extend(run.helpers());
         }
         let mut read: Vec<String> = Vec::new();
         for dir in dirs {
@@ -534,10 +560,13 @@ impl Plan {
         let found = toolchains(home);
         let own = display(&self.home);
         let mut path = Vec::new();
-        if self.coding.claude.is_some() {
-            // Its own `claude` first, so no other program of that name
-            // (mise's, npm's) shadows the one setup checked.
-            path.push(display(&self.claude_bin()));
+        if !self.coding.agents.is_empty() {
+            // Its own agents first, so no other program of that name (mise's,
+            // npm's) shadows the one setup checked.
+            path.push(display(&self.agents_bin()));
+        }
+        if let Some(tools) = &self.coding.tools {
+            path.extend(crate::coding::prepare::tools_path(tools));
         }
         path.extend(found.path);
         path.extend(["/usr/local/bin", "/usr/bin", "/bin"].map(String::from));
@@ -586,6 +615,10 @@ impl Plan {
                 env.push((name, value));
             }
         }
+        // Later values win, so what the toolchains named goes first.
+        let tools = self.tools_environment();
+        env.retain(|(name, _)| !tools.iter().any(|(own, _)| own == name));
+        env.extend(tools);
         self.env.add_to(&mut env);
         env
     }
@@ -679,8 +712,9 @@ impl Plan {
                 "guiAccess": false,
                 "nestedPty": false,
                 // Claude Code keeps its sign-in in the login keychain on
-                // macOS: a run allowed it reaches the keychain.
-                "keychainAccess": self.coding.claude.as_ref().is_some_and(|c| c.login.keychain),
+                // macOS: a run allowed it reaches the keychain. Codex's is a
+                // file, so a run allowed only Codex doesn't.
+                "keychainAccess": self.coding.agents.iter().any(|c| c.login.keychain),
                 "extraMachLookups": [],
             });
         } else {

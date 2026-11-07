@@ -72,6 +72,9 @@ pub struct CodingConfig {
     /// path it was found at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<PathBuf>,
+    /// The `codex` program, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex: Option<PathBuf>,
     /// What 0.13.1 and earlier wrote when they kept a token from `claude
     /// setup-token` in the secret store. Kept, so any save leaves it, until
     /// the next `cww coding` deletes that token
@@ -106,6 +109,12 @@ pub struct Repository {
     /// would offer: a private key outside every shared folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_key: Option<PathBuf>,
+    /// `owner/name` on GitHub, for a repository a bot's run named and this
+    /// computer prepared by itself (`crate::coding::prepare`). A bot's
+    /// `roots` names only these by it: the server knows them already. Its
+    /// `url` is what this computer's Git login reached, never the server's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<String>,
 }
 
 /// The browser: whether Chat with Work may use it, on which sites, and for
@@ -356,6 +365,23 @@ pub struct BotLoan {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub claude_code: bool,
+    /// The same for Codex: `~/.codex`, `codex_login` in the file.
+    #[serde(
+        default,
+        rename = "codex_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub codex: bool,
+    /// The GitHub owners whose repositories this bot's first runs may mirror
+    /// and prepare here by themselves, with the person's Git login: the
+    /// person's yes, on this computer, to what the server can name. Nothing
+    /// else is ever fetched for a server's word.
+    #[serde(
+        default,
+        rename = "repository_owners",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub owners: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -560,6 +586,27 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", file.display())),
         }
+    }
+
+    /// Load, change and save the file while holding a lock every process
+    /// that edits it this way takes, so two edits never save over each other:
+    /// the daemon's, and a repository a run prepared (`crate::coding::prepare`).
+    pub fn edit<T>(paths: &Paths, edit: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+        let lock_path = paths.config_file().with_extension("toml.lock");
+        if let Some(dir) = lock_path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .context("opening the settings' lock")?;
+        lock.lock().context("waiting for the settings' lock")?;
+        let mut config = Config::load(paths)?;
+        let edited = edit(&mut config)?;
+        config.save(paths)?;
+        Ok(edited)
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {

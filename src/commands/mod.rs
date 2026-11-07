@@ -420,6 +420,8 @@ pub struct Runs {
     /// keychain's answer), so two starting at once never both take the last
     /// place, and neither waits for the other.
     starting: Arc<Mutex<usize>>,
+    /// Repositories bots' first runs are preparing (`crate::coding::prepare`).
+    preparations: crate::coding::prepare::Preparations,
     paths: Paths,
 }
 
@@ -448,6 +450,7 @@ impl Runs {
                 limits: Limits::from_config(&crate::config::Limits::default()),
             })),
             starting: Arc::new(Mutex::new(0)),
+            preparations: Default::default(),
             paths,
         }
     }
@@ -486,11 +489,11 @@ impl Runs {
             &self.paths,
             &request.root,
             request.bot.as_deref(),
-            || {
+            |agent| {
                 self.paths
                     .person_home
                     .as_deref()
-                    .map(crate::coding::Login::find)
+                    .map(|home| crate::coding::Login::find_for(agent, home))
                     .unwrap_or_default()
             },
         );
@@ -577,6 +580,7 @@ impl Runs {
 
     /// Stop every run (the worker restarted, or the daemon stops).
     pub fn stop_all(&self) {
+        self.preparations.stop_all();
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             lock(&cell).stop = true;
@@ -686,6 +690,33 @@ impl Runner {
 
     pub async fn start(&self, request: Request) -> Result<Status, RunError> {
         parse(self.call(channel_call::Call::Start { request }).await?)
+    }
+
+    /// Start preparing what a bot's run named, or hear what's missing.
+    pub async fn prepare(
+        &self,
+        ask: crate::coding::prepare::Ask,
+    ) -> Result<crate::coding::prepare::View, RunError> {
+        parse(self.call(channel_call::Call::Prepare { ask }).await?)
+    }
+
+    /// How preparing it stands.
+    pub async fn prepared(
+        &self,
+        ask: crate::coding::prepare::Ask,
+    ) -> Result<Option<crate::coding::prepare::View>, RunError> {
+        parse(self.call(channel_call::Call::Prepared { ask }).await?)
+    }
+
+    /// What this computer has for the coding agents.
+    pub async fn coding_look(
+        &self,
+        repository: Option<String>,
+    ) -> Result<crate::coding::prepare::Look, RunError> {
+        parse(
+            self.call(channel_call::Call::CodingLook { repository })
+                .await?,
+        )
     }
 
     pub async fn status(&self, run: &str) -> Result<Status, RunError> {
