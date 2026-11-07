@@ -1507,6 +1507,7 @@ fn only_a_bot_allowed_it_gets_codexs_sign_in_and_its_tokens_never_print() {
 }
 
 /// A bare repository with these files, as GitHub would hold it.
+#[cfg(unix)]
 fn bare_repository(base: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
     let work = base.join("origin-work");
     std::fs::create_dir_all(&work).unwrap();
@@ -1539,6 +1540,7 @@ fn bare_repository(base: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
     bare
 }
 
+#[cfg(unix)]
 fn prepared(fx: &Fixture, ask: &crate::coding::prepare::Ask) -> crate::coding::prepare::View {
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     loop {
