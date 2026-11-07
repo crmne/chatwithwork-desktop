@@ -637,56 +637,176 @@ const MAX_OPENCODE_DB_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Each credential's value in OpenCode's database and its write-ahead log:
 /// the JSON it stores (`{"type":"key","key":...}`, `{"type":"oauth",
-/// "access":...,"refresh":...}`, `{"type":"external",...}`), found in the
-/// files' bytes, where SQLite keeps a row's text whole. Without opening it
-/// as a database: a run allowed OpenCode can write it, so it's only read,
-/// a regular file, at most [`MAX_OPENCODE_DB_BYTES`] of each. An old value a
-/// page still holds is found too, which only takes more out of output.
+/// "access":...,"refresh":...}`, `{"type":"external",...}`). Without opening
+/// it as a database: a run allowed OpenCode can write it, so it's only read,
+/// a regular file, at most [`MAX_OPENCODE_DB_BYTES`] of each. Every row of
+/// every table is put back together from its pages, overflow pages included
+/// ([`sqlite_rows`]), where a long sign-in's value is split; the files'
+/// bytes are searched as they are too, for one a page left behind. An old
+/// value found that way only takes more out of output.
 fn opencode_credentials(dir: &Path) -> Vec<Value> {
+    let db = read_regular(&dir.join(OPENCODE_DB_FILE), MAX_OPENCODE_DB_BYTES);
+    let wal = read_regular(
+        &dir.join(format!("{OPENCODE_DB_FILE}-wal")),
+        MAX_OPENCODE_DB_BYTES,
+    );
+    let mut found = Vec::new();
+    if let Some(db) = &db {
+        for row in sqlite_rows(db, wal.as_deref()) {
+            credentials_in(&row, &mut found);
+        }
+    }
+    for bytes in db.iter().chain(wal.iter()) {
+        credentials_in(bytes, &mut found);
+    }
+    found
+}
+
+/// The credentials whose JSON `bytes` hold whole, added to `found` once each.
+fn credentials_in(bytes: &[u8], found: &mut Vec<Value>) {
     const KINDS: [&[u8]; 3] = [
         br#""type":"key""#,
         br#""type":"oauth""#,
         br#""type":"external""#,
     ];
-    let mut found = Vec::new();
-    for name in [
-        OPENCODE_DB_FILE.to_string(),
-        format!("{OPENCODE_DB_FILE}-wal"),
-    ] {
-        let Some(bytes) = read_regular(&dir.join(name), MAX_OPENCODE_DB_BYTES) else {
+    let mut at = 0;
+    while let Some(offset) = bytes[at..].windows(7).position(|w| w == br#""type":"#) {
+        let mark = at + offset;
+        at = mark + 1;
+        if !KINDS.iter().any(|kind| bytes[mark..].starts_with(kind)) {
             continue;
-        };
-        let mut at = 0;
-        while let Some(offset) = bytes[at..].windows(7).position(|w| w == br#""type":"#) {
-            let mark = at + offset;
-            at = mark + 1;
-            if !KINDS.iter().any(|kind| bytes[mark..].starts_with(kind)) {
-                continue;
-            }
-            // The object it's in: the nearest `{` before it that starts one
-            // whose own `type` is this, a credential's value being at most a
-            // few KiB.
-            let floor = mark.saturating_sub(16 * 1024);
-            let value = (floor..mark)
-                .rev()
-                .filter(|&i| bytes[i] == b'{')
-                .take(16)
-                .find_map(|start| {
-                    let value = serde_json::Deserializer::from_slice(&bytes[start..])
-                        .into_iter::<Value>()
-                        .next()?
-                        .ok()?;
-                    matches!(value["type"].as_str(), Some("key" | "oauth" | "external"))
-                        .then_some(value)
-                });
-            if let Some(value) = value
-                && !found.contains(&value)
-            {
-                found.push(value);
+        }
+        // The object it's in: the nearest `{` before it that starts one whose
+        // own `type` is this.
+        let floor = mark.saturating_sub(16 * 1024);
+        let value = (floor..mark)
+            .rev()
+            .filter(|&i| bytes[i] == b'{')
+            .take(16)
+            .find_map(|start| {
+                let value = serde_json::Deserializer::from_slice(&bytes[start..])
+                    .into_iter::<Value>()
+                    .next()?
+                    .ok()?;
+                matches!(value["type"].as_str(), Some("key" | "oauth" | "external"))
+                    .then_some(value)
+            });
+        if let Some(value) = value
+            && !found.contains(&value)
+        {
+            found.push(value);
+        }
+    }
+}
+
+/// Most bytes of one row [`sqlite_rows`] puts back together.
+const MAX_SQLITE_ROW: usize = 1024 * 1024;
+
+/// Every row of every table in a SQLite database's bytes, with the pages its
+/// write-ahead log holds in place of the database's (the last of each), each
+/// row's record whole however many overflow pages it took. Only reads what
+/// the file format says (sqlite.org/fileformat2.html); anything that doesn't
+/// fit it is passed over, never trusted: a malformed file gives fewer rows.
+fn sqlite_rows(db: &[u8], wal: Option<&[u8]>) -> Vec<Vec<u8>> {
+    if db.len() < 100 || !db.starts_with(b"SQLite format 3\0") {
+        return Vec::new();
+    }
+    let size = match u16::from_be_bytes([db[16], db[17]]) {
+        1 => 65536,
+        n => usize::from(n),
+    };
+    let usable = size.saturating_sub(usize::from(db[20]));
+    if !size.is_power_of_two() || !(512..=65536).contains(&size) || usable < 480 {
+        return Vec::new();
+    }
+    let mut pages: std::collections::HashMap<u32, &[u8]> = db
+        .chunks_exact(size)
+        .zip(1u32..)
+        .map(|(page, number)| (number, page))
+        .collect();
+    if let Some(wal) = wal.filter(|w| w.len() >= 32) {
+        let frame_size = u32::from_be_bytes([wal[8], wal[9], wal[10], wal[11]]) as usize;
+        if frame_size == size {
+            for frame in wal[32..].chunks_exact(24 + size) {
+                let number = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+                if number > 0 {
+                    pages.insert(number, &frame[24..]);
+                }
             }
         }
     }
-    found
+    let mut rows = Vec::new();
+    for (&number, page) in &pages {
+        let header = if number == 1 { 100 } else { 0 };
+        // A table's leaf page, which holds its rows.
+        if page.get(header) != Some(&0x0d) || page.len() < header + 8 {
+            continue;
+        }
+        let cells = usize::from(u16::from_be_bytes([page[header + 3], page[header + 4]]));
+        for cell in 0..cells {
+            let at = header + 8 + cell * 2;
+            let Some(pointer) = page.get(at..at + 2) else {
+                break;
+            };
+            let offset = usize::from(u16::from_be_bytes([pointer[0], pointer[1]]));
+            if let Some(row) = sqlite_row(page, offset, usable, &pages) {
+                rows.push(row);
+            }
+        }
+    }
+    rows
+}
+
+/// One table leaf cell's record at `offset` of `page`, followed through its
+/// overflow pages.
+fn sqlite_row(
+    page: &[u8],
+    offset: usize,
+    usable: usize,
+    pages: &std::collections::HashMap<u32, &[u8]>,
+) -> Option<Vec<u8>> {
+    let (length, read) = sqlite_varint(page.get(offset..)?)?;
+    let (_rowid, read_rowid) = sqlite_varint(page.get(offset + read..)?)?;
+    let length = usize::try_from(length).ok()?.min(MAX_SQLITE_ROW);
+    let start = offset + read + read_rowid;
+    let most = usable - 35;
+    let least = (usable - 12) * 32 / 255 - 23;
+    let local = if length <= most {
+        length
+    } else {
+        let k = least + (length - least) % (usable - 4);
+        if k <= most { k } else { least }
+    };
+    let mut row = page.get(start..start + local)?.to_vec();
+    if local == length {
+        return Some(row);
+    }
+    let next = page.get(start + local..start + local + 4)?;
+    let mut next = u32::from_be_bytes([next[0], next[1], next[2], next[3]]);
+    let mut hops = 0;
+    while row.len() < length && next != 0 && hops < pages.len() {
+        let overflow = pages.get(&next)?;
+        let take = (length - row.len()).min(usable - 4);
+        row.extend_from_slice(overflow.get(4..4 + take)?);
+        next = u32::from_be_bytes([overflow[0], overflow[1], overflow[2], overflow[3]]);
+        hops += 1;
+    }
+    Some(row)
+}
+
+/// A SQLite varint and how many bytes it took.
+fn sqlite_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (i, &byte) in bytes.iter().take(9).enumerate() {
+        if i == 8 {
+            return Some(((value << 8) | u64::from(byte), 9));
+        }
+        value = (value << 7) | u64::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+    }
+    None
 }
 
 /// The model the person chose in OpenCode's own config
@@ -794,18 +914,24 @@ fn long_strings(value: &Value) -> Vec<Secret> {
     found
 }
 
-/// The values a `.env` file gives the variables `names`.
+/// The values a `.env` file gives the variables `names`, as dotenv reads
+/// them: `export` or not, quoted (to the closing quote) or bare (to a
+/// ` #` comment).
 fn env_values(text: &str, names: &[&str]) -> Vec<Secret> {
     text.lines()
         .filter_map(|line| {
-            let line = line.trim().trim_start_matches("export ").trim_start();
+            let line = line.trim();
+            let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
             let (name, value) = line.split_once('=')?;
-            names.contains(&name.trim()).then(|| {
-                value
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_string()
-            })
+            if !names.contains(&name.trim()) {
+                return None;
+            }
+            let value = value.trim_start();
+            let value = match value.chars().next() {
+                Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+                _ => value.split(" #").next().unwrap_or_default().trim_end(),
+            };
+            Some(value.to_string())
         })
         .filter(|value| value.len() >= 20)
         .map(Secret::new)

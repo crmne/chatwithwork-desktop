@@ -912,7 +912,7 @@ fn geminis_sign_in_is_its_folder_its_tokens_and_its_key() {
     std::fs::remove_file(gemini.join(GEMINI_OAUTH_FILE)).unwrap();
     std::fs::write(
         gemini.join(".env"),
-        format!("# mine\nexport GEMINI_API_KEY=\"{GEMINI_KEY}\"\nOTHER=not-a-key-but-quite-long-enough\n"),
+        format!("# mine\nexport GEMINI_API_KEY=\"{GEMINI_KEY}\" # personal\nOTHER=not-a-key-but-quite-long-enough\n"),
     )
     .unwrap();
     let login = Login::find_for(Agent::Gemini, &home);
@@ -1078,4 +1078,54 @@ fn each_agents_variable_names_its_sign_in_where_it_is() {
         named(Agent::Pi),
         ("PI_CODING_AGENT_DIR", "/home/u/.pi/agent".into())
     );
+}
+
+/// A dotenv value's quotes and comment aren't the key.
+#[test]
+fn a_dotenv_key_is_read_without_its_quotes_or_comment() {
+    let read = |text: &str| -> Vec<String> {
+        env_values(text, &["GEMINI_API_KEY"])
+            .iter()
+            .map(|s| s.expose().to_string())
+            .collect()
+    };
+    for line in [
+        format!("GEMINI_API_KEY={GEMINI_KEY}"),
+        format!("GEMINI_API_KEY={GEMINI_KEY} # personal"),
+        format!("export GEMINI_API_KEY = '{GEMINI_KEY}' # personal"),
+        format!("GEMINI_API_KEY=\"{GEMINI_KEY}\"#x"),
+    ] {
+        assert_eq!(read(&line), [GEMINI_KEY], "{line}");
+    }
+}
+
+/// A sign-in too long for one of SQLite's pages is split across overflow
+/// pages, with their own bytes in between, in a real database (made with
+/// `sqlite3`, its tokens made up): it's put back together, and every token
+/// in it found.
+#[test]
+fn a_long_opencode_sign_in_split_across_sqlite_pages_is_found() {
+    let db = include_bytes!("testdata/opencode-overflow.db");
+    let mut raw = Vec::new();
+    credentials_in(db, &mut raw);
+    assert!(raw.is_empty(), "its bytes alone don't hold it whole");
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let data = Agent::OpenCode.config_dir_in(&home);
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join(OPENCODE_DB_FILE), db).unwrap();
+    let login = Login::find_for(Agent::OpenCode, &home);
+    assert_eq!(login.billing, Billing::Plan);
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    for end in [".overflowACCESS", "_overflowREFRESH", ".overflowID"] {
+        assert!(
+            secrets.iter().any(|s| s.len() > 3000 && s.ends_with(end)),
+            "{end}"
+        );
+    }
+    assert!(sqlite_rows(b"not a database", None).is_empty());
+    let mut torn = db.to_vec();
+    torn.truncate(5000);
+    let _ = sqlite_rows(&torn, Some(&torn));
 }
