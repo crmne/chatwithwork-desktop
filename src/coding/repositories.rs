@@ -258,6 +258,35 @@ fn end_all(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// Whether the person's Git login reaches `url`, within `limit`: `git
+/// ls-remote`, with nothing to ask with and nothing kept. A public repository
+/// answers over https without one, which reaches it all the same.
+pub fn reaches(url: &str, limit: Duration) -> bool {
+    if check_url(url).is_err() {
+        return false;
+    }
+    let mirror = Path::new("");
+    let mut remote = git_for(None, mirror);
+    remote
+        .args(["ls-remote", "--exit-code", "--quiet", "--"])
+        .arg(url)
+        .arg("HEAD");
+    run(remote, limit).is_ok()
+}
+
+/// A private copy of `mirror` at `to`, in Desktop's own data folder, to read
+/// what it needs: never the checkout in a shared folder, whose files a
+/// command could have changed.
+pub fn private_copy(mirror: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to.parent().unwrap_or(to))?;
+    let mut clone = git();
+    clone
+        .args(["clone", "--quiet", "--no-hardlinks", "--depth", "1", "--"])
+        .arg(format!("file://{}", mirror.display()))
+        .arg(to);
+    run(clone, Duration::from_secs(600)).context("copying the repository")
+}
+
 /// Hooks off: an empty folder of Desktop's own.
 fn no_hooks(mirror: &Path) -> String {
     format!("core.hooksPath={}", mirror.join("cww-no-hooks").display())

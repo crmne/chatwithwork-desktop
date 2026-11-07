@@ -1,0 +1,13 @@
+/* Letting a bot code on this computer: the app's own window (coding_setup.rs). */
+body { background: var(--canvas); }
+.coding-setup { display: grid; gap: 1rem; padding: 1.5rem; max-width: 34rem; margin: 0 auto; }
+.coding-setup__where { font: 500 0.6875rem/1.4 var(--font-mono, ui-monospace, monospace); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-muted); }
+.coding-setup h1 { font-size: 1.125rem; line-height: 1.3; font-weight: 600; margin: 0; }
+.coding-setup__checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.coding-setup__checks li { display: flex; gap: 0.5rem; align-items: baseline; overflow-wrap: anywhere; }
+.coding-setup__mark { flex: none; font-family: var(--font-mono, ui-monospace, monospace); }
+.coding-setup__mark--ok { color: var(--positive-ink, var(--positive)); }
+.coding-setup__mark--no { color: var(--negative-ink); }
+.coding-setup__note { margin: 0; font-size: 0.8125rem; color: var(--ink-muted); }
+.coding-setup__actions { display: flex; gap: 0.5rem; justify-content: flex-end; flex-wrap: wrap; }
+.coding-setup__error { margin: 0; color: var(--negative-ink); font-size: 0.8125rem; }

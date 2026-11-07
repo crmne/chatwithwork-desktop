@@ -505,20 +505,41 @@ fn make_home(plan: &Plan) -> std::io::Result<()> {
         std::fs::write(plan.script_path(), super::windows::script(&plan.command))?;
     }
     #[cfg(unix)]
-    if let Some(claude) = &plan.coding.claude {
-        // The one `claude` first on its PATH: a link to the program setup
-        // checked, where it really is, which the sandbox reads.
-        let bin = plan.claude_bin();
+    for run in &plan.coding.agents {
+        // The one program of that name first on its PATH: a link to the one
+        // setup checked, where it really is, which the sandbox reads.
+        let bin = plan.agents_bin();
         std::fs::create_dir_all(&bin)?;
-        std::os::unix::fs::symlink(&claude.real, bin.join("claude"))?;
-        // Claude Code's sign-in where Claude Code looks for it, in the
-        // run's home: links to the person's `~/.claude` and `~/.claude.json`,
-        // which the sandbox lets it read and write.
-        if let Some(dir) = &claude.login.dir {
-            std::os::unix::fs::symlink(dir, plan.home.join(crate::coding::CONFIG_DIR))?;
+        std::os::unix::fs::symlink(&run.real, bin.join(run.agent.program()))?;
+        // Codex finds its helpers beside the program it was started as.
+        for helper in run.helpers() {
+            if let Some(name) = helper.file_name() {
+                std::os::unix::fs::symlink(&helper, bin.join(name))?;
+            }
         }
-        if let Some(file) = &claude.login.file {
+        // The sign-in where the agent looks for it, in the run's home: links
+        // to the person's `~/.claude` and `~/.claude.json`, or `~/.codex`,
+        // which the sandbox lets it read and write.
+        if let Some(dir) = &run.login.dir {
+            std::os::unix::fs::symlink(dir, plan.home.join(run.agent.config_dir()))?;
+        }
+        if let Some(file) = &run.login.file {
             std::os::unix::fs::symlink(file, plan.home.join(crate::coding::CONFIG_FILE))?;
+        }
+        // macOS finds the login keychain from the home folder, and a run has
+        // one of its own: without this `security` searches only the system's,
+        // and Claude Code says it isn't logged in. The sandbox's keychain
+        // access is what lets it read there (`keychainAccess`).
+        #[cfg(target_os = "macos")]
+        if run.login.keychain
+            && let Ok(real) = crate::paths::home_dir()
+            && !plan.home.join("Library/Keychains").exists()
+        {
+            std::fs::create_dir_all(plan.home.join("Library"))?;
+            std::os::unix::fs::symlink(
+                real.join("Library/Keychains"),
+                plan.home.join("Library/Keychains"),
+            )?;
         }
     }
     Ok(())

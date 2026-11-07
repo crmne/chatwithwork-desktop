@@ -72,6 +72,9 @@ pub struct CodingConfig {
     /// path it was found at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<PathBuf>,
+    /// The `codex` program, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex: Option<PathBuf>,
     /// What 0.13.1 and earlier wrote when they kept a token from `claude
     /// setup-token` in the secret store. Kept, so any save leaves it, until
     /// the next `cww coding` deletes that token
@@ -106,6 +109,12 @@ pub struct Repository {
     /// would offer: a private key outside every shared folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_key: Option<PathBuf>,
+    /// `owner/name` on GitHub, for a repository a bot's run named and this
+    /// computer prepared by itself (`crate::coding::prepare`). A bot's
+    /// `roots` names only these by it: the server knows them already. Its
+    /// `url` is what this computer's Git login reached, never the server's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<String>,
 }
 
 /// The browser: whether Chat with Work may use it, on which sites, and for
@@ -356,6 +365,23 @@ pub struct BotLoan {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub claude_code: bool,
+    /// The same for Codex: `~/.codex`, `codex_login` in the file.
+    #[serde(
+        default,
+        rename = "codex_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub codex: bool,
+    /// The GitHub owners whose repositories this bot's first runs may mirror
+    /// and prepare here by themselves, with the person's Git login: the
+    /// person's yes, on this computer, to what the server can name. Nothing
+    /// else is ever fetched for a server's word.
+    #[serde(
+        default,
+        rename = "repository_owners",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub owners: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

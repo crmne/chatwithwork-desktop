@@ -212,6 +212,34 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bot: Option<String>,
     },
+    /// What the app's dialog shows before it asks to let a bot code here
+    /// (`crate::coding::prepare::look`): each agent installed and signed in,
+    /// the person's Git login reaching a repository, and the folder it would
+    /// work in. Changes nothing. Only a same-user client reaches it.
+    CodingLook {
+        bot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
+    },
+    /// The person's Allow in that dialog: share `folder` with changes,
+    /// commands and the network (a new one is made by the client), lend it to
+    /// `bot`, give its runs `agent`'s sign-in, and let its first runs prepare
+    /// repositories of `owner` by themselves. Only a same-user client reaches
+    /// it, never the server.
+    CodingAllow {
+        /// A folder already lent to it, by ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root: Option<String>,
+        /// Otherwise the folder to share, where it is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<PathBuf>,
+        bot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        agent: crate::coding::Agent,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
+    },
     /// Stop sharing a folder, by ID, label or path.
     RootsRemove {
         root: String,

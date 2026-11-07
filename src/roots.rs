@@ -160,6 +160,7 @@ pub fn set_writable(
         root.bots.iter_mut().for_each(|loan| {
             loan.unattended = false;
             loan.claude_code = false;
+            loan.codex = false;
         });
     }
     Ok(root.clone())
@@ -197,6 +198,7 @@ pub fn set_commands(
         root.bots.iter_mut().for_each(|loan| {
             loan.unattended = false;
             loan.claude_code = false;
+            loan.codex = false;
         });
     }
     Ok(root.clone())
@@ -234,9 +236,15 @@ pub fn set_bot(
         .map(|n| n.chars().take(80).collect())
         .or_else(|| root.loan(bot).map(|loan| loan.name.clone()))
         .unwrap_or_default();
-    // Lending again keeps the Claude Code sign-in it was given, which only
-    // `set_bot_claude_code` changes.
-    let claude_code = root.loan(bot).is_some_and(|loan| loan.claude_code) && root.runs_commands();
+    // Lending again keeps the agents' sign-ins and owners it was given, which
+    // only `set_bot_agent` and `add_bot_owner` change.
+    let commands = root.runs_commands();
+    let claude_code = root.loan(bot).is_some_and(|loan| loan.claude_code) && commands;
+    let codex = root.loan(bot).is_some_and(|loan| loan.codex) && commands;
+    let owners = root
+        .loan(bot)
+        .map(|loan| loan.owners.clone())
+        .unwrap_or_default();
     root.bots.retain(|loan| loan.id != bot);
     if lent {
         root.bots.push(BotLoan {
@@ -244,24 +252,70 @@ pub fn set_bot(
             name,
             unattended,
             claude_code,
+            codex,
+            owners,
         });
     }
     Ok(root.clone())
 }
 
+/// The computer's owner pressed Always allow on a bot's command card: its
+/// commands in this folder start unattended (PROTOCOL.md 7.2.1). Only a folder
+/// already lent to that bot, with commands on; it changes nothing else of the
+/// loan or the folder, and shares, lends, and turns on nothing. The person
+/// turns it off here at any time, and only another press sets it again.
+pub fn allow_bot_unattended_from_server(
+    config: &mut Config,
+    which: &str,
+    bot: &str,
+) -> Result<Root> {
+    let root = config
+        .roots
+        .iter_mut()
+        .find(|root| root.id == which)
+        .with_context(|| format!("no shared folder {which:?}"))?;
+    if !root.runs_commands() {
+        bail!("{} doesn't allow commands", root.label);
+    }
+    let label = root.label.clone();
+    let Some(loan) = root.bots.iter_mut().find(|loan| loan.id == bot) else {
+        bail!("{label} isn't shared with bot {bot}");
+    };
+    loan.unattended = true;
+    Ok(root.clone())
+}
+
 /// Let a bot's commands in a folder lent to it use this computer's Claude
-/// Code sign-in (docs/coding-computers.md), or stop. Only where commands
-/// are allowed, and only for a bot the folder is lent to. Only the user
-/// does this, here or through the control channel; the server can't.
+/// Code sign-in (docs/coding-computers.md), or stop.
 pub fn set_bot_claude_code(
     config: &mut Config,
     which: &str,
     bot: &str,
     claude_code: bool,
 ) -> Result<Root> {
+    set_bot_agent(
+        config,
+        which,
+        bot,
+        crate::coding::Agent::ClaudeCode,
+        claude_code,
+    )
+}
+
+/// Let a bot's commands in a folder lent to it use this computer's sign-in
+/// of `agent` (docs/coding-computers.md), or stop. Only where commands are
+/// allowed, and only for a bot the folder is lent to. Only the user does
+/// this, here or through the control channel; the server can't.
+pub fn set_bot_agent(
+    config: &mut Config,
+    which: &str,
+    bot: &str,
+    agent: crate::coding::Agent,
+    allowed: bool,
+) -> Result<Root> {
     let index = find_root(config, which)?;
     let root = &mut config.roots[index];
-    if claude_code && !root.runs_commands() {
+    if allowed && !root.runs_commands() {
         bail!(
             "{} doesn't allow commands. Allow them there first (`cww roots allow-commands {}`)",
             root.label,
@@ -272,7 +326,30 @@ pub fn set_bot_claude_code(
     let Some(loan) = root.bots.iter_mut().find(|loan| loan.id == bot) else {
         bail!("{label} isn't shared with bot {bot}. Share it first (`cww roots share`)");
     };
-    loan.claude_code = claude_code;
+    match agent {
+        crate::coding::Agent::ClaudeCode => loan.claude_code = allowed,
+        crate::coding::Agent::Codex => loan.codex = allowed,
+    }
+    Ok(root.clone())
+}
+
+/// Let a bot's first runs in a folder lent to it mirror and prepare
+/// repositories of GitHub owner `owner` by themselves, with the person's Git
+/// login (docs/coding-computers.md, "The first run"). Only the user does
+/// this, here or through the control channel; the server can't.
+pub fn add_bot_owner(config: &mut Config, which: &str, bot: &str, owner: &str) -> Result<Root> {
+    if !crate::coding::prepare::valid_owner(owner) {
+        bail!("{owner:?} isn't a GitHub owner's name");
+    }
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    let label = root.label.clone();
+    let Some(loan) = root.bots.iter_mut().find(|loan| loan.id == bot) else {
+        bail!("{label} isn't shared with bot {bot}. Share it first (`cww roots share`)");
+    };
+    if !loan.owners.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
+        loan.owners.push(owner.to_string());
+    }
     Ok(root.clone())
 }
 

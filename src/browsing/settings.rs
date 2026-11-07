@@ -88,6 +88,8 @@ pub fn set_bot(config: &mut Config, bot: &str, name: Option<&str>, lent: bool) -
             name,
             unattended: false,
             claude_code: false,
+            codex: false,
+            owners: Vec::new(),
         });
     }
     Ok(())

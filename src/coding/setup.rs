@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::{ClaudeState, Login, detect, repositories};
+use super::{Agent, AgentState, Login, detect, repositories};
 use crate::config::{Config, Repository};
 use crate::control::{self, ControlRequest};
 use crate::paths::Paths;
@@ -22,6 +22,8 @@ use crate::roots::{self, NewRoot};
 pub struct Options {
     pub bot: Option<String>,
     pub bot_name: Option<String>,
+    /// Which agent this bot uses here: Claude Code unless it's named.
+    pub agent: Option<Agent>,
     pub folder: Option<PathBuf>,
     pub repo: Option<String>,
     /// A deploy key to fetch the repository with, outside every shared folder.
@@ -242,12 +244,13 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
         return Ok(());
     };
 
-    // 4. Claude Code, installed.
-    let claude = claude_step(&mut config, paths, &ask)?;
+    // 4. The agent, installed.
+    let agent = options.agent.unwrap_or(Agent::ClaudeCode);
+    let installed = agent_step(agent, &mut config, paths, &ask)?;
 
     // 5. Signed in, and this bot's runs here allowed to use it.
-    if claude {
-        sign_in_step(&mut config, paths, &ask, &root_id, &bot)?;
+    if installed {
+        sign_in_step(agent, &mut config, paths, &ask, &root_id, &bot)?;
     }
 
     // 6. The repository.
@@ -267,7 +270,15 @@ pub fn setup(paths: &Paths, options: Options) -> Result<()> {
         Step::Skipped("--skip-proof".into()).print("Proof");
     } else {
         let checkout = checkout.map(|(name, path, _)| (name, path));
-        proof_step(paths, &ask, &options, &root_id, &bot, checkout.as_ref())?;
+        proof_step(
+            agent,
+            paths,
+            &ask,
+            &options,
+            &root_id,
+            &bot,
+            checkout.as_ref(),
+        )?;
     }
 
     println!();
@@ -438,7 +449,7 @@ fn which(name: &str) -> Option<PathBuf> {
 /// program it runs. A leftover that doesn't run (an old `~/.claude/local`
 /// install, say) is passed over.
 pub fn find_claude() -> Option<PathBuf> {
-    find_claude_outside(&[])
+    find_outside(Agent::ClaudeCode, &[])
 }
 
 /// Whether `path` is in a shared folder that allows changes, where a command
@@ -451,57 +462,87 @@ fn changeable(roots: &[crate::config::Root], path: &Path) -> bool {
     })
 }
 
-/// The `claude` a run uses: the one setup recorded while it's there, else the
-/// first of the places it's installed. Only looks: whoever starts runs never
-/// runs a program to find it, outside the sandbox, and a run uses it only in
-/// there. Never one in a shared folder that allows changes.
-pub fn claude_for_run(
+/// The program setup recorded for `agent`.
+fn recorded(agent: Agent, coding: &crate::config::CodingConfig) -> Option<&PathBuf> {
+    match agent {
+        Agent::ClaudeCode => coding.claude.as_ref(),
+        Agent::Codex => coding.codex.as_ref(),
+    }
+}
+
+/// Where `agent`'s installers put it, beyond the `PATH`.
+fn installed_places(agent: Agent, home: &Path) -> Vec<PathBuf> {
+    let program = agent.program();
+    let exe = if cfg!(windows) {
+        format!("{program}.exe")
+    } else {
+        program.to_string()
+    };
+    let mut places = vec![home.join(".local").join("bin").join(&exe)];
+    places.push(match agent {
+        Agent::ClaudeCode => home
+            .join(".local/share/mise/installs/claude/latest")
+            .join(&exe),
+        Agent::Codex => home
+            .join(".local/share/mise/installs/codex/latest/bin")
+            .join(&exe),
+    });
+    places.extend([
+        PathBuf::from("/opt/homebrew/bin").join(program),
+        PathBuf::from("/usr/local/bin").join(program),
+        home.join(".npm-global").join("bin").join(program),
+    ]);
+    if agent == Agent::ClaudeCode {
+        places.push(home.join(".claude").join("local").join(&exe));
+    }
+    places
+}
+
+/// The program a run uses for `agent`: the one setup recorded while it's
+/// there, else the first of the places it's installed. Only looks: whoever
+/// starts runs never runs a program to find it, outside the sandbox, and a
+/// run uses it only in there. Never one in a shared folder that allows
+/// changes.
+pub fn program_for_run(
+    agent: Agent,
     coding: &crate::config::CodingConfig,
     roots: &[crate::config::Root],
 ) -> Option<PathBuf> {
-    if let Some(recorded) = coding.claude.as_ref().filter(|p| p.is_file()) {
+    if let Some(recorded) = recorded(agent, coding).filter(|p| p.is_file()) {
         return Some(recorded.clone());
     }
     let home = crate::paths::home_dir().ok()?;
-    let exe = if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
+    // A mise shim or wrapper only finds the program again, and asks the
+    // network whether it's the latest: the program itself, if it's there.
+    let through_mise = |p: &PathBuf| {
+        let text = p.to_string_lossy();
+        text.contains("mise") && (text.contains("shims") || text.contains("command-wrappers"))
     };
-    which("claude")
-        .into_iter()
-        .chain([
-            home.join(".local").join("bin").join(exe),
-            home.join(".local/share/mise/installs/claude/latest")
-                .join(exe),
-            PathBuf::from("/opt/homebrew/bin/claude"),
-            PathBuf::from("/usr/local/bin/claude"),
-            home.join(".npm-global").join("bin").join("claude"),
-            home.join(".claude").join("local").join(exe),
-        ])
+    let on_path = which(agent.program());
+    on_path
+        .iter()
+        .filter(|p| !through_mise(p))
+        .cloned()
+        .chain(installed_places(agent, &home))
+        .chain(on_path.iter().cloned())
         .find(|p| p.is_file() && !changeable(roots, p))
 }
 
-/// As [`find_claude`], passing over any candidate a command could change:
-/// one inside a shared folder that allows changes. Probing it would run what
-/// a bot wrote, as the person, outside the sandbox.
-pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
+/// As [`find_claude`], for `agent`, passing over any candidate a command
+/// could change: one inside a shared folder that allows changes. Probing it
+/// would run what a bot wrote, as the person, outside the sandbox.
+pub fn find_outside(agent: Agent, roots: &[crate::config::Root]) -> Option<PathBuf> {
     let home = crate::paths::home_dir().ok()?;
-    // Commands given the sign-in can change anything in `~/.claude`, whose
-    // `local` is one of the places below.
+    // Commands given a sign-in can change anything in the agent's folder,
+    // where `~/.claude/local` is one of the places below.
     let lent_login = roots
         .iter()
-        .any(|root| root.bots.iter().any(|l| l.claude_code));
-    let login = crate::roots::canonical(&home.join(super::CONFIG_DIR)).ok();
-    let exe = if cfg!(windows) {
-        "claude.exe"
-    } else {
-        "claude"
-    };
+        .any(|root| root.bots.iter().any(|l| agent.allowed(l)));
+    let login = crate::roots::canonical(&home.join(agent.config_dir())).ok();
     let mise = || {
         let program = which("mise").filter(|p| !changeable(roots, p))?;
         let mut command = Command::new(program);
-        command.args(["which", "claude"]);
+        command.args(["which", agent.program()]);
         output_within(command, PROBE_LIMIT)
             .map(PathBuf::from)
             .filter(|p| p.is_file())
@@ -516,9 +557,9 @@ pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
                 }))
     };
     let runs = |p: &PathBuf| p.is_file() && !writable(p) && version(p).is_some();
-    // Each asked only when the one before didn't give a `claude` that runs.
+    // Each asked only when the one before didn't give a program that runs.
     let on_path = || {
-        which("claude").and_then(|found| {
+        which(agent.program()).and_then(|found| {
             let text = found.to_string_lossy();
             if text.contains("mise") && text.contains("shims") {
                 mise()
@@ -533,15 +574,7 @@ pub fn find_claude_outside(roots: &[crate::config::Root]) -> Option<PathBuf> {
     if let Some(found) = mise().filter(runs) {
         return Some(found);
     }
-    [
-        home.join(".local").join("bin").join(exe),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        home.join(".npm-global").join("bin").join("claude"),
-        home.join(".claude").join("local").join(exe),
-    ]
-    .into_iter()
-    .find(runs)
+    installed_places(agent, &home).into_iter().find(runs)
 }
 
 fn version(program: &Path) -> Option<String> {
@@ -592,7 +625,14 @@ fn output_within(mut command: Command, limit: Duration) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn install_command() -> (&'static str, Vec<&'static str>, &'static str) {
+fn install_command(agent: Agent) -> (&'static str, Vec<&'static str>, &'static str) {
+    if agent == Agent::Codex {
+        return (
+            "npm",
+            vec!["install", "-g", "@openai/codex"],
+            "npm install -g @openai/codex",
+        );
+    }
     if cfg!(windows) {
         (
             "powershell",
@@ -612,35 +652,38 @@ fn install_command() -> (&'static str, Vec<&'static str>, &'static str) {
     }
 }
 
-fn claude_step(config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> {
-    let mut found = find_claude_outside(&config.roots);
+fn agent_step(agent: Agent, config: &mut Config, paths: &Paths, ask: &Asker) -> Result<bool> {
+    let name = agent.name();
+    let mut found = find_outside(agent, &config.roots);
     if found.is_none() {
-        let (program, args, shown) = install_command();
-        println!("Claude Code isn't installed. Anthropic's installer is:\n  {shown}");
+        let (program, args, shown) = install_command(agent);
+        println!("{name} isn't installed. Its installer is:\n  {shown}");
         if ask.confirm("Run it now?", true)? {
             let status = Command::new(program).args(&args).status();
             if !status.is_ok_and(|s| s.success()) {
                 Step::Failed("the installer failed; run it yourself, then this again".into())
-                    .print("Claude Code");
+                    .print(name);
                 return Ok(false);
             }
-            found = find_claude_outside(&config.roots);
+            found = find_outside(agent, &config.roots);
         }
     }
     let Some(program) = found else {
-        Step::NeedsYou("not installed: install it, then run this again".into())
-            .print("Claude Code");
+        Step::NeedsYou("not installed: install it, then run this again".into()).print(name);
         return Ok(false);
     };
     let Some(version) = version(&program) else {
-        Step::Failed(format!("{} doesn't run", program.display())).print("Claude Code");
+        Step::Failed(format!("{} doesn't run", program.display())).print(name);
         return Ok(false);
     };
-    if config.coding.claude.as_ref() != Some(&program) {
-        config.coding.claude = Some(program.clone());
+    if recorded(agent, &config.coding) != Some(&program) {
+        match agent {
+            Agent::ClaudeCode => config.coding.claude = Some(program.clone()),
+            Agent::Codex => config.coding.codex = Some(program.clone()),
+        }
         save(config, paths)?;
     }
-    Step::Ok(format!("{version}, at {}", program.display())).print("Claude Code");
+    Step::Ok(format!("{version}, at {}", program.display())).print(name);
     Ok(true)
 }
 
@@ -776,67 +819,73 @@ fn pick_bot(paths: &Paths, ask: &Asker, given: Option<&str>) -> Result<(String, 
     }
 }
 
-/// Claude Code's sign-in on this computer, where Claude Code keeps it.
-fn login(paths: &Paths) -> Login {
+/// `agent`'s sign-in on this computer, where it keeps it.
+fn login(agent: Agent, paths: &Paths) -> Login {
     paths
         .person_home
         .as_deref()
-        .map(Login::find)
+        .map(|home| Login::find_for(agent, home))
         .unwrap_or_default()
 }
 
 fn sign_in_step(
+    agent: Agent,
     config: &mut Config,
     paths: &Paths,
     ask: &Asker,
     root: &str,
     bot: &str,
 ) -> Result<()> {
-    if !login(paths).signed_in() {
-        Step::NeedsYou(
-            "Claude Code isn't signed in on this computer: run `claude` once and sign in, then \
-             run this again"
-                .into(),
-        )
+    let name = agent.name();
+    if !login(agent, paths).signed_in() {
+        Step::NeedsYou(format!(
+            "{name} isn't signed in on this computer: {}, then run this again",
+            agent.sign_in_hint()
+        ))
         .print("Sign-in");
         return Ok(());
     }
     let allowed = config
         .root(root)
         .and_then(|r| r.loan(bot))
-        .is_some_and(|l| l.claude_code);
+        .is_some_and(|l| agent.allowed(l));
     if !allowed {
         let label = config.root(root).map_or(root, |r| r.label.as_str());
+        let (files, keychain) = match agent {
+            Agent::ClaudeCode => (
+                "~/.claude and ~/.claude.json",
+                if cfg!(target_os = "macos") {
+                    " and reach your login keychain as Claude Code does (any item that lets the \
+                     `security` command read it, other programs' too)"
+                } else {
+                    ""
+                },
+            ),
+            Agent::Codex => ("~/.codex", ""),
+        };
         println!(
-            "Bot {bot}'s coding runs in {label} would use your Claude Code sign-in on this \
-             computer: they could read and change ~/.claude and ~/.claude.json{}, where Claude \
-             Code keeps it and refreshes it, and nothing else of your home folder. A command \
-             there could read its tokens, and change Claude Code's settings, which the next \
-             `claude` you run yourself starts outside the sandbox. Desktop removes the tokens \
-             from what commands print, which doesn't stop a command written to hide them.",
-            if cfg!(target_os = "macos") {
-                " and reach your login keychain as Claude Code does (any item that lets the \
-                 `security` command read it, other programs' too)"
-            } else {
-                ""
-            }
+            "Bot {bot}'s coding runs in {label} would use your {name} sign-in on this computer: \
+             they could read and change {files}{keychain}, where {name} keeps it and refreshes \
+             it, and nothing else of your home folder. A command there could read its tokens, \
+             and change {name}'s settings, which the next `{}` you run yourself starts outside \
+             the sandbox. Desktop removes the tokens from what commands print, which doesn't \
+             stop a command written to hide them.",
+            agent.program()
         );
         if ask.confirm(
-            "Let bots' coding runs use this computer's Claude Code sign-in?",
+            &format!("Let bots' coding runs use this computer's {name} sign-in?"),
             false,
         )? {
-            roots::set_bot_claude_code(config, root, bot, true)?;
+            roots::set_bot_agent(config, root, bot, agent, true)?;
             save(config, paths)?;
         }
     }
-    let state = config
-        .root(root)
-        .map(|r| super::claude_state(&config.coding, r, bot));
+    let state = config.root(root).map(|r| super::agent_state(agent, r, bot));
     match state {
-        Some(ClaudeState::Ready) => {
-            Step::Ok("this computer's Claude Code sign-in, for this bot in this folder".into())
-        }
-        Some(state) => Step::NeedsYou(state.sentence().into()),
+        Some(AgentState::Ready) => Step::Ok(format!(
+            "this computer's {name} sign-in, for this bot in this folder"
+        )),
+        Some(state) => Step::NeedsYou(state.sentence(agent)),
         None => Step::Failed("the folder is gone".into()),
     }
     .print("Sign-in");
@@ -880,6 +929,7 @@ fn repository_step(
                 name,
                 url,
                 ssh_key: None,
+                github: None,
             }
         }
     };
@@ -1164,6 +1214,7 @@ fn tail(text: &str, lines: usize) -> String {
 }
 
 fn proof_step(
+    agent: Agent,
     paths: &Paths,
     ask: &Asker,
     options: &Options,
@@ -1204,18 +1255,25 @@ fn proof_step(
     let config = Config::load(paths)?;
     let ready = config
         .root(root)
-        .is_some_and(|r| super::claude_state(&config.coding, r, bot) == ClaudeState::Ready);
+        .is_some_and(|r| super::agent_state(agent, r, bot) == AgentState::Ready);
+    let name = agent.name();
+    let title = format!("{name} run");
     if !ready {
-        Step::Skipped("Claude Code isn't ready for this bot here".into()).print("Claude Code run");
+        Step::Skipped(format!("{name} isn't ready for this bot here")).print(&title);
         return Ok(());
     }
     let dir = checkout.map(|(n, _)| n.as_str()).unwrap_or("");
-    println!("Asking Claude Code for one word, in the sandbox, as bot {bot}…");
+    println!("Asking {name} for one word, in the sandbox, as bot {bot}…");
     let (state, code, output) = check(
         paths,
         root,
         dir,
-        "claude -p 'Reply with the word ready.' --max-turns 1",
+        match agent {
+            Agent::ClaudeCode => "claude -p 'Reply with the word ready.' --max-turns 1",
+            Agent::Codex => {
+                "codex exec --sandbox danger-full-access --skip-git-repo-check 'Reply with the word ready.'"
+            }
+        },
         bot,
         Duration::from_secs(180),
     )
@@ -1230,54 +1288,61 @@ fn proof_step(
         ))
     };
     let failed = step.failed();
-    step.print("Claude Code run");
+    step.print(&title);
     if failed {
-        println!("  The sandbox needs the network for Claude Code; `cww coding status` says more.");
+        println!("  The sandbox needs the network for {name}; `cww coding status` says more.");
     }
     Ok(())
 }
 
 /// What each folder lent to a bot has, as `cww coding status` prints it.
 pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
-    let stored = login(paths).signed_in();
-    let program = installed(config);
-    match &program {
-        Some(p) => println!("Claude Code: {}", p.display()),
-        None => println!(
-            "Claude Code: not installed (`curl -fsSL https://claude.ai/install.sh | bash`, or \
-             `cww coding setup`)"
-        ),
-    }
-    println!(
-        "Sign-in: {}",
-        if stored {
-            "Claude Code is signed in on this computer"
-        } else {
-            "Claude Code isn't signed in on this computer: run `claude` once and sign in"
+    for agent in Agent::ALL {
+        let name = agent.name();
+        let stored = login(agent, paths).signed_in();
+        let program = installed(agent, config);
+        match &program {
+            Some(p) => println!("{name}: {}", p.display()),
+            None => println!(
+                "{name}: not installed (`{}`, or `cww coding setup --agent {}`)",
+                install_command(agent).2,
+                agent.program()
+            ),
         }
-    );
-    for root in &config.roots {
-        for loan in &root.bots {
-            if only_bot.is_some_and(|b| b != loan.id) {
-                continue;
+        println!(
+            "Sign-in: {}",
+            if stored {
+                format!("{name} is signed in on this computer")
+            } else {
+                format!(
+                    "{name} isn't signed in on this computer: {}",
+                    agent.sign_in_hint()
+                )
             }
-            let state = effective_state(&config.coding, root, &loan.id, stored, program.is_some());
-            println!(
-                "Bot {}{} in {}: {}{}",
-                loan.id,
-                if loan.name.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", loan.name)
-                },
-                root.label,
-                state.sentence(),
-                if loan.unattended {
-                    ", commands start unattended"
-                } else {
-                    ""
+        );
+        for root in &config.roots {
+            for loan in &root.bots {
+                if only_bot.is_some_and(|b| b != loan.id) || !agent.allowed(loan) {
+                    continue;
                 }
-            );
+                let state = effective_state(agent, root, &loan.id, stored, program.is_some());
+                println!(
+                    "Bot {}{} in {}: {}{}",
+                    loan.id,
+                    if loan.name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", loan.name)
+                    },
+                    root.label,
+                    state.sentence(agent),
+                    if loan.unattended {
+                        ", commands start unattended"
+                    } else {
+                        ""
+                    }
+                );
+            }
         }
     }
     for repo in &config.coding.repositories {
@@ -1298,23 +1363,23 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     }
 }
 
-/// The `claude` a run would use.
-fn installed(config: &Config) -> Option<PathBuf> {
-    claude_for_run(&config.coding, &config.roots)
+/// The program a run would use.
+fn installed(agent: Agent, config: &Config) -> Option<PathBuf> {
+    program_for_run(agent, &config.coding, &config.roots)
 }
 
 /// The state as a run would find it: ready only when Claude Code is
 /// installed and signed in on this computer, which the config doesn't say.
 fn effective_state(
-    coding: &crate::config::CodingConfig,
+    agent: Agent,
     root: &crate::config::Root,
     bot: &str,
     signed_in: bool,
     installed: bool,
-) -> ClaudeState {
-    match super::claude_state(coding, root, bot) {
-        ClaudeState::Ready if !installed => ClaudeState::NotInstalled,
-        ClaudeState::Ready if !signed_in => ClaudeState::NotSignedIn,
+) -> AgentState {
+    match super::agent_state(agent, root, bot) {
+        AgentState::Ready if !installed => AgentState::NotInstalled,
+        AgentState::Ready if !signed_in => AgentState::NotSignedIn,
         state => state,
     }
 }
@@ -1322,9 +1387,18 @@ fn effective_state(
 /// What `cww coding status --json` prints: per loan, the state the server
 /// would see, and per repository, its fetch. No token, ever.
 pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Value {
-    let stored = login(paths).signed_in();
-    let program = installed(config);
-    let found = program.is_some();
+    let looks: Vec<(Agent, bool, bool)> = Agent::ALL
+        .into_iter()
+        .map(|agent| {
+            (
+                agent,
+                login(agent, paths).signed_in(),
+                installed(agent, config).is_some(),
+            )
+        })
+        .collect();
+    let program = installed(Agent::ClaudeCode, config);
+    let stored = login(Agent::ClaudeCode, paths).signed_in();
     let loans: Vec<Value> = config
         .roots
         .iter()
@@ -1332,14 +1406,31 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
             root.bots
                 .iter()
                 .filter(move |loan| only_bot.is_none_or(|bot| bot == loan.id))
-                .map(move |loan| {
-                    serde_json::json!({
-                        "root": root.id,
-                        "bot": loan.id,
-                        "name": loan.name,
-                        "unattended": loan.unattended,
-                        "claude_code": effective_state(&config.coding, root, &loan.id, stored, found).name(),
-                    })
+                .map({
+                    let looks = looks.clone();
+                    move |loan| {
+                        let states: serde_json::Map<String, Value> = looks
+                            .iter()
+                            .map(|(agent, stored, found)| {
+                                (
+                                    agent.key().to_string(),
+                                    serde_json::json!(
+                                        effective_state(*agent, root, &loan.id, *stored, *found)
+                                            .name()
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let mut entry = serde_json::json!({
+                            "root": root.id,
+                            "bot": loan.id,
+                            "name": loan.name,
+                            "unattended": loan.unattended,
+                        });
+                        entry["claude_code"] = states["claude_code"].clone();
+                        entry["codex"] = states["codex"].clone();
+                        entry
+                    }
                 })
         })
         .collect();
@@ -1362,7 +1453,9 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
         .collect();
     serde_json::json!({
         "claude": program,
+        "codex": installed(Agent::Codex, config),
         "signed_in": stored,
+        "codex_signed_in": login(Agent::Codex, paths).signed_in(),
         "loans": loans,
         "repositories": repos,
     })

@@ -417,6 +417,8 @@ mod tests {
                     name: "Issue fixer".into(),
                     unattended,
                     claude_code: false,
+                    codex: false,
+                    owners: Vec::new(),
                 }],
             }],
             ..Config::default()

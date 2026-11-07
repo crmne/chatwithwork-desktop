@@ -253,6 +253,15 @@ impl Reader {
         ))
     }
 
+    /// A repository a run just prepared: what `roots` says of its folder, until
+    /// the next reload reads the same from the config.
+    pub fn note_repository(&self, repository: crate::config::Repository) {
+        let mut state = self.state.write().expect("reader state");
+        if !state.coding.repositories.contains(&repository) {
+            state.coding.repositories.push(repository);
+        }
+    }
+
     /// The IDs of the folders lent to the bot with ID `bot`.
     pub fn lent_to(&self, bot: &str) -> Vec<String> {
         let state = self.state.read().expect("reader state");

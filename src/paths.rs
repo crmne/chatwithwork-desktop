@@ -295,6 +295,21 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// This computer's name, as its system says it, for this computer's own windows.
+pub fn hostname() -> String {
+    #[cfg(unix)]
+    {
+        rustix::system::uname()
+            .nodename()
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

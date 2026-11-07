@@ -27,6 +27,7 @@ mod audio;
 mod autostart;
 mod banner;
 mod bridge;
+mod coding_setup;
 mod computer;
 mod control;
 // The stand-in daemon for `--demo`: it answers the whole control protocol

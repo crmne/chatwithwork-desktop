@@ -78,9 +78,26 @@ pub const ASK_UNATTENDED: &str = "ask_unattended";
 /// folder lent to it (PROTOCOL.md 7.2.1, docs/coding-computers.md): called
 /// by the server by name, never listed.
 pub const ASK_CLAUDE_CODE: &str = "ask_claude_code";
+/// The computer's owner pressed Always allow on a bot's command card: its
+/// commands in that folder, already lent to it with commands on, start
+/// unattended at once (PROTOCOL.md 7.2.1). Called by the server by name, never
+/// listed. A server older than this asks instead (`ask_unattended`).
+pub const ALLOW_UNATTENDED: &str = "allow_unattended";
+/// A bot's run asks this computer to prepare a repository it named, where the
+/// person allowed that (docs/coding-computers.md, "The first run"), and how
+/// that stands. Called by the server by name, never listed.
+pub const PREPARE_REPOSITORY: &str = "prepare_repository";
+pub const PREPARE_STATUS: &str = "prepare_status";
 
 /// Trusted browser-only local consent; never a model argument.
 pub const BROWSER_AUTO_APPROVE_META: &str = "com.chatwithwork/browserAutoApprove";
+
+/// A card's Always allow, for the daemon to apply, and whether it did.
+pub struct UnattendedGrant {
+    pub root: String,
+    pub bot: String,
+    pub done: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
 
 /// Who a call is for: a person (any shared folder, as each allows), or a
 /// bot (only the folders lent to it).
@@ -151,6 +168,8 @@ struct Inner {
     browser: Option<BrowserTools>,
     /// Bots' requests for unattended commands, waiting for the person.
     asks: Option<Arc<crate::unattended_asks::Asks>>,
+    /// Always allow pressed on a bot's command card, for the daemon to apply.
+    unattended_grants: Option<tokio::sync::mpsc::UnboundedSender<UnattendedGrant>>,
     reader: Arc<Reader>,
     writer: Arc<Writer>,
     limiter: Arc<Limiter>,
@@ -174,6 +193,7 @@ impl LocalFiles {
                 printing: None,
                 browser: None,
                 asks: None,
+                unattended_grants: None,
                 reader,
                 writer,
                 limiter,
@@ -211,6 +231,20 @@ impl LocalFiles {
         let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
         Self {
             inner: Arc::new(Inner { browser, ..inner }),
+        }
+    }
+
+    /// Take a card's Always allow (`allow_unattended`).
+    pub fn with_unattended_grants(
+        self,
+        grants: tokio::sync::mpsc::UnboundedSender<UnattendedGrant>,
+    ) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                unattended_grants: Some(grants),
+                ..inner
+            }),
         }
     }
 
@@ -290,6 +324,9 @@ impl LocalFiles {
                 || (PRINT_TOOLS.contains(&name) && self.printing().is_some())
                 || ((name == ASK_UNATTENDED || name == ASK_CLAUDE_CODE)
                     && self.inner.asks.is_some())
+                || (name == ALLOW_UNATTENDED && self.inner.unattended_grants.is_some())
+                || ((name == PREPARE_REPOSITORY || name == PREPARE_STATUS)
+                    && self.commands().is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -576,6 +613,129 @@ impl LocalFiles {
         Ok(None)
     }
 
+    /// Always allow on a bot's command card: its commands in a folder already
+    /// lent to it with commands on start unattended, which the daemon sets,
+    /// audits and shows in a notice. Nothing else can be widened this way.
+    async fn allow_unattended(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+        let Caller::Bot { id, .. } = caller else {
+            return Err(ToolError::new(
+                ErrorCode::NotLent,
+                "only a bot's chat can ask this computer for that",
+            ));
+        };
+        let AskUnattendedArgs { root } = parse_args(args)?;
+        let reader = &self.inner.reader;
+        let not_lent = || {
+            ToolError::new(
+                ErrorCode::NotLent,
+                format!("the folder {root} isn't lent to this bot on this computer"),
+            )
+        };
+        let loan = reader.loan(&root, id).ok_or_else(not_lent)?;
+        let folder = reader
+            .roots()
+            .into_iter()
+            .find(|r| r.id == root)
+            .ok_or_else(not_lent)?;
+        if !folder.allows_commands {
+            return Err(ToolError::new(
+                ErrorCode::NotWritable,
+                format!(
+                    "Commands aren't allowed in the shared folder “{}”.",
+                    folder.label
+                ),
+            ));
+        }
+        if loan.unattended {
+            return Ok(Output::Ask(json!({ "status": "already" })));
+        }
+        let (done, heard) = tokio::sync::oneshot::channel();
+        let grants = self
+            .inner
+            .unattended_grants
+            .as_ref()
+            .expect("offered only with grants");
+        let unavailable = || ToolError::new(ErrorCode::Internal, "the daemon is stopping");
+        grants
+            .send(UnattendedGrant {
+                root: root.clone(),
+                bot: id.clone(),
+                done,
+            })
+            .map_err(|_| unavailable())?;
+        heard
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|message| ToolError::new(ErrorCode::NotWritable, message))?;
+        Ok(Output::Ask(json!({ "status": "allowed" })))
+    }
+
+    /// A bot's run on a repository: prepare it, or say how that stands. Only
+    /// a bot's chat, and whoever starts commands checks everything again
+    /// against the config on disk. `record` stays on this computer.
+    async fn prepare(
+        &self,
+        args: Value,
+        caller: &Caller,
+        status: bool,
+    ) -> Result<Output, ToolError> {
+        let Caller::Bot { id, .. } = caller else {
+            return Err(ToolError::new(
+                ErrorCode::NotLent,
+                "only a bot's chat can ask this computer for that",
+            ));
+        };
+        let PrepareArgs {
+            repository,
+            agent,
+            tests,
+        } = parse_args(args)?;
+        let commands = self.commands().ok_or_else(|| {
+            ToolError::new(ErrorCode::NotWritable, "no folder here allows commands")
+        })?;
+        let ask = crate::coding::prepare::Ask {
+            bot: id.clone(),
+            repository,
+            agent,
+            tests: tests.unwrap_or(true),
+        };
+        let refused = |e: crate::commands::RunError| {
+            let code = if e.code == "paused" {
+                ErrorCode::Paused
+            } else {
+                ErrorCode::NotWritable
+            };
+            ToolError::new(code, e.message)
+        };
+        let view = if status {
+            commands
+                .runner
+                .prepared(ask.clone())
+                .await
+                .map_err(refused)?
+        } else {
+            let mut entry = AuditEntry::event("coding_prepare");
+            entry.detail = Some(format!("{} for bot {id}", ask.repository));
+            self.inner.audit.append(&entry);
+            Some(
+                commands
+                    .runner
+                    .prepare(ask.clone())
+                    .await
+                    .map_err(refused)?,
+            )
+        };
+        let Some(mut view) = view else {
+            return Ok(Output::Ask(
+                json!({ "state": "unknown", "repository": ask.repository }),
+            ));
+        };
+        if let Some(record) = view.record.take() {
+            self.inner.reader.note_repository(record);
+        }
+        Ok(Output::Ask(serde_json::to_value(view).unwrap_or_default()))
+    }
+
     /// Queue a bot's request about a folder lent to it, to run its
     /// commands there unattended or to run Claude Code there with this
     /// computer's sign-in, for the person on this computer to answer there.
@@ -724,6 +884,9 @@ impl LocalFiles {
                 self.ask(args, caller, crate::unattended_asks::AskKind::ClaudeCode)
                     .await
             }
+            ALLOW_UNATTENDED => self.allow_unattended(args, caller).await,
+            PREPARE_REPOSITORY => self.prepare(args, caller, false).await,
+            PREPARE_STATUS => self.prepare(args, caller, true).await,
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;
                 let roots = blocking(move || Ok(reader.roots())).await?;
@@ -1111,6 +1274,16 @@ struct EmptyArgs {}
 #[serde(deny_unknown_fields)]
 struct AskUnattendedArgs {
     root: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareArgs {
+    repository: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    tests: Option<bool>,
 }
 
 enum Output {

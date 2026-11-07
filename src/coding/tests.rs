@@ -26,6 +26,8 @@ fn loan(claude_code: bool) -> BotLoan {
         name: "Issue fixer".into(),
         unattended: false,
         claude_code,
+        codex: false,
+        owners: Vec::new(),
     }
 }
 
@@ -100,7 +102,8 @@ fn the_login_is_found_where_claude_code_keeps_it() {
 fn a_secret_never_prints() {
     let secret = Secret::new(TOKEN.into());
     assert!(!format!("{secret:?}").contains("oat01"));
-    let claude = Claude {
+    let claude = AgentRun {
+        agent: Agent::ClaudeCode,
         program: "/x/claude".into(),
         real: "/y/claude".into(),
         read: "/y".into(),
@@ -115,35 +118,34 @@ fn a_secret_never_prints() {
 
 #[test]
 fn claude_is_ready_only_for_a_bot_allowed_it_where_commands_reach_the_network() {
-    let coding = ready_coding();
     assert_eq!(
-        claude_state(&coding, &root(Some(loan(true))), "42"),
-        ClaudeState::Ready
+        agent_state(Agent::ClaudeCode, &root(Some(loan(true))), "42"),
+        AgentState::Ready
     );
     assert_eq!(
-        claude_state(&coding, &root(Some(loan(false))), "42"),
-        ClaudeState::NotAllowed
+        agent_state(Agent::ClaudeCode, &root(Some(loan(false))), "42"),
+        AgentState::NotAllowed
     );
     assert_eq!(
-        claude_state(&coding, &root(Some(loan(true))), "7"),
-        ClaudeState::NotAllowed
+        agent_state(Agent::ClaudeCode, &root(Some(loan(true))), "7"),
+        AgentState::NotAllowed
     );
     let mut offline = root(Some(loan(true)));
     offline.network = false;
     assert_eq!(
-        claude_state(&coding, &offline, "42"),
-        ClaudeState::NoNetwork
+        agent_state(Agent::ClaudeCode, &offline, "42"),
+        AgentState::NoNetwork
     );
     let mut no_commands = root(Some(loan(true)));
     no_commands.commands = false;
     assert_eq!(
-        claude_state(&coding, &no_commands, "42"),
-        ClaudeState::NotAllowed
+        agent_state(Agent::ClaudeCode, &no_commands, "42"),
+        AgentState::NotAllowed
     );
     // No setup needed: a run finds `claude` itself.
     assert_eq!(
-        claude_state(&CodingConfig::default(), &root(Some(loan(true))), "42"),
-        ClaudeState::Ready
+        agent_state(Agent::ClaudeCode, &root(Some(loan(true))), "42"),
+        AgentState::Ready
     );
 }
 
@@ -155,6 +157,7 @@ fn a_bot_sees_whether_claude_is_ready_and_repository_names_only() {
         name: "app".into(),
         url: "git@github.com:acme/app.git".into(),
         ssh_key: None,
+        github: None,
     });
     let value = coding_for_bot(&coding, &root(Some(loan(true))), "42");
     assert_eq!(value["claude_code"], "ready");
@@ -179,27 +182,28 @@ fn only_an_allowed_bot_run_gets_the_login() {
     config.roots.push(root(Some(loan(true))));
     let home = dir.path().join("home");
     signed_in_home(&home);
-    let login = || Login::find(&home);
+    let login = |agent: Agent| Login::find_for(agent, &home);
 
-    let person = for_run(&config, &paths, "bots", None, || {
+    let person = for_run(&config, &paths, "bots", None, |_| {
         panic!("read for a person")
     });
-    assert_eq!(person.claude, None);
-    let other = for_run(&config, &paths, "bots", Some("7"), || {
+    assert_eq!(person.agents, Vec::new());
+    let other = for_run(&config, &paths, "bots", Some("7"), |_| {
         panic!("read for bot 7")
     });
-    assert_eq!(other.claude, None);
+    assert_eq!(other.agents, Vec::new());
     let bot = for_run(&config, &paths, "bots", Some("42"), login);
-    let claude = bot.claude.expect("the bot's run gets Claude Code");
+    let claude = bot.agents.first().expect("the bot's run gets Claude Code");
+    assert_eq!(bot.agents.len(), 1, "only the agent its loan allows");
     assert_eq!(claude.program, program);
     assert!(claude.login.signed_in());
     assert_eq!(claude.login.paths().count(), 2);
 
     config.roots[0].bots[0].claude_code = false;
-    let withdrawn = for_run(&config, &paths, "bots", Some("42"), || {
+    let withdrawn = for_run(&config, &paths, "bots", Some("42"), |_| {
         panic!("read when withdrawn")
     });
-    assert_eq!(withdrawn.claude, None);
+    assert_eq!(withdrawn.agents, Vec::new());
 }
 
 #[test]
@@ -345,6 +349,7 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
         name: "app".into(),
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
+        github: None,
     };
     let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
     assert!(mirror.starts_with(&paths.data_dir));
@@ -418,6 +423,7 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         name: "app".into(),
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
+        github: None,
     };
     let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
 
@@ -580,9 +586,191 @@ fn a_run_uses_the_recorded_claude_only_while_its_there() {
         ..Default::default()
     };
     assert_eq!(
-        super::setup::claude_for_run(&coding, &[]),
+        super::setup::program_for_run(Agent::ClaudeCode, &coding, &[]),
         Some(recorded.clone())
     );
     std::fs::remove_file(&recorded).unwrap();
-    assert_ne!(super::setup::claude_for_run(&coding, &[]), Some(recorded));
+    assert_ne!(
+        super::setup::program_for_run(Agent::ClaudeCode, &coding, &[]),
+        Some(recorded)
+    );
+}
+
+/// Codex as it leaves itself on any system: `~/.codex/auth.json`.
+fn codex_home(home: &Path, auth: serde_json::Value) {
+    std::fs::create_dir_all(home.join(CODEX_DIR)).unwrap();
+    std::fs::write(home.join(CODEX_DIR).join(CODEX_AUTH_FILE), auth.to_string()).unwrap();
+}
+
+const CODEX_ACCESS: &str = "eyJhbGciOiJSUzI1NiIsImtpZCI6IjEyMyJ9.access.token";
+const CODEX_REFRESH: &str = "rt_refreshREFRESHrefreshREFRESH0123456789";
+
+#[test]
+fn codexs_sign_in_is_its_own_folder_and_every_token_in_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    codex_home(
+        &home,
+        serde_json::json!({
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": "eyJpZCI6InRva2VuIn0.id.tokenTOKENtoken",
+                "access_token": CODEX_ACCESS,
+                "refresh_token": CODEX_REFRESH,
+                "account_id": "0123456789abcdef0123456789abcdef",
+            },
+            "last_refresh": "2026-11-05T21:29:45Z",
+        }),
+    );
+    let login = Login::find_for(Agent::Codex, &home);
+    assert!(login.signed_in());
+    assert_eq!(login.billing, Billing::Plan);
+    assert_eq!(login.file, None, "only its folder");
+    assert_eq!(login.paths().count(), 1);
+    let secrets: Vec<&str> = login.secrets.iter().map(Secret::expose).collect();
+    assert!(secrets.contains(&CODEX_ACCESS) && secrets.contains(&CODEX_REFRESH));
+    assert!(
+        !secrets.contains(&"0123456789abcdef0123456789abcdef"),
+        "an id isn't a secret"
+    );
+    assert!(!format!("{login:?}").contains(CODEX_REFRESH));
+
+    codex_home(
+        &home,
+        serde_json::json!({ "OPENAI_API_KEY": "sk-proj-abcdefghijklmnopqrstuvwxyz" }),
+    );
+    let login = Login::find_for(Agent::Codex, &home);
+    assert!(login.signed_in());
+    assert_eq!(login.billing, Billing::ApiKey);
+
+    codex_home(&home, serde_json::json!({}));
+    assert!(!Login::find_for(Agent::Codex, &home).signed_in());
+}
+
+#[cfg(unix)]
+#[test]
+fn codexs_folder_is_never_one_a_link_makes_something_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh"), home.join(CODEX_DIR)).unwrap();
+    assert_eq!(Login::find_for(Agent::Codex, &home).dir, None);
+}
+
+#[test]
+fn claudes_plan_or_api_account_is_read_from_its_credentials() {
+    assert_eq!(
+        claude_billing(r#"{"claudeAiOauth":{"subscriptionType":"max"}}"#),
+        Billing::Plan
+    );
+    assert_eq!(
+        claude_billing(r#"{"claudeAiOauth":{"accessToken":"x"}}"#),
+        Billing::ApiKey
+    );
+    assert_eq!(claude_billing("not json"), Billing::Unknown);
+}
+
+#[test]
+fn each_agent_has_its_own_switch_on_a_loan() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join("codex");
+    std::fs::write(&codex, "").unwrap();
+    let claude = dir.path().join("claude");
+    std::fs::write(&claude, "").unwrap();
+    let paths = crate::paths::Paths::under(dir.path());
+    let mut lent = loan(false);
+    lent.codex = true;
+    let mut config = Config {
+        coding: CodingConfig {
+            claude: Some(claude),
+            codex: Some(codex.clone()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    config.roots.push(root(Some(lent)));
+    assert_eq!(
+        agent_state(Agent::Codex, &config.roots[0], "42"),
+        AgentState::Ready
+    );
+    assert_eq!(
+        agent_state(Agent::ClaudeCode, &config.roots[0], "42"),
+        AgentState::NotAllowed
+    );
+
+    let home = dir.path().join("home");
+    codex_home(
+        &home,
+        serde_json::json!({ "tokens": { "access_token": CODEX_ACCESS } }),
+    );
+    let run = for_run(&config, &paths, "bots", Some("42"), |agent| {
+        Login::find_for(agent, &home)
+    });
+    if cfg!(target_os = "macos") {
+        assert!(run.agents.is_empty(), "Codex can't run in Seatbelt yet");
+        return;
+    }
+    assert_eq!(run.agents.len(), 1, "only Codex");
+    assert_eq!(run.agents[0].agent, Agent::Codex);
+    assert_eq!(run.agents[0].program, codex);
+
+    let value = coding_for_bot(&config.coding, &config.roots[0], "42");
+    assert_eq!(value["agents"]["codex"], "ready");
+    assert_eq!(value["agents"]["claude_code"], "not_allowed");
+    assert_eq!(
+        value["claude_code"], "not_allowed",
+        "for servers that know only this"
+    );
+    assert_eq!(value["prepares"], true);
+
+    let mut off = config.clone();
+    crate::roots::set_commands(&mut off, "bots", false, false).unwrap();
+    assert!(!off.roots[0].bots[0].codex, "commands off ends it");
+    let mut read_only = config.clone();
+    crate::roots::set_writable(&mut read_only, "bots", false, false).unwrap();
+    assert!(!read_only.roots[0].bots[0].codex);
+    assert!(
+        crate::roots::set_bot(&mut config, "bots", "42", None, true, false)
+            .unwrap()
+            .bots[0]
+            .codex,
+        "lending again keeps it"
+    );
+}
+
+#[test]
+fn only_this_computer_names_the_owners_a_bots_runs_may_prepare() {
+    let mut config = Config::default();
+    config.roots.push(root(Some(loan(true))));
+    assert!(crate::roots::add_bot_owner(&mut config, "bots", "42", "../x").is_err());
+    crate::roots::add_bot_owner(&mut config, "bots", "42", "acme").unwrap();
+    crate::roots::add_bot_owner(&mut config, "bots", "42", "ACME").unwrap();
+    assert_eq!(config.roots[0].bots[0].owners, ["acme"]);
+    assert!(crate::roots::add_bot_owner(&mut config, "bots", "7", "acme").is_err());
+    let saved = toml::to_string(&config.roots[0].bots[0]).unwrap();
+    assert!(saved.contains("repository_owners"), "{saved}");
+}
+
+/// Always allow on a card turns on only that, only for a loan with commands.
+#[test]
+fn a_cards_always_allow_widens_only_a_loan_with_commands() {
+    use crate::roots::allow_bot_unattended_from_server as allow;
+    let mut config = Config::default();
+    config.roots.push(root(Some(loan(false))));
+    let before = config.roots[0].clone();
+
+    assert!(allow(&mut config, "bots", "7").is_err(), "not lent to it");
+    assert!(allow(&mut config, "elsewhere", "42").is_err(), "not shared");
+    let mut no_commands = config.clone();
+    crate::roots::set_commands(&mut no_commands, "bots", false, false).unwrap();
+    assert!(
+        allow(&mut no_commands, "bots", "42").is_err(),
+        "commands off"
+    );
+    assert!(!no_commands.roots[0].bots[0].unattended);
+
+    allow(&mut config, "bots", "42").unwrap();
+    let mut expected = before;
+    expected.bots[0].unattended = true;
+    assert_eq!(config.roots[0], expected, "nothing else changed");
 }

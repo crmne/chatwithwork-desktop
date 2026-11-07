@@ -5061,6 +5061,8 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
         name: "Issue fixer".into(),
         unattended: false,
         claude_code: true,
+        codex: false,
+        owners: Vec::new(),
     });
     config.coding.claude = Some(program);
     config.save(&fx.paths).unwrap();

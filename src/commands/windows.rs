@@ -456,10 +456,17 @@ impl Plan {
         let found = host.toolchains();
         let own = display(&self.home);
         let mut path: Vec<PathBuf> = Vec::new();
-        if let Some(claude) = &self.coding.claude {
-            // The folder of the `claude.exe` setup checked comes first, as
-            // it's named there.
-            path.push(claude.entry.clone().unwrap_or_else(|| claude.read.clone()));
+        for run in &self.coding.agents {
+            // The folder of the program setup checked comes first, as it's
+            // named there.
+            path.push(run.entry.clone().unwrap_or_else(|| run.read.clone()));
+        }
+        if let Some(tools) = &self.coding.tools {
+            path.extend(
+                crate::coding::prepare::tools_path(tools)
+                    .into_iter()
+                    .map(PathBuf::from),
+            );
         }
         path.extend(found.path.clone());
         path.extend(host.system_path(&self.folder));
@@ -558,16 +565,13 @@ impl Plan {
             ),
         ]);
         env.extend(self.coding_environment());
-        // The run's own home has no `.claude`, and Windows can't link one
-        // there without Developer Mode: Claude Code's own variable names
-        // the person's, where its sign-in is (`.credentials.json`).
-        if let Some(dir) = self
-            .coding
-            .claude
-            .as_ref()
-            .and_then(|c| c.login.dir.as_ref())
-        {
-            env.push(("CLAUDE_CONFIG_DIR".to_string(), display(dir)));
+        // The run's own home has no `.claude` or `.codex`, and Windows can't
+        // link one there without Developer Mode: the agent's own variable
+        // names the person's, where its sign-in is.
+        for run in &self.coding.agents {
+            if let Some(dir) = &run.login.dir {
+                env.push((run.agent.config_variable().to_string(), display(dir)));
+            }
         }
         for (name, value) in found.env {
             if name == "MISE_DATA_DIR" {
@@ -629,17 +633,16 @@ impl Plan {
         if self.limits.processes > 0 {
             resources["maxProcesses"] = self.limits.processes.into();
         }
-        // Windows grants a run folders only: Claude Code's folder, which
+        // Windows grants a run folders only: each agent's folder, which
         // holds its sign-in there, and not `~/.claude.json`.
         let mut readwrite = vec![display(&self.folder), display(&self.home)];
-        if let Some(dir) = self
-            .coding
-            .claude
-            .as_ref()
-            .and_then(|c| c.login.dir.as_ref())
-        {
-            readwrite.push(display(dir));
-        }
+        readwrite.extend(
+            self.coding
+                .agents
+                .iter()
+                .filter_map(|run| run.login.dir.as_ref())
+                .map(|dir| display(dir)),
+        );
         json!({
             "version": "1.1.0-alpha",
             "containerId": format!("cww-run-{}", self.id),
@@ -1063,7 +1066,8 @@ mod tests {
         let without = plan.windows_request(&host);
         assert_eq!(strings(&without["filesystem"]["readwritePaths"]).len(), 2);
         assert!(!without.to_string().contains("CLAUDE_CONFIG_DIR"));
-        plan.coding.claude = Some(crate::coding::Claude {
+        plan.coding.agents = vec![crate::coding::AgentRun {
+            agent: crate::coding::Agent::ClaudeCode,
             program: base.path().join("claude.exe"),
             real: base.path().join("claude.exe"),
             read: base.path().to_path_buf(),
@@ -1073,7 +1077,7 @@ mod tests {
                 file: Some(base.path().join("person").join(".claude.json")),
                 ..Default::default()
             },
-        });
+        }];
         let json = plan.windows_request(&host);
         assert_eq!(
             strings(&json["filesystem"]["readwritePaths"]),

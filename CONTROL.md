@@ -235,6 +235,22 @@ Allows commands in a shared folder that allows changes (`commands: true`), or st
 
 Answers with the updated `root` and writes a `root_commands_allowed` or `root_commands_stopped` audit entry; the daemon reconnects so the server lists the tools again. `cww roots allow-commands <root> [--network]` and `cww roots deny-commands <root>` do the same from the command line.
 
+### `coding_look`
+
+```json
+{"cmd": "coding_look", "bot": "42", "repository": "acme/app"}
+```
+
+What the app's window shows before it asks to let a bot code here (`docs/coding-computers.md`, "One yes"): `agents`, each with `agent`, `name`, `installed`, `signed_in`, `billing` and `sign_in_hint`; `reaches`, whether the person's Git login reaches `repository`; and `root`, a folder already lent to the bot with commands on. Changes nothing, and holds no token.
+
+### `coding_allow`
+
+```json
+{"cmd": "coding_allow", "folder": "/home/ana/bots", "bot": "42", "name": "Issue fixer", "agent": "codex", "owner": "acme"}
+```
+
+The person's Allow in that window. With `folder` (or `root`, one already shared), it shares it with changes, commands and the network, lends it to `bot`, gives its runs `agent`'s sign-in, and records `owner` on the loan. Writes `root_bot_coding_allowed`. Only a same-user client reaches it, never the server.
+
 ### `coding_check`
 
 ```json

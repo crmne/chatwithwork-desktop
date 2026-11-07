@@ -1,16 +1,18 @@
-//! Coding bots on this computer (docs/coding-computers.md): the Claude Code
-//! sign-in a bot's commands get, the repositories Desktop mirrors for them,
-//! and what a bot's `roots` says is ready.
+//! Coding bots on this computer (docs/coding-computers.md): the coding
+//! agents' sign-ins a bot's commands get ([`Agent`]: Claude Code and Codex),
+//! the repositories Desktop mirrors for them, and what a bot's `roots` says
+//! is ready.
 //!
-//! The sign-in is Claude Code's own, where Claude Code keeps it on this
-//! computer ([`Login`]): a bot whose loan says `claude_code` gets those
-//! paths in its run's sandbox, to read and write as Claude Code does when
-//! it refreshes its tokens, and nothing else of the home folder. Any token
-//! Desktop can read there is taken out of the run's output ([`Redactor`]).
+//! A sign-in is the agent's own, where it keeps it on this computer
+//! ([`Login`]): a bot whose loan allows that agent gets those paths in its
+//! run's sandbox, to read and write as the agent does when it refreshes its
+//! tokens, and nothing else of the home folder. Any token Desktop can read
+//! there is taken out of the run's output ([`Redactor`]).
 //! Mirrors live in Desktop's data folder, which no command writes, so
 //! fetching one with the person's credentials runs nothing a bot wrote.
 
 pub mod detect;
+pub mod prepare;
 pub mod repositories;
 pub mod setup;
 #[cfg(test)]
@@ -18,11 +20,124 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::auth::secrets::SecretStore;
 use crate::config::{CodingConfig, Config, Root};
 use crate::paths::Paths;
+
+/// A coding agent a bot's runs can use with this computer's sign-in. Each
+/// has its own switch on a loan, its own program and its own folder in the
+/// home folder; what the sandbox does with them is the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Agent {
+    ClaudeCode,
+    Codex,
+}
+
+impl Agent {
+    pub const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+
+    /// Its name on the wire: `claude_code`, `codex`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude_code",
+            Self::Codex => "codex",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|agent| agent.key() == key)
+    }
+
+    /// Why it can't run in a bot's sandbox on this system, if it can't. Codex
+    /// on macOS stops at "Failed to synchronize managed preferences" in
+    /// Seatbelt, and Desktop doesn't loosen the sandbox for it.
+    pub fn unavailable(self) -> Option<&'static str> {
+        (self == Self::Codex && cfg!(target_os = "macos"))
+            .then_some("Codex can't run in this computer's sandbox on macOS yet")
+    }
+
+    /// What people call it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex",
+        }
+    }
+
+    /// The program, as a person types it.
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude",
+            Self::Codex => "codex",
+        }
+    }
+
+    /// Its folder in the home folder.
+    pub fn config_dir(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => CONFIG_DIR,
+            Self::Codex => CODEX_DIR,
+        }
+    }
+
+    /// The variable that names that folder for it, on Windows, which can't
+    /// link one into a run's home without Developer Mode.
+    pub fn config_variable(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "CLAUDE_CONFIG_DIR",
+            Self::Codex => "CODEX_HOME",
+        }
+    }
+
+    /// What a run's output says where its token was.
+    pub fn redacted(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => REDACTED,
+            Self::Codex => CODEX_REDACTED,
+        }
+    }
+
+    /// Whether `loan` allows it.
+    pub fn allowed(self, loan: &crate::config::BotLoan) -> bool {
+        match self {
+            Self::ClaudeCode => loan.claude_code,
+            Self::Codex => loan.codex,
+        }
+    }
+
+    /// How to sign in, for the person.
+    pub fn sign_in_hint(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "run `claude` once and sign in",
+            Self::Codex => "run `codex login`",
+        }
+    }
+}
+
+/// Who pays for a run of an agent, as its sign-in says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Billing {
+    /// The person's subscription: Claude or ChatGPT.
+    Plan,
+    /// An API key, billed by use.
+    ApiKey,
+    /// It couldn't tell (a locked keychain, say).
+    #[default]
+    Unknown,
+}
+
+/// Codex's folder in the home folder: its settings, sessions and sign-in
+/// (`auth.json`).
+pub const CODEX_DIR: &str = ".codex";
+/// Where Codex keeps its tokens, in [`CODEX_DIR`].
+pub const CODEX_AUTH_FILE: &str = "auth.json";
+/// What a run's output says where a Codex token was.
+pub const CODEX_REDACTED: &str = "[codex-token]";
 
 /// Claude Code's folder in the home folder: its settings, sessions and, on
 /// Linux and Windows, its sign-in (`.credentials.json`).
@@ -61,14 +176,15 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Claude Code's sign-in on this computer, where Claude Code itself keeps
-/// it for whoever runs `claude` here: `~/.claude` and `~/.claude.json` in
+/// An agent's sign-in on this computer, where the agent itself keeps it for
+/// whoever runs it here. Claude Code: `~/.claude` and `~/.claude.json` in
 /// the home folder, and on macOS the login keychain's
-/// `Claude Code-credentials`. Only those standard places: never another
-/// folder `CLAUDE_CONFIG_DIR` or an account switcher points at.
+/// `Claude Code-credentials`. Codex: `~/.codex`, with its tokens in
+/// `auth.json`. Only those standard places: never another folder
+/// `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or an account switcher points at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Login {
-    /// `~/.claude`, where it really is, if it's there.
+    /// `~/.claude` or `~/.codex`, where it really is, if it's there.
     pub dir: Option<PathBuf>,
     /// `~/.claude.json`, where it really is, if it's there.
     pub file: Option<PathBuf>,
@@ -77,9 +193,40 @@ pub struct Login {
     pub keychain: bool,
     /// The tokens Desktop could read, to take out of a run's output.
     pub secrets: Vec<Secret>,
+    /// Whose bill a run goes on, as the sign-in says.
+    pub billing: Billing,
 }
 
 impl Login {
+    /// `agent`'s sign-in in the home folder `home`, as it is now.
+    pub fn find_for(agent: Agent, home: &Path) -> Self {
+        match agent {
+            Agent::ClaudeCode => Self::find(home),
+            Agent::Codex => Self::find_codex(home),
+        }
+    }
+
+    /// Codex's: its folder, whose `auth.json` holds its tokens or an API key.
+    fn find_codex(home: &Path) -> Self {
+        let dir = crate::roots::canonical(&home.join(CODEX_DIR))
+            .ok()
+            .filter(|p| p.is_dir())
+            .filter(|p| p.file_name().is_some_and(|name| is_named(name, CODEX_DIR)))
+            .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)));
+        let auth = dir
+            .as_ref()
+            .and_then(|d| read_small(&d.join(CODEX_AUTH_FILE)))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or_default();
+        Self {
+            dir,
+            file: None,
+            keychain: false,
+            secrets: codex_secrets(&auth),
+            billing: codex_billing(&auth),
+        }
+    }
+
     /// The sign-in in the home folder `home`, as it is now. The keychain is
     /// asked only for the person's own home, whose keychain it is.
     pub fn find(home: &Path) -> Self {
@@ -94,7 +241,7 @@ impl Login {
         // is fine.
         let dir = real(CONFIG_DIR)
             .filter(|p| p.is_dir())
-            .filter(|p| p.file_name().is_some_and(is_config_dir))
+            .filter(|p| p.file_name().is_some_and(|name| is_named(name, CONFIG_DIR)))
             .filter(|p| matches!(crate::roots::too_broad(p), Ok(None)));
         // Only the file itself, never another a link leads to.
         let file = real(CONFIG_FILE).filter(|p| {
@@ -102,11 +249,13 @@ impl Login {
                 && crate::roots::canonical(home)
                     .is_ok_and(|home| p.as_path() == home.join(CONFIG_FILE))
         });
-        let mut secrets = dir
+        let credentials = dir
             .as_ref()
-            .and_then(|d| read_small(&d.join(CREDENTIALS_FILE)))
-            .map(|text| tokens_in(&text))
-            .unwrap_or_default();
+            .and_then(|d| read_small(&d.join(CREDENTIALS_FILE)));
+        let mut billing = credentials
+            .as_deref()
+            .map_or(Billing::Unknown, claude_billing);
+        let mut secrets = credentials.map(|text| tokens_in(&text)).unwrap_or_default();
         let keychain = cfg!(target_os = "macos")
             && crate::paths::home_dir()
                 .ok()
@@ -115,16 +264,20 @@ impl Login {
             && keychain_item(false).is_some();
         if keychain && let Some(text) = keychain_item(true) {
             secrets.extend(tokens_in(&text));
+            if billing == Billing::Unknown {
+                billing = claude_billing(&text);
+            }
         }
         Self {
             dir,
             file,
             keychain,
             secrets,
+            billing,
         }
     }
 
-    /// Whether Claude Code is signed in here: tokens in its folder, or in
+    /// Whether the agent is signed in here: tokens in its folder, or in
     /// the keychain.
     pub fn signed_in(&self) -> bool {
         self.keychain || !self.secrets.is_empty()
@@ -150,14 +303,59 @@ impl Login {
     }
 }
 
-/// Whether a folder is named as Claude Code's: on Windows, whose file names
+/// Whether a folder is named as the agent's: on Windows, whose file names
 /// ignore case, `.Claude` is that folder too.
-fn is_config_dir(name: &std::ffi::OsStr) -> bool {
+fn is_named(name: &std::ffi::OsStr, wanted: &str) -> bool {
     if cfg!(windows) {
-        name.eq_ignore_ascii_case(CONFIG_DIR)
+        name.eq_ignore_ascii_case(wanted)
     } else {
-        name == CONFIG_DIR
+        name == wanted
     }
+}
+
+/// Claude Code's credentials say a subscription (`pro`, `max`, `team`...) by
+/// its `subscriptionType`; a sign-in with a Console account has none and
+/// bills the API.
+fn claude_billing(text: &str) -> Billing {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Billing::Unknown;
+    };
+    match value["claudeAiOauth"]["subscriptionType"].as_str() {
+        Some(kind) if !kind.is_empty() => Billing::Plan,
+        _ if value["claudeAiOauth"].is_object() => Billing::ApiKey,
+        _ => Billing::Unknown,
+    }
+}
+
+/// Codex's `auth.json`: an `OPENAI_API_KEY`, or a ChatGPT sign-in's `tokens`.
+fn codex_billing(auth: &Value) -> Billing {
+    if auth["OPENAI_API_KEY"]
+        .as_str()
+        .is_some_and(|k| !k.is_empty())
+    {
+        Billing::ApiKey
+    } else if auth["tokens"].is_object() {
+        Billing::Plan
+    } else {
+        Billing::Unknown
+    }
+}
+
+/// Every token in Codex's `auth.json`: its API key, and its sign-in's
+/// tokens, whatever they're called. Its account's id is no secret.
+fn codex_secrets(auth: &Value) -> Vec<Secret> {
+    let key = auth["OPENAI_API_KEY"].as_str();
+    let tokens = auth["tokens"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| name.as_str() != "account_id")
+        .filter_map(|(_, value)| value.as_str());
+    key.into_iter()
+        .chain(tokens)
+        .filter(|token| token.len() >= 20)
+        .map(|token| Secret::new(token.to_string()))
+        .collect()
 }
 
 /// Largest credentials file Desktop reads: Claude Code's is under 1 KiB.
@@ -266,24 +464,24 @@ pub fn forget_legacy_token(config: &mut Config, paths: &Paths) -> anyhow::Result
     Ok(())
 }
 
-/// Whether Claude Code is ready for a bot's commands in a folder, as the
+/// Whether an agent is ready for a bot's commands in a folder, as the
 /// config says. A run checks again, with the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClaudeState {
+pub enum AgentState {
     Ready,
-    /// Setup found no `claude` here.
+    /// Setup found no program for it here.
     NotInstalled,
-    /// Claude Code isn't signed in on this computer. Only `cww coding`
-    /// says so: the server's `roots` comes from the config, which doesn't
-    /// know, and a run then hears it from Claude Code itself.
+    /// It isn't signed in on this computer. Only `cww coding` and preparing
+    /// a repository say so: the server's `roots` comes from the config, which
+    /// doesn't know, and a run then hears it from the agent itself.
     NotSignedIn,
     /// Not lent to this bot in this folder.
     NotAllowed,
-    /// The folder's commands have no network, which Claude Code needs.
+    /// The folder's commands have no network, which the agents need.
     NoNetwork,
 }
 
-impl ClaudeState {
+impl AgentState {
     pub fn name(self) -> &'static str {
         match self {
             Self::Ready => "ready",
@@ -295,78 +493,119 @@ impl ClaudeState {
     }
 
     /// What to tell the person, in a sentence.
-    pub fn sentence(self) -> &'static str {
+    pub fn sentence(self, agent: Agent) -> String {
+        let name = agent.name();
         match self {
-            Self::Ready => "Claude Code is ready",
-            Self::NotInstalled => "Claude Code isn't installed",
-            Self::NotSignedIn => {
-                "Claude Code isn't signed in on this computer: run `claude` once and sign in"
+            Self::Ready => format!("{name} is ready"),
+            Self::NotInstalled => format!("{name} isn't installed"),
+            Self::NotSignedIn => format!(
+                "{name} isn't signed in on this computer: {}",
+                agent.sign_in_hint()
+            ),
+            Self::NotAllowed => format!("this bot's runs here don't use {name}'s sign-in"),
+            Self::NoNetwork => {
+                format!("this folder's commands have no network, which {name} needs")
             }
-            Self::NotAllowed => "this bot's runs here don't use Claude Code's sign-in",
-            Self::NoNetwork => "this folder's commands have no network, which Claude Code needs",
         }
     }
 }
 
 /// The state as the config says it: a loan's yes, and the network. Whether
-/// Claude Code is installed and signed in, the config can't say (a run finds
-/// `claude` itself when no setup recorded one), so only `cww coding status`,
-/// which looks, says `not_installed` and `not_signed_in`.
-pub fn claude_state(_coding: &CodingConfig, root: &Root, bot: &str) -> ClaudeState {
-    if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| loan.claude_code) {
-        ClaudeState::NotAllowed
+/// the agent is installed and signed in, the config can't say (a run finds
+/// the program itself when no setup recorded one), so only `cww coding
+/// status`, which looks, says `not_installed` and `not_signed_in`.
+pub fn agent_state(agent: Agent, root: &Root, bot: &str) -> AgentState {
+    if !root.runs_commands() || !root.loan(bot).is_some_and(|loan| agent.allowed(loan)) {
+        AgentState::NotAllowed
     } else if !root.network {
-        ClaudeState::NoNetwork
+        AgentState::NoNetwork
     } else {
-        ClaudeState::Ready
+        AgentState::Ready
     }
 }
 
-/// What a bot's `roots` says of a folder lent to it: whether Claude Code is
-/// ready, and the repositories' names. Never a path, an address or a token.
+/// What a bot's `roots` says of a folder lent to it: whether each agent is
+/// ready, whether this computer prepares repositories by itself, and the
+/// repositories' names. Never a path, an address or a token.
 pub fn coding_for_bot(coding: &CodingConfig, root: &Root, bot: &str) -> Value {
-    let repositories: Vec<&str> = coding
-        .repositories
-        .iter()
-        .filter(|repo| repo.root == root.id)
+    let held = || {
+        coding
+            .repositories
+            .iter()
+            .filter(|repo| repo.root == root.id)
+    };
+    let repositories: Vec<&str> = held()
         .map(|repo| repo.name.as_str())
         // Names are at most 100 characters; this keeps a folder's answer
         // small whatever the config holds.
         .take(MAX_REPOSITORIES_LISTED)
         .collect();
+    // Only those a bot's own run named, which the server knows already.
+    let named: serde_json::Map<String, Value> = held()
+        .filter_map(|repo| Some((repo.github.clone()?, json!(repo.name))))
+        .take(MAX_REPOSITORIES_LISTED)
+        .collect();
     json!({
-        "claude_code": claude_state(coding, root, bot).name(),
+        // Kept for servers that know only this one.
+        "claude_code": agent_state(Agent::ClaudeCode, root, bot).name(),
+        "agents": Agent::ALL
+            .iter()
+            .map(|agent| (agent.key().to_string(), json!(agent_state(*agent, root, bot).name())))
+            .collect::<serde_json::Map<_, _>>(),
+        "prepares": true,
+        "owners": root.loan(bot).map(|loan| loan.owners.clone()).unwrap_or_default(),
         "repositories": repositories,
+        "named": named,
     })
 }
 
 /// What a run gets beyond a person's: the folder's mirrors to read, and,
-/// for a bot allowed it, Claude Code with its sign-in.
+/// for a bot allowed them, the agents with their sign-ins.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunCoding {
     /// Mirrors of the repositories checked out in the run's folder, with
     /// their repositories: read only, fetched before the run when stale.
     pub mirrors: Vec<(PathBuf, crate::config::Repository)>,
-    pub claude: Option<Claude>,
+    pub agents: Vec<AgentRun>,
+    /// The folder's own place for toolchains and caches that outlast a run,
+    /// once a run prepared a repository there ([`prepare::tools_env`]).
+    pub tools: Option<PathBuf>,
 }
 
-/// Claude Code for one run: the program setup checked, where it really is,
+/// An agent for one run: the program setup checked, where it really is,
 /// what the sandbox reads for it, and the computer's sign-in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Claude {
+pub struct AgentRun {
+    pub agent: Agent,
     pub program: PathBuf,
     pub real: PathBuf,
     /// The folder the program really is in, or only the program where that
     /// folder is too broad to read (see [`grant`]).
     pub read: PathBuf,
-    /// Windows: the folder holding the `claude.exe` setup checked, as it
-    /// is named there (the program may be a link to a file named otherwise),
+    /// Windows: the folder holding the program setup checked, as it is
+    /// named there (the program may be a link to a file named otherwise),
     /// first on the run's PATH and read too.
     pub entry: Option<PathBuf>,
     pub login: Login,
 }
 
-impl Claude {
+impl AgentRun {
+    /// The programs that come with it, which it starts from beside itself:
+    /// Codex's `codex-code-mode-host` and `codex-exec-server`. Only those,
+    /// where its folder is too broad to read whole.
+    pub fn helpers(&self) -> Vec<PathBuf> {
+        if self.agent != Agent::Codex {
+            return Vec::new();
+        }
+        std::fs::read_dir(self.real_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("codex-"))
+            .map(|entry| entry.path())
+            .collect()
+    }
+
     /// The folder holding the program itself, where any link leads.
     pub fn real_dir(&self) -> PathBuf {
         self.real
@@ -375,7 +614,7 @@ impl Claude {
     }
 }
 
-/// What a run reads for Claude Code at `real`: the folder it really is in,
+/// What a run reads for an agent at `real`: the folder it really is in,
 /// where its installers put it with nothing else (`~/.local/share/claude/versions`,
 /// mise's install), or, where that folder is too broad (the home folder, one
 /// that holds it, a drive, a system folder, one that holds a shared folder
@@ -424,16 +663,16 @@ pub fn grant_with(
     }
 }
 
-/// What a run of `request` in folder `root` gets. `login` looks for Claude
-/// Code's sign-in, and is asked only when the bot's loan allows Claude Code.
-/// A run gets Claude Code even when it isn't signed in, and hears so from
-/// Claude Code itself.
+/// What a run of `request` in folder `root` gets. `login` looks for an
+/// agent's sign-in, and is asked only for those the bot's loan allows. A run
+/// gets the agent even when it isn't signed in, and hears so from the agent
+/// itself.
 pub fn for_run(
     config: &Config,
     paths: &Paths,
     root: &str,
     bot: Option<&str>,
-    login: impl FnOnce() -> Login,
+    login: impl Fn(Agent) -> Login,
 ) -> RunCoding {
     let mirrors = config
         .coding
@@ -445,36 +684,55 @@ pub fn for_run(
         // its config says, outside the sandbox.
         .filter(|(dir, _)| dir.is_dir() && !repositories::writable_by_commands(dir, &config.roots))
         .collect();
-    let claude = bot.and_then(|bot| {
-        let root = config.roots.iter().find(|r| r.id == root)?;
-        if claude_state(&config.coding, root, bot) != ClaudeState::Ready {
-            return None;
-        }
-        // The one setup recorded while it's there, else the one this computer
-        // has: a bot allowed Claude Code needs no `cww coding setup`.
-        let program = setup::claude_for_run(&config.coding, &config.roots)?;
-        // Without Windows' `\\?\` prefix, which a run's PATH and grants can't use.
-        let real = crate::roots::canonical(&program)
-            .ok()
-            .filter(|p| p.is_file())?;
-        let read = grant(&real, config, paths)?;
-        let entry = if cfg!(windows) {
-            let named = crate::roots::canonical(program.parent()?)
-                .ok()?
-                .join(program.file_name()?);
-            Some(grant(&named, config, paths)?)
-        } else {
-            None
-        };
-        Some(Claude {
-            program,
-            real,
-            read,
-            entry,
-            login: login().narrowed(config, paths),
+    let agents = bot
+        .and_then(|bot| Some((bot, config.roots.iter().find(|r| r.id == root)?)))
+        .map(|(bot, root)| {
+            Agent::ALL
+                .into_iter()
+                .filter(|agent| agent.unavailable().is_none())
+                .filter(|agent| agent_state(*agent, root, bot) == AgentState::Ready)
+                .filter_map(|agent| agent_for_run(agent, config, paths, &login))
+                .collect()
         })
-    });
-    RunCoding { mirrors, claude }
+        .unwrap_or_default();
+    let tools = prepare::tools_dir(config, root);
+    RunCoding {
+        mirrors,
+        agents,
+        tools,
+    }
+}
+
+fn agent_for_run(
+    agent: Agent,
+    config: &Config,
+    paths: &Paths,
+    login: &impl Fn(Agent) -> Login,
+) -> Option<AgentRun> {
+    // The one setup recorded while it's there, else the one this computer
+    // has: a bot allowed an agent needs no `cww coding setup`.
+    let program = setup::program_for_run(agent, &config.coding, &config.roots)?;
+    // Without Windows' `\\?\` prefix, which a run's PATH and grants can't use.
+    let real = crate::roots::canonical(&program)
+        .ok()
+        .filter(|p| p.is_file())?;
+    let read = grant(&real, config, paths)?;
+    let entry = if cfg!(windows) {
+        let named = crate::roots::canonical(program.parent()?)
+            .ok()?
+            .join(program.file_name()?);
+        Some(grant(&named, config, paths)?)
+    } else {
+        None
+    };
+    Some(AgentRun {
+        agent,
+        program,
+        real,
+        read,
+        entry,
+        login: login(agent).narrowed(config, paths),
+    })
 }
 
 /// Takes secrets' exact text out of a stream as it passes, across the

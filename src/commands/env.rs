@@ -75,6 +75,7 @@ const RESERVED_PREFIXES: &[&str] = &[
     "LC_",
     "CWW_",
     "CLAUDE_CODE_",
+    "CODEX_",
 ];
 
 /// One part of a value: text, or a command whose output goes there.
