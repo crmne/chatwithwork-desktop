@@ -102,7 +102,7 @@ fn digits(text: &str, least: usize, most: usize) -> bool {
 fn decision(query: &str) -> bool {
     query
         .strip_prefix("decision=")
-        .and_then(|key| key.strip_prefix(['t', 'h']))
+        .and_then(|key| key.strip_prefix(['t', 'h', 'b']))
         .is_some_and(|id| digits(id, 1, 18))
 }
 
@@ -138,6 +138,7 @@ mod tests {
             "/482139075/decisions",
             "/482139075/decisions?decision=t42",
             "/482139075/decisions?decision=h7",
+            "/482139075/decisions?decision=b12",
             "/482139075/bots",
             "/482139075/bots/3",
             "/482139075/bots/3?set_up=coding",
@@ -252,6 +253,9 @@ mod tests {
             "chatwithwork://work.example/482139075/chats/16#x",
             "chatwithwork://work.example/482139075/decisions?decision=t42&approve=1",
             "chatwithwork://work.example/482139075/decisions?decision=x42",
+            "chatwithwork://work.example/482139075/decisions?decision=B12",
+            "chatwithwork://work.example/482139075/decisions?decision=b",
+            "chatwithwork://work.example/482139075/decisions?decision=bt12",
             "chatwithwork://work.example/482139075/decisions?decision=t",
             "chatwithwork://work.example/482139075/decisions?",
             "chatwithwork://work.example/482139075/decisions?decision=t42#x",
