@@ -159,8 +159,7 @@ pub fn set_writable(
         root.network = false;
         root.bots.iter_mut().for_each(|loan| {
             loan.unattended = false;
-            loan.claude_code = false;
-            loan.codex = false;
+            crate::coding::disallow_all(loan);
         });
     }
     Ok(root.clone())
@@ -197,8 +196,7 @@ pub fn set_commands(
         // No command runs there now, so none runs unattended either.
         root.bots.iter_mut().for_each(|loan| {
             loan.unattended = false;
-            loan.claude_code = false;
-            loan.codex = false;
+            crate::coding::disallow_all(loan);
         });
     }
     Ok(root.clone())
@@ -241,6 +239,9 @@ pub fn set_bot(
     let commands = root.runs_commands();
     let claude_code = root.loan(bot).is_some_and(|loan| loan.claude_code) && commands;
     let codex = root.loan(bot).is_some_and(|loan| loan.codex) && commands;
+    let opencode = root.loan(bot).is_some_and(|loan| loan.opencode) && commands;
+    let gemini = root.loan(bot).is_some_and(|loan| loan.gemini) && commands;
+    let pi = root.loan(bot).is_some_and(|loan| loan.pi) && commands;
     let owners = root
         .loan(bot)
         .map(|loan| loan.owners.clone())
@@ -253,6 +254,9 @@ pub fn set_bot(
             unattended,
             claude_code,
             codex,
+            opencode,
+            gemini,
+            pi,
             owners,
         });
     }
@@ -326,10 +330,7 @@ pub fn set_bot_agent(
     let Some(loan) = root.bots.iter_mut().find(|loan| loan.id == bot) else {
         bail!("{label} isn't shared with bot {bot}. Share it first (`cww roots share`)");
     };
-    match agent {
-        crate::coding::Agent::ClaudeCode => loan.claude_code = allowed,
-        crate::coding::Agent::Codex => loan.codex = allowed,
-    }
+    agent.allow(loan, allowed);
     Ok(root.clone())
 }
 

@@ -89,6 +89,9 @@ pub fn set_bot(config: &mut Config, bot: &str, name: Option<&str>, lent: bool) -
             unattended: false,
             claude_code: false,
             codex: false,
+            opencode: false,
+            gemini: false,
+            pi: false,
             owners: Vec::new(),
         });
     }

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -1282,6 +1282,9 @@ fn only_a_bot_allowed_it_gets_claude_codes_sign_in_and_its_tokens_never_print() 
         unattended: false,
         claude_code: true,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     });
     fx.config.coding.claude = Some(program);
@@ -1473,6 +1476,9 @@ fn only_a_bot_allowed_it_gets_codexs_sign_in_and_its_tokens_never_print() {
         unattended: false,
         claude_code: false,
         codex: true,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     });
     fx.config.coding.codex = Some(program);
@@ -1586,6 +1592,9 @@ fn the_first_run_prepares_a_repository_by_itself_and_names_a_step_that_fails() {
         unattended: false,
         claude_code: true,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: vec!["acme".into()],
     });
     let bare = bare_repository(
@@ -1724,6 +1733,9 @@ fn real_claude_code_answers_from_the_sandbox() {
         unattended: false,
         claude_code: true,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     });
     fx.config.coding.claude = Some(program);
@@ -1733,6 +1745,65 @@ fn real_claude_code_answers_from_the_sandbox() {
     };
     let status = fx.runs.start(&fx.config, &ask).unwrap();
     let done = wait_for(&fx.runs, &status.id, Duration::from_secs(190));
+    let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
+    let leaked = [&done.stdout, &done.stderr, &window.text]
+        .iter()
+        .any(|text| login.secrets.iter().any(|s| text.contains(s.expose())));
+    assert!(!leaked, "a token printed");
+    eprintln!(
+        "state {} exit {:?}\nstdout: {}\nstderr: {}",
+        done.status.state, done.status.exit_code, done.stdout, done.stderr
+    );
+    assert_eq!(done.status.exit_code, Some(0));
+    assert!(done.stdout.to_lowercase().contains("ready"));
+}
+
+/// The real agent `CWW_TEST_AGENT` names (`opencode`, `gemini`, `pi`...),
+/// found as a run finds it, answers from the sandbox with the sign-in in the
+/// home folder `CWW_TEST_PERSON_HOME` (a test home holding a copy, never a
+/// person's own), as a bot's run gets it. Needs the network, and spends a
+/// few tokens. Its failures never print what the run printed if a token
+/// leaked.
+#[test]
+#[ignore = "needs CWW_TEST_AGENT signed in under CWW_TEST_PERSON_HOME, and the network"]
+fn real_agent_answers_from_the_sandbox() {
+    let key = std::env::var("CWW_TEST_AGENT").expect("CWW_TEST_AGENT");
+    let agent = crate::coding::Agent::ALL
+        .into_iter()
+        .find(|a| a.key() == key || a.program() == key)
+        .expect("a coding agent");
+    let home = PathBuf::from(std::env::var("CWW_TEST_PERSON_HOME").expect("CWW_TEST_PERSON_HOME"));
+    let mut fx = fixture(true);
+    let mut paths = fx.runs.paths.clone();
+    paths.person_home = Some(home.clone());
+    let login = crate::coding::Login::find_for(agent, &home);
+    assert!(login.signed_in(), "{}", agent.sign_in_hint());
+    fx.runs = Runs::new(paths);
+    fx.config.limits.command_timeout_seconds = 240;
+    fx.config.roots[0].network = true;
+    let mut loan = crate::config::BotLoan {
+        id: "42".into(),
+        name: String::new(),
+        unattended: false,
+        claude_code: false,
+        codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
+        owners: Vec::new(),
+    };
+    agent.allow(&mut loan, true);
+    fx.config.roots[0].bots.push(loan);
+    if let Ok(program) = std::env::var("CWW_TEST_PROGRAM") {
+        crate::coding::setup::record_program(&mut fx.config.coding, agent, PathBuf::from(program));
+    }
+    let probe = std::env::var("CWW_TEST_COMMAND").unwrap_or_else(|_| agent.ready_probe().into());
+    let ask = Request {
+        bot: Some("42".into()),
+        ..request(&probe)
+    };
+    let status = fx.runs.start(&fx.config, &ask).unwrap();
+    let done = wait_for(&fx.runs, &status.id, Duration::from_secs(250));
     let window = fx.runs.output(&status.id, 0, MAX_OUTPUT_CHUNK).unwrap();
     let leaked = [&done.stdout, &done.stderr, &window.text]
         .iter()
@@ -1794,6 +1865,7 @@ fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
             keychain: false,
             secrets: Vec::new(),
             billing: Default::default(),
+            env: Vec::new(),
         },
     }];
     let mut expected = own.clone();

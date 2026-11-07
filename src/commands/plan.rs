@@ -455,7 +455,18 @@ impl Plan {
     /// it can't write, and its temporary files in the run's own. Its sign-in
     /// is where the agent keeps it ([`Plan::coding_writable`]).
     pub fn coding_environment(&self) -> Vec<(String, String)> {
-        let mut env = Vec::new();
+        let mut env: Vec<(String, String)> = self
+            .coding
+            .agents
+            .iter()
+            .flat_map(|a| {
+                a.agent
+                    .environment()
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .chain(a.login.env.iter().cloned())
+            })
+            .collect();
         if self
             .coding
             .agents
@@ -463,7 +474,6 @@ impl Plan {
             .any(|a| a.agent == crate::coding::Agent::ClaudeCode)
         {
             env.extend([
-                ("DISABLE_AUTOUPDATER".to_string(), "1".to_string()),
                 // Claude Code keeps its own files under /tmp otherwise,
                 // which Seatbelt and the process container don't give a
                 // run: the run's own temporary folder instead.
@@ -514,7 +524,8 @@ impl Plan {
     }
 
     /// What a run allowed an agent reads and writes beyond its folder and
-    /// home: `~/.claude` and `~/.claude.json`, or `~/.codex`, where they
+    /// home: `~/.claude` and `~/.claude.json`, `~/.codex`, or
+    /// `~/.local/share/opencode`, where they
     /// really are, which its own home links to (`run.rs`). The agent
     /// refreshes its tokens there. Nothing else of the person's home.
     pub fn coding_writable(&self) -> Vec<String> {

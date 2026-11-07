@@ -5062,6 +5062,9 @@ async fn a_bots_claude_code_runs_get_the_sign_in_and_never_print_it() {
         unattended: false,
         claude_code: true,
         codex: false,
+        opencode: false,
+        gemini: false,
+        pi: false,
         owners: Vec::new(),
     });
     config.coding.claude = Some(program);

@@ -75,6 +75,15 @@ pub struct CodingConfig {
     /// The `codex` program, the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex: Option<PathBuf>,
+    /// The `opencode` program, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode: Option<PathBuf>,
+    /// The `gemini` program, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gemini: Option<PathBuf>,
+    /// The `pi` program, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi: Option<PathBuf>,
     /// What 0.13.1 and earlier wrote when they kept a token from `claude
     /// setup-token` in the secret store. Kept, so any save leaves it, until
     /// the next `cww coding` deletes that token
@@ -372,6 +381,28 @@ pub struct BotLoan {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub codex: bool,
+    /// The same for OpenCode: `~/.local/share/opencode`, `opencode_login`
+    /// in the file.
+    #[serde(
+        default,
+        rename = "opencode_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub opencode: bool,
+    /// The same for Gemini CLI: `~/.gemini`, `gemini_login` in the file.
+    #[serde(
+        default,
+        rename = "gemini_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub gemini: bool,
+    /// The same for pi: `~/.pi/agent`, `pi_login` in the file.
+    #[serde(
+        default,
+        rename = "pi_login",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub pi: bool,
     /// The GitHub owners whose repositories this bot's first runs may mirror
     /// and prepare here by themselves, with the person's Git login: the
     /// person's yes, on this computer, to what the server can name. Nothing

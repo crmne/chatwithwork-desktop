@@ -570,12 +570,13 @@ impl Plan {
         let tools = self.tools_environment();
         env.retain(|(name, _)| !tools.iter().any(|(own, _)| own == name));
         env.extend(tools);
-        // The run's own home has no `.claude` or `.codex`, and Windows can't
-        // link one there without Developer Mode: the agent's own variable
-        // names the person's, where its sign-in is.
+        // The run's own home has no `.claude`, `.codex` or OpenCode's data
+        // folder, and Windows can't link one there without Developer Mode:
+        // the agent's own variable names the person's, where its sign-in is.
         for run in &self.coding.agents {
             if let Some(dir) = &run.login.dir {
-                env.push((run.agent.config_variable().to_string(), display(dir)));
+                let (name, value) = run.agent.config_variable(dir);
+                env.push((name.to_string(), display(&value)));
             }
         }
         for (name, value) in found.env {

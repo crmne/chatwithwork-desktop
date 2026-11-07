@@ -473,7 +473,7 @@ enum CodingCommand {
         /// The bot's name, to recognize it here.
         #[arg(long)]
         name: Option<String>,
-        /// The coding agent it uses: claude (the default) or codex.
+        /// The coding agent it uses: claude (the default), codex or opencode.
         #[arg(long)]
         agent: Option<String>,
         /// The folder it works in (default ~/bots).
@@ -516,7 +516,7 @@ enum CodingCommand {
         bot: String,
         #[arg(long)]
         off: bool,
-        /// The coding agent: claude (the default) or codex.
+        /// The coding agent: claude (the default), codex or opencode.
         #[arg(long)]
         agent: Option<String>,
         /// Let this bot's first runs here prepare repositories of this GitHub
@@ -1632,8 +1632,13 @@ fn coding_agent(name: Option<&str>) -> anyhow::Result<cww::coding::Agent> {
     use cww::coding::Agent;
     match name {
         None | Some("claude") | Some("claude_code") | Some("claude-code") => Ok(Agent::ClaudeCode),
-        Some("codex") => Ok(Agent::Codex),
-        Some(other) => anyhow::bail!("{other:?} isn't a coding agent: use claude or codex"),
+        Some(other) => Agent::ALL
+            .into_iter()
+            .find(|agent| agent.program() == other || agent.key() == other)
+            .ok_or_else(|| {
+                let names: Vec<&str> = Agent::ALL.iter().map(|a| a.program()).collect();
+                anyhow::anyhow!("{other:?} isn't a coding agent: use {}", names.join(", "))
+            }),
     }
 }
 

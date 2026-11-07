@@ -1,8 +1,8 @@
 # Lending this computer to a coding bot
 
-A coding bot in Chat with Work (the Issue fixer with Claude Code or Codex, the Dependency upgrader on a computer, and bots like them) runs commands on a computer lent to it: it fetches the repository, has a coding agent (`claude -p`, or `codex exec`) make a change in a fresh worktree, runs the tests, and then commits the changed files through Chat with Work's GitHub App. This page is how a person gets a computer ready for that in one guided step, on Linux, macOS and Windows, and what the computer then holds to.
+A coding bot in Chat with Work (the Issue fixer, the Dependency upgrader on a computer, and bots like them) runs commands on a computer lent to it: it fetches the repository, has a coding agent (`claude -p`, `codex exec`, `opencode run`, `gemini -p` or `pi -p`) make a change in a fresh worktree, runs the tests, and then commits the changed files through Chat with Work's GitHub App. This page is how a person gets a computer ready for that in one guided step, on Linux, macOS and Windows, and what the computer then holds to.
 
-Status: one yes in the app's own window and a first run that prepares itself ([below](#one-yes)), and the guided `cww coding setup` for servers. Claude Code and Codex.
+Status: one yes in the app's own window and a first run that prepares itself ([below](#one-yes)), and the guided `cww coding setup` for servers. Claude Code, Codex, OpenCode, Gemini CLI and pi ([Which agents](#which-agents)).
 
 **What the server can do here.** The person chooses on this computer which bot, which agent, and whose repositories (the [one Allow](#one-yes), or `cww coding`). The server can then name a repository of an owner they allowed, and a run prepares it asking nobody ([The first run](#the-first-run)), and a card's Always allow from the computer's owner makes a folder already lent to that bot unattended ([below](#letting-a-bots-commands-run-unattended-from-its-card)). It can't lend a folder, turn commands or the network on, or give a sign-in. It learns whether a lent folder is ready, and the names of the repositories a run named, never a token, a path or an address.
 
@@ -122,9 +122,39 @@ The same mapping for `~/.codex` as `~/.claude`, with its own switch on a loan (`
 
 **The program.** `.cww-bin/codex` links to the program, and its helpers beside it (`codex-code-mode-host`, `codex-exec-server`) are read and linked too. A run uses `codex exec --sandbox danger-full-access`: its own sandbox can't start inside this one, which already holds it to the folder. That's Codex's flag for its own, not a way past Desktop's.
 
+## OpenCode's sign-in
+
+OpenCode 2 keeps its sign-ins and keys (a ChatGPT, Copilot or OpenCode Zen sign-in, or a provider's API key) as rows of its database, `~/.local/share/opencode/opencode.db`, beside its sessions. A loan's `opencode_login = true` (`--agent opencode`) lends that data folder, read and write, as `~/.codex` is lent; on Windows `OPENCODE_DB` names the database.
+
+- **Never its config folder.** `~/.config/opencode` holds its plugins (npm packages it runs) and the password of its background service, which runs as you outside every sandbox: a run that knew it could have that service run anything. A run gets its own config folder, and only the model you chose there (the top-level `model` of `opencode.json` or `.jsonc`), as `OPENCODE_CONFIG_CONTENT`. Without one it uses OpenCode's own default, as `opencode run` would.
+- **Its own server, never yours.** A run starts it with `opencode run --standalone --auto '<task>'`: a private server inside the sandbox, never the background service. A run that leaves `--standalone` out finds no service password in its own home, and its service ends with the run.
+- **Tokens.** Desktop reads the credentials from the database's bytes (and its write-ahead log), without opening it as a database, a regular file of at most 256 MiB each, and takes every string of 20 characters or more in each out of what the run prints, as `[opencode-token]`. An old value a page still holds goes too.
+- **What it can't promise**, as for Claude Code: a run can read and change your OpenCode sessions in that database, and its snapshots' Git folders there, which OpenCode later runs `git` on as you.
+- **Not on macOS:** its server must listen on a local port, which Seatbelt doesn't give a run, and Desktop doesn't loosen the sandbox for it. The window says so.
+
+## Gemini CLI's sign-in
+
+`~/.gemini`, with a Google sign-in's tokens in `oauth_creds.json` (Google AI Pro or Ultra, Code Assist, or the free tier), or an API key in its `.env` (`GEMINI_API_KEY`), lent by `gemini_login = true` (`--agent gemini`). On Windows `GEMINI_CLI_HOME` names the folder that holds it. A run gets `GEMINI_SANDBOX=false`: its own sandbox can't start inside this one. Every string of 20 characters or more in `oauth_creds.json`, and the key in `.env`, leave what the run prints as `[gemini-token]`. A sign-in kept in the system keychain (`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE`) reads as not signed in here. A run starts it with `gemini -p '<task>' --approval-mode yolo --skip-trust`. Its settings (`settings.json`: hooks, MCP servers) run outside the sandbox the next time you start it, as Claude Code's do.
+
+## pi's sign-in
+
+`~/.pi/agent`, whose `auth.json` holds a sign-in per provider (a ChatGPT or Copilot plan, among others) or an API key, lent by `pi_login = true` (`--agent pi`); on Windows `PI_CODING_AGENT_DIR` names it. Every string of 20 characters or more in `auth.json` leaves what the run prints as `[pi-token]`. A run gets `PI_SKIP_VERSION_CHECK=1` and starts it with `pi -p --no-session '<task>'`. The folder holds its extensions (TypeScript it runs), and a key in `auth.json` may be a shell command it runs to get one: what a run writes there runs outside the sandbox the next time you start pi.
+
+An agent installed with npm whose program is a script (`gemini`, or pi from `npm install -g`) is read with its whole package folder, its dependencies included, never more.
+
+## Which agents
+
+Claude Code, Codex, OpenCode, Gemini CLI and pi: the most used command-line coding agents that run headless on a person's own subscription or key, with a sign-in in a file this computer can lend as it is. Left out, for now:
+
+- **GitHub Copilot CLI** keeps its token in the system keychain, and in a file only after an interactive yes; Seatbelt that blocks `com.apple.SecurityServer` breaks its HTTPS. Lending it would mean passing a token in, which Desktop never does.
+- **Cursor CLI** keeps its sign-in in the macOS keychain unless told otherwise, and we couldn't sign in to try it.
+- **Amp** and **Factory Droid** keep theirs in the keyring (Droid's file is encrypted with a key there), so only an API key would work, not the person's plan.
+- **Goose** uses the keyring unless told otherwise; **Aider** takes API keys only, and its last release was in August 2025; **Crush** runs shell from its config as it loads.
+- **T3 Code** isn't an agent: it's an app that drives Claude Code, Codex, OpenCode and others, which a bot here uses directly.
+
 ## Who pays
 
-A run on this computer uses the sign-in's own plan or key: Chat with Work charges nothing for it. The answer to `prepare_repository` says which, read from `claudeAiOauth.subscriptionType` or `auth.json`, so the run's card says "Uses your Claude plan on chalk". Anthropic's and OpenAI's own terms and limits apply to a plan used this way.
+A run on this computer uses the sign-in's own plan or key: Chat with Work charges nothing for it. The answer to `prepare_repository` says which (`plan`, `api_key` or `unknown`), read from the sign-in (Claude Code's `claudeAiOauth.subscriptionType`, an OAuth sign-in or a key in the others' files), so the run's card says "Uses your Claude plan on chalk". Each provider's own terms and limits apply to a plan used this way.
 
 **From 0.13.1 and earlier.** Those versions kept a token from `claude setup-token`, pasted into `cww coding sign-in`, in this computer's secret store. That's gone with `cww coding sign-in` and `sign-out`: the first `cww coding` command after the update deletes the stored token and says so (unpairing deletes it too). Revoke it at claude.ai (Settings, Claude Code) if you no longer use it. A loan's old `claude_code = true` doesn't carry over: that yes covered one token, and this gives a run Claude Code's files, so it's asked for again. Until then the bot's `roots` says `not_allowed`, and its request brings up the dialog; on a server with no app, run `cww coding allow <root> <bot>`. Sign in to Claude Code on that computer too if you only ever used a token there.
 
@@ -159,7 +189,7 @@ In a bot's `roots` (PROTOCOL.md 7.2.1), each lent folder says whether Claude Cod
 
 ```json
 { "id": "bots", "label": "bots", "unattended": false,
-  "coding": { "claude_code": "ready", "agents": { "claude_code": "ready", "codex": "not_allowed" },
+  "coding": { "claude_code": "ready", "agents": { "claude_code": "ready", "codex": "not_allowed", "opencode": "not_allowed", "gemini": "not_allowed", "pi": "not_allowed" },
               "prepares": true, "owners": ["acme"], "repositories": ["app"], "named": { "acme/app": "app" } } }
 ```
 
@@ -171,10 +201,10 @@ In a bot's `roots` (PROTOCOL.md 7.2.1), each lent folder says whether Claude Cod
 
 The rules in [SECURITY.md](../SECURITY.md) and [commands.md](commands.md) all still hold; this adds:
 
-- **This computer decides, with two named exceptions.** The `[coding]` programs, `claude_login` and `codex_login` on a loan, and `repository_owners` are changed only by `cww coding`, `cww roots`, the control API (the app's window), or editing `config.toml`, never by the server. The server can name a repository of an owner the person allowed, which a run records and prepares ([The first run](#the-first-run)), and a card's Always allow makes a loan unattended ([above](#letting-a-bots-commands-run-unattended-from-its-card)). It can ask for Claude Code (`ask_claude_code`), and the person answers here. Turning a folder's commands off, or making it read-only, ends its loans' `claude_code` as it ends `unattended`.
+- **This computer decides, with two named exceptions.** The `[coding]` programs, each agent's `<agent>_login` on a loan (`claude_login`, `codex_login`, `opencode_login`, `gemini_login`, `pi_login`), and `repository_owners` are changed only by `cww coding`, `cww roots`, the control API (the app's window), or editing `config.toml`, never by the server. The server can name a repository of an owner the person allowed, which a run records and prepares ([The first run](#the-first-run)), and a card's Always allow makes a loan unattended ([above](#letting-a-bots-commands-run-unattended-from-its-card)). It can ask for Claude Code (`ask_claude_code`), and the person answers here. Turning a folder's commands off, or making it read-only, ends its loans' `claude_code` as it ends `unattended`.
 - **The sign-in never reaches the worker, the server or the audit log.** Only a run whose loan allows it reads Claude Code's own paths, and the tokens Desktop can read there are removed from the run's output. It's never copied: Desktop stores no token of its own.
 - **Desktop runs `git` outside the sandbox only on its own mirror**, with fixed arguments, hooks off, and a config no command can write, plus `git ls-remote` on an address it built itself and a private copy of the mirror to read what it needs. It never runs anything outside the sandbox in a shared folder. The first run's install and test code runs in the sandbox. The setup's toolchain step is the one exception, run by the person, in their terminal, after they agreed, before any bot has touched the checkout.
-- **What a compromised server could do** in a folder lent with `claude_login` and commands: what it can already do there (run commands, as approvals or the unattended loan allow), plus use the person's Claude Code subscription, read their Claude Code history, with the network try to leak its tokens, and change Claude Code's settings so the person's own next `claude` runs something outside the sandbox ([What it can't promise](#claude-codes-sign-in)). Beyond that it can have a run copy, install and test any repository of an owner the person allowed, with the network on, and make a lent folder's commands unattended. It can't learn a token from `roots`, reach another folder or another owner's repositories, push to the repository, lend a folder, or give a sign-in.
+- **What a compromised server could do** in a folder lent with an agent's sign-in and commands: what it can already do there (run commands, as approvals or the unattended loan allow), plus use the person's Claude Code subscription, read their Claude Code history, with the network try to leak its tokens, and change Claude Code's settings so the person's own next `claude` runs something outside the sandbox ([What it can't promise](#claude-codes-sign-in)). Beyond that it can have a run copy, install and test any repository of an owner the person allowed, with the network on, and make a lent folder's commands unattended. It can't learn a token from `roots`, reach another folder or another owner's repositories, push to the repository, lend a folder, or give a sign-in.
 
 ## Testing
 
@@ -188,11 +218,12 @@ Tried for real on 2026-11-03, with the setup token 0.13.1 and earlier used, and 
 - **Linux (Fedora 43, Bubblewrap), Plenty's NUC.** Moved from the hand-made setup: `cww coding sign-in --stdin` from the old `.env` file, then `cww coding setup --bot 24 --repo ... --ssh-key ...`, which kept the existing checkout and pointed its `origin` at the new mirror. Through the daemon, as bot 24, `bin/rails test` passed in the sandbox with the network, and `claude -p` answered from it, with `claude` on mise's `installs/claude/latest` link. The daemon fetched the stale mirror itself before the run, with the deploy key. Trying it found two bugs, fixed before this was called built. Bubblewrap can't start with a link given as a folder to bind (the program's folder is now bound where it really is), and ssh refused the system's `/etc/ssh` config inside the service's user namespace (Desktop's fetches now use `~/.ssh/config`).
 - **macOS 27 (Seatbelt), the Mac mini.** The real Claude Code answered from the sandbox with a setup token (`real_claude_code_answers_from_the_sandbox`). That run found Claude Code writing to `/tmp/claude-<uid>`, which Seatbelt refuses (now `CLAUDE_CODE_TMPDIR`), and waiting three seconds on an open stdin (now closed). The redaction test also ran there in Seatbelt, and `cww coding setup` ran side by side from nothing: folder, sign-in, mirror, checkout and status.
 - **Windows 11 (26H2), the test VM.** The installer CI built, then `cww coding setup` from nothing over SSH. It installed Claude Code with Anthropic's installer and found it outside `PATH` in `~\.local\bin`, kept the token in the file store, and made the mirror and the checkout (`origin` is the mirror) and fetched it. Over SSH the Credential Manager isn't reachable (`ERROR_NO_SUCH_LOGON_SESSION`), and the setup says so. Commands can't run in a sandbox from an SSH session, so on Windows the run itself was tested in CI on Windows 11 on Arm, in a process container: the redaction test with a stand-in `claude.cmd` (the sign-in reaches only the allowed bot, with the token taken out of stdout, stderr and the output window). The real Claude Code from a Windows sandbox, which needs a desktop session, hasn't been tried.
+- **OpenCode, Gemini CLI and pi, 2026-11-07, on chalk (Bubblewrap) and the Mac mini (macOS 27, Seatbelt), with test homes holding API keys, never a person's sign-in:** through `real_agent_answers_from_the_sandbox` (`CWW_TEST_AGENT`, `CWW_TEST_PERSON_HOME`), each real agent ran a shell tool in the checkout and answered from the sandbox, the run's home holding only links to its own folder; `cat` of each one's sign-in printed `[opencode-token]`, `[gemini-token]` and `[pi-token]`. OpenCode 2.2.6, Gemini CLI 0.67.0 and pi 1.5.0 on Linux; Gemini CLI and pi on macOS, where OpenCode's private server couldn't listen (above). A plan's sign-in (ChatGPT, Google) has the same files but wasn't tried. Windows wasn't tried for these three.
 - **Everywhere, in CI:** the unit tests, and on Linux the e2e test through the tunnel (`roots` says `ready`, the bot's run gets the sign-in redacted, a person's doesn't, and so does `coding_check`).
 
 ## Not built yet
 
-- Other coding agents' sign-ins (Gemini CLI, say): `[coding]` and a loan take another entry each.
+- The agents [left out](#which-agents), and OpenCode and Codex on macOS.
 - The sign-in for a person's own chats' commands: only bots' runs get it.
 - Toolchains on Windows: mise's fallback into `.cww-tools` is Linux and macOS only; on Windows `mise install` must be able to write, or that step's card says so.
 
