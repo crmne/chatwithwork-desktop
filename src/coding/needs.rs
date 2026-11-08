@@ -367,8 +367,16 @@ fn database_yml(text: &str, from: &str, needs: &mut Needs) {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if !raw.starts_with([' ', '\t']) {
-            // `development:` or `default: &default`.
+        // A block starts at any key with no value of its own: `development:`,
+        // `default: &default`, or a nested database (`primary:` under
+        // `production:`, Rails' several databases); what follows is its.
+        let opens = line.split_once(':').is_some_and(|(key, rest)| {
+            !key.contains(' ') && key != "<<" && {
+                let rest = rest.trim();
+                rest.is_empty() || rest.starts_with('&')
+            }
+        });
+        if opens {
             let anchor = line
                 .split_once('&')
                 .map(|(_, a)| a.trim().to_string())
@@ -513,8 +521,9 @@ fn urls(text: &str, from: &str, needs: &mut Needs) {
         // `DATABASE_URL=postgres://...`: the URL starts at its scheme, and
         // keeps any `=` in it (a password's).
         let start = word[..at]
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rfind(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(*c, '+' | '-' | '.')))
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let word = &word[start..];
         let scheme = &word[..at - start];
         let Some((name, port)) = kind(scheme.trim_end_matches("ql")).or_else(|| kind(scheme))
@@ -693,6 +702,35 @@ mod tests {
             found.contains(&("192.168.8.31".to_string(), 6543)),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn several_rails_databases_are_each_read() {
+        let mut needs = Needs::default();
+        database_yml(
+            "default: &default\n  adapter: postgresql\n\n\
+             production:\n  primary:\n    <<: *default\n    host: db.internal\n  \
+             queue:\n    <<: *default\n    host: 10.0.0.9\n    port: 6543\n",
+            "config/database.yml",
+            &mut needs,
+        );
+        let found: Vec<(String, u16)> = needs
+            .services
+            .iter()
+            .map(|s| (s.host.clone(), s.port))
+            .collect();
+        assert!(
+            found.contains(&("db.internal".to_string(), 5432)),
+            "{found:?}"
+        );
+        assert!(found.contains(&("10.0.0.9".to_string(), 6543)), "{found:?}");
+    }
+
+    #[test]
+    fn a_url_after_a_character_of_several_bytes_is_read() {
+        let mut needs = Needs::default();
+        urls("#🔗postgres://localhost/app", ".env.example", &mut needs);
+        assert_eq!(needs.services.len(), 1);
     }
 
     #[test]

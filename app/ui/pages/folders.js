@@ -297,6 +297,8 @@ function networkText(app, root) {
     : NETWORK_TEXT[level];
   const reach = level === "internet" ? [] : (root.reach || []);
   if (!reach.length) return text;
+  // Seatbelt names no address but this Mac's: saved ones do nothing there.
+  if (app.info.platform === "macos") return `${text} (Saved local-network addresses don’t apply on macOS.)`;
   const also = `${reach.join(", ")} (cww roots reach --remove takes one away)`;
   return level === "none"
     ? `Commands here reach only ${also}.`

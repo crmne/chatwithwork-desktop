@@ -1203,6 +1203,10 @@ impl Daemon {
         let root = self
             .edit_config(move |config, _| set_writable(config, &which, writable, i_know))
             .await?;
+        if !writable {
+            // Its commands stopped with its changes: so did any Allow once.
+            self.once.forget(&root.id);
+        }
         let mut entry = AuditEntry::event(if writable {
             "root_changes_allowed"
         } else {
@@ -1369,6 +1373,14 @@ impl Daemon {
             )
             .into());
         };
+        // A sandbox's network is IPv4: an exact IPv6 address can't be given.
+        if address.is_ipv6() && !address.is_loopback() && place != crate::reach::Where::Internet {
+            return Err(Refusal::new(
+                "not_allowed",
+                "an IPv6 address can't be given on its own: allow the internet instead",
+            )
+            .into());
+        }
         // The address may have moved since the question was asked (a local
         // address now this computer's, say): a yes gives only what it said.
         if shown.is_some_and(|shown| shown != place) {

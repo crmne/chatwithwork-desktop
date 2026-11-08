@@ -761,7 +761,8 @@ impl Runs {
                     r.id == cell.root
                         && r.runs_commands()
                         && r.network_level().rank() >= level.rank()
-                        && reach.iter().all(|a| r.reach.contains(&a.to_string()))
+                        && (*level == crate::reach::Level::Internet
+                            || reach.iter().all(|a| r.reach.contains(&a.to_string())))
                 });
             if cell.state == State::Running && !allowed {
                 cell.stop = true;

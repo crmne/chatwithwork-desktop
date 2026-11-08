@@ -366,7 +366,7 @@ impl Reach {
         };
         // An exact address is IPv4 only (the sandbox's network has no IPv6),
         // so an IPv6 one on the local network can't be given.
-        if address.is_ipv6() && given == Where::LocalNetwork {
+        if address.is_ipv6() && !address.is_loopback() && given != Where::Internet {
             return Ok(ReachPlan::Refused);
         }
         let what = cww::reach::describe(&address.to_string(), self.port);
