@@ -256,7 +256,7 @@ In Rails terms: authenticate in the `Desktop` connection's `connect` from the re
 
 To revoke a device, the server sets `revoked_at`, closes the device's socket with **4003**, and rejects every later refresh with `invalid_grant`. The socket's lifetime is **not** tied to the access token's lifetime: a token is checked at upgrade time only, and the server ends sessions by closing the socket. A server that wants periodic re-authentication MAY close with 4001 at any time.
 
-The daemon also reconnects by itself when what it offers changes: the set of shared folders, the folders that allow changes or commands, printers, or the browser's settings. A new connection is how the server learns to list the tools and call `roots` again.
+The daemon also reconnects by itself when what it offers changes: the set of shared folders, the folders that allow changes or commands, printers, or whether the browser is on, may change pages, or asks before each action. A new connection is how the server learns to list the tools and call `roots` again.
 
 **Backoff** is full-jitter exponential: a random delay in `[0.25 s, min(60 s, 1 s × 2^attempt)]`, reset after a connection that lasted at least 60 seconds.
 
