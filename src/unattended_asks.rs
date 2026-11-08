@@ -411,6 +411,8 @@ mod tests {
                 writable: true,
                 commands,
                 network: false,
+                local_services: true,
+                reach: Vec::new(),
                 read_budget: None,
                 bots: vec![BotLoan {
                     id: "42".into(),

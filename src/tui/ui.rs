@@ -2660,13 +2660,19 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
                 theme.strong(),
             )];
             lines.push(Line::raw(""));
+            // The same words on every system, as its snapshot is.
+            let network = "Its network is the folder's: by default this computer's own \
+                           services, like a database (none on Windows), and the local network \
+                           or the internet only if you allow them (i).";
             lines.extend(
                 wrap(
-                    "Chat with Work could then run commands here, like tests or a build. Each \
-                     one is approved in Chat with Work, or runs without asking in a chat where \
-                     you chose Allow everything. A command runs in a sandbox that can change or \
-                     delete anything in this folder and nothing outside it, without the network \
-                     unless you allow it (i).",
+                    &format!(
+                        "Chat with Work could then run commands here, like tests or a build. \
+                         Each one is approved in Chat with Work, or runs without asking in a \
+                         chat where you chose Allow everything. A command runs in a sandbox \
+                         that can change or delete anything in this folder and nothing outside \
+                         it. {network}"
+                    ),
                     text_width,
                 )
                 .into_iter()
@@ -2847,7 +2853,10 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 ("r", "rename the selected folder"),
                 ("w", "allow or stop changes in the selected folder"),
                 ("m", "allow or stop commands in the selected folder"),
-                ("i", "let its commands use the network, or not"),
+                (
+                    "i",
+                    "its commands' network: none, local services, or the internet too",
+                ),
                 ("d", "stop sharing the selected folder"),
             ],
         ),

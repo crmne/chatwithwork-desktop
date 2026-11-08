@@ -913,6 +913,8 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         };
         let mut config = Config {

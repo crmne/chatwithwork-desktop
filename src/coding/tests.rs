@@ -15,6 +15,8 @@ fn root(bot: Option<BotLoan>) -> Root {
         writable: true,
         commands: true,
         network: true,
+        local_services: true,
+        reach: Vec::new(),
         bots: bot.into_iter().collect(),
         read_budget: None,
     }
@@ -240,6 +242,16 @@ fn output_keeps_what_only_starts_like_the_token() {
     assert_eq!(String::from_utf8(out).unwrap(), "sk-ant-oat01-abc and more");
     let mut none = Redactor::new([]);
     assert_eq!(none.push(b"anything"), b"anything");
+}
+
+#[test]
+fn a_secret_is_found_in_a_name_looked_up_whatever_its_case_and_dots() {
+    let secret = Secret::new("ops_testSERVICEaccount0123".into());
+    let redactor = Redactor::new([(&secret, REDACTED.to_string())]);
+    assert!(redactor.found_in_name("ops_testserviceaccount0123.invalid"));
+    assert!(redactor.found_in_name("ops_testservice.account0123.example"));
+    assert!(!redactor.found_in_name("rubygems.org"));
+    assert!(!Redactor::new([]).found_in_name("anything.example"));
 }
 
 #[test]

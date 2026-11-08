@@ -1262,6 +1262,8 @@ fn pair(fixture: &Fixture, server: &FakeServer) {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         }],
         ..Config::default()
@@ -4175,6 +4177,8 @@ fn pair_for_changes(fx: &Fixture, server: &FakeServer, writable: bool, limits: O
         writable: false,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     });
     if let Some(limits) = limits {
@@ -5538,6 +5542,8 @@ async fn changes_files_on_windows() {
         writable: false,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     });
     config.save(&fx.paths).unwrap();

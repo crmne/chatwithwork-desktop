@@ -57,6 +57,8 @@ fn fixture(commands: bool) -> Fixture {
         writable: true,
         commands,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     });
     // Windows PowerShell can take long to start on a machine that hasn't
@@ -76,6 +78,7 @@ fn request(command: &str) -> Request {
         dir: String::new(),
         command: command.into(),
         bot: None,
+        once: Vec::new(),
     }
 }
 
@@ -237,7 +240,7 @@ fn landlock_refuses_commands_the_network() {
     let refused = Sandbox::Landlock.refuses(&online).unwrap();
     assert_eq!(refused.code, "network_unavailable");
     assert!(
-        refused.message.contains("Turn the network off"),
+        refused.message.contains("Turn the internet off"),
         "{refused:?}"
     );
     assert_eq!(Sandbox::Bubblewrap.refuses(&online), None);
@@ -400,8 +403,10 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
         return;
     }
     let mut fx = fixture(true);
+    fx.config.roots[0].local_services = false;
     if !on_landlock() {
-        // Only the loopback interface, and it's down: nothing to reach.
+        // Only the loopback interface, or with slirp4netns a network of its
+        // own whose firewall refuses everything (and says what it refused).
         let status = fx
             .runs
             .start(
@@ -410,8 +415,13 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
             )
             .unwrap();
         let done = wait(&fx.runs, &status.id);
-        assert_eq!(done.stdout.trim(), "lo", "{done:?}");
+        let interfaces = done.stdout.trim();
+        assert!(interfaces == "lo" || interfaces == "lo\ntap0", "{done:?}");
     }
+    assert_ne!(reaches_this_computers_loopback(&fx, &fx.config), Some(true));
+    // Local services are this computer's services, never a program's
+    // listener on a port the system picked for it (this test's).
+    fx.config.roots[0].local_services = true;
     assert_ne!(reaches_this_computers_loopback(&fx, &fx.config), Some(true));
     // Landlock could only give it this computer's whole network, so a
     // folder that allows the network runs nothing there.
@@ -424,7 +434,7 @@ fn a_command_has_no_network_unless_the_folder_allows_it() {
             done.status
                 .error
                 .as_deref()
-                .is_some_and(|e| e.contains("Turn the network off")),
+                .is_some_and(|e| e.contains("Turn the internet off")),
             "{done:?}"
         );
     }
@@ -511,6 +521,12 @@ fn too_many_running_commands_wait_their_turn() {
     fx.config.limits.commands_running = 0;
     let second = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
     fx.runs.stop(&second.id).unwrap();
+    // A network narrowed under a run stops it: its sandbox can't narrow.
+    let third = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
+    fx.config.roots[0].local_services = false;
+    fx.runs.stop_outside(&fx.config);
+    assert_eq!(wait(&fx.runs, &third.id).status.state, "stopped");
+    fx.config.roots[0].local_services = true;
     fx.config.roots[0].commands = false;
     fx.runs.stop_outside(&fx.config);
     assert_eq!(wait(&fx.runs, &first.id).status.state, "stopped");
@@ -724,6 +740,10 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
         folder: "/".into(),
         cwd: "/".into(),
         network: false,
+        local_services: true,
+        reach: Vec::new(),
+        once: Vec::new(),
+        networks: Default::default(),
         limits: Limits {
             cpu_seconds: 1,
             memory_mb: 1,
@@ -2030,4 +2050,137 @@ fn claude_codes_folder_is_read_where_it_really_is_and_never_too_broad() {
         Some(beside.clone()),
         "only the program"
     );
+}
+
+/// How far a run reaches, as each sandbox is asked for it.
+#[test]
+fn a_runs_network_follows_its_folders_level() {
+    use crate::reach::{Grant, HostNetwork, Level};
+    let fx = fixture(true);
+    let paths = Paths::under(Path::new("/x/cww"));
+    let mut plan = plan(&fx.config, &paths, &request("make"), "0123456789ab").unwrap();
+    plan.networks = super::plan::Networks {
+        host: HostNetwork {
+            addresses: vec!["192.168.8.20".parse().unwrap()],
+            bridges: vec![(std::net::Ipv4Addr::new(172, 17, 0, 0), 16)],
+        },
+        loopback: vec![5432, 6379],
+        closed: vec![41234],
+        log: Some("/x/cww/runs/0123456789ab.blocked".into()),
+        own_network: true,
+    };
+    // Local services, by default.
+    assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::Local);
+    let local = plan.network_json(Sandbox::Bubblewrap);
+    let egress = &local["egress"];
+    assert_eq!(egress["default"], "deny");
+    assert_eq!(egress["hostLoopbackPorts"], serde_json::json!([5432, 6379]));
+    assert_eq!(
+        egress["allow"][0]["to"],
+        serde_json::json!([{ "cidr": "192.168.8.20/32" }, { "cidr": "172.17.0.0/16" }])
+    );
+    // slirp's name server stays the internet's; then the ports that lead
+    // out of the sandbox, a listener of Desktop's or a random one included.
+    assert_eq!(
+        egress["deny"][0],
+        serde_json::json!({ "to": [{ "cidr": "10.0.2.3/32" }] })
+    );
+    assert_eq!(
+        egress["deny"][1]["ports"][0],
+        serde_json::json!({ "protocol": "tcp", "port": 2375, "endPort": 2376 })
+    );
+    assert!(
+        egress["deny"][1]["ports"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!({ "protocol": "tcp", "port": 41234 }))
+    );
+    assert_eq!(egress["blocked"], "reject");
+    assert_eq!(egress["blockedLog"], "/x/cww/runs/0123456789ab.blocked");
+    // Seatbelt: the loopback ports alone, never rules it can't hold.
+    let mac = plan.network_json(Sandbox::Seatbelt);
+    assert_eq!(
+        mac["egress"]["hostLoopbackPorts"],
+        serde_json::json!([5432, 6379])
+    );
+    assert!(mac["egress"].get("allow").is_none() && mac["egress"].get("blockedLog").is_none());
+    // Where a run can't have a network of its own, local services give
+    // nothing, and it runs with none rather than failing.
+    plan.networks.own_network = false;
+    assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::None);
+    plan.networks.own_network = true;
+    // Landlock and Windows hold no local services.
+    assert_eq!(plan.network_access(Sandbox::Landlock), Level::None);
+    assert_eq!(plan.network_access(Sandbox::ProcessContainer), Level::None);
+    // An exact local-network address, and an "Allow once".
+    plan.reach = vec!["192.168.8.31:5432".parse().unwrap()];
+    plan.once = vec![
+        Grant {
+            host: "192.168.8.40".parse().unwrap(),
+            port: 6379,
+            internet: false,
+        },
+        // Never reopens a closed listener.
+        Grant {
+            host: "127.0.0.1".parse().unwrap(),
+            port: 41234,
+            internet: false,
+        },
+    ];
+    assert_eq!(
+        plan.network_json(Sandbox::Bubblewrap)["egress"]["hostLoopbackPorts"],
+        serde_json::json!([5432, 6379])
+    );
+    let allowed = plan.network_json(Sandbox::Bubblewrap)["egress"]["allow"].clone();
+    assert_eq!(
+        allowed[1],
+        serde_json::json!({ "to": [{ "cidr": "192.168.8.31/32" }], "ports": [{ "protocol": "tcp", "port": 5432 }] })
+    );
+    assert_eq!(allowed[2]["to"][0]["cidr"], "192.168.8.40/32");
+    // An "Allow once" for an internet address gives that run the internet.
+    plan.once = vec![Grant {
+        host: "151.101.1.227".parse().unwrap(),
+        port: 443,
+        internet: false,
+    }];
+    assert_eq!(plan.network_access(Sandbox::Bubblewrap), Level::Internet);
+    assert_eq!(
+        plan.network_json(Sandbox::Bubblewrap)["egress"]["default"],
+        "allow"
+    );
+    // None: everything refused, and logged where it can be.
+    plan.once.clear();
+    plan.local_services = false;
+    // An exact address at None keeps the closed ports closed.
+    let none_exact = plan.network_json(Sandbox::Bubblewrap);
+    assert!(
+        none_exact["egress"]["deny"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["ports"].as_array().is_some_and(
+                |p| p.contains(&serde_json::json!({ "protocol": "tcp", "port": 41234 }))
+            ))
+    );
+    plan.reach.clear();
+    let none = plan.network_json(Sandbox::Bubblewrap);
+    assert_eq!(none["egress"]["default"], "deny");
+    assert!(
+        none["egress"].get("hostLoopbackPorts").is_none() && none["egress"].get("allow").is_none()
+    );
+    assert_eq!(none["egress"]["blocked"], "reject");
+    plan.networks.log = None;
+    assert_eq!(
+        plan.network_json(Sandbox::Bubblewrap),
+        serde_json::json!({ "egress": { "default": "deny" } })
+    );
+    // The internet: everything, the ports that lead out of the sandbox aside.
+    plan.network = true;
+    let open = plan.network_json(Sandbox::Bubblewrap);
+    assert_eq!(open["egress"]["default"], "allow");
+    assert_eq!(
+        open["egress"]["hostLoopbackPorts"],
+        serde_json::json!([5432, 6379])
+    );
+    assert!(open["egress"].get("deny").is_some() && open["egress"].get("allow").is_none());
 }

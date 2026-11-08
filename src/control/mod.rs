@@ -112,8 +112,55 @@ pub enum ControlRequest {
     RootsCommands {
         root: String,
         commands: bool,
+        /// The internet (and the local network, local services with them).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         network: bool,
+        /// This computer's own services; absent keeps them as they are.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_services: Option<bool>,
+    },
+    /// Let a folder's commands reach this computer's own services, or not
+    /// (docs/commands.md, "Its network").
+    RootsLocalServices {
+        root: String,
+        on: bool,
+    },
+    /// Let a folder's commands reach one exact local-network address
+    /// (`ip:port`), or stop (`remove`).
+    RootsReach {
+        root: String,
+        address: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remove: bool,
+    },
+    /// The person's answer in the app's own dialog to a page's
+    /// `computer.allowReach`: this computer places the address itself, then
+    /// allows it for the next command (`once`) or for good, or records the
+    /// refusal.
+    RootsReachAnswer {
+        root: String,
+        host: String,
+        port: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        once: bool,
+        allow: bool,
+        /// The pairing the question was asked under (`status`'s
+        /// `device_id`), and the folder's path it named: an answer given
+        /// for another is refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// The server it was paired with when it asked (`status`'s
+        /// `server`), and what the question said a yes gives
+        /// (`this_computer`, `local_network`, `internet`): a yes is never
+        /// worth more than what it was asked for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "where")]
+        place: Option<crate::reach::Where>,
     },
     /// The system's printers, and which of them Chat with Work may use.
     Printers,
@@ -239,6 +286,11 @@ pub enum ControlRequest {
         agent: crate::coding::Agent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<String>,
+        /// The repository the window looked at (`owner/name`): what its code
+        /// reaches, read here from its mirror if this computer has one, is
+        /// given with the yes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
     },
     /// Stop sharing a folder, by ID, label or path.
     RootsRemove {

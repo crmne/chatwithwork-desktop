@@ -4,7 +4,7 @@
 //! `run` is destructive (a command can change anything in its folder) and
 //! open-world (with the folder's network setting on, it can reach the
 //! network), so Chat with Work asks the person every time. A dry run says
-//! what would run, where, with or without network and with which limits,
+//! what would run, where, how far it reaches and with which limits,
 //! for the approval card, without running anything.
 
 use std::time::Duration;
@@ -31,7 +31,10 @@ const PROGRESS_CHARS: usize = 200;
 pub struct CommandRoot {
     pub id: String,
     pub label: String,
+    /// The internet, as `network` has always said.
     pub network: bool,
+    /// How far its commands reach (`network_access`).
+    pub access: crate::reach::Level,
 }
 
 /// What the command tools need: where commands run, and which folders
@@ -39,6 +42,8 @@ pub struct CommandRoot {
 #[derive(Clone)]
 pub struct CommandTools {
     pub runner: Runner,
+    /// "Allow once" answers, taken by the next command in their folder.
+    pub once: crate::reach::OnceGrants,
     pub roots: Vec<CommandRoot>,
     pub limits: Limits,
 }
@@ -82,6 +87,8 @@ pub struct RunResult {
     pub folder: String,
     pub command: String,
     pub network: bool,
+    /// `none`, `local` or `internet`: what this run got.
+    pub network_access: String,
     #[serde(flatten)]
     pub status: Status,
     /// The end of what it printed, while it's running too.
@@ -146,18 +153,28 @@ impl CommandTools {
                         "command": command,
                         "shell": shell(),
                         "network": root.network,
+                        "network_access": root.access.as_str(),
                         "background": args.background,
                         "limits": self.limits,
                     });
                     return Ok((preview, Some(command)));
                 }
+                let taken = self.once.take(&root.id, bot.as_deref());
                 let request = Request {
                     root: root.id.clone(),
                     dir: path.rel.as_string(),
                     command: command.clone(),
                     bot,
+                    once: taken.grants(),
                 };
-                let status = self.runner.start(request).await.map_err(tool_error)?;
+                // A command that didn't start leaves its "Allow once" for the next.
+                let status = match self.runner.start(request).await {
+                    Ok(status) => status,
+                    Err(refused) => {
+                        self.once.restore(taken);
+                        return Err(tool_error(refused));
+                    }
+                };
                 let wait = if args.background {
                     Duration::ZERO
                 } else {
@@ -172,12 +189,18 @@ impl CommandTools {
                     )
                 });
                 let detail = ended(&finished.status, &command);
+                let mut status = finished.status;
+                let access = status
+                    .network_access
+                    .take()
+                    .unwrap_or_else(|| root.access.as_str().to_string());
                 let result = RunResult {
                     path: shown,
                     folder: root.label,
                     command,
                     network: root.network,
-                    status: finished.status,
+                    network_access: access,
+                    status,
                     stdout: finished.stdout,
                     stderr: finished.stderr,
                     stdout_cut: finished.stdout_cut,
@@ -192,7 +215,8 @@ impl CommandTools {
             "run_status" => {
                 let args: HandleArgs = parse(args)?;
                 handle(&args.run)?;
-                let finished = self.runner.finished(&args.run).await.map_err(tool_error)?;
+                let mut finished = self.runner.finished(&args.run).await.map_err(tool_error)?;
+                finished.status.network_access = None;
                 Ok((serde_json::to_value(finished).unwrap_or(Value::Null), None))
             }
             "run_output" => {
@@ -211,7 +235,8 @@ impl CommandTools {
                 handle(&args.run)?;
                 self.runner.stop(&args.run).await.map_err(tool_error)?;
                 // It stops within a moment; say how it ended once it has.
-                let finished = self.follow(&args.run, Duration::from_secs(5), None).await?;
+                let mut finished = self.follow(&args.run, Duration::from_secs(5), None).await?;
+                finished.status.network_access = None;
                 let detail = ended(&finished.status, "");
                 Ok((
                     serde_json::to_value(finished).unwrap_or(Value::Null),
@@ -333,11 +358,13 @@ pub fn shell() -> &'static str {
 const RUN_SH: &str = "Run one line of shell (`sh -c`) in a shared folder that allows commands \
      (`allows_commands: true` in `roots`), such as `bin/rails test` or `npm run build`. \
      It runs in a sandbox of its own: it can change only that folder, reads the system \
-     and the installed language toolchains, has no network unless the folder allows it \
-     (`network` in `roots`), and has CPU, memory and time limits. `path` is the folder \
+     and the installed language toolchains, reaches this computer's own services but \
+     not the local network or the internet unless the folder allows them \
+     (`network_access` in `roots`), and has CPU, memory and time limits. `path` is the folder \
      to start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns \
      the exit code and the end of its output; a longer command keeps running, and the \
-     result says how to follow it. `background: true` returns at once. The person \
+     result says how to follow it. `background: true` returns at once. When the \
+     sandbox refused it a connection or a path, `blocked` says which. The person \
      approves every command.";
 
 const RUN_POWERSHELL: &str = "Run one line of Windows PowerShell 5.1 in a shared folder that \
@@ -345,8 +372,8 @@ const RUN_POWERSHELL: &str = "Run one line of Windows PowerShell 5.1 in a shared
      `dotnet build`. Separate commands with `;`: this PowerShell has no `&&` or `||`. \
      `cmd /c` runs cmd syntax. It runs in a sandbox of its own: it can change only that \
      folder, reads the system, the folders on the system's PATH and the installed \
-     language toolchains, has no network unless the folder allows it (`network` in \
-     `roots`), and has CPU, memory, process and time limits. `path` is the folder to \
+     language toolchains, has no network unless the folder allows the internet \
+     (`network` in `roots`), and has CPU, memory, process and time limits. `path` is the folder to \
      start in, `<root_id>:` or `<root_id>:dir`. Waits up to 15 seconds and returns the \
      exit code (the last command's) and the end of its output; a longer command keeps \
      running, and the result says how to follow it. `background: true` returns at once. \
@@ -442,6 +469,8 @@ mod tests {
             output_bytes: 0,
             error: None,
             limit: None,
+            blocked: Vec::new(),
+            network_access: None,
         };
         assert_eq!(ended(&status("exited", Some(0)), "make"), "exit 0 · make");
         let at_limit = Status {
@@ -461,10 +490,12 @@ mod tests {
     async fn a_dry_run_says_where_and_how_without_running() {
         let tools = CommandTools {
             runner: Runner::Off("not here".into()),
+            once: Default::default(),
             roots: vec![CommandRoot {
                 id: "app".into(),
                 label: "App".into(),
                 network: false,
+                access: crate::reach::Level::of(false, false),
             }],
             limits: Limits::from_config(&crate::config::Limits::default()),
         };

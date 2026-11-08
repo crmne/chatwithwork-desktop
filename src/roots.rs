@@ -121,6 +121,8 @@ pub fn add_root(config: &mut Config, paths: &Paths, new: NewRoot<'_>) -> Result<
         writable: new.writable,
         commands: false,
         network: false,
+        local_services: true,
+        reach: Vec::new(),
         read_budget: None,
     };
     config.roots.push(root.clone());
@@ -174,6 +176,18 @@ pub fn set_commands(
     commands: bool,
     network: bool,
 ) -> Result<Root> {
+    set_commands_reaching(config, which, commands, network, None)
+}
+
+/// [`set_commands`], and local services on or off (`None` keeps them as
+/// they are). The internet (`network`) includes them either way.
+pub fn set_commands_reaching(
+    config: &mut Config,
+    which: &str,
+    commands: bool,
+    network: bool,
+    local_services: Option<bool>,
+) -> Result<Root> {
     let index = find_root(config, which)?;
     let root = &mut config.roots[index];
     if commands && !root.writable {
@@ -192,12 +206,64 @@ pub fn set_commands(
     }
     root.commands = commands;
     root.network = commands && network;
+    if let Some(local_services) = local_services {
+        root.local_services = local_services;
+    }
     if !commands {
         // No command runs there now, so none runs unattended either.
         root.bots.iter_mut().for_each(|loan| {
             loan.unattended = false;
             crate::coding::disallow_all(loan);
         });
+    }
+    Ok(root.clone())
+}
+
+/// Let a folder's commands reach this computer's own services, or not
+/// (docs/commands.md, "Its network"). Only where commands are allowed.
+pub fn set_local_services(config: &mut Config, which: &str, on: bool) -> Result<Root> {
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    if !root.runs_commands() {
+        bail!(
+            "{} doesn't allow commands. Allow them first (`cww roots allow-commands {}`)",
+            root.label,
+            root.id
+        );
+    }
+    root.local_services = on;
+    Ok(root.clone())
+}
+
+/// Let a folder's commands reach one exact address on the local network
+/// (`ip:port`), or stop (`add: false`). Only where commands are allowed.
+pub fn set_reach(config: &mut Config, which: &str, address: &str, add: bool) -> Result<Root> {
+    let index = find_root(config, which)?;
+    let root = &mut config.roots[index];
+    let address = crate::reach::parse_reach(address).map_err(anyhow::Error::msg)?;
+    let entry = address.to_string();
+    if add
+        && crate::reach::HostNetwork::current().classify(std::net::IpAddr::V4(*address.ip()))
+            == crate::reach::Where::ThisComputer
+    {
+        bail!(
+            "{} is this computer, or a container on it: allow local services for the folder instead",
+            address.ip()
+        );
+    }
+    if add {
+        if !root.runs_commands() {
+            bail!(
+                "{} doesn't allow commands. Allow them first (`cww roots allow-commands {}`)",
+                root.label,
+                root.id
+            );
+        }
+        if !root.reach.contains(&entry) {
+            root.reach.push(entry);
+        }
+    } else {
+        root.reach.retain(|e| *e != entry);
     }
     Ok(root.clone())
 }
@@ -413,7 +479,7 @@ pub fn find<'a>(config: &'a Config, which: &str) -> Result<&'a Root> {
     Ok(&config.roots[find_root(config, which)?])
 }
 
-fn find_root(config: &Config, which: &str) -> Result<usize> {
+pub fn find_root(config: &Config, which: &str) -> Result<usize> {
     let as_path = canonical(Path::new(which)).ok();
     config
         .roots
@@ -588,6 +654,8 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         });
         assert_eq!(new_id(&config, "Work docs"), "work-docs-2");
@@ -613,6 +681,8 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         });
         let root = set_read_budget(&mut config, "app", Some(5_000_000)).unwrap();
@@ -648,6 +718,8 @@ mod tests {
             writable: true,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         });
 
@@ -811,6 +883,8 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         });
         let err = set_writable(&mut config, "home", true, false).unwrap_err();

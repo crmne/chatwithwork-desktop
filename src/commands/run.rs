@@ -30,6 +30,7 @@ pub(super) fn spawn(
                 let state = run(&mut plan, &cell);
                 lock(&cell).finish(state);
                 remove_home(&plan.home);
+                let _ = std::fs::remove_file(plan.blocked_log());
                 retire(&plan.id);
             }
         });
@@ -66,6 +67,8 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
             return State::Failed(e.message);
         }
     };
+    plan.networks = super::plan::Networks::current(sandbox, plan.blocked_log());
+    lock(cell).watch_blocked(plan, sandbox);
     if let Some(e) = sandbox.refuses(plan) {
         tracing::info!(run = %plan.id, code = %e.code, "the sandbox refused a command");
         return State::Failed(e.message);
@@ -135,6 +138,9 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
             let _ = process.kill();
             let _ = process.wait();
             break State::Stopped;
+        }
+        if polls.is_multiple_of(COUNT_EVERY) {
+            lock(cell).read_blocked();
         }
         let stop = lock(cell).stop;
         if stop || Instant::now() >= deadline {

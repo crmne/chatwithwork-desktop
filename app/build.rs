@@ -17,6 +17,7 @@ const COMMANDS: &[&str] = &[
     "computer_add_folder",
     "computer_notifications",
     "computer_set_up_coding",
+    "computer_allow_reach",
     // The window that asks whether a bot may code here (coding_setup.rs).
     "coding_setup_state",
     "coding_setup_answer",

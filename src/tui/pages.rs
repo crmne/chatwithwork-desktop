@@ -228,14 +228,19 @@ fn folders(
             width,
         );
         let id = format!(" · {}:", root.id);
-        let (access, access_style) = if root.allows_commands && root.network {
-            ("Commands, network", theme.signal_ink(Signal::Attention))
-        } else if root.allows_commands {
-            ("Commands allowed", theme.signal_ink(Signal::Attention))
+        let (access, access_style) = if root.allows_commands {
+            let access = match root.level() {
+                crate::reach::Level::None => "Commands allowed".to_string(),
+                level => format!("Commands, {}", level.words().to_lowercase()),
+            };
+            (access, theme.signal_ink(Signal::Attention))
         } else if root.writable {
-            ("Changes allowed", theme.signal_ink(Signal::Attention))
+            (
+                "Changes allowed".to_string(),
+                theme.signal_ink(Signal::Attention),
+            )
         } else {
-            ("Read-only", theme.faint())
+            ("Read-only".to_string(), theme.faint())
         };
         let path_room =
             (width as usize).saturating_sub(id.chars().count() + access.chars().count() + 5);

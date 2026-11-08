@@ -160,8 +160,8 @@ function folderRow(app, root) {
   const [indexLabel, tone] = indexState(root);
   const runsCommands = commandsHere(app);
 
-  const setting = (titleText, text, control) =>
-    h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
+  const setting = (titleText, text, control, stack = false) =>
+    h("div", { class: stack ? "row row--stack" : "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
 
   return h("div", { class: "row row--stack" },
     h("div", { class: "row__head" },
@@ -256,12 +256,57 @@ function folderRow(app, root) {
             app.render();
           }),
           button("Allow Commands", () => allow(app, root), { kind: "btn-primary", disabled: !view.confirmation }))) : null,
-      root.writable && root.allows_commands ? setting("Commands use the network", root.network
-        ? "Commands here can reach the internet, to install packages or fetch dependencies."
-        : "Commands here run without a network.",
-      switchInput(root.network, (on) => change(app, root.id, { cmd: "roots_commands", root: root.id, commands: true, network: on }),
-        { label: `Commands in ${root.label} use the network`, key: `network-${root.id}`, disabled: busy })) : null,
+      root.writable && root.allows_commands ? setting("Network", networkText(app, root),
+      h("select", {
+        class: "select",
+        "aria-label": `Network for commands in ${root.label}`,
+        disabled: busy,
+        onchange: (event) => {
+          const level = event.target.value;
+          return change(app, root.id, {
+            cmd: "roots_commands", root: root.id, commands: true,
+            network: level === "internet", local_services: level !== "none",
+          });
+        },
+      }, NETWORK_LEVELS.filter(([value]) => value !== "local" || app.info.platform !== "windows").map(([value, label]) =>
+        h("option", { value, selected: networkLevel(root) === value },
+          value === "internet" && app.info.platform === "windows" ? "The internet" : label))), true) : null,
       bots(app, root, busy)));
+}
+
+// How far a folder's commands reach, in the words `cww` uses too
+// (src/reach.rs). Windows can't give commands this computer's own services.
+const NETWORK_LEVELS = [
+  ["none", "None"],
+  ["local", "Local services"],
+  ["internet", "Local services and the internet"],
+];
+const NETWORK_TEXT = {
+  none: "Commands here reach no network.",
+  local: "This computer’s services, like a database in Docker.",
+  internet: "The internet and the local network, and this computer’s services.",
+};
+
+// What the chosen level gives here: on Windows the internet never reaches
+// this computer's own services, and any exact address a folder was allowed
+// still holds below the internet.
+function networkText(app, root) {
+  const level = networkLevel(root);
+  const text = level === "internet" && app.info.platform === "windows"
+    ? "The internet and the local network, not this computer’s services."
+    : NETWORK_TEXT[level];
+  const reach = level === "internet" ? [] : (root.reach || []);
+  if (!reach.length) return text;
+  // Seatbelt names no address but this Mac's: saved ones do nothing there.
+  if (app.info.platform === "macos") return `${text} (Saved local-network addresses don’t apply on macOS.)`;
+  const also = `${reach.join(", ")} (cww roots reach --remove takes one away)`;
+  return level === "none"
+    ? `Commands here reach only ${also}.`
+    : `${text.replace(/\.$/, "")}, and ${also}.`;
+}
+
+function networkLevel(root) {
+  return root.network_access || (root.network ? "internet" : "none");
 }
 
 // Whether commands can run here: everywhere but Windows, and there where

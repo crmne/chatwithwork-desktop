@@ -13,6 +13,7 @@
 //! fetching one with the person's credentials runs nothing a bot wrote.
 
 pub mod detect;
+pub mod needs;
 pub mod prepare;
 pub mod repositories;
 pub mod setup;
@@ -1448,6 +1449,25 @@ impl Redactor {
             secrets,
             held: Vec::new(),
         }
+    }
+
+    /// Whether `text` holds one of the secrets, ignoring case and dots: a
+    /// name looked up (`<TOKEN>.example`, lower-cased, split into labels)
+    /// can carry one too.
+    pub fn found_in_name(&self, text: &str) -> bool {
+        let text: Vec<u8> = text
+            .bytes()
+            .filter(|b| *b != b'.')
+            .map(|b| b.to_ascii_lowercase())
+            .collect();
+        self.secrets.iter().any(|(secret, _)| {
+            let secret: Vec<u8> = secret
+                .iter()
+                .filter(|b| **b != b'.')
+                .map(|b| b.to_ascii_lowercase())
+                .collect();
+            !secret.is_empty() && text.windows(secret.len()).any(|w| w == secret.as_slice())
+        })
     }
 
     /// The bytes that may go out now.

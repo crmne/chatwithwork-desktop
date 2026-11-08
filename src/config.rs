@@ -270,10 +270,26 @@ pub struct Root {
     /// computer's apps, never by the server.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub commands: bool,
-    /// Let those commands use the network (installing packages, fetching
-    /// dependencies). Off by default: commands run without a network.
+    /// Let those commands reach the internet and the local network
+    /// (installing packages, fetching dependencies), and this computer's own
+    /// services with them. Off by default ("Internet" in the app).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub network: bool,
+    /// Let those commands reach this computer's own services: its loopback,
+    /// its own addresses, and its containers' networks (`docker0` and the
+    /// like), never the local network or the internet, and never the ports
+    /// that would let a command out of its sandbox (`reach.rs`). On by
+    /// default, so a folder that allowed commands before 0.16.0 gets it.
+    #[serde(
+        default = "local_services_default",
+        skip_serializing_if = "Clone::clone"
+    )]
+    pub local_services: bool,
+    /// Exact local-network addresses (`ip:port`) its commands may reach
+    /// besides, from "Always allow" on one. Only ever changed here or from
+    /// this computer's apps; never sent to the server.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reach: Vec<String>,
     /// Chat with Work bots this folder is lent to (PROTOCOL.md section 7.2.1).
     /// A call a bot's chat makes reaches only the folders lent to that bot,
     /// and a command it runs without a person approving it only where its
@@ -296,6 +312,10 @@ pub struct Root {
 /// rolling hour.
 pub const MAX_READ_BUDGET: usize = 20_000_000;
 
+fn local_services_default() -> bool {
+    true
+}
+
 impl Root {
     /// This folder's own read budget, if it has one and an hourly read
     /// limit is set, within its bounds: at least the per-chat budget every
@@ -312,6 +332,15 @@ impl Root {
     /// Commands may run here: changes and commands are both allowed.
     pub fn runs_commands(&self) -> bool {
         self.writable && self.commands
+    }
+
+    /// How far its commands reach, by its settings alone (the sandbox this
+    /// computer gets may hold less: `commands::network_access`).
+    pub fn network_level(&self) -> crate::reach::Level {
+        if !self.runs_commands() {
+            return crate::reach::Level::None;
+        }
+        crate::reach::Level::of(self.local_services, self.network)
     }
 
     /// The loan of this folder to the bot with this ID, if it's lent to it.
@@ -672,6 +701,8 @@ mod tests {
             writable: true,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: None,
         });
         config.deny.extra.push("*.secret".into());
@@ -817,6 +848,8 @@ mod tests {
             writable: false,
             commands: false,
             network: false,
+            local_services: true,
+            reach: Vec::new(),
             read_budget: Some(10_000_000),
         };
         assert_eq!(root.read_budget(&Limits::default()), None);

@@ -39,10 +39,21 @@ struct OrganizationContext {
     proxy: Option<String>,
 }
 
+/// What a reach question named, which its answer must still match
+/// (`roots_reach_answer`).
+struct Asked {
+    device: Option<String>,
+    path: Option<String>,
+    server: Option<String>,
+    place: Option<crate::reach::Where>,
+}
+
 struct Daemon {
     organization: Option<OrganizationContext>,
     /// Where `run` starts commands.
     runner: crate::commands::Runner,
+    /// "Allow once" answers waiting for their command (`reach.rs`).
+    once: crate::reach::OnceGrants,
     paths: Paths,
     config: Mutex<Config>,
     reader: Arc<Reader>,
@@ -350,13 +361,19 @@ fn command_refusal(e: crate::commands::RunError) -> anyhow::Error {
     Refusal::new(&e.code, e.message).into()
 }
 
-/// The folders that allow commands, and whether they may use the network.
-fn command_roots(config: &Config) -> Vec<(String, String, bool)> {
+/// The folders that allow commands, and how far their commands reach.
+fn command_roots(config: &Config) -> Vec<(String, String, crate::reach::Level)> {
     config
         .roots
         .iter()
         .filter(|r| r.runs_commands())
-        .map(|r| (r.id.clone(), r.label.clone(), r.network))
+        .map(|r| {
+            (
+                r.id.clone(),
+                r.label.clone(),
+                crate::commands::network_access(r),
+            )
+        })
         .collect()
 }
 
@@ -364,12 +381,19 @@ fn command_roots(config: &Config) -> Vec<(String, String, bool)> {
 fn command_tools(
     config: &Config,
     runner: &crate::commands::Runner,
+    once: &crate::reach::OnceGrants,
 ) -> crate::commands::tools::CommandTools {
     crate::commands::tools::CommandTools {
         runner: runner.clone(),
+        once: once.clone(),
         roots: command_roots(config)
             .into_iter()
-            .map(|(id, label, network)| crate::commands::tools::CommandRoot { id, label, network })
+            .map(|(id, label, access)| crate::commands::tools::CommandRoot {
+                id,
+                label,
+                network: access == crate::reach::Level::Internet,
+                access,
+            })
             .collect(),
         limits: crate::commands::Limits::from_config(&config.limits),
     }
@@ -605,6 +629,7 @@ async fn run_with_notifications(
     let daemon = Arc::new(Daemon {
         organization,
         runner,
+        once: Default::default(),
         limiter,
         writer,
         paused: Arc::new(AtomicBool::new(config.paused)),
@@ -676,7 +701,7 @@ impl Daemon {
             Arc::clone(&self.paused),
             config.limits.max_message_bytes,
         )
-        .with_commands(command_tools(&config, &self.runner))
+        .with_commands(command_tools(&config, &self.runner, &self.once))
         .with_asks(Arc::clone(&self.asks))
         .with_unattended_grants(self.unattended_grants.clone())
         .with_printing(crate::printing::tools::PrintTools {
@@ -1093,6 +1118,22 @@ impl Daemon {
         self.configure_browser(&new);
         let pairing = crate::unattended_asks::pairing(&new);
         let paired_again = crate::unattended_asks::pairing(&config) != pairing;
+        if paired_again {
+            // An "Allow once" was the person's answer for this pairing's bots.
+            self.once.clear();
+        }
+        // ...and for a folder as it was: one that stopped commands, or that
+        // another took the place of, keeps none (`cww roots` edits the
+        // config and asks for this reload).
+        for old in config.roots.iter().filter(|r| r.runs_commands()) {
+            let kept = new
+                .roots
+                .iter()
+                .any(|r| r.id == old.id && r.path == old.path && r.runs_commands());
+            if !kept {
+                self.once.forget(&old.id);
+            }
+        }
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.
@@ -1162,6 +1203,10 @@ impl Daemon {
         let root = self
             .edit_config(move |config, _| set_writable(config, &which, writable, i_know))
             .await?;
+        if !writable {
+            // Its commands stopped with its changes: so did any Allow once.
+            self.once.forget(&root.id);
+        }
         let mut entry = AuditEntry::event(if writable {
             "root_changes_allowed"
         } else {
@@ -1173,26 +1218,274 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
-    async fn set_commands(&self, which: String, commands: bool, network: bool) -> Result<Value> {
+    async fn set_commands(
+        &self,
+        which: String,
+        commands: bool,
+        network: bool,
+        local_services: Option<bool>,
+    ) -> Result<Value> {
         let root = self
             .edit_config(move |config, _| {
-                crate::roots::set_commands(config, &which, commands, network)
+                crate::roots::set_commands_reaching(
+                    config,
+                    &which,
+                    commands,
+                    network,
+                    local_services,
+                )
             })
             .await?;
+        if !commands {
+            self.once.forget(&root.id);
+        }
         let mut entry = AuditEntry::event(if commands {
             "root_commands_allowed"
         } else {
             "root_commands_stopped"
         });
         entry.detail = Some(format!(
-            "{} ({}){}",
+            "{} ({}), {}",
             root.id,
             root.label,
-            if root.network { ", with network" } else { "" }
+            root.network_level().words().to_lowercase()
         ));
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
+    }
+
+    async fn set_local_services(&self, which: String, on: bool) -> Result<Value> {
+        let root = self
+            .edit_config(move |config, _| crate::roots::set_local_services(config, &which, on))
+            .await?;
+        let mut entry = AuditEntry::event("root_local_services_changed");
+        entry.detail = Some(format!(
+            "{} ({}), {}",
+            root.id,
+            root.label,
+            if on { "on" } else { "off" }
+        ));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
+    async fn set_reach(&self, which: String, address: String, remove: bool) -> Result<Value> {
+        let root = self
+            .edit_config(move |config, _| {
+                crate::roots::set_reach(config, &which, &address, !remove)
+            })
+            .await?;
+        let mut entry = AuditEntry::event(if remove {
+            "root_reach_removed"
+        } else {
+            "root_reach_allowed"
+        });
+        entry.detail = Some(format!("{} ({})", root.id, root.label));
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "root": root }))
+    }
+
+    /// The person's answer to `computer.allowReach`, from the app's own
+    /// dialog. The address is placed here, from this computer's own
+    /// networks: this computer turns local services on, the local network
+    /// adds the exact address to `reach`, and the internet turns the
+    /// folder's internet on; "once" gives the next command in the folder (the
+    /// bot's, when named) that destination, or the internet for an internet
+    /// address. Answers `{ "allowed": true }` or `{ "declined": true }`.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_reach(
+        &self,
+        which: String,
+        host: String,
+        port: u16,
+        bot: Option<String>,
+        once: bool,
+        allow: bool,
+        asked: Asked,
+    ) -> Result<Value> {
+        let Asked {
+            device,
+            path,
+            server,
+            place: shown,
+        } = asked;
+        let address = crate::reach::resolve(&host, port).ok_or_else(|| {
+            Refusal::new("invalid", "that isn't an address this computer can find")
+        })?;
+        if port == 0 || crate::reach::excluded(port) {
+            return Err(Refusal::new(
+                "not_allowed",
+                format!("port {port} is never reachable from commands"),
+            )
+            .into());
+        }
+        let place = crate::reach::HostNetwork::current().classify(address);
+        let generation;
+        let root = {
+            let config = self.config.lock().await;
+            // The question was for this pairing and this folder, not one
+            // that took its place while it was open.
+            let paired = config.server.as_ref().map(|s| s.device_id.clone());
+            let origin = config.server.as_ref().map(|s| s.url.clone());
+            if (device.is_some() && device != paired) || (server.is_some() && server != origin) {
+                return Err(Refusal::new(
+                    "stale",
+                    "this computer was paired again since it asked: ask again",
+                )
+                .into());
+            }
+            let index = crate::roots::find_root(&config, &which)?;
+            let root = config.roots[index].clone();
+            // Read under the settings' lock, which a reload holds while it
+            // drops grants: one that comes after this makes an "Allow once"
+            // below stale.
+            generation = self.once.generation(&root.id);
+            if path.is_some_and(|p| std::path::Path::new(&p) != root.path) {
+                return Err(
+                    Refusal::new("stale", "that folder changed since it asked: ask again").into(),
+                );
+            }
+            root
+        };
+        if !root.runs_commands() {
+            return Err(Refusal::new(
+                "not_allowed",
+                format!("{} doesn't allow commands", root.label),
+            )
+            .into());
+        }
+        // The dialog named the bot from the folder's loans: one that's gone
+        // since gets nothing.
+        if let Some(bot) = bot.as_deref()
+            && root.loan(bot).is_none()
+        {
+            return Err(Refusal::new(
+                "not_allowed",
+                format!("{} isn't lent to that bot", root.label),
+            )
+            .into());
+        }
+        // What this computer's sandbox can give: an address on the local
+        // network only with the internet on macOS and Windows, and none of
+        // this computer's own services on Windows.
+        let Some(place) = crate::reach::grantable(place) else {
+            return Err(Refusal::new(
+                "not_allowed",
+                "commands can't reach this computer's own services on this system",
+            )
+            .into());
+        };
+        // A sandbox's network is IPv4: an exact IPv6 address can't be given.
+        // (On macOS this Mac's own address goes through `localhost:<port>`,
+        // which Seatbelt reads as every address of this machine.)
+        let mac_own = cfg!(target_os = "macos") && place == crate::reach::Where::ThisComputer;
+        if address.is_ipv6()
+            && !address.is_loopback()
+            && place != crate::reach::Where::Internet
+            && !mac_own
+        {
+            return Err(Refusal::new(
+                "not_allowed",
+                "an IPv6 address can't be given on its own: allow the internet instead",
+            )
+            .into());
+        }
+        // The address may have moved since the question was asked (a local
+        // address now this computer's, say): a yes gives only what it said.
+        if shown.is_some_and(|shown| shown != place) {
+            return Err(Refusal::new(
+                "stale",
+                "that address is somewhere else now than when it asked: ask again",
+            )
+            .into());
+        }
+        let mut entry = AuditEntry::event(if allow {
+            "root_reach_allowed"
+        } else {
+            "root_reach_declined"
+        });
+        entry.detail = Some(format!(
+            "{} ({}), {}{}{}",
+            root.id,
+            root.label,
+            place.as_str(),
+            if once { ", once" } else { "" },
+            bot.as_deref()
+                .map(|b| format!(", for bot {b}"))
+                .unwrap_or_default()
+        ));
+        if !allow {
+            self.audit.append(&entry);
+            return Ok(json!({ "declined": true }));
+        }
+        if once {
+            let kept = self.once.add_since(
+                generation,
+                &root.id,
+                bot.as_deref(),
+                crate::reach::Grant {
+                    host: address,
+                    port,
+                    internet: place == crate::reach::Where::Internet,
+                },
+            );
+            if !kept {
+                return Err(Refusal::new(
+                    "stale",
+                    "this computer or that folder changed since it asked: ask again",
+                )
+                .into());
+            }
+            self.audit.append(&entry);
+            return Ok(json!({ "allowed": true }));
+        }
+        let id = root.id.clone();
+        let root_path = root.path.clone();
+        // The pairing the question was asked under, when the app named it,
+        // else the one checked above: the edit refuses any other.
+        let paired_now = match device.clone() {
+            Some(device) => Some(device),
+            None => self
+                .config
+                .lock()
+                .await
+                .server
+                .as_ref()
+                .map(|s| s.device_id.clone()),
+        };
+        self.edit_config(move |config, _| {
+            // Checked again in the same edit: commands stopped or the loan
+            // withdrawn meanwhile are never given back by this answer.
+            if config.server.as_ref().map(|s| s.device_id.clone()) != paired_now {
+                anyhow::bail!("this computer was paired again since it asked: ask again");
+            }
+            let index = crate::roots::find_root(config, &id)?;
+            let current = &config.roots[index];
+            if current.path != root_path
+                || !current.runs_commands()
+                || bot.as_deref().is_some_and(|b| current.loan(b).is_none())
+            {
+                anyhow::bail!("that folder changed since it asked: ask again");
+            }
+            match place {
+                crate::reach::Where::ThisComputer => {
+                    crate::roots::set_local_services(config, &id, true)
+                }
+                crate::reach::Where::LocalNetwork => {
+                    crate::roots::set_reach(config, &id, &format!("{address}:{port}"), true)
+                }
+                crate::reach::Where::Internet => {
+                    crate::roots::set_commands_reaching(config, &id, true, true, None)
+                }
+            }
+        })
+        .await?;
+        self.audit.append(&entry);
+        self.reload().await?;
+        Ok(json!({ "allowed": true }))
     }
 
     async fn set_bot(
@@ -1273,6 +1566,7 @@ impl Daemon {
 
     /// The person's Allow in the app's dialog (docs/coding-computers.md, "One
     /// yes"): each thing `cww coding setup` asks one by one, at once.
+    #[allow(clippy::too_many_arguments)]
     async fn coding_allow(
         &self,
         root: Option<String>,
@@ -1281,8 +1575,24 @@ impl Daemon {
         name: Option<String>,
         agent: crate::coding::Agent,
         owner: Option<String>,
+        repository: Option<String>,
     ) -> Result<Value> {
         let (id, audited) = (bot.clone(), owner.clone());
+        // What the repository's code reaches, read by the runner from its
+        // mirror (never the window's word): the yes gives it.
+        let needs = match repository {
+            Some(repository) => self
+                .runner
+                .coding_look(Some(repository))
+                .await
+                .ok()
+                .and_then(|look| look.needs),
+            None => None,
+        };
+        let reach = needs
+            .as_ref()
+            .map(crate::coding::needs::reach_entries)
+            .unwrap_or_default();
         let root = self
             .edit_config(move |config, paths| {
                 let which = match (root, folder) {
@@ -1310,7 +1620,12 @@ impl Daemon {
                     (None, None) => anyhow::bail!("no folder to share"),
                 };
                 crate::roots::set_writable(config, &which, true, false)?;
-                crate::roots::set_commands(config, &which, true, true)?;
+                // Local services always, and the internet, which the coding
+                // agents need to reach their own service (and installs).
+                crate::roots::set_commands_reaching(config, &which, true, true, Some(true))?;
+                for address in &reach {
+                    crate::roots::set_reach(config, &which, address, true)?;
+                }
                 let unattended = config
                     .root(&which)
                     .and_then(|r| r.loan(&bot))
@@ -1715,6 +2030,8 @@ impl Daemon {
                 let mut v = serde_json::to_value(&r).unwrap_or_default();
                 v["local_path"] = json!(path);
                 v["bots"] = json!(configured.map(|c| c.bots.clone()).unwrap_or_default());
+                // This computer's own clients only: never in `roots`.
+                v["reach"] = json!(configured.map(|c| c.reach.clone()).unwrap_or_default());
                 v
             })
             .collect();
@@ -1895,6 +2212,9 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsRemove { .. }
                     | ControlRequest::RootsWritable { .. }
                     | ControlRequest::RootsCommands { .. }
+                    | ControlRequest::RootsLocalServices { .. }
+                    | ControlRequest::RootsReach { .. }
+                    | ControlRequest::RootsReachAnswer { .. }
                     | ControlRequest::RootsBot { .. }
                     | ControlRequest::CodingAllow { .. }
                     | ControlRequest::CodingLook { .. }
@@ -1990,7 +2310,47 @@ impl ControlHandler for Daemon {
                 root,
                 commands,
                 network,
-            } => self.set_commands(root, commands, network).await,
+                local_services,
+            } => {
+                self.set_commands(root, commands, network, local_services)
+                    .await
+            }
+            ControlRequest::RootsLocalServices { root, on } => {
+                self.set_local_services(root, on).await
+            }
+            ControlRequest::RootsReach {
+                root,
+                address,
+                remove,
+            } => self.set_reach(root, address, remove).await,
+            ControlRequest::RootsReachAnswer {
+                root,
+                host,
+                port,
+                bot,
+                once,
+                allow,
+                device,
+                path,
+                server,
+                place,
+            } => {
+                self.answer_reach(
+                    root,
+                    host,
+                    port,
+                    bot,
+                    once,
+                    allow,
+                    Asked {
+                        device,
+                        path,
+                        server,
+                        place,
+                    },
+                )
+                .await
+            }
             ControlRequest::Printers => self.printers().await,
             ControlRequest::PrintersAdd {
                 queue,
@@ -2208,6 +2568,8 @@ impl ControlHandler for Daemon {
                     None => command.clone(),
                 });
                 self.audit.append(&entry);
+                let taken = self.once.take(&root, bot.as_deref());
+                let once = taken.grants();
                 let started = self
                     .runner
                     .start(crate::commands::Request {
@@ -2215,8 +2577,12 @@ impl ControlHandler for Daemon {
                         dir,
                         command,
                         bot,
+                        once,
                     })
                     .await;
+                if started.is_err() {
+                    self.once.restore(taken);
+                }
                 let status = match started {
                     Ok(status) => status,
                     Err(refused) => {
@@ -2244,6 +2610,7 @@ impl ControlHandler for Daemon {
                 Ok(json!({
                     "agents": look.agents,
                     "reaches": look.reaches,
+                    "needs": look.needs,
                     "commands": commands,
                     "root": lent.map(|root| json!({
                         "id": root.id,
@@ -2259,8 +2626,9 @@ impl ControlHandler for Daemon {
                 name,
                 agent,
                 owner,
+                repository,
             } => {
-                self.coding_allow(root, folder, bot, name, agent, owner)
+                self.coding_allow(root, folder, bot, name, agent, owner, repository)
                     .await
             }
             ControlRequest::AuditTail { lines } => {

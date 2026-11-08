@@ -344,6 +344,7 @@ fn root(id: &str, label: &str, index: &str, files: u64) -> RootState {
         writable: false,
         allows_commands: false,
         network: false,
+        network_access: None,
     }
 }
 
@@ -958,6 +959,7 @@ fn allowing_commands_asks_first() {
             id: "work-docs".into(),
             commands: true,
             network: false,
+            local_services: None,
         })]
     );
     writable.allows_commands = true;
@@ -967,7 +969,8 @@ fn allowing_commands_asks_first() {
         vec![Effect::Daemon(DaemonCommand::SetCommands {
             id: "work-docs".into(),
             commands: true,
-            network: true,
+            network: cfg!(windows),
+            local_services: Some(true),
         })]
     );
     assert_eq!(
@@ -976,6 +979,7 @@ fn allowing_commands_asks_first() {
             id: "work-docs".into(),
             commands: false,
             network: false,
+            local_services: None,
         })]
     );
 }
@@ -3934,6 +3938,8 @@ fn listed(id: &str, command: &str, state: &str, exit_code: Option<i32>) -> Liste
                 output_bytes: 120,
                 error: None,
                 limit: None,
+                blocked: Vec::new(),
+                network_access: None,
             },
             root: "app".into(),
             dir: "api".into(),
