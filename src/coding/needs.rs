@@ -47,6 +47,12 @@ pub struct Needs {
     /// What it installs from the internet, for a person: "gems".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub installs: Vec<String>,
+    /// The exact `ip:port`s its local-network services need in `reach`,
+    /// worked out here from the addresses this computer found for their
+    /// names, which go no further (`Service::address`). Only between this
+    /// computer's own processes (`coding_look`), never in a prepare's answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reach: Vec<String>,
     /// The files that say it needs the internet: `Gemfile`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub internet_from: Vec<String>,
@@ -224,6 +230,12 @@ pub fn read(names: &[String], file: impl Fn(&str) -> Option<String>, host: &Host
         }
     }
     needs.services = placed;
+    needs.reach = needs
+        .services
+        .iter()
+        .filter(|s| s.place == Where::LocalNetwork)
+        .filter_map(reach_entry)
+        .collect();
     needs
 }
 
@@ -336,29 +348,81 @@ fn published(entry: &serde_json::Value, target: u16) -> Option<u16> {
     }
 }
 
-/// A Rails `config/database.yml`: its adapter, host and port, read line by
-/// line since its ERB isn't YAML. ERB's default (`{ "localhost" }`,
+/// A Rails `config/database.yml`: each environment's adapter, host and
+/// port, read line by line since its ERB isn't YAML, with what a block
+/// merges from another (`<<: *default`). ERB's default (`{ "localhost" }`,
 /// `|| "db"`) stands for the value; ERB without one means `localhost`.
 fn database_yml(text: &str, from: &str, needs: &mut Needs) {
-    let mut adapter = None;
-    let mut host = None;
-    let mut port = None;
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(value) = line.strip_prefix("url:") {
+    #[derive(Default, Clone)]
+    struct Block {
+        anchor: Option<String>,
+        merges: Option<String>,
+        adapter: Option<(&'static str, u16)>,
+        host: Option<String>,
+        port: Option<u16>,
+    }
+    let mut blocks: Vec<Block> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if !raw.starts_with([' ', '\t']) {
+            // `development:` or `default: &default`.
+            let anchor = line
+                .split_once('&')
+                .map(|(_, a)| a.trim().to_string())
+                .filter(|a| !a.is_empty());
+            blocks.push(Block {
+                anchor,
+                ..Block::default()
+            });
+            continue;
+        }
+        let Some(block) = blocks.last_mut() else {
+            continue;
+        };
+        if let Some(value) = line.strip_prefix("<<:") {
+            block.merges = Some(value.trim().trim_start_matches('*').to_string());
+        } else if let Some(value) = line.strip_prefix("url:") {
             urls(value, from, needs);
         } else if let Some(value) = line.strip_prefix("adapter:") {
-            adapter = adapter.or_else(|| kind(value.trim()));
+            block.adapter = block.adapter.or_else(|| kind(value.trim()));
         } else if let Some(value) = line.strip_prefix("host:") {
-            host = host.or_else(|| erb_value(value));
+            block.host = block.host.clone().or_else(|| erb_value(value));
         } else if let Some(value) = line.strip_prefix("port:") {
-            port = port.or_else(|| erb_value(value).and_then(|p| p.parse().ok()));
+            block.port = block
+                .port
+                .or_else(|| erb_value(value).and_then(|p| p.parse().ok()));
         }
     }
-    if let Some((name, default)) = adapter {
-        let host = host.unwrap_or_else(|| "localhost".to_string());
-        if !host.starts_with('/') {
-            add(needs, name, &host, port.unwrap_or(default), from);
+    // Each block with what it merges, a few levels deep at most.
+    let resolve = |block: &Block| {
+        let mut resolved = block.clone();
+        let mut next = block.merges.clone();
+        for _ in 0..4 {
+            let Some(name) = next else {
+                break;
+            };
+            let Some(base) = blocks
+                .iter()
+                .find(|b| b.anchor.as_deref() == Some(name.as_str()))
+            else {
+                break;
+            };
+            resolved.adapter = resolved.adapter.or(base.adapter);
+            resolved.host = resolved.host.or_else(|| base.host.clone());
+            resolved.port = resolved.port.or(base.port);
+            next = base.merges.clone();
+        }
+        resolved
+    };
+    for block in blocks.iter().map(resolve) {
+        if let Some((name, default)) = block.adapter {
+            let host = block.host.unwrap_or_else(|| "localhost".to_string());
+            if !host.starts_with('/') {
+                add(needs, name, &host, block.port.unwrap_or(default), from);
+            }
         }
     }
 }
@@ -483,12 +547,18 @@ pub fn allowed(root: &Root, needs: &Needs) -> bool {
 
 /// The exact `ip:port`s the local network's services need in `reach`.
 pub fn reach_entries(needs: &Needs) -> Vec<String> {
-    needs
+    let mut entries = needs.reach.clone();
+    for entry in needs
         .services
         .iter()
         .filter(|s| s.place == Where::LocalNetwork)
         .filter_map(reach_entry)
-        .collect()
+    {
+        if !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    entries
 }
 
 /// A local-network service's `reach` entry: its address, the one this
@@ -591,6 +661,31 @@ mod tests {
             .collect();
         let names: Vec<String> = map.keys().cloned().collect();
         read(&names, |n| map.get(n).cloned(), &chalk())
+    }
+
+    #[test]
+    fn each_rails_environment_is_read_with_what_it_merges() {
+        let mut needs = Needs::default();
+        database_yml(
+            "default: &default\n  adapter: postgresql\n  host: localhost\n\n\
+             development:\n  <<: *default\n  database: app_dev\n\n\
+             test:\n  <<: *default\n  host: <%= ENV.fetch(\"DB_HOST\") { \"192.168.8.31\" } %>\n  port: 6543\n",
+            "config/database.yml",
+            &mut needs,
+        );
+        let found: Vec<(String, u16)> = needs
+            .services
+            .iter()
+            .map(|s| (s.host.clone(), s.port))
+            .collect();
+        assert!(
+            found.contains(&("localhost".to_string(), 5432)),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&("192.168.8.31".to_string(), 6543)),
+            "{found:?}"
+        );
     }
 
     #[test]

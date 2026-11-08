@@ -245,6 +245,16 @@ fn output_keeps_what_only_starts_like_the_token() {
 }
 
 #[test]
+fn a_secret_is_found_in_a_name_looked_up_whatever_its_case_and_dots() {
+    let secret = Secret::new("ops_testSERVICEaccount0123".into());
+    let redactor = Redactor::new([(&secret, REDACTED.to_string())]);
+    assert!(redactor.found_in_name("ops_testserviceaccount0123.invalid"));
+    assert!(redactor.found_in_name("ops_testservice.account0123.example"));
+    assert!(!redactor.found_in_name("rubygems.org"));
+    assert!(!Redactor::new([]).found_in_name("anything.example"));
+}
+
+#[test]
 fn output_loses_every_secret_across_chunks() {
     let token = Secret::new(TOKEN.into());
     let long = Secret::new("ops_testSERVICEaccount0123".into());

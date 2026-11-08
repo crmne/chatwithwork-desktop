@@ -278,9 +278,11 @@ struct Cell {
     out_total: u64,
     err_total: u64,
     tail_bytes: usize,
-    /// Take the run's secrets, if it has any, out of each stream.
+    /// Take the run's secrets, if it has any, out of each stream, and out
+    /// of the names it looked up.
     redact_out: crate::coding::Redactor,
     redact_err: crate::coding::Redactor,
+    redact_names: crate::coding::Redactor,
     /// What the sandbox refused it so far.
     blocked: Vec<Blocked>,
     /// Where its sandbox logs the connections it blocked, how far that's
@@ -321,6 +323,7 @@ impl Cell {
             tail_bytes: plan.limits.output_chars.saturating_mul(4).max(1024),
             redact_out: plan.redactor(),
             redact_err: plan.redactor(),
+            redact_names: plan.redactor(),
             blocked: Vec::new(),
             blocked_log: None,
             host: Default::default(),
@@ -353,7 +356,13 @@ impl Cell {
         *read = end as u64;
         let lines = String::from_utf8_lossy(&text[start..end]).into_owned();
         for line in lines.lines() {
-            if let Some(blocked) = blocked::network(line, &self.host) {
+            if let Some(mut blocked) = blocked::network(line, &self.host) {
+                // A name looked up can carry a secret, as what it prints can.
+                if let Blocked::Network { host, .. } = &mut blocked
+                    && self.redact_names.found_in_name(host)
+                {
+                    *host = env::REDACTED.to_string();
+                }
                 self.add_blocked(blocked);
             }
         }
@@ -407,6 +416,7 @@ impl Cell {
     fn redact(&mut self, plan: &Plan) {
         self.redact_out = plan.redactor();
         self.redact_err = plan.redactor();
+        self.redact_names = plan.redactor();
     }
 
     /// What a stream printed, with the run's secret taken out before

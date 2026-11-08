@@ -594,7 +594,9 @@ impl Plan {
                 continue;
             }
             match host.classify(grant.host) {
-                Where::ThisComputer if grant.host.is_loopback() => ports.push(grant.port),
+                // Seatbelt's `localhost:<port>` is every address of this
+                // machine, so on macOS its own addresses go there too.
+                Where::ThisComputer if grant.host.is_loopback() || !rules => ports.push(grant.port),
                 Where::ThisComputer | Where::LocalNetwork if level != Level::Internet => {
                     exact.push((grant.host, grant.port))
                 }

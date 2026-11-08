@@ -1113,6 +1113,18 @@ impl Daemon {
             // An "Allow once" was the person's answer for this pairing's bots.
             self.once.clear();
         }
+        // ...and for a folder as it was: one that stopped commands, or that
+        // another took the place of, keeps none (`cww roots` edits the
+        // config and asks for this reload).
+        for old in config.roots.iter().filter(|r| r.runs_commands()) {
+            let kept = new
+                .roots
+                .iter()
+                .any(|r| r.id == old.id && r.path == old.path && r.runs_commands());
+            if !kept {
+                self.once.forget(&old.id);
+            }
+        }
         *config = new;
         drop(config);
         // Runs in folders that no longer allow commands stop now.

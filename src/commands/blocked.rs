@@ -124,20 +124,46 @@ pub(super) fn paths(
 
 /// The absolute paths in a line of output, without the quotes, colons and
 /// brackets around them: `/home/ana/.cache`, and on Windows
-/// `C:\Users\ana\secret.txt` or `C:/Users/ana`.
+/// `C:\Users\ana\secret.txt` or `C:/Users/ana`. A quoted one is taken
+/// whole, spaces and all (`'/home/ana/Work docs/file.txt'`).
 fn absolute_paths(line: &str) -> Vec<String> {
-    line.split(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '(' | ')' | ','))
-        .filter_map(|word| {
-            let word = word.trim_end_matches([':', '.', ';', ']']);
-            let unix = word.len() > 1 && word.starts_with('/') && !word.starts_with("//");
-            let bytes = word.as_bytes();
-            let drive = bytes.len() > 3
-                && bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':'
-                && matches!(bytes[2], b'\\' | b'/');
-            (unix || drive).then(|| word.to_string())
-        })
-        .collect()
+    let mut found = Vec::new();
+    let mut rest = String::new();
+    let mut quoted: Option<(char, String)> = None;
+    for c in line.chars() {
+        match &mut quoted {
+            Some((quote, inside)) if c == *quote => {
+                if let Some(path) = absolute(inside) {
+                    found.push(path);
+                }
+                quoted = None;
+                rest.push(' ');
+            }
+            Some((_, inside)) => inside.push(c),
+            None if matches!(c, '\'' | '"' | '`') => quoted = Some((c, String::new())),
+            None => rest.push(c),
+        }
+    }
+    if let Some((_, inside)) = quoted {
+        rest.push_str(&inside);
+    }
+    found.extend(
+        rest.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ','))
+            .filter_map(absolute),
+    );
+    found
+}
+
+/// `word` as an absolute path, without what trails it in a sentence.
+fn absolute(word: &str) -> Option<String> {
+    let word = word.trim().trim_end_matches([':', '.', ';', ']']);
+    let unix = word.len() > 1 && word.starts_with('/') && !word.starts_with("//");
+    let bytes = word.as_bytes();
+    let drive = bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    (unix || drive).then(|| word.to_string())
 }
 
 #[cfg(test)]
@@ -226,6 +252,14 @@ mod tests {
             vec!["C:/Users/ana".to_string()]
         );
         assert!(absolute_paths("a:b and C: alone").is_empty());
+        assert_eq!(
+            absolute_paths(r"Access to the path 'C:\Users\Ana Work\secret.txt' is denied."),
+            vec![r"C:\Users\Ana Work\secret.txt".to_string()]
+        );
+        assert_eq!(
+            absolute_paths("touch: cannot touch '/home/ana/Work docs/file.txt': Permission denied"),
+            vec!["/home/ana/Work docs/file.txt".to_string()]
+        );
     }
 
     #[test]
