@@ -93,6 +93,11 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     }
     let home = crate::paths::home_dir().ok();
     if let Err(state) = resolve_env(plan, cell, sandbox, home.as_deref(), deadline) {
+        // A `$( )` the kernel ended at the run's memory limit.
+        #[cfg(target_os = "linux")]
+        if cgroup.as_ref().is_some_and(|c| c.ran_out_of_memory()) {
+            lock(cell).limit = Some("memory");
+        }
         return state;
     }
     // The `$( )`s took time: a stop or the clock may have come meanwhile.

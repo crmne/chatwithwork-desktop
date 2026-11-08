@@ -20,10 +20,10 @@
       "matchManagers": [
         "cargo"
       ],
-      "matchPackageNames": [
+      "enabled": false,
+      "matchDepNames": [
         "mxc-sdk"
-      ],
-      "enabled": false
+      ]
     }
   ]
 }

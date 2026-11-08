@@ -93,17 +93,19 @@ impl Drop for RunCgroup {
     }
 }
 
-/// Whether `memory.events` counts a process the kernel ended at the limit.
+/// Whether `memory.events` says the run reached its own limit (`oom`) and
+/// the kernel ended a process for it. A kill from the computer running out,
+/// or from a cgroup above, counts no `oom` here.
 fn out_of_memory(events: &str) -> bool {
-    events.lines().any(|line| {
-        let mut words = line.split_whitespace();
-        matches!(words.next(), Some("oom_kill" | "oom_group_kill"))
-            && words
-                .next()
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0)
-                > 0
-    })
+    let count = |name: &str| {
+        events
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, n)| n.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    count("oom") > 0 && count("oom_kill") + count("oom_group_kill") > 0
 }
 
 /// Where runs' cgroups go, set up once.
@@ -111,8 +113,8 @@ fn parent() -> Option<&'static Path> {
     static PARENT: OnceLock<Option<PathBuf>> = OnceLock::new();
     PARENT
         .get_or_init(|| {
-            let own = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-            let parent = set_up(&delegated(&own)?);
+            let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+            let parent = delegated(&own).and_then(|cgroup| set_up(&cgroup));
             if parent.is_none() {
                 tracing::info!("no cgroup to hold commands' memory: they have no memory limit");
             }
@@ -144,12 +146,33 @@ fn unit_is_delegated(cgroup: &Path) -> bool {
     {
         systemctl.arg("--user");
     }
-    systemctl
+    let Ok(mut child) = systemctl
         .args(["show", "--property=Delegate", "--value", unit])
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "yes")
+        .spawn()
+    else {
+        return false;
+    };
+    // A user manager that doesn't answer mustn't hold the run up.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+    let mut answer = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = std::io::Read::read_to_string(&mut out, &mut answer);
+    }
+    answer.trim() == "yes"
 }
 
 /// The cgroup v2 a `/proc/<pid>/cgroup` names, above [`LEAF`].
@@ -230,7 +253,10 @@ mod tests {
         let quiet = "low 0\nhigh 0\nmax 12\noom 1\noom_kill 0\noom_group_kill 0\n";
         assert!(!out_of_memory(quiet));
         assert!(out_of_memory("low 0\nmax 40\noom 1\noom_kill 1\n"));
-        assert!(out_of_memory("oom_kill 0\noom_group_kill 1\n"));
+        assert!(out_of_memory("oom 1\noom_kill 0\noom_group_kill 1\n"));
+        // Killed without reaching its own limit: the computer, or a cgroup
+        // above, ran out.
+        assert!(!out_of_memory("oom 0\noom_kill 1\n"));
         assert!(!out_of_memory(""));
     }
 

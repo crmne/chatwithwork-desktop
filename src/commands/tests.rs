@@ -728,7 +728,18 @@ fn a_command_is_stopped_at_its_process_limit() {
 /// Delegate=yes cargo test ...`).
 #[cfg(target_os = "linux")]
 fn memory_is_held() -> bool {
-    super::cgroup::RunCgroup::make("probe", 64).is_some()
+    static PROBES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    super::cgroup::RunCgroup::make(&format!("probe-{}-{n}", std::process::id()), 64).is_some()
+}
+
+/// Whether a run finds `python3`, as [`shell`] gives it this test's `PATH`.
+#[cfg(target_os = "linux")]
+fn has_python() -> bool {
+    std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 /// rustc, LLVM, a JVM or Go reserve far more address space than they use:
@@ -737,13 +748,7 @@ fn memory_is_held() -> bool {
 #[cfg(target_os = "linux")]
 #[test]
 fn reserving_address_space_isnt_using_memory() {
-    if !sandbox_works() {
-        return;
-    }
-    let python = std::process::Command::new("python3")
-        .arg("--version")
-        .output();
-    if !python.is_ok_and(|o| o.status.success()) {
+    if !sandbox_works() || !has_python() {
         return;
     }
     let mut fx = fixture(true);
@@ -766,7 +771,7 @@ fn reserving_address_space_isnt_using_memory() {
 #[cfg(target_os = "linux")]
 #[test]
 fn using_more_memory_than_the_limit_ends_the_run() {
-    if !sandbox_works() || !memory_is_held() {
+    if !sandbox_works() || !has_python() || !memory_is_held() {
         eprintln!("no delegated cgroup: the memory limit isn't held here");
         return;
     }
