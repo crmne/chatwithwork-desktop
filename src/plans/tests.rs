@@ -150,8 +150,8 @@ fn the_command_line_is_built_here_and_holds_none_of_the_servers_words() {
                 assert!(words.contains(&"web_search=\"disabled\"".to_string()));
                 assert!(
                     words.contains(&format!(
-                        "model_instructions_file=\"{}\"",
-                        dir.join(INSTRUCTIONS_FILE).display()
+                        "model_instructions_file={}",
+                        serde_json::to_string(&dir.join(INSTRUCTIONS_FILE)).unwrap()
                     )),
                     "{words:?}"
                 );
