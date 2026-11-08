@@ -6645,3 +6645,202 @@ async fn remote_file_refusals_keep_local_patterns_and_app_paths_private() {
         .unwrap()
         .unwrap();
 }
+
+/// Thinking with a plan over the wire (docs/own-plans.md): `plans`,
+/// `ask_plan` and `think` are never listed; only the person on this
+/// computer gives the yes; a step's text comes as progress in pieces of at
+/// most 200 characters and its calls come back with Claude Code's prefix
+/// taken off, the agent stopped at them; turning the yes off refuses the
+/// next step. With a stand-in `claude` that prints Claude Code's events.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chat_thinks_with_a_plan_only_once_this_computer_said_yes() {
+    if !command_sandbox_works() {
+        return;
+    }
+    const TOKEN: &str = "sk-ant-oat01-e2ePLANtokenPLAN0123456789abcdefghijklmnopqrs";
+    let fx = fixture();
+    let home = fx.paths.person_home.clone().unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::write(
+        home.join(".claude/.credentials.json"),
+        json!({ "claudeAiOauth": { "accessToken": TOKEN, "subscriptionType": "max" } }).to_string(),
+    )
+    .unwrap();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, false, None);
+    let install = fx.base.join("claude-install");
+    std::fs::create_dir_all(&install).unwrap();
+    let said = "word ".repeat(50);
+    let events = [
+        json!({ "type": "system", "subtype": "init", "model": "claude-test-1", "parent_tool_use_id": null }),
+        json!({ "type": "stream_event", "parent_tool_use_id": null, "event": { "type": "message_start", "message": { "model": "claude-test-1" } } }),
+        json!({ "type": "stream_event", "parent_tool_use_id": null, "event": { "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } } }),
+        json!({ "type": "stream_event", "parent_tool_use_id": null, "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": said } } }),
+        json!({ "type": "assistant", "parent_tool_use_id": null, "message": { "model": "claude-test-1", "content": [{ "type": "tool_use", "id": "toolu_1", "name": "mcp__cww__gmail_search", "input": { "query": "budget" } }] } }),
+        json!({ "type": "stream_event", "parent_tool_use_id": null, "event": { "type": "message_delta", "delta": { "stop_reason": "tool_use" }, "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 5 } } }),
+        json!({ "type": "stream_event", "parent_tool_use_id": null, "event": { "type": "message_stop" } }),
+    ];
+    let lines: Vec<String> = events.iter().map(Value::to_string).collect();
+    std::fs::write(install.join("events.jsonl"), lines.join("\n") + "\n").unwrap();
+    let program = install.join("claude");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\ncat {}\necho \"$(cat \"$HOME/.claude/.credentials.json\")\" >&2\nexec sleep 60\n",
+            install.join("events.jsonl").display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.coding.claude = Some(program);
+    config.save(&fx.paths).unwrap();
+
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let tools = s.request("tools/list", json!({})).await;
+    for name in ["plans", "ask_plan", "think"] {
+        assert!(
+            !tool_names(&tools).contains(&name.to_string()),
+            "{name} listed"
+        );
+    }
+    let plans = s.call("plans", json!({})).await;
+    let claude = &plans["structuredContent"]["plans"][1];
+    assert_eq!(claude["agent"], "claude_code", "{plans}");
+    assert_eq!(claude["name"], "Claude");
+    assert_eq!(claude["installed"], true, "{plans}");
+    assert_eq!(claude["signed_in"], true);
+    assert_eq!(claude["billing"], "plan");
+    assert_eq!(claude["chats"], false);
+    assert_eq!(claude["bot"], Value::Null);
+    assert!(!plans.to_string().contains("e2ePLAN"));
+
+    let step = json!({
+        "agent": "claude_code",
+        "instructions": "Be brief.",
+        "transcript": "User: find the budget mail",
+        "tools": [{ "name": "gmail_search", "description": "Search mail", "input_schema": { "type": "object" } }],
+    });
+    let refused = s.call("think", step.clone()).await;
+    assert_eq!(error_code(&refused), "not_allowed", "{refused}");
+
+    let asked = s.call("ask_plan", json!({ "agent": "claude_code" })).await;
+    assert_eq!(
+        asked["structuredContent"],
+        json!({ "status": "asked" }),
+        "{asked}"
+    );
+    let status = control(&fx.paths, ControlRequest::Status).await;
+    let asks = status["unattended_asks"].as_array().unwrap();
+    assert_eq!(asks.len(), 1, "{status}");
+    assert_eq!(asks[0]["kind"], "plan");
+    assert_eq!(asks[0]["root"], "claude_code");
+    assert_eq!(asks[0]["bot"], "");
+    control(
+        &fx.paths,
+        ControlRequest::RootsUnattendedAnswer {
+            root: "claude_code".into(),
+            bot: String::new(),
+            allow: true,
+            kind: cww::unattended_asks::AskKind::Plan,
+            asked_at: None,
+        },
+    )
+    .await;
+    assert!(Config::load(&fx.paths).unwrap().plans.claude_code.chats);
+    let mut s = connect_or_keep(&mut server, s).await;
+    let already = s.call("ask_plan", json!({ "agent": "claude_code" })).await;
+    assert_eq!(already["structuredContent"], json!({ "status": "already" }));
+    // The owner's yes isn't a bot's.
+    let bots = s.bot_call("think", step.clone(), "42").await;
+    assert_eq!(error_code(&bots), "not_allowed", "{bots}");
+
+    let started = Instant::now();
+    let (result, progress) = call_with_progress(&mut s, "think", step.clone()).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "stopped at its call"
+    );
+    assert_ne!(result["isError"], true, "{result}");
+    let answer = &result["structuredContent"];
+    assert_eq!(answer["stop"], "tool_use", "{answer}");
+    assert_eq!(answer["text"], said);
+    assert_eq!(answer["model"], "claude-test-1");
+    assert_eq!(
+        answer["tool_calls"],
+        json!([{ "id": "toolu_1", "name": "gmail_search", "arguments": { "query": "budget" } }])
+    );
+    assert_eq!(
+        answer["usage"],
+        json!({ "input_tokens": 15, "output_tokens": 20, "cached_tokens": 5 })
+    );
+    let messages: Vec<&str> = progress
+        .iter()
+        .map(|p| p["message"].as_str().unwrap())
+        .collect();
+    assert!(
+        messages.iter().all(|m| m.chars().count() <= 200),
+        "{progress:?}"
+    );
+    assert_eq!(messages.concat(), said);
+    let counts: Vec<u64> = progress
+        .iter()
+        .map(|p| p["progress"].as_f64().unwrap() as u64)
+        .collect();
+    assert!(counts.windows(2).all(|w| w[0] < w[1]), "{counts:?}");
+    assert_eq!(counts.last().copied(), Some(250));
+    assert!(!result.to_string().contains("e2ePLAN"));
+
+    let entries = control(&fx.paths, ControlRequest::AuditTail { lines: Some(50) }).await;
+    let entries = entries["entries"].as_array().unwrap();
+    let think = entries
+        .iter()
+        .rev()
+        .find(|e| e["event"] == "think")
+        .unwrap();
+    let detail = think["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("claude_code for the owner: tool_use, 1 tool calls"),
+        "{detail}"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e.to_string().contains("find the budget mail"))
+    );
+    assert!(entries.iter().any(|e| e["event"] == "plan_asked"));
+    assert!(entries.iter().any(|e| e["event"] == "plan_allowed"));
+
+    control(
+        &fx.paths,
+        ControlRequest::PlansAllow {
+            agent: "claude".into(),
+            bot: None,
+            allow: false,
+        },
+    )
+    .await;
+    let mut s = connect_or_keep(&mut server, s).await;
+    let refused = s.call("think", step).await;
+    assert_eq!(error_code(&refused), "not_allowed", "{refused}");
+    assert!(
+        std::fs::read_dir(fx.paths.data_dir.join("thinking"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}

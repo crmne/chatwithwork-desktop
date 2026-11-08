@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1bc9e-9360-71d1-979a-d3b1a71bac82"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"cww","tool":"gmail_search","arguments":{"query":"from:Alice budget"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"cww","tool":"calendar_list","arguments":{"day":"2026-11-09"},"result":null,"error":null,"status":"in_progress"}}

@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"01a1bc9d-18fd-77a2-9382-aac7e18a6e28"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"cww","tool":"gmail_search","arguments":{"query":"from:alice budget"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"cww","tool":"gmail_search","arguments":{"query":"from:alice budget"},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"cww","tool":"calendar_list","arguments":{"day":"2026-11-09"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"cww","tool":"calendar_list","arguments":{"day":"2026-11-09"},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I tried both tools, but access was blocked because they require approval and approvals are disabled.\n\n- Emails: `from:alice budget`\n- Calendar: November 9, 2026\n\nNo emails or events were retrieved."}}
+{"type":"turn.completed","usage":{"input_tokens":23183,"cached_input_tokens":15112,"cache_write_input_tokens":8062,"output_tokens":140,"reasoning_output_tokens":0}}

@@ -88,6 +88,23 @@ pub const ALLOW_UNATTENDED: &str = "allow_unattended";
 /// that stands. Called by the server by name, never listed.
 pub const PREPARE_REPOSITORY: &str = "prepare_repository";
 pub const PREPARE_STATUS: &str = "prepare_status";
+/// What this computer has for thinking with an agent's own sign-in, and
+/// what its owner allowed (docs/own-plans.md). Called by the server by
+/// name, never listed, as are `ask_plan` and `think`.
+pub const PLANS: &str = "plans";
+/// Ask the person on this computer to let a chat think with an agent's
+/// own sign-in here.
+pub const ASK_PLAN: &str = "ask_plan";
+/// One step of a chat's thinking with an agent's own sign-in.
+pub const THINK: &str = "think";
+
+/// How often a step's progress is asked for.
+const THINK_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+/// How long a step is waited for at most, beyond its own limit.
+const THINK_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(crate::plans::STEP_SECONDS + 60);
+/// Characters of answer text each progress report carries at most.
+const THINK_PROGRESS_CHARS: usize = 200;
 
 /// Trusted browser-only local consent; never a model argument.
 pub const BROWSER_AUTO_APPROVE_META: &str = "com.chatwithwork/browserAutoApprove";
@@ -170,6 +187,9 @@ struct Inner {
     asks: Option<Arc<crate::unattended_asks::Asks>>,
     /// Always allow pressed on a bot's command card, for the daemon to apply.
     unattended_grants: Option<tokio::sync::mpsc::UnboundedSender<UnattendedGrant>>,
+    /// Whoever starts commands, which also starts thinking steps, whether
+    /// or not a folder allows commands.
+    runner: Option<crate::commands::Runner>,
     reader: Arc<Reader>,
     writer: Arc<Writer>,
     limiter: Arc<Limiter>,
@@ -194,6 +214,7 @@ impl LocalFiles {
                 browser: None,
                 asks: None,
                 unattended_grants: None,
+                runner: None,
                 reader,
                 writer,
                 limiter,
@@ -243,6 +264,17 @@ impl LocalFiles {
         Self {
             inner: Arc::new(Inner {
                 unattended_grants: Some(grants),
+                ..inner
+            }),
+        }
+    }
+
+    /// Think with agents' own sign-ins through `runner` (`plans`, `think`).
+    pub fn with_runner(self, runner: crate::commands::Runner) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                runner: Some(runner),
                 ..inner
             }),
         }
@@ -327,6 +359,8 @@ impl LocalFiles {
                 || (name == ALLOW_UNATTENDED && self.inner.unattended_grants.is_some())
                 || ((name == PREPARE_REPOSITORY || name == PREPARE_STATUS)
                     && self.commands().is_some())
+                || ((name == PLANS || name == THINK) && self.inner.runner.is_some())
+                || (name == ASK_PLAN && self.inner.runner.is_some() && self.inner.asks.is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -783,6 +817,7 @@ impl LocalFiles {
                     match kind {
                         AskKind::Unattended => "they can't run there unattended.",
                         AskKind::ClaudeCode => "Claude Code can't run there.",
+                        AskKind::Plan => "nothing can run there.",
                     }
                 ),
             ));
@@ -790,6 +825,7 @@ impl LocalFiles {
         let given = match kind {
             AskKind::Unattended => loan.unattended,
             AskKind::ClaudeCode => loan.claude_code,
+            AskKind::Plan => true,
         };
         if given {
             return Ok(Output::Ask(json!({ "status": "already" })));
@@ -811,6 +847,7 @@ impl LocalFiles {
                 let mut entry = AuditEntry::event(match kind {
                     AskKind::Unattended => "root_bot_unattended_asked",
                     AskKind::ClaudeCode => "root_bot_claude_code_asked",
+                    AskKind::Plan => "plan_asked",
                 });
                 entry.detail = Some(format!("{root} ({}) for bot {id}", folder.label));
                 self.inner.audit.append(&entry);
@@ -824,6 +861,216 @@ impl LocalFiles {
             }
         }
         Ok(Output::Ask(json!({ "status": "asked" })))
+    }
+
+    fn runner(&self) -> &crate::commands::Runner {
+        self.inner
+            .runner
+            .as_ref()
+            .expect("offered only with a runner")
+    }
+
+    /// What this computer has for each agent, and what its owner allowed
+    /// for this chat's owner or its bot (docs/own-plans.md).
+    async fn plans(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+        let _: EmptyArgs = parse_args(args)?;
+        let plans = self
+            .runner()
+            .plans(caller_bot(caller))
+            .await
+            .map_err(|e| ToolError::new(ErrorCode::Unavailable, e.message))?;
+        Ok(Output::Ask(json!({ "plans": plans })))
+    }
+
+    /// Queue a request for the person on this computer to let this chat's
+    /// owner, or its bot, think with an agent's own sign-in. Changes nothing
+    /// the computer allows.
+    async fn ask_plan(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+        use crate::unattended_asks::{AskKind, Asked};
+        let PlanArgs { agent: key } = parse_args(args)?;
+        let agent = crate::plans::agent(&key)
+            .filter(|_| key != "claude")
+            .ok_or_else(|| ToolError::invalid_argument("`agent` is `codex` or `claude_code`"))?;
+        let bot = caller_bot(caller);
+        // As whoever starts the steps reads the config now.
+        let plans = self
+            .runner()
+            .plans(bot.clone())
+            .await
+            .map_err(|e| ToolError::new(ErrorCode::Unavailable, e.message))?;
+        let allowed = plans.iter().any(|plan| {
+            plan.agent == agent.key()
+                && match &bot {
+                    Some(_) => plan.bot == Some(true),
+                    None => plan.chats,
+                }
+        });
+        if allowed {
+            return Ok(Output::Ask(json!({ "status": "already" })));
+        }
+        let asks = Arc::clone(self.inner.asks.as_ref().expect("offered only with asks"));
+        let (root, asker) = (agent.key().to_string(), bot.clone().unwrap_or_default());
+        let asked = blocking(move || {
+            asks.ask(&root, &asker, AskKind::Plan).map_err(|e| {
+                ToolError::new(
+                    ErrorCode::Internal,
+                    format!("The request couldn't be kept on this computer: {e:#}"),
+                )
+            })
+        })
+        .await?;
+        match asked {
+            Asked::Queued => {
+                let mut entry = AuditEntry::event("plan_asked");
+                entry.detail = Some(format!(
+                    "{} for {}",
+                    agent.key(),
+                    crate::plans::for_whom(bot.as_deref())
+                ));
+                self.inner.audit.append(&entry);
+            }
+            Asked::Already => {}
+            Asked::Full => {
+                return Err(ToolError::new(
+                    ErrorCode::RateLimited,
+                    "Too many requests are waiting for the person on this computer. Ask again \
+                     once they've answered some.",
+                ));
+            }
+        }
+        Ok(Output::Ask(json!({ "status": "asked" })))
+    }
+
+    /// One thinking step: the agent answers with text, or asks for Chat with
+    /// Work's tools, which go back to the server to run. Whoever starts
+    /// commands checks the yes itself; this side reports the text as it
+    /// comes and stops the step if the call is cancelled.
+    async fn think(
+        &self,
+        args: Value,
+        chat: &str,
+        progress: Option<Progress>,
+        caller: &Caller,
+    ) -> Result<Output, ToolError> {
+        let args: ThinkArgs = parse_args(args)?;
+        let raw = match args.output.as_deref() {
+            None | Some("events") => false,
+            Some("raw") => true,
+            Some(_) => return Err(ToolError::invalid_argument("`output` is `events` or `raw`")),
+        };
+        let ask = crate::plans::ThinkAsk {
+            agent: args.agent,
+            bot: caller_bot(caller),
+            instructions: args.instructions,
+            transcript: args.transcript,
+            tools: args.tools,
+            model: args.model,
+            raw,
+        };
+        let agent = crate::plans::validate(&ask).map_err(ToolError::invalid_argument)?;
+        let sizes = format!(
+            "{} instruction and {} transcript characters, {} tools",
+            ask.instructions.chars().count(),
+            ask.transcript.chars().count(),
+            ask.tools.len()
+        );
+        let whom = match &ask.bot {
+            Some(bot) => format!("bot {bot}"),
+            None => "the owner".into(),
+        };
+        let audit = |outcome: &str| {
+            let mut entry = AuditEntry::event("think");
+            entry.chat_id = (!chat.is_empty()).then(|| chat.to_string());
+            entry.detail = Some(format!("{} for {whom}: {outcome}; {sizes}", agent.key()));
+            self.inner.audit.append(&entry);
+        };
+        let runner = self.runner().clone();
+        let id = match runner.think(ask).await {
+            Ok(id) => id,
+            Err(e) => {
+                audit(&format!("refused, {}", e.code));
+                return Err(think_refusal(e));
+            }
+        };
+        // A cancelled call drops this future: the step stops at once.
+        struct Stopper(Option<(crate::commands::Runner, String)>);
+        impl Drop for Stopper {
+            fn drop(&mut self) {
+                if let Some((runner, id)) = self.0.take()
+                    && let Ok(handle) = tokio::runtime::Handle::try_current()
+                {
+                    handle.spawn(async move {
+                        let _ = runner.think_stop(&id).await;
+                    });
+                }
+            }
+        }
+        let mut stopper = Stopper(Some((runner.clone(), id.clone())));
+        let deadline = tokio::time::Instant::now() + THINK_WAIT;
+        // Where the next status starts: characters of text, or raw bytes;
+        // and the characters reported so far.
+        let mut sent: u64 = 0;
+        let mut reported: u64 = 0;
+        loop {
+            tokio::time::sleep(THINK_POLL).await;
+            if tokio::time::Instant::now() >= deadline {
+                audit("failed, took too long");
+                return Err(ToolError::new(
+                    ErrorCode::Failed,
+                    "the step took longer than this computer waits",
+                ));
+            }
+            let status = match runner.think_status(&id, sent).await {
+                Ok(status) => status,
+                Err(e) => {
+                    audit(&format!("failed, {}", e.code));
+                    return Err(ToolError::new(ErrorCode::Failed, e.message));
+                }
+            };
+            if raw {
+                let chunk = status["raw"].as_str().unwrap_or_default();
+                for piece in crate::plans::chunks(chunk, THINK_PROGRESS_CHARS) {
+                    reported += piece.chars().count() as u64;
+                    if let Some(progress) = &progress {
+                        progress(reported, piece);
+                    }
+                }
+                sent = status["next"].as_u64().unwrap_or(sent);
+            } else {
+                let text = status["text"].as_str().unwrap_or_default();
+                for piece in crate::plans::chunks(text, THINK_PROGRESS_CHARS) {
+                    sent += piece.chars().count() as u64;
+                    reported = sent;
+                    if let Some(progress) = &progress {
+                        progress(reported, piece);
+                    }
+                }
+            }
+            if status["done"] != Value::Bool(true) {
+                continue;
+            }
+            stopper.0 = None;
+            if let Some(error) = status.get("error") {
+                let message = error["message"]
+                    .as_str()
+                    .unwrap_or("it stopped")
+                    .to_string();
+                audit("failed");
+                return Err(ToolError::new(ErrorCode::Failed, message));
+            }
+            let result = status["result"].clone();
+            if raw {
+                audit(&format!("raw, {reported} characters out"));
+            } else {
+                let calls = result["tool_calls"].as_array().map_or(0, Vec::len);
+                let chars = result["text"].as_str().map_or(0, |t| t.chars().count());
+                audit(&format!(
+                    "{}, {calls} tool calls, {chars} characters out",
+                    result["stop"].as_str().unwrap_or("end_turn")
+                ));
+            }
+            return Ok(Output::Ask(result));
+        }
     }
 
     /// What a bot sees of the list of folders: only those lent to it, each
@@ -893,6 +1140,9 @@ impl LocalFiles {
             ALLOW_UNATTENDED => self.allow_unattended(args, caller).await,
             PREPARE_REPOSITORY => self.prepare(args, caller, false).await,
             PREPARE_STATUS => self.prepare(args, caller, true).await,
+            PLANS => self.plans(args, caller).await,
+            ASK_PLAN => self.ask_plan(args, caller).await,
+            THINK => self.think(args, chat, progress, caller).await,
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;
                 let roots = blocking(move || Ok(reader.roots())).await?;
@@ -1280,6 +1530,50 @@ struct EmptyArgs {}
 #[serde(deny_unknown_fields)]
 struct AskUnattendedArgs {
     root: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanArgs {
+    agent: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThinkArgs {
+    agent: String,
+    #[serde(default)]
+    instructions: String,
+    transcript: String,
+    #[serde(default)]
+    tools: Vec<crate::plans::ToolSpec>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    output: Option<String>,
+}
+
+/// The bot a call is for, `None` for a person's.
+fn caller_bot(caller: &Caller) -> Option<String> {
+    match caller {
+        Caller::Bot { id, .. } => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// A step refused by whoever starts commands, as a tool error.
+fn think_refusal(e: crate::commands::RunError) -> ToolError {
+    let code = match e.code.as_str() {
+        "not_allowed" => ErrorCode::NotAllowed,
+        "not_installed" => ErrorCode::NotInstalled,
+        "not_signed_in" => ErrorCode::NotSignedIn,
+        "busy" => ErrorCode::Busy,
+        "paused" => ErrorCode::Paused,
+        "invalid" => ErrorCode::InvalidArgument,
+        "unavailable" => ErrorCode::Unavailable,
+        _ => ErrorCode::Failed,
+    };
+    ToolError::new(code, e.message)
 }
 
 #[derive(serde::Deserialize)]

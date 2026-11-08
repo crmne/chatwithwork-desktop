@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1bca5-7c0c-7263-baeb-e13ae478b8d6"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"The sea rolls toward the shore in long, silver waves. Beneath its restless surface, a quiet world moves with the tides."}}
+{"type":"turn.completed","usage":{"input_tokens":15231,"cached_input_tokens":0,"cache_write_input_tokens":15228,"output_tokens":30,"reasoning_output_tokens":0}}

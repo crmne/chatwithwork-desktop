@@ -53,6 +53,24 @@ pub enum Call {
     CodingLook {
         repository: Option<String>,
     },
+    /// What this computer has for thinking with an agent's own sign-in,
+    /// for a bot if one asks (`crate::plans::look`).
+    Plans {
+        bot: Option<String>,
+    },
+    /// Start a thinking step (`think.rs`), checked against the config here.
+    Think {
+        ask: crate::plans::ThinkAsk,
+    },
+    /// How a thinking step stands, from a character (or, raw, a byte) on.
+    ThinkStatus {
+        id: String,
+        from: u64,
+    },
+    /// Stop a thinking step.
+    ThinkStop {
+        id: String,
+    },
 }
 
 /// Answer one call, as the supervisor does.
@@ -111,6 +129,24 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
             paths,
             repository.as_deref(),
         )),
+        Call::Plans { bot } => {
+            let bot = bot.filter(|b| crate::plans::valid_bot(b));
+            to_value(crate::plans::look(
+                &config()?,
+                paths,
+                bot.as_deref(),
+                super::think::sandbox().err(),
+            ))
+        }
+        Call::Think { ask } => super::think::start(runs, &config()?, paths, &ask)?,
+        Call::ThinkStatus { id, from } => {
+            run_id(&id)?;
+            super::think::status(runs, &id, from)?
+        }
+        Call::ThinkStop { id } => {
+            run_id(&id)?;
+            super::think::stop(runs, &id)?
+        }
     };
     Ok(value)
 }

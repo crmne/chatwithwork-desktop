@@ -114,7 +114,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
 - `allows_commands` is there when commands run in the folder (see `roots_commands`), with `network` (the internet and the local network) and `network_access`: `none`, `local` (this computer's own services) or `internet` (everything, local services included). On Windows a folder is `none` or `internet`. `reach` lists the exact local-network addresses (`ip:port`) its commands may reach besides, only here, never to the server (see `roots_reach`).
-- `unattended_asks` lists the bots asking, about a folder lent to them, to run their commands unattended (`"kind": "unattended"`) or to run Claude Code with this computer's sign-in (`"kind": "claude_code"`), waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "kind": "unattended", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
+- `unattended_asks` lists the bots asking, about a folder lent to them, to run their commands unattended (`"kind": "unattended"`) or to run Claude Code with this computer's sign-in (`"kind": "claude_code"`), and Chat with Work asking to think with an agent's own sign-in (`"kind": "plan"`, `root` the agent, `bot` empty for the owner's own chats, `folder` the agent's name), waiting for the person (see `roots_unattended_answer`), empty when none: `{"root": "app", "folder": "App", "bot": "42", "kind": "unattended", "name": "Issue fixer", "asked_at": "2026-11-04T10:00:00Z", "expires_at": "2026-11-05T10:00:00Z"}`. `folder` and `name` are this computer's own names for the folder and the loan, never the server's words.
 - `commands_with_changes` is `true` from 0.16.1, whose `roots_commands` takes `with_changes`; absent, a client asks for changes first.
 - `read_budget` is there when the folder has a read budget of its own that counts (see `roots_read_budget`): the characters a chat may read from it per rolling hour. It's absent while no hourly read limit is set.
 - `commands` is `null` except on Windows, where it says whether commands can run here: `{"available": true, "sandbox": "process_container", "drives": [{"root": "C:\\", "prepared": false}]}`, or `{"available": false, "detail": "commands need Windows 11 24H2 or later, ...", "drives": [...]}`. `drives` are the system's drive and the drives of the folders that allow commands; `prepared` is false where sandboxed programs can't see the top of the drive yet, which Node.js and cmd's `dir` need (`cww roots prepare-commands`, [docs/commands.md](docs/commands.md#windows)).
@@ -290,6 +290,17 @@ The person's Allow in that window. With `folder` (or `root`, one already shared)
 
 `cww coding setup`'s proof: starts one command in a shared folder that allows commands, as the bot `bot`'s run would start there, with its Claude Code sign-in where its loan allows it, and answers its status at once (as `run` does, PROTOCOL.md 8.15). Follow it with `commands` and `command_output`; stop it with `command_stop`. Refused where the folder doesn't allow commands. Writes a `coding_check` audit entry with the command line. Only a same-user client reaches the control socket, and such a client could run the command itself.
 
+### `plans` and `plans_allow`
+
+```json
+{"cmd": "plans"}
+{"cmd": "plans", "bot": "42"}
+{"cmd": "plans_allow", "agent": "codex", "allow": true}
+{"cmd": "plans_allow", "agent": "claude", "bot": "42", "allow": false}
+```
+
+Thinking with this computer's own ChatGPT (Codex) or Claude (Claude Code) sign-in as a chat's model ([docs/own-plans.md](docs/own-plans.md), PROTOCOL.md 7.2.2). `plans` answers what the server's `plans` does: `{"plans": [{"agent", "name", "installed", "signed_in", "billing", "chats", "bot", "unavailable"}]}`, with `bot` the yes for the bot asked about (`null` without one). `plans_allow` gives the yes (`allow: true`) or takes it back, for this computer's owner's own chats, or with `bot` for that bot; `agent` is `codex` or `claude_code` (`claude` too). It's `[plans.<agent>]` in `config.toml`, takes effect at the next step, writes `plan_allowed` or `plan_withdrawn` when it changes something, and answers `{"agent", "bot", "allowed"}`. Taking it back also answers a request for it that waits. Clients should say what a yes gives before sending one (the app's dialog: "Let Chat with Work use your ChatGPT plan for your chats?"); taking it back needs no question. `cww plans [--json]` and `cww plans allow <codex|claude> [--bot 42] [--off]` do the same from the command line. Only a same-user client reaches it, never the server.
+
 ### `roots_read_budget`
 
 ```json
@@ -322,6 +333,8 @@ The desktop app lists these grants in Shared folders. Selection and unattended c
 ```
 
 A dialog also sends the `asked_at` of the request it showed, and the answer is refused if the request waiting now was made at another time, so it never reaches one that took its place.
+
+With `"kind": "plan"` it answers a request to think with an agent's own sign-in (`ask_plan`, PROTOCOL.md 7.2.2): `root` is the agent (`codex` or `claude_code`) and `bot` the bot's ID, or `""` for this computer's owner's own chats. `allow: true` does what `plans_allow` does; `allow: false` writes `plan_declined`. The app's dialog says "Let Chat with Work use your ChatGPT plan for your chats?" (or "...for Issue fixer?", the name a loan here gave the bot, else "Bot 42"), with Allow and Deny.
 
 With `"kind": "claude_code"` it answers a request for Claude Code (`ask_claude_code`): `allow: true` does what `cww coding allow <root> <bot>` does and writes `root_bot_claude_code_allowed`; `allow: false` writes `root_bot_claude_code_declined`. The app's dialog for it says "Let Issue fixer run Claude Code in App?" and what that gives the bot's runs, with Allow and Deny; `cww roots allow` and `decline` take `--claude-code`. Without `kind`, it's a request for unattended commands, as below.
 

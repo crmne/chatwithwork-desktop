@@ -1051,6 +1051,7 @@ mod tests {
             coding: Default::default(),
             env: Default::default(),
             cgroup: None,
+            internet_only: false,
         }
     }
 
