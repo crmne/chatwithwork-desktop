@@ -108,36 +108,60 @@ fn out_of_memory(events: &str) -> bool {
     count("oom") > 0 && count("oom_kill") + count("oom_group_kill") > 0
 }
 
-/// Where runs' cgroups go, set up once.
+/// Where runs' cgroups go, set up once. A systemd that didn't answer is
+/// asked again at the next run, rather than leaving every later run without
+/// a memory limit.
 fn parent() -> Option<&'static Path> {
     static PARENT: OnceLock<Option<PathBuf>> = OnceLock::new();
-    PARENT
-        .get_or_init(|| {
-            let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
-            let parent = delegated(&own).and_then(|cgroup| set_up(&cgroup));
-            if parent.is_none() {
-                tracing::info!("no cgroup to hold commands' memory: they have no memory limit");
-            }
-            parent
-        })
-        .as_deref()
+    static ASKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if let Some(parent) = PARENT.get() {
+        return parent.as_deref();
+    }
+    let _asking = ASKING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(parent) = PARENT.get() {
+        return parent.as_deref();
+    }
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let parent = match delegated(&own) {
+        Some(Some(cgroup)) => set_up(&cgroup),
+        Some(None) => None,
+        None => {
+            tracing::info!(
+                "systemd didn't say whether this cgroup is delegated: asking again at the next command"
+            );
+            return None;
+        }
+    };
+    if parent.is_none() {
+        tracing::info!("no cgroup to hold commands' memory: they have no memory limit");
+    }
+    PARENT.get_or_init(|| parent).as_deref()
 }
 
 /// The delegated cgroup this process belongs to, from `/proc/self/cgroup`:
 /// its own, or the one above it once this process moved to [`LEAF`].
-fn delegated(own: &str) -> Option<PathBuf> {
-    cgroup_of(own).filter(|cgroup| is_delegated(cgroup) || unit_is_delegated(cgroup))
+/// `None` when systemd didn't answer.
+fn delegated(own: &str) -> Option<Option<PathBuf>> {
+    let Some(cgroup) = cgroup_of(own) else {
+        return Some(None);
+    };
+    if is_delegated(&cgroup) {
+        return Some(Some(cgroup));
+    }
+    Some(unit_is_delegated(&cgroup)?.then_some(cgroup))
 }
 
 /// Whether systemd's unit for `cgroup` (`cww.service`, a scope) says
 /// `Delegate=yes`. A user manager marks no attribute on what it delegates,
-/// so it's asked.
-fn unit_is_delegated(cgroup: &Path) -> bool {
+/// so it's asked. `None` when it didn't answer.
+fn unit_is_delegated(cgroup: &Path) -> Option<bool> {
     let Some(unit) = cgroup.file_name().and_then(|n| n.to_str()) else {
-        return false;
+        return Some(false);
     };
     if !(unit.ends_with(".service") || unit.ends_with(".scope")) {
-        return false;
+        return Some(false);
     }
     let mut systemctl = std::process::Command::new("systemctl");
     if cgroup
@@ -153,18 +177,20 @@ fn unit_is_delegated(cgroup: &Path) -> bool {
         .stderr(std::process::Stdio::null())
         .spawn()
     else {
-        return false;
+        return None;
     };
     // A user manager that doesn't answer mustn't hold the run up.
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         match child.try_wait() {
+            // A unit systemd doesn't know is an answer: not delegated.
             Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => return Some(false),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                return None;
             }
         }
     }
@@ -172,7 +198,7 @@ fn unit_is_delegated(cgroup: &Path) -> bool {
     if let Some(mut out) = child.stdout.take() {
         let _ = std::io::Read::read_to_string(&mut out, &mut answer);
     }
-    answer.trim() == "yes"
+    Some(answer.trim() == "yes")
 }
 
 /// The cgroup v2 a `/proc/<pid>/cgroup` names, above [`LEAF`].
