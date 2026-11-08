@@ -7,12 +7,14 @@ Status: **built on Linux, tested on macOS and Windows.** On macOS, commands were
 A folder that allows commands has one of three levels, set on this computer only (the app's settings pane, `cww roots`, or `config.toml`):
 
 - **None.** Nothing at all.
-- **Local services** (the default, `local_services = true`). This computer's own services, without the internet: its loopback (a command's own `localhost:5432` reaches the PostgreSQL this computer serves on `127.0.0.1:5432`), its own addresses, and the networks of the containers and virtual machines it runs: Docker's `docker0` and Compose's `br-*`, Podman's, libvirt's `virbr*`, CNI's, LXC's, LXD's and Incus's (172.17.0.4:5432, a container's own address, is this computer). Never the local network, never the internet, and name lookups fail, since a name server is outside this computer.
+- **Local services** (the default, `local_services = true`). This computer's own services, without the internet: its loopback (a command's own `localhost:5432` reaches the PostgreSQL this computer serves on `127.0.0.1:5432`), its own addresses, and the networks of the containers and virtual machines it runs: Docker's `docker0` and Compose's `br-<network id>` (never another `br-` bridge, which can be the local network's), Podman's, libvirt's `virbr*`, CNI's, LXC's, LXD's and Incus's (172.17.0.4:5432, a container's own address, is this computer). Never the local network, never the internet, and name lookups fail, since a name server is outside this computer.
 - **Local services and the internet** (`network = true`, "Internet"). Everything, as before 0.16.0: the internet and the local network, and this computer's services with them.
+
+Narrowing a folder's network (to None, from the internet, or taking an exact address away) stops the commands running there, whose sandboxes were made with the wider one.
 
 Folders that allowed commands before 0.16.0 keep their setting: with the network they keep everything, and without it they get local services, which they didn't have.
 
-Exact addresses on the local network (a database on another machine, `192.168.1.20:5432`) can be allowed one by one (`reach` in `config.toml`, `cww roots reach <folder> <ip:port>`, or "Always allow" in the app's dialog), never a whole network. Each holds whatever the folder's level, "None" included, since it was allowed by name. Only private, link-local, shared (100.64.0.0/10) and unique local addresses go there: this computer's own addresses are local services, and anything else is the internet.
+Exact addresses on the local network (a database on another machine, `192.168.1.20:5432`) can be allowed one by one (`reach` in `config.toml`, `cww roots reach <folder> <ip:port>`, or "Always allow" in the app's dialog), never a whole network. Each holds whatever the folder's level, "None" included, since it was allowed by name. Only private, link-local and shared (100.64.0.0/10) IPv4 addresses go there, never one of this computer's own or its containers' (those are local services), and anything else is the internet.
 
 On Linux, a command's own servers keep working at every level: it listens on its own loopback, which is its own, and connects to itself there, and nothing reaches them from outside its sandbox. On macOS a command can't serve itself ([Per system](#per-system)).
 

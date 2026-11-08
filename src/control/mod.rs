@@ -153,6 +153,14 @@ pub enum ControlRequest {
         device: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// The server it was paired with when it asked (`status`'s
+        /// `server`), and what the question said a yes gives
+        /// (`this_computer`, `local_network`, `internet`): a yes is never
+        /// worth more than what it was asked for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "where")]
+        place: Option<crate::reach::Where>,
     },
     /// The system's printers, and which of them Chat with Work may use.
     Printers,

@@ -256,7 +256,7 @@ function folderRow(app, root) {
             app.render();
           }),
           button("Allow Commands", () => allow(app, root), { kind: "btn-primary", disabled: !view.confirmation }))) : null,
-      root.writable && root.allows_commands ? setting("Network", NETWORK_TEXT[networkLevel(root)],
+      root.writable && root.allows_commands ? setting("Network", networkText(app, root),
       h("select", {
         class: "select",
         "aria-label": `Network for commands in ${root.label}`,
@@ -269,7 +269,8 @@ function folderRow(app, root) {
           });
         },
       }, NETWORK_LEVELS.filter(([value]) => value !== "local" || app.info.platform !== "windows").map(([value, label]) =>
-        h("option", { value, selected: networkLevel(root) === value }, label))), true) : null,
+        h("option", { value, selected: networkLevel(root) === value },
+          value === "internet" && app.info.platform === "windows" ? "The internet" : label))), true) : null,
       bots(app, root, busy)));
 }
 
@@ -285,6 +286,22 @@ const NETWORK_TEXT = {
   local: "This computer’s services, like a database in Docker.",
   internet: "The internet and the local network, and this computer’s services.",
 };
+
+// What the chosen level gives here: on Windows the internet never reaches
+// this computer's own services, and any exact address a folder was allowed
+// still holds below the internet.
+function networkText(app, root) {
+  const level = networkLevel(root);
+  const text = level === "internet" && app.info.platform === "windows"
+    ? "The internet and the local network, not this computer’s services."
+    : NETWORK_TEXT[level];
+  const reach = level === "internet" ? [] : (root.reach || []);
+  if (!reach.length) return text;
+  const also = `${reach.join(", ")} (cww roots reach --remove takes one away)`;
+  return level === "none"
+    ? `Commands here reach only ${also}.`
+    : `${text.replace(/\.$/, "")}, and ${also}.`;
+}
 
 function networkLevel(root) {
   return root.network_access || (root.network ? "internet" : "none");

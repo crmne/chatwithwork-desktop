@@ -210,8 +210,13 @@ impl Change {
                     ask(
                         "Allow Commands",
                         format!(
-                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. It reaches this computer’s own services, like a database, but not the local network or the internet unless you allow them.",
-                            root.label
+                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. {}",
+                            root.label,
+                            if cfg!(windows) {
+                                "It has no network unless you allow the internet."
+                            } else {
+                                "Its network is the folder’s: this computer’s own services, like a database, unless you set it to None, and the local network or the internet only if you allow them."
+                            }
                         ),
                         "Allow Commands",
                     )
@@ -343,8 +348,13 @@ impl Reach {
                 .bots
                 .iter()
                 .find(|loan| loan.id == *bot)
-                .map(|loan| loan.name.clone())
-                .filter(|name| !name.trim().is_empty())
+                .map(|loan| {
+                    if loan.name.trim().is_empty() {
+                        format!("Bot {}", loan.id)
+                    } else {
+                        loan.name.clone()
+                    }
+                })
                 .ok_or_else(|| "That bot isn't lent this folder.".to_string())?,
             None => "Chat with Work".to_string(),
         };
@@ -354,6 +364,11 @@ impl Reach {
         let Some(given) = cww::reach::grantable(place) else {
             return Ok(ReachPlan::Refused);
         };
+        // An exact address is IPv4 only (the sandbox's network has no IPv6),
+        // so an IPv6 one on the local network can't be given.
+        if address.is_ipv6() && given == Where::LocalNetwork {
+            return Ok(ReachPlan::Refused);
+        }
         let what = cww::reach::describe(&address.to_string(), self.port);
         let after = match (self.once, given) {
             (true, Where::Internet) if place != Where::Internet => {
@@ -398,6 +413,8 @@ impl Reach {
                 .local_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
+            server: status.server.clone(),
+            place: Some(given),
         };
         Ok(ReachPlan::Ask {
             question,
@@ -709,6 +726,8 @@ mod tests {
                 allow: true,
                 device: status.device_id.clone(),
                 path: Some("/home/ana/app".into()),
+                server: status.server.clone(),
+                place: Some(Where::ThisComputer),
             }
         );
         assert!(matches!(

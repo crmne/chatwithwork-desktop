@@ -574,7 +574,7 @@ enum RootsCommand {
         network: bool,
         /// Keep them from this computer's own services (a database in
         /// Docker, a development server), which they reach by default.
-        #[arg(long, conflicts_with = "local_services")]
+        #[arg(long, conflicts_with_all = ["local_services", "network"])]
         no_local_services: bool,
         /// Let them reach this computer's own services (the default).
         #[arg(long)]
@@ -1339,8 +1339,9 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             notify_daemon(paths, "");
         }
         RootsCommand::LocalServices { root, on } => {
-            let root = cww::roots::set_local_services(&mut config, &root, on == "on")?;
-            config.save(paths)?;
+            let root = Config::edit(paths, |config| {
+                cww::roots::set_local_services(config, &root, on == "on")
+            })?;
             println!(
                 "Commands in {} ({}) now reach: {}.",
                 root.label,
@@ -1354,8 +1355,9 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             address,
             remove,
         } => {
-            let root = cww::roots::set_reach(&mut config, &root, &address, !remove)?;
-            config.save(paths)?;
+            let root = Config::edit(paths, |config| {
+                cww::roots::set_reach(config, &root, &address, !remove)
+            })?;
             if remove {
                 println!("Commands in {} no longer reach {address}.", root.label);
             } else {

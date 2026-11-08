@@ -39,6 +39,15 @@ struct OrganizationContext {
     proxy: Option<String>,
 }
 
+/// What a reach question named, which its answer must still match
+/// (`roots_reach_answer`).
+struct Asked {
+    device: Option<String>,
+    path: Option<String>,
+    server: Option<String>,
+    place: Option<crate::reach::Where>,
+}
+
 struct Daemon {
     organization: Option<OrganizationContext>,
     /// Where `run` starts commands.
@@ -1291,9 +1300,14 @@ impl Daemon {
         bot: Option<String>,
         once: bool,
         allow: bool,
-        device: Option<String>,
-        path: Option<String>,
+        asked: Asked,
     ) -> Result<Value> {
+        let Asked {
+            device,
+            path,
+            server,
+            place: shown,
+        } = asked;
         let address = crate::reach::resolve(&host, port).ok_or_else(|| {
             Refusal::new("invalid", "that isn't an address this computer can find")
         })?;
@@ -1310,7 +1324,8 @@ impl Daemon {
             // The question was for this pairing and this folder, not one
             // that took its place while it was open.
             let paired = config.server.as_ref().map(|s| s.device_id.clone());
-            if device.is_some() && device != paired {
+            let origin = config.server.as_ref().map(|s| s.url.clone());
+            if (device.is_some() && device != paired) || (server.is_some() && server != origin) {
                 return Err(Refusal::new(
                     "stale",
                     "this computer was paired again since it asked: ask again",
@@ -1354,6 +1369,15 @@ impl Daemon {
             )
             .into());
         };
+        // The address may have moved since the question was asked (a local
+        // address now this computer's, say): a yes gives only what it said.
+        if shown.is_some_and(|shown| shown != place) {
+            return Err(Refusal::new(
+                "stale",
+                "that address is somewhere else now than when it asked: ask again",
+            )
+            .into());
+        }
         let mut entry = AuditEntry::event(if allow {
             "root_reach_allowed"
         } else {
@@ -1387,12 +1411,25 @@ impl Daemon {
             return Ok(json!({ "allowed": true }));
         }
         let id = root.id.clone();
+        let root_path = root.path.clone();
+        let paired_now = self
+            .config
+            .lock()
+            .await
+            .server
+            .as_ref()
+            .map(|s| s.device_id.clone());
         self.edit_config(move |config, _| {
             // Checked again in the same edit: commands stopped or the loan
             // withdrawn meanwhile are never given back by this answer.
+            if config.server.as_ref().map(|s| s.device_id.clone()) != paired_now {
+                anyhow::bail!("this computer was paired again since it asked: ask again");
+            }
             let index = crate::roots::find_root(config, &id)?;
             let current = &config.roots[index];
-            if !current.runs_commands() || bot.as_deref().is_some_and(|b| current.loan(b).is_none())
+            if current.path != root_path
+                || !current.runs_commands()
+                || bot.as_deref().is_some_and(|b| current.loan(b).is_none())
             {
                 anyhow::bail!("that folder changed since it asked: ask again");
             }
@@ -2258,9 +2295,24 @@ impl ControlHandler for Daemon {
                 allow,
                 device,
                 path,
+                server,
+                place,
             } => {
-                self.answer_reach(root, host, port, bot, once, allow, device, path)
-                    .await
+                self.answer_reach(
+                    root,
+                    host,
+                    port,
+                    bot,
+                    once,
+                    allow,
+                    Asked {
+                        device,
+                        path,
+                        server,
+                        place,
+                    },
+                )
+                .await
             }
             ControlRequest::Printers => self.printers().await,
             ControlRequest::PrintersAdd {
@@ -2521,6 +2573,7 @@ impl ControlHandler for Daemon {
                 Ok(json!({
                     "agents": look.agents,
                     "reaches": look.reaches,
+                    "needs": look.needs,
                     "commands": commands,
                     "root": lent.map(|root| json!({
                         "id": root.id,

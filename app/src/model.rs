@@ -149,7 +149,11 @@ pub struct RootStatus {
 impl RootStatus {
     /// Whether its commands reach this computer's own services.
     pub fn local_services(&self) -> bool {
-        matches!(self.network_access.as_deref(), Some("local" | "internet"))
+        match self.network_access.as_deref() {
+            Some(access) => matches!(access, "local" | "internet"),
+            // A daemon before 0.16.0 says only `network`.
+            None => self.network,
+        }
     }
 }
 

@@ -242,6 +242,15 @@ pub fn set_reach(config: &mut Config, which: &str, address: &str, add: bool) -> 
     let root = &mut config.roots[index];
     let address = crate::reach::parse_reach(address).map_err(anyhow::Error::msg)?;
     let entry = address.to_string();
+    if add
+        && crate::reach::HostNetwork::current().classify(std::net::IpAddr::V4(*address.ip()))
+            == crate::reach::Where::ThisComputer
+    {
+        bail!(
+            "{} is this computer, or a container on it: allow local services for the folder instead",
+            address.ip()
+        );
+    }
     if add {
         if !root.runs_commands() {
             bail!(

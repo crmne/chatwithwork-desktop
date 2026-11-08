@@ -294,6 +294,9 @@ struct Cell {
     home: std::path::PathBuf,
     /// How far it reaches, once its sandbox is known.
     access: Option<crate::reach::Level>,
+    /// Its folder's network when it started: narrowing it stops the run,
+    /// whose sandbox can't be narrowed while it runs.
+    started_with: (crate::reach::Level, Vec<std::net::SocketAddrV4>),
 }
 
 impl Cell {
@@ -330,6 +333,10 @@ impl Cell {
             folder: plan.folder.clone(),
             home: plan.home.clone(),
             access: None,
+            started_with: (
+                crate::reach::Level::of(plan.local_services, plan.network),
+                plan.reach.clone(),
+            ),
         }
     }
 
@@ -740,17 +747,22 @@ impl Runs {
         }
     }
 
-    /// Stop the runs in folders that no longer allow commands, and all of
-    /// them while the computer is paused.
+    /// Stop the runs in folders that no longer allow commands, or whose
+    /// network was narrowed since they started (a sandbox's network can't
+    /// be narrowed while it runs), and all of them while the computer is
+    /// paused.
     pub fn stop_outside(&self, config: &Config) {
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             let mut cell = lock(&cell);
+            let (level, reach) = &cell.started_with;
             let allowed = !config.paused
-                && config
-                    .roots
-                    .iter()
-                    .any(|r| r.id == cell.root && r.runs_commands());
+                && config.roots.iter().any(|r| {
+                    r.id == cell.root
+                        && r.runs_commands()
+                        && r.network_level().rank() >= level.rank()
+                        && reach.iter().all(|a| r.reach.contains(&a.to_string()))
+                });
             if cell.state == State::Running && !allowed {
                 cell.stop = true;
             }

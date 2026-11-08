@@ -506,10 +506,17 @@ fn environment(text: &str, from: &str, needs: &mut Needs) {
 
 /// Service URLs in a piece of text: `postgres://user@db:5432/app`.
 fn urls(text: &str, from: &str, needs: &mut Needs) {
-    for word in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '=' | '`')) {
-        let Some((scheme, _)) = word.split_once("://") else {
+    for word in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`')) {
+        let Some(at) = word.find("://") else {
             continue;
         };
+        // `DATABASE_URL=postgres://...`: the URL starts at its scheme, and
+        // keeps any `=` in it (a password's).
+        let start = word[..at]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |i| i + 1);
+        let word = &word[start..];
+        let scheme = &word[..at - start];
         let Some((name, port)) = kind(scheme.trim_end_matches("ql")).or_else(|| kind(scheme))
         else {
             continue;

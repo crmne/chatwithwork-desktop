@@ -582,10 +582,13 @@ impl Plan {
         // A folder's exact addresses hold at every level below the internet,
         // which has them already: each was allowed by name.
         if level != Level::Internet {
+            // Never one of this computer's own addresses: those are local
+            // services, which the level gives or doesn't.
             exact.extend(
                 self.reach
                     .iter()
-                    .map(|a| (std::net::IpAddr::V4(*a.ip()), a.port())),
+                    .map(|a| (std::net::IpAddr::V4(*a.ip()), a.port()))
+                    .filter(|(ip, _)| host.classify(*ip) != Where::ThisComputer),
             );
         }
         for grant in &self.once {

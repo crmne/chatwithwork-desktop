@@ -45,6 +45,15 @@ impl Level {
         }
     }
 
+    /// How far it reaches, to compare: none, then local, then internet.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Local => 1,
+            Self::Internet => 2,
+        }
+    }
+
     /// From a folder's two switches.
     pub fn of(local_services: bool, internet: bool) -> Self {
         if internet {
@@ -157,11 +166,17 @@ pub struct HostNetwork {
 /// (`docker0`, and `br-<id>` for Compose's networks), Podman's, libvirt's,
 /// CNI's, LXC's, LXD's and Incus's.
 const BRIDGE_PREFIXES: &[&str] = &[
-    "docker", "br-", "podman", "virbr", "cni", "lxcbr", "lxdbr", "incusbr", "vboxnet", "vmnet",
+    "docker", "podman", "virbr", "cni", "lxcbr", "lxdbr", "incusbr", "vboxnet", "vmnet",
 ];
 
+/// A container's or virtual machine's network: one of [`BRIDGE_PREFIXES`],
+/// or Docker's `br-` followed by its network's 12 hex digits, never another
+/// `br-` (a `br-lan` bridging the local network).
 fn is_bridge(name: &str) -> bool {
     BRIDGE_PREFIXES.iter().any(|p| name.starts_with(p))
+        || name
+            .strip_prefix("br-")
+            .is_some_and(|id| id.len() == 12 && id.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 impl HostNetwork {
@@ -193,6 +208,8 @@ impl HostNetwork {
     /// link-local and unique local addresses, and shared address space), or
     /// the internet.
     pub fn classify(&self, address: IpAddr) -> Where {
+        // `::ffff:127.0.0.1` is 127.0.0.1.
+        let address = address.to_canonical();
         if address.is_loopback() || address.is_unspecified() || self.addresses.contains(&address) {
             return Where::ThisComputer;
         }
@@ -648,8 +665,8 @@ pub fn resolve(host: &str, port: u16) -> Option<IpAddr> {
     if host.eq_ignore_ascii_case("localhost") {
         return Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
-    if let Ok(address) = host.parse() {
-        return Some(address);
+    if let Ok(address) = host.parse::<IpAddr>() {
+        return Some(address.to_canonical());
     }
     if host.is_empty() || host.len() > 253 || host.contains(['/', ' ', '\0']) {
         return None;
@@ -664,7 +681,7 @@ pub fn resolve(host: &str, port: u16) -> Option<IpAddr> {
         .iter()
         .find(|a| a.is_ipv4())
         .or_else(|| found.first())
-        .copied()
+        .map(|a| a.to_canonical())
 }
 
 /// "PostgreSQL (172.17.0.4:5432)", or the address alone.
@@ -703,6 +720,8 @@ pub struct OnceGrants(std::sync::Arc<std::sync::Mutex<Held>>);
 struct Held {
     waiting: Vec<Waiting>,
     generation: u64,
+    /// Each folder's, bumped when its own are dropped.
+    folders: std::collections::HashMap<String, u64>,
 }
 
 /// What a command took from [`OnceGrants`].
@@ -710,6 +729,7 @@ struct Held {
 pub struct Taken {
     taken: Vec<Waiting>,
     generation: u64,
+    folder: Option<(String, u64)>,
 }
 
 impl Taken {
@@ -755,9 +775,11 @@ impl OnceGrants {
             .into_iter()
             .partition(|w| w.root == root && (w.bot.is_none() || w.bot.as_deref() == bot));
         held.waiting = others;
+        let folder = held.folders.get(root).copied().unwrap_or(0);
         Taken {
             taken: mine,
             generation: held.generation,
+            folder: Some((root.to_string(), folder)),
         }
     }
 
@@ -765,7 +787,11 @@ impl OnceGrants {
     /// all dropped meanwhile ([`OnceGrants::clear`], [`OnceGrants::forget`]).
     pub fn restore(&self, taken: Taken) {
         let mut held = self.held();
-        if held.generation == taken.generation {
+        let folder_same = taken
+            .folder
+            .as_ref()
+            .is_none_or(|(root, at)| held.folders.get(root).copied().unwrap_or(0) == *at);
+        if held.generation == taken.generation && folder_same {
             held.waiting.extend(taken.taken);
         }
     }
@@ -781,7 +807,7 @@ impl OnceGrants {
     pub fn forget(&self, root: &str) {
         let mut held = self.held();
         held.waiting.retain(|w| w.root != root);
-        held.generation += 1;
+        *held.folders.entry(root.to_string()).or_default() += 1;
     }
 }
 
@@ -812,6 +838,7 @@ mod tests {
         assert_eq!(at("100.101.1.2"), Where::LocalNetwork);
         assert_eq!(at("fd12::1"), Where::LocalNetwork);
         assert_eq!(at("fe80::1"), Where::LocalNetwork);
+        assert_eq!(at("::ffff:127.0.0.1"), Where::ThisComputer);
         assert_eq!(at("151.101.1.227"), Where::Internet);
         assert_eq!(at("2a00:1450::1"), Where::Internet);
     }
@@ -825,6 +852,35 @@ mod tests {
         assert_eq!(grantable_on(ThisComputer, false, true), None);
         assert_eq!(grantable_on(LocalNetwork, false, true), Some(Internet));
         assert_eq!(grantable_on(Internet, false, true), Some(Internet));
+    }
+
+    #[test]
+    fn only_containers_and_virtual_machines_networks_are_bridges() {
+        for name in ["docker0", "br-2b9f69c57db9", "podman1", "virbr0", "cni0"] {
+            assert!(is_bridge(name), "{name}");
+        }
+        for name in ["br-lan", "br0", "enp12s0", "br-2b9f69c57dbz"] {
+            assert!(!is_bridge(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_folder_that_stopped_commands_keeps_nothing_another_took() {
+        let grants = OnceGrants::default();
+        let grant = Grant {
+            host: "172.17.0.4".parse().unwrap(),
+            port: 5432,
+            internet: false,
+        };
+        grants.add("app", None, grant.clone());
+        grants.add("docs", None, grant.clone());
+        let app = grants.take("app", None);
+        let docs = grants.take("docs", None);
+        grants.forget("docs");
+        grants.restore(app);
+        grants.restore(docs);
+        assert_eq!(grants.take("app", None).grants(), vec![grant]);
+        assert!(grants.take("docs", None).grants().is_empty());
     }
 
     #[test]

@@ -2660,14 +2660,19 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
                 theme.strong(),
             )];
             lines.push(Line::raw(""));
+            // The same words on every system, as its snapshot is.
+            let network = "Its network is the folder's: by default this computer's own \
+                           services, like a database (none on Windows), and the local network \
+                           or the internet only if you allow them (i).";
             lines.extend(
                 wrap(
-                    "Chat with Work could then run commands here, like tests or a build. Each \
-                     one is approved in Chat with Work, or runs without asking in a chat where \
-                     you chose Allow everything. A command runs in a sandbox that can change or \
-                     delete anything in this folder and nothing outside it. It reaches this \
-                     computer's own services, like a database, but not the local network or the \
-                     internet unless you allow them (i).",
+                    &format!(
+                        "Chat with Work could then run commands here, like tests or a build. \
+                         Each one is approved in Chat with Work, or runs without asking in a \
+                         chat where you chose Allow everything. A command runs in a sandbox \
+                         that can change or delete anything in this folder and nothing outside \
+                         it. {network}"
+                    ),
                     text_width,
                 )
                 .into_iter()

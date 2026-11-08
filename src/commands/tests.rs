@@ -521,6 +521,12 @@ fn too_many_running_commands_wait_their_turn() {
     fx.config.limits.commands_running = 0;
     let second = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
     fx.runs.stop(&second.id).unwrap();
+    // A network narrowed under a run stops it: its sandbox can't narrow.
+    let third = fx.runs.start(&fx.config, &shell("sleep 30")).unwrap();
+    fx.config.roots[0].local_services = false;
+    fx.runs.stop_outside(&fx.config);
+    assert_eq!(wait(&fx.runs, &third.id).status.state, "stopped");
+    fx.config.roots[0].local_services = true;
     fx.config.roots[0].commands = false;
     fx.runs.stop_outside(&fx.config);
     assert_eq!(wait(&fx.runs, &first.id).status.state, "stopped");
