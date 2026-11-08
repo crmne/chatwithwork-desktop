@@ -544,7 +544,7 @@ impl Demo {
         match cmd {
             "status" => self.state.lock().expect("demo lock").status.clone(),
             "settings_context" => {
-                json!({ "ok": true, "account": std::env::var("CWW_DEMO_ACCOUNT_ID").unwrap_or_else(|_| "123456789".into()), "device_id": std::env::var("CWW_DEMO_DEVICE_ID").unwrap_or_else(|_| "42".into()), "commands_allowed": false, "can_manage_policy": true,
+                json!({ "ok": true, "account": std::env::var("CWW_DEMO_ACCOUNT_ID").unwrap_or_else(|_| "123456789".into()), "device_id": std::env::var("CWW_DEMO_DEVICE_ID").unwrap_or_else(|_| "42".into()), "commands_allowed": std::env::var_os("CWW_DEMO_COMMANDS_ALLOWED").is_some(), "can_manage_policy": true,
                 "bot": request["bot"].as_str().map(|id| json!({ "id": id, "name": std::env::var("CWW_DEMO_BOT_NAME").unwrap_or_else(|_| "Issue fixer".into()) })) })
             }
             "pause" | "resume" => {
@@ -899,6 +899,28 @@ impl Demo {
                 let log = &self.state.lock().expect("demo lock").log;
                 json!({ "ok": true, "entries": log[log.len().saturating_sub(n)..] })
             }
+            // What the coding setup window shows: Claude Code signed in, the
+            // repository reached, a new folder, and what a Rails app's files
+            // say it reaches, for pictures of the window.
+            "coding_look" => json!({
+                "ok": true,
+                "agents": [{ "agent": "claude_code", "name": "Claude Code", "installed": true,
+                             "signed_in": true, "sign_in_hint": "run `claude` once and sign in" }],
+                "reaches": request["repository"].is_string(),
+                "root": null,
+                "commands": true,
+                "needs": {
+                    "services": [
+                        { "name": "PostgreSQL", "host": "localhost", "port": 5432,
+                          "where": "this_computer", "from": "docker-compose.yml" },
+                        { "name": "Redis", "host": "localhost", "port": 6379,
+                          "where": "this_computer", "from": "docker-compose.yml" },
+                    ],
+                    "internet": true,
+                    "installs": ["gems"],
+                    "internet_from": ["Gemfile"],
+                },
+            }),
             _ => json!({ "ok": false, "error": format!("the demo doesn't do {cmd:?}") }),
         }
     }
