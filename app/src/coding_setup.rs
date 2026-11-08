@@ -124,8 +124,16 @@ pub fn view(
 ) -> Value {
     let mut checks = Vec::new();
     let agent = chosen(look, request.agent.as_deref());
+    // The one asked for, by its own name even when this computer didn't
+    // list it: an agent the look leaves out isn't here.
+    let asked_name = request
+        .agent
+        .as_deref()
+        .and_then(Agent::from_key)
+        .map(Agent::name);
     let agent_name = agent
         .and_then(|a| a["name"].as_str())
+        .or(asked_name)
         .unwrap_or("A coding agent");
     let ready = agent.is_some_and(|a| {
         a["unavailable"].is_null() && a["installed"] == true && a["signed_in"] == true
@@ -137,7 +145,11 @@ pub fn view(
         }
         Some(a) if a["signed_in"] != true => json!({ "ok": false, "text": format!(
             "{agent_name} isn't signed in: {}", a["sign_in_hint"].as_str().unwrap_or_default()) }),
-        _ => json!({ "ok": true, "text": format!("{agent_name} installed and signed in") }),
+        Some(_) => json!({ "ok": true, "text": format!("{agent_name} installed and signed in") }),
+        None if asked_name.is_some() => {
+            json!({ "ok": false, "text": format!("{agent_name} isn't installed on this computer") })
+        }
+        None => json!({ "ok": false, "text": "No coding agent is installed on this computer" }),
     });
     let reached = match (&request.repository, look["reaches"].as_bool()) {
         (Some(repository), Some(true)) => {
@@ -558,6 +570,61 @@ mod tests {
             &[],
         );
         assert_eq!(shown["can_allow"], false, "the organization said no");
+    }
+
+    #[test]
+    fn an_agent_asked_for_that_isnt_here_is_missing() {
+        let home = tempfile::tempdir().unwrap();
+        let mut asked = request();
+        asked.agent = Some("gemini".into());
+        let shown = view(
+            &asked,
+            "Fixer",
+            true,
+            &look(true, true, Some(true)),
+            home.path(),
+            &[],
+        );
+        assert_eq!(shown["can_allow"], false, "{shown}");
+        assert_eq!(
+            shown["checks"][0],
+            json!({ "ok": false, "text": "Gemini CLI isn't installed on this computer" })
+        );
+
+        for (installed, signed_in, text) in [
+            (false, false, "Claude Code isn't installed on this computer"),
+            (
+                true,
+                false,
+                "Claude Code isn't signed in: run `claude` once and sign in",
+            ),
+        ] {
+            let shown = view(
+                &request(),
+                "Fixer",
+                true,
+                &look(installed, signed_in, Some(true)),
+                home.path(),
+                &[],
+            );
+            assert_eq!(shown["checks"][0], json!({ "ok": false, "text": text }));
+        }
+
+        let mut asked = request();
+        asked.agent = None;
+        let shown = view(
+            &asked,
+            "Fixer",
+            true,
+            &json!({ "agents": [], "reaches": true }),
+            home.path(),
+            &[],
+        );
+        assert_eq!(shown["can_allow"], false, "{shown}");
+        assert_eq!(
+            shown["checks"][0],
+            json!({ "ok": false, "text": "No coding agent is installed on this computer" })
+        );
     }
 
     #[test]
