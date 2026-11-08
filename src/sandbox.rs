@@ -163,6 +163,8 @@ pub fn confine(plan: Plan) -> Status {
     // Read the system's watch quota while /proc/sys is still readable: the
     // confined daemon can't, and would guess too high.
     let _ = crate::reader::watch::default_limit();
+    // And this computer's memory, for commands' default memory limit.
+    let _ = crate::config::default_command_memory_mb();
     let status = sys::confine(&plan);
     let _ = PLAN.set(plan);
     let _ = STATUS.set(status.clone());

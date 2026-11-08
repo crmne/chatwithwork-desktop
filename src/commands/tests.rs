@@ -304,7 +304,10 @@ fn macos_promises_no_memory_or_process_limit() {
     if cfg!(target_os = "macos") {
         assert_eq!((limits.memory_mb, limits.processes), (0, 0));
     } else {
-        assert_eq!((limits.memory_mb, limits.processes), (4096, 256));
+        assert_eq!(
+            (limits.memory_mb, limits.processes),
+            (crate::config::default_command_memory_mb(), 256)
+        );
     }
 }
 
