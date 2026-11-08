@@ -2144,8 +2144,19 @@ fn a_runs_network_follows_its_folders_level() {
     );
     // None: everything refused, and logged where it can be.
     plan.once.clear();
-    plan.reach.clear();
     plan.local_services = false;
+    // An exact address at None keeps the closed ports closed.
+    let none_exact = plan.network_json(Sandbox::Bubblewrap);
+    assert!(
+        none_exact["egress"]["deny"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["ports"].as_array().is_some_and(
+                |p| p.contains(&serde_json::json!({ "protocol": "tcp", "port": 41234 }))
+            ))
+    );
+    plan.reach.clear();
     let none = plan.network_json(Sandbox::Bubblewrap);
     assert_eq!(none["egress"]["default"], "deny");
     assert!(

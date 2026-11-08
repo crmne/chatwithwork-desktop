@@ -1270,6 +1270,7 @@ impl Daemon {
     /// folder's internet on; "once" gives the next command in the folder (the
     /// bot's, when named) that destination, or the internet for an internet
     /// address. Answers `{ "allowed": true }` or `{ "declined": true }`.
+    #[allow(clippy::too_many_arguments)]
     async fn answer_reach(
         &self,
         which: String,
@@ -1278,6 +1279,8 @@ impl Daemon {
         bot: Option<String>,
         once: bool,
         allow: bool,
+        device: Option<String>,
+        path: Option<String>,
     ) -> Result<Value> {
         let address = crate::reach::resolve(&host, port).ok_or_else(|| {
             Refusal::new("invalid", "that isn't an address this computer can find")
@@ -1292,8 +1295,24 @@ impl Daemon {
         let place = crate::reach::HostNetwork::current().classify(address);
         let root = {
             let config = self.config.lock().await;
+            // The question was for this pairing and this folder, not one
+            // that took its place while it was open.
+            let paired = config.server.as_ref().map(|s| s.device_id.clone());
+            if device.is_some() && device != paired {
+                return Err(Refusal::new(
+                    "stale",
+                    "this computer was paired again since it asked: ask again",
+                )
+                .into());
+            }
             let index = crate::roots::find_root(&config, &which)?;
-            config.roots[index].clone()
+            let root = config.roots[index].clone();
+            if path.is_some_and(|p| std::path::Path::new(&p) != root.path) {
+                return Err(
+                    Refusal::new("stale", "that folder changed since it asked: ask again").into(),
+                );
+            }
+            root
         };
         if !root.runs_commands() {
             return Err(Refusal::new(
@@ -1356,15 +1375,25 @@ impl Daemon {
             return Ok(json!({ "allowed": true }));
         }
         let id = root.id.clone();
-        self.edit_config(move |config, _| match place {
-            crate::reach::Where::ThisComputer => {
-                crate::roots::set_local_services(config, &id, true)
+        self.edit_config(move |config, _| {
+            // Checked again in the same edit: commands stopped or the loan
+            // withdrawn meanwhile are never given back by this answer.
+            let index = crate::roots::find_root(config, &id)?;
+            let current = &config.roots[index];
+            if !current.runs_commands() || bot.as_deref().is_some_and(|b| current.loan(b).is_none())
+            {
+                anyhow::bail!("that folder changed since it asked: ask again");
             }
-            crate::reach::Where::LocalNetwork => {
-                crate::roots::set_reach(config, &id, &format!("{address}:{port}"), true)
-            }
-            crate::reach::Where::Internet => {
-                crate::roots::set_commands_reaching(config, &id, true, true, None)
+            match place {
+                crate::reach::Where::ThisComputer => {
+                    crate::roots::set_local_services(config, &id, true)
+                }
+                crate::reach::Where::LocalNetwork => {
+                    crate::roots::set_reach(config, &id, &format!("{address}:{port}"), true)
+                }
+                crate::reach::Where::Internet => {
+                    crate::roots::set_commands_reaching(config, &id, true, true, None)
+                }
             }
         })
         .await?;
@@ -2215,7 +2244,12 @@ impl ControlHandler for Daemon {
                 bot,
                 once,
                 allow,
-            } => self.answer_reach(root, host, port, bot, once, allow).await,
+                device,
+                path,
+            } => {
+                self.answer_reach(root, host, port, bot, once, allow, device, path)
+                    .await
+            }
             ControlRequest::Printers => self.printers().await,
             ControlRequest::PrintersAdd {
                 queue,

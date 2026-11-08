@@ -574,23 +574,8 @@ impl Plan {
         let rules = sandbox == Sandbox::Bubblewrap;
         if level != Level::None {
             ports.extend(&self.networks.loopback);
-            if rules && !this_computer.is_empty() {
-                let excluded: Vec<serde_json::Value> = crate::reach::EXCLUDED_PORTS
-                    .iter()
-                    .copied()
-                    .chain(self.networks.closed.iter().map(|port| (*port, *port)))
-                    .map(|(start, end)| {
-                        if start == end {
-                            json!({ "protocol": "tcp", "port": start })
-                        } else {
-                            json!({ "protocol": "tcp", "port": start, "endPort": end })
-                        }
-                    })
-                    .collect();
-                deny.push(json!({ "to": this_computer, "ports": excluded }));
-                if level == Level::Local {
-                    allow.push(json!({ "to": this_computer }));
-                }
+            if rules && level == Level::Local && !this_computer.is_empty() {
+                allow.push(json!({ "to": this_computer }));
             }
         }
         let mut exact: Vec<(std::net::IpAddr, u16)> = Vec::new();
@@ -615,6 +600,25 @@ impl Plan {
                 }
                 _ => {}
             }
+        }
+        // The ports no command reaches stay closed on this computer's own
+        // addresses and its containers' networks whatever else is allowed:
+        // its local services, the internet, or an exact address that turns
+        // out to be one of its own.
+        if rules && !this_computer.is_empty() && (level != Level::None || !exact.is_empty()) {
+            let excluded: Vec<serde_json::Value> = crate::reach::EXCLUDED_PORTS
+                .iter()
+                .copied()
+                .chain(self.networks.closed.iter().map(|port| (*port, *port)))
+                .map(|(start, end)| {
+                    if start == end {
+                        json!({ "protocol": "tcp", "port": start })
+                    } else {
+                        json!({ "protocol": "tcp", "port": start, "endPort": end })
+                    }
+                })
+                .collect();
+            deny.push(json!({ "to": this_computer, "ports": excluded }));
         }
         if rules {
             for (ip, port) in exact {

@@ -338,12 +338,6 @@ impl Reach {
             return Ok(ReachPlan::Refused);
         }
         let place = place(address);
-        // What this system's sandbox can give for it: nothing of this
-        // computer's own on Windows, and the local network only with the
-        // internet on macOS and Windows, which the question then says.
-        let Some(given) = cww::reach::grantable(place) else {
-            return Ok(ReachPlan::Refused);
-        };
         let who = match &self.bot {
             Some(bot) => root
                 .bots
@@ -353,6 +347,12 @@ impl Reach {
                 .filter(|name| !name.trim().is_empty())
                 .ok_or_else(|| "That bot isn't lent this folder.".to_string())?,
             None => "Chat with Work".to_string(),
+        };
+        // What this system's sandbox can give for it: nothing of this
+        // computer's own on Windows, and the local network only with the
+        // internet on macOS and Windows, which the question then says.
+        let Some(given) = cww::reach::grantable(place) else {
+            return Ok(ReachPlan::Refused);
         };
         let what = cww::reach::describe(&address.to_string(), self.port);
         let after = match (self.once, given) {
@@ -385,6 +385,7 @@ impl Reach {
             ),
             yes: "Allow".into(),
         };
+        // Bound to what the question named: this pairing and this folder.
         let answer = ControlRequest::RootsReachAnswer {
             root: root.id.clone(),
             host: address.to_string(),
@@ -392,6 +393,11 @@ impl Reach {
             bot: self.bot.clone(),
             once: self.once,
             allow: true,
+            device: status.device_id.clone(),
+            path: root
+                .local_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
         };
         Ok(ReachPlan::Ask {
             question,
@@ -661,6 +667,19 @@ mod tests {
         serde_json::from_value(json).unwrap()
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_is_never_asked_for_this_computers_own_services() {
+        let asked = reach(json!({
+            "folder": "app", "host": "172.17.0.4", "port": 5432, "bot": "42", "once": false
+        }));
+        assert_eq!(
+            asked.plan(&status(), |_| Where::ThisComputer).unwrap(),
+            ReachPlan::Refused
+        );
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn a_reach_is_asked_in_this_computers_words_never_the_pages() {
         let status = status();
@@ -688,6 +707,8 @@ mod tests {
                 bot: Some("42".into()),
                 once: false,
                 allow: true,
+                device: status.device_id.clone(),
+                path: Some("/home/ana/app".into()),
             }
         );
         assert!(matches!(
@@ -704,6 +725,14 @@ mod tests {
         assert!(question.message.starts_with(
             "Let Chat with Work reach Redis (192.168.1.20:6379) from App on the local network?"
         ));
+        // Only Linux gives one address on the local network; elsewhere the
+        // question says it takes the internet.
+        assert_eq!(
+            question
+                .message
+                .contains("only allow that with the internet"),
+            cfg!(any(windows, target_os = "macos"))
+        );
         let ReachPlan::Ask { question, .. } = reach(json!({
             "folder": "app", "host": "151.101.1.227", "port": 443, "bot": "42", "once": true
         }))

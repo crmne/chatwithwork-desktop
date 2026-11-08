@@ -146,6 +146,13 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         once: bool,
         allow: bool,
+        /// The pairing the question was asked under (`status`'s
+        /// `device_id`), and the folder's path it named: an answer given
+        /// for another is refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// The system's printers, and which of them Chat with Work may use.
     Printers,

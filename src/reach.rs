@@ -695,15 +695,26 @@ pub const ONCE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(30
 /// one bot's, when the answer named it), held in memory only: the next such
 /// command takes them, and they end with it, or after [`ONCE_LIFETIME`].
 #[derive(Clone, Default)]
-pub struct OnceGrants(std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>);
+pub struct OnceGrants(std::sync::Arc<std::sync::Mutex<Held>>);
+
+/// The grants waiting, and how many times they were all dropped: what a
+/// command took before that is never put back.
+#[derive(Default)]
+struct Held {
+    waiting: Vec<Waiting>,
+    generation: u64,
+}
 
 /// What a command took from [`OnceGrants`].
 #[derive(Default)]
-pub struct Taken(Vec<Waiting>);
+pub struct Taken {
+    taken: Vec<Waiting>,
+    generation: u64,
+}
 
 impl Taken {
     pub fn grants(&self) -> Vec<Grant> {
-        self.0.iter().map(|w| w.grant.clone()).collect()
+        self.taken.iter().map(|w| w.grant.clone()).collect()
     }
 }
 
@@ -715,14 +726,17 @@ struct Waiting {
 }
 
 impl OnceGrants {
-    pub fn add(&self, root: &str, bot: Option<&str>, grant: Grant) {
-        let mut waiting = self
-            .0
+    fn held(&self) -> std::sync::MutexGuard<'_, Held> {
+        self.0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn add(&self, root: &str, bot: Option<&str>, grant: Grant) {
+        let mut held = self.held();
         let now = std::time::Instant::now();
-        waiting.retain(|w| w.until > now);
-        waiting.push(Waiting {
+        held.waiting.retain(|w| w.until > now);
+        held.waiting.push(Waiting {
             root: root.to_string(),
             bot: bot.map(str::to_string),
             grant,
@@ -734,42 +748,40 @@ impl OnceGrants {
     /// no other command gets after it. [`OnceGrants::restore`] puts them
     /// back, as they were, for a command that didn't start.
     pub fn take(&self, root: &str, bot: Option<&str>) -> Taken {
-        let mut waiting = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = self.held();
         let now = std::time::Instant::now();
-        waiting.retain(|w| w.until > now);
-        let (mine, others): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut *waiting)
+        held.waiting.retain(|w| w.until > now);
+        let (mine, others): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut held.waiting)
             .into_iter()
             .partition(|w| w.root == root && (w.bot.is_none() || w.bot.as_deref() == bot));
-        *waiting = others;
-        Taken(mine)
+        held.waiting = others;
+        Taken {
+            taken: mine,
+            generation: held.generation,
+        }
     }
 
-    /// Put back what a command that didn't start took.
+    /// Put back what a command that didn't start took, unless they were
+    /// all dropped meanwhile ([`OnceGrants::clear`], [`OnceGrants::forget`]).
     pub fn restore(&self, taken: Taken) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(taken.0);
+        let mut held = self.held();
+        if held.generation == taken.generation {
+            held.waiting.extend(taken.taken);
+        }
     }
 
     /// Forget every one: this computer was paired again.
     pub fn clear(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        let mut held = self.held();
+        held.waiting.clear();
+        held.generation += 1;
     }
 
     /// Forget a folder's, when its commands stop.
     pub fn forget(&self, root: &str) {
-        let mut waiting = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        waiting.retain(|w| w.root != root);
+        let mut held = self.held();
+        held.waiting.retain(|w| w.root != root);
+        held.generation += 1;
     }
 }
 
@@ -883,6 +895,13 @@ mod tests {
         // A command that didn't start gives it back.
         grants.restore(taken);
         assert_eq!(grants.take("app", Some("42")).grants(), vec![grant.clone()]);
+        // Nor after the computer was paired again.
+        grants.add("app", Some("42"), grant.clone());
+        let taken = grants.take("app", Some("42"));
+        assert_eq!(taken.grants().len(), 1);
+        grants.clear();
+        grants.restore(taken);
+        assert!(grants.take("app", Some("42")).grants().is_empty());
         grants.add("app", None, grant.clone());
         assert_eq!(grants.take("app", None).grants(), vec![grant.clone()]);
         grants.add("app", None, grant);
