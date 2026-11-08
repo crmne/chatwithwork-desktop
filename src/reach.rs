@@ -752,6 +752,45 @@ impl OnceGrants {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Where the grants of `root` stand now: what [`OnceGrants::add_since`]
+    /// checks, so a pairing change or a folder's that came in between
+    /// checking an answer and keeping it isn't undone by it.
+    pub fn generation(&self, root: &str) -> (u64, u64) {
+        let held = self.held();
+        (
+            held.generation,
+            held.folders.get(root).copied().unwrap_or(0),
+        )
+    }
+
+    /// [`OnceGrants::add`], unless the grants were dropped since
+    /// `generation` was read. Whether it was kept.
+    pub fn add_since(
+        &self,
+        generation: (u64, u64),
+        root: &str,
+        bot: Option<&str>,
+        grant: Grant,
+    ) -> bool {
+        let mut held = self.held();
+        if (
+            held.generation,
+            held.folders.get(root).copied().unwrap_or(0),
+        ) != generation
+        {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        held.waiting.retain(|w| w.until > now);
+        held.waiting.push(Waiting {
+            root: root.to_string(),
+            bot: bot.map(str::to_string),
+            grant,
+            until: now + ONCE_LIFETIME,
+        });
+        true
+    }
+
     pub fn add(&self, root: &str, bot: Option<&str>, grant: Grant) {
         let mut held = self.held();
         let now = std::time::Instant::now();
@@ -862,6 +901,23 @@ mod tests {
         for name in ["br-lan", "br0", "enp12s0", "br-2b9f69c57dbz"] {
             assert!(!is_bridge(name), "{name}");
         }
+    }
+
+    #[test]
+    fn an_answer_checked_before_its_folder_changed_is_not_kept() {
+        let grants = OnceGrants::default();
+        let grant = Grant {
+            host: "192.168.1.20".parse().unwrap(),
+            port: 5432,
+            internet: false,
+        };
+        let before = grants.generation("app");
+        grants.forget("app");
+        assert!(!grants.add_since(before, "app", None, grant.clone()));
+        let now = grants.generation("app");
+        assert!(grants.add_since(now, "app", None, grant.clone()));
+        grants.clear();
+        assert!(!grants.add_since(now, "app", None, grant));
     }
 
     #[test]

@@ -1323,6 +1323,7 @@ impl Daemon {
             .into());
         }
         let place = crate::reach::HostNetwork::current().classify(address);
+        let generation;
         let root = {
             let config = self.config.lock().await;
             // The question was for this pairing and this folder, not one
@@ -1338,6 +1339,10 @@ impl Daemon {
             }
             let index = crate::roots::find_root(&config, &which)?;
             let root = config.roots[index].clone();
+            // Read under the settings' lock, which a reload holds while it
+            // drops grants: one that comes after this makes an "Allow once"
+            // below stale.
+            generation = self.once.generation(&root.id);
             if path.is_some_and(|p| std::path::Path::new(&p) != root.path) {
                 return Err(
                     Refusal::new("stale", "that folder changed since it asked: ask again").into(),
@@ -1410,7 +1415,8 @@ impl Daemon {
             return Ok(json!({ "declined": true }));
         }
         if once {
-            self.once.add(
+            let kept = self.once.add_since(
+                generation,
                 &root.id,
                 bot.as_deref(),
                 crate::reach::Grant {
@@ -1419,6 +1425,13 @@ impl Daemon {
                     internet: place == crate::reach::Where::Internet,
                 },
             );
+            if !kept {
+                return Err(Refusal::new(
+                    "stale",
+                    "this computer or that folder changed since it asked: ask again",
+                )
+                .into());
+            }
             self.audit.append(&entry);
             return Ok(json!({ "allowed": true }));
         }
