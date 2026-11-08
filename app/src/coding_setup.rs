@@ -146,8 +146,10 @@ pub fn view(
         Some(a) if a["signed_in"] != true => json!({ "ok": false, "text": format!(
             "{agent_name} isn't signed in: {}", a["sign_in_hint"].as_str().unwrap_or_default()) }),
         Some(_) => json!({ "ok": true, "text": format!("{agent_name} installed and signed in") }),
+        // Not listed: missing here, or a background agent older than the app
+        // that doesn't know it, so it says neither.
         None if asked_name.is_some() => {
-            json!({ "ok": false, "text": format!("{agent_name} isn't installed on this computer") })
+            json!({ "ok": false, "text": format!("{agent_name} wasn't found on this computer") })
         }
         None => json!({ "ok": false, "text": "No coding agent is installed on this computer" }),
     });
@@ -588,7 +590,7 @@ mod tests {
         assert_eq!(shown["can_allow"], false, "{shown}");
         assert_eq!(
             shown["checks"][0],
-            json!({ "ok": false, "text": "Gemini CLI isn't installed on this computer" })
+            json!({ "ok": false, "text": "Gemini CLI wasn't found on this computer" })
         );
 
         for (installed, signed_in, text) in [
