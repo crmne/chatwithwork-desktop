@@ -884,6 +884,10 @@ mod tests {
 
     #[test]
     fn a_mirror_is_read_with_git_and_nothing_else() {
+        // Some build sandboxes (Nix's) have no git: nothing to read with.
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().join("work");
         let mirror = dir.path().join("mirror.git");
