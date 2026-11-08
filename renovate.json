@@ -6,9 +6,24 @@
   "packageRules": [
     {
       "description": "gtk and cairo-rs must stay on webkit2gtk 2.0 and Tauri's GTK3 stack (gtk-rs 0.18). A newer gtk conflicts on gdk-sys's native links; snapshot.rs also needs the same cairo surface type. Raise these together when Tauri and WebKitGTK support the new stack.",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["gtk", "cairo-rs"],
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "gtk",
+        "cairo-rs"
+      ],
       "allowedVersions": "<0.19"
+    },
+    {
+      "description": "mxc-sdk follows crmne/microsoft-mxc's local-services branch, pinned by hand: Renovate's digest updates follow the fork's default branch and would take Desktop back before the commits it needs.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "enabled": false,
+      "matchDepNames": [
+        "mxc-sdk"
+      ]
     }
   ]
 }

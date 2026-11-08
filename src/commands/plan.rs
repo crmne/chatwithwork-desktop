@@ -159,6 +159,9 @@ pub struct Plan {
     /// The folder's environment (`env.rs`): read by whoever starts the run,
     /// its values worked out by the run's thread before the command starts.
     pub env: super::env::RunEnv,
+    /// On Linux, the cgroup that holds it to its memory limit, made by its
+    /// thread before it starts (`cgroup.rs`). None: no memory limit.
+    pub cgroup: Option<PathBuf>,
 }
 
 /// Check `request` against `config`: the folder allows commands, the
@@ -229,6 +232,7 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
         home: paths.runs_dir().join(id),
         coding: Default::default(),
         env: Default::default(),
+        cgroup: None,
     })
 }
 
@@ -865,6 +869,9 @@ impl Plan {
             ("PATH".to_string(), path.join(":")),
             ("HOME".to_string(), own.clone()),
             ("TMPDIR".to_string(), format!("{own}/tmp")),
+            // The person's own /run/user/<uid> is out of the sandbox's
+            // reach: tools that keep sockets or locks there get their own.
+            ("XDG_RUNTIME_DIR".to_string(), format!("{own}/run")),
             ("XDG_CACHE_HOME".to_string(), format!("{own}/.cache")),
             ("LANG".to_string(), "C.UTF-8".to_string()),
             ("TERM".to_string(), "dumb".to_string()),
@@ -991,10 +998,12 @@ impl Plan {
             document["resources"]["cpuTimeMs"] =
                 self.limits.cpu_seconds.saturating_mul(1000).into();
         }
-        // MXC refuses a run whose memory limit its backend can't hold, as
-        // Seatbelt can't; 0 means none.
-        if self.limits.memory_mb > 0 && sandbox != Sandbox::Seatbelt {
-            document["resources"]["memoryMb"] = self.limits.memory_mb.into();
+        // On Linux the memory limit is the run's cgroup's (`cgroup.rs`),
+        // never an rlimit: those count reserved address space, which rustc,
+        // a JVM or Go reserve far beyond what they use. Seatbelt can't hold
+        // one at all.
+        if let Some(cgroup) = &self.cgroup {
+            document["resources"]["cgroup"] = display(cgroup).into();
         }
         if sandbox == Sandbox::Seatbelt {
             document["containment"] = "seatbelt".into();

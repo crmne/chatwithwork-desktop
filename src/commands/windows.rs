@@ -1050,6 +1050,7 @@ mod tests {
             home: home.to_path_buf(),
             coding: Default::default(),
             env: Default::default(),
+            cgroup: None,
         }
     }
 

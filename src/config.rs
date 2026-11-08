@@ -502,7 +502,9 @@ pub struct Limits {
     /// suite on many cores uses ten minutes of it in one, and the wall
     /// clock (`command_timeout_seconds`) still ends a run.
     pub command_cpu_seconds: u64,
-    /// Memory each process a command starts may allocate, in megabytes.
+    /// Memory a command may use, in megabytes: on Linux everything it
+    /// starts together, on Windows each process. Half this computer's
+    /// memory by default, at least 4 GB ([`default_command_memory_mb`]).
     pub command_memory_mb: u64,
     /// How long a command may run, in seconds, before it's stopped.
     pub command_timeout_seconds: u64,
@@ -571,7 +573,23 @@ impl Limits {
         if self.command_cpu_seconds == 600 {
             self.command_cpu_seconds = new.command_cpu_seconds;
         }
+        if self.command_memory_mb == 4_096 {
+            self.command_memory_mb = new.command_memory_mb;
+        }
     }
+}
+
+/// Memory a command may use by default: half this computer's, and at least
+/// 4 GB, read once. A confined daemon can't read it, so [`crate::sandbox`]
+/// reads it before confining.
+pub fn default_command_memory_mb() -> u64 {
+    static DEFAULT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *DEFAULT.get_or_init(|| half_of(crate::dictation::memory_bytes()))
+}
+
+/// Half of `bytes` of memory, in megabytes, and never under 4 GB.
+fn half_of(bytes: Option<u64>) -> u64 {
+    bytes.map_or(4_096, |bytes| (bytes / 2 / (1024 * 1024)).max(4_096))
 }
 
 /// Commands that may run at once by default: one per CPU this computer
@@ -600,7 +618,7 @@ impl Default for Limits {
             max_change_file_bytes: 10 * 1024 * 1024,
             max_change_entries: 1_000,
             command_cpu_seconds: 0,
-            command_memory_mb: 4_096,
+            command_memory_mb: default_command_memory_mb(),
             command_timeout_seconds: 1_800,
             command_processes: 256,
             commands_running: default_commands_running(),
@@ -751,12 +769,32 @@ mod tests {
         let mut custom = Limits {
             commands_running: 2,
             command_cpu_seconds: 120,
+            command_memory_mb: 6_000,
             ..Limits::default()
         };
         custom.raise_old_defaults();
         assert_eq!(custom.commands_running, 2);
         assert_eq!(custom.command_cpu_seconds, 120);
+        assert_eq!(custom.command_memory_mb, 6_000);
         assert!(Limits::default().commands_running >= 1);
+    }
+
+    /// 0.15.0 and earlier held each command to 4 GB: a config that still
+    /// says exactly that moves to half this computer's memory.
+    #[test]
+    fn the_old_memory_limit_moves_to_half_this_computers_memory() {
+        let mut limits = Limits {
+            command_memory_mb: 4_096,
+            ..Limits::default()
+        };
+        limits.raise_old_defaults();
+        assert_eq!(limits.command_memory_mb, default_command_memory_mb());
+        assert!(default_command_memory_mb() >= 4_096);
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(half_of(Some(64 * gib)), 32_768);
+        assert_eq!(half_of(Some(16 * gib)), 8_192);
+        assert_eq!(half_of(Some(4 * gib)), 4_096);
+        assert_eq!(half_of(None), 4_096);
     }
 
     /// 0.13.1 and earlier noted a stored Claude Code token: such a config

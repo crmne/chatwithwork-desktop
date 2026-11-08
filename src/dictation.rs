@@ -216,7 +216,7 @@ impl Preferences {
 }
 
 /// This computer's memory, where the system says.
-fn memory_bytes() -> Option<u64> {
+pub(crate) fn memory_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let meminfo = fs::read_to_string("/proc/meminfo").ok()?;

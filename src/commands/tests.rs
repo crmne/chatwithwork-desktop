@@ -197,11 +197,18 @@ fn the_request_holds_the_run_to_its_folder_without_network() {
     );
     // No CPU limit by default: MXC gets none.
     assert!(json["resources"].get("cpuTimeMs").is_none(), "{json}");
-    if cfg!(target_os = "macos") {
-        assert!(json["resources"].get("memoryMb").is_none(), "{json}");
-    } else {
-        assert_eq!(json["resources"]["memoryMb"], 4096);
-    }
+    // Never an rlimit for memory, which counts reserved address space; on
+    // Linux the run's cgroup holds it, named once its thread made one.
+    assert!(json["resources"].get("memoryMb").is_none(), "{json}");
+    assert!(json["resources"].get("cgroup").is_none(), "{json}");
+    let mut held = plan.clone();
+    held.cgroup = Some("/sys/fs/cgroup/cww.service/run-0123456789ab".into());
+    let json: serde_json::Value =
+        serde_json::from_str(&held.request_json(None, Sandbox::Bubblewrap)).unwrap();
+    assert_eq!(
+        json["resources"]["cgroup"],
+        "/sys/fs/cgroup/cww.service/run-0123456789ab"
+    );
     let env: Vec<&str> = json["process"]["env"]
         .as_array()
         .unwrap()
@@ -297,7 +304,10 @@ fn macos_promises_no_memory_or_process_limit() {
     if cfg!(target_os = "macos") {
         assert_eq!((limits.memory_mb, limits.processes), (0, 0));
     } else {
-        assert_eq!((limits.memory_mb, limits.processes), (4096, 256));
+        assert_eq!(
+            (limits.memory_mb, limits.processes),
+            (crate::config::default_command_memory_mb(), 256)
+        );
     }
 }
 
@@ -716,6 +726,136 @@ fn a_command_is_stopped_at_its_process_limit() {
     assert_eq!(done.status.limit, None);
 }
 
+/// Whether this process can give runs a memory limit: a delegated cgroup
+/// (a service with `Delegate=yes`, or `systemd-run --user --scope -p
+/// Delegate=yes cargo test ...`).
+#[cfg(target_os = "linux")]
+fn memory_is_held() -> bool {
+    static PROBES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    super::cgroup::RunCgroup::make(&format!("probe-{}-{n}", std::process::id()), 64).is_some()
+}
+
+/// Whether a run finds `python3`, as [`shell`] gives it this test's `PATH`.
+#[cfg(target_os = "linux")]
+fn has_python() -> bool {
+    std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// rustc, LLVM, a JVM or Go reserve far more address space than they use:
+/// a run's memory limit counts what it uses, so reserving 8 GiB under a
+/// 256 MB limit works.
+#[cfg(target_os = "linux")]
+#[test]
+fn reserving_address_space_isnt_using_memory() {
+    if !sandbox_works() || !has_python() {
+        return;
+    }
+    let mut fx = fixture(true);
+    fx.config.limits.command_memory_mb = 256;
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &shell("python3 -c 'import mmap; m = mmap.mmap(-1, 8 << 30); m[0] = 1; print(\"reserved\")'"),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert_eq!(done.stdout, "reserved\n");
+    assert_eq!(done.status.limit, None);
+}
+
+/// Memory really used past the limit ends the run, which says so. Only
+/// where this process has a delegated cgroup.
+#[cfg(target_os = "linux")]
+#[test]
+fn using_more_memory_than_the_limit_ends_the_run() {
+    if !sandbox_works() || !has_python() || !memory_is_held() {
+        eprintln!("no delegated cgroup: the memory limit isn't held here");
+        return;
+    }
+    let mut fx = fixture(true);
+    fx.config.limits.command_memory_mb = 128;
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &shell("python3 -c 'b = bytearray(512 << 20); print(\"allocated\")'"),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.state, "exited", "{done:?}");
+    assert!(!done.stdout.contains("allocated"), "{done:?}");
+    assert_eq!(done.status.limit.as_deref(), Some("memory"), "{done:?}");
+
+    // Under it, the same run works, and its cgroup is gone after.
+    fx.config.limits.command_memory_mb = 1024;
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &shell("python3 -c 'b = bytearray(512 << 20); print(\"allocated\")'"),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.stdout, "allocated\n", "{done:?}");
+    assert_eq!(done.status.limit, None);
+}
+
+/// rustc and LLVM under the default 4 GB limit, for real: a crate with
+/// dependencies builds in a run. Before the limit was a cgroup's, it was an
+/// rlimit, and rustc failed to allocate ("memory allocation of 42467344
+/// bytes failed"). Needs the internet, and cargo where the run finds it:
+/// `cargo test -p cww --lib cargo_builds -- --ignored`, in a delegated
+/// cgroup (`systemd-run --user --scope -p Delegate=yes`) to hold the limit.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "builds a crate, fetching from crates.io"]
+fn cargo_builds_a_crate_with_dependencies() {
+    assert!(sandbox_works());
+    let mut fx = fixture(true);
+    fx.config.roots[0].network = true;
+    fx.config.limits.command_timeout_seconds = 600;
+    let held = memory_is_held();
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &shell(
+                "cargo new -q demo && cd demo && cargo add -q serde --features derive && cargo add -q regex tokio --features tokio/full && cargo add -q clap --features derive && cargo add -q syn --features full && cargo build -q --release && echo built",
+            ),
+        )
+        .unwrap();
+    let done = wait_for(&fx.runs, &status.id, Duration::from_secs(600));
+    assert_eq!(done.status.exit_code, Some(0), "held: {held}, {done:?}");
+    assert!(done.stdout.ends_with("built\n"), "{done:?}");
+    eprintln!("built a crate with dependencies; memory limit held: {held}");
+}
+
+/// The person's /run/user/<uid> is out of reach: a run gets a runtime
+/// folder of its own, which it may write.
+#[test]
+fn a_command_has_a_runtime_folder_of_its_own() {
+    if !sandbox_works() {
+        return;
+    }
+    let fx = fixture(true);
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            &shell("test -d \"$XDG_RUNTIME_DIR\" && touch \"$XDG_RUNTIME_DIR/sock\" && stat -c %a \"$XDG_RUNTIME_DIR\""),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert_eq!(done.stdout, "700\n", "{done:?}");
+}
+
 #[test]
 fn a_command_that_spins_ends_at_its_cpu_limit() {
     if !sandbox_works() {
@@ -754,6 +894,7 @@ fn utf8_is_never_cut_in_the_middle_of_a_character() {
         home: "/".into(),
         coding: Default::default(),
         env: Default::default(),
+        cgroup: None,
     };
     let mut cell = Cell::new(&plan, "r".into(), String::new());
     cell.append(Stream::Out, "héllo".as_bytes());

@@ -20,6 +20,8 @@ Type=simple
 ExecStartPre=+/usr/bin/mkdir -p -m 0700 %h/.config/cww %h/.local/share/cww %h/.local/state/cww
 ExecStart=/usr/bin/cww daemon run
 Restart=on-failure
+# Each command gets a cgroup of its own, under this one, for its memory limit.
+Delegate=yes
 RestartSec=5
 RuntimeDirectory=cww
 RuntimeDirectoryMode=0700
