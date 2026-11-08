@@ -548,6 +548,21 @@ impl Login {
             .as_deref()
             .map_or(Billing::Unknown, claude_billing);
         let mut secrets = credentials.map(|text| tokens_in(&text)).unwrap_or_default();
+        // An Anthropic Console key Claude Code keeps itself in `~/.claude.json`
+        // (`primaryApiKey`), from signing in with a Console account: billed by
+        // use, and taken out of what a run prints like any token.
+        if let Some(key) = file
+            .as_deref()
+            .and_then(|f| read_up_to(f, MAX_CLAUDE_JSON_BYTES))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|v| v["primaryApiKey"].as_str().map(str::to_string))
+            .filter(|k| k.starts_with("sk-ant-") && k.len() >= 20)
+        {
+            secrets.push(Secret::new(key));
+            if billing == Billing::Unknown {
+                billing = Billing::ApiKey;
+            }
+        }
         let keychain = cfg!(target_os = "macos")
             && crate::paths::home_dir()
                 .ok()
@@ -1017,6 +1032,15 @@ const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
 /// allowed the sign-in can replace the file, so never a FIFO, which would
 /// hold up whoever starts runs, or a huge one.
 fn read_small(path: &Path) -> Option<String> {
+    read_up_to(path, MAX_CREDENTIALS_BYTES)
+}
+
+/// Claude Code's `~/.claude.json` holds its history of projects too, so it's
+/// read up to this size for its key.
+const MAX_CLAUDE_JSON_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A regular file of at most `max` bytes, as text.
+fn read_up_to(path: &Path, max: u64) -> Option<String> {
     use std::io::Read;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -1027,14 +1051,12 @@ fn read_small(path: &Path) -> Option<String> {
     }
     let file = options.open(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.len() > MAX_CREDENTIALS_BYTES {
+    if !meta.is_file() || meta.len() > max {
         return None;
     }
     let mut text = String::new();
-    file.take(MAX_CREDENTIALS_BYTES + 1)
-        .read_to_string(&mut text)
-        .ok()?;
-    (text.len() as u64 <= MAX_CREDENTIALS_BYTES).then_some(text)
+    file.take(max + 1).read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= max).then_some(text)
 }
 
 /// Every token of Anthropic's in Claude Code's credentials (`accessToken`,
@@ -1231,6 +1253,9 @@ pub struct RunCoding {
     /// The checkouts Desktop made in the folder, which the agents trust
     /// ([`trust`]): only for a run that gets an agent.
     pub checkouts: Vec<PathBuf>,
+    /// Programs or folders it reads besides: a thinking step's `cww`, which
+    /// serves Chat with Work's tools to its agent (docs/own-plans.md).
+    pub read: Vec<PathBuf>,
 }
 
 /// An agent for one run: the program setup checked, where it really is,
@@ -1375,7 +1400,19 @@ pub fn for_run(
         agents,
         tools,
         checkouts,
+        read: Vec::new(),
     }
+}
+
+/// `agent` for a thinking step (docs/own-plans.md), found and granted as a
+/// bot's run gets it, with the sign-in `login` lent the same way.
+pub fn agent_for_thinking(
+    agent: Agent,
+    config: &Config,
+    paths: &Paths,
+    login: Login,
+) -> Option<AgentRun> {
+    agent_for_run(agent, config, paths, &move |_| login.clone())
 }
 
 fn agent_for_run(
