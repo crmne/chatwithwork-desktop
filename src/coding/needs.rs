@@ -362,7 +362,10 @@ fn database_yml(text: &str, from: &str, needs: &mut Needs) {
         port: Option<u16>,
     }
     let mut blocks: Vec<Block> = Vec::new();
-    for raw in text.lines() {
+    let lines: Vec<&str> = text.lines().collect();
+    let indent = |raw: &str| raw.len() - raw.trim_start().len();
+    for (at, raw) in lines.iter().enumerate() {
+        let raw = *raw;
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -370,12 +373,19 @@ fn database_yml(text: &str, from: &str, needs: &mut Needs) {
         // A block starts at any key with no value of its own: `development:`,
         // `default: &default`, or a nested database (`primary:` under
         // `production:`, Rails' several databases); what follows is its.
-        let opens = line.split_once(':').is_some_and(|(key, rest)| {
-            !key.contains(' ') && key != "<<" && {
-                let rest = rest.trim();
-                rest.is_empty() || rest.starts_with('&')
-            }
-        });
+        // Only when what follows is indented under it: an empty value
+        // (`password:`) stays in its block.
+        let nested = lines[at + 1..]
+            .iter()
+            .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+            .is_some_and(|next| indent(next) > indent(raw));
+        let opens = nested
+            && line.split_once(':').is_some_and(|(key, rest)| {
+                !key.contains(' ') && key != "<<" && {
+                    let rest = rest.trim();
+                    rest.is_empty() || rest.starts_with('&')
+                }
+            });
         if opens {
             let anchor = line
                 .split_once('&')
@@ -724,6 +734,22 @@ mod tests {
             "{found:?}"
         );
         assert!(found.contains(&("10.0.0.9".to_string(), 6543)), "{found:?}");
+    }
+
+    #[test]
+    fn an_empty_value_stays_in_its_block() {
+        let mut needs = Needs::default();
+        database_yml(
+            "development:\n  adapter: postgresql\n  password:\n  host: 192.168.8.31\n  port: 6543\n",
+            "config/database.yml",
+            &mut needs,
+        );
+        let found: Vec<(String, u16)> = needs
+            .services
+            .iter()
+            .map(|s| (s.host.clone(), s.port))
+            .collect();
+        assert_eq!(found, vec![("192.168.8.31".to_string(), 6543)]);
     }
 
     #[test]

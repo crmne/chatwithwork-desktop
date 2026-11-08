@@ -1379,7 +1379,14 @@ impl Daemon {
             .into());
         };
         // A sandbox's network is IPv4: an exact IPv6 address can't be given.
-        if address.is_ipv6() && !address.is_loopback() && place != crate::reach::Where::Internet {
+        // (On macOS this Mac's own address goes through `localhost:<port>`,
+        // which Seatbelt reads as every address of this machine.)
+        let mac_own = cfg!(target_os = "macos") && place == crate::reach::Where::ThisComputer;
+        if address.is_ipv6()
+            && !address.is_loopback()
+            && place != crate::reach::Where::Internet
+            && !mac_own
+        {
             return Err(Refusal::new(
                 "not_allowed",
                 "an IPv6 address can't be given on its own: allow the internet instead",
@@ -1437,13 +1444,18 @@ impl Daemon {
         }
         let id = root.id.clone();
         let root_path = root.path.clone();
-        let paired_now = self
-            .config
-            .lock()
-            .await
-            .server
-            .as_ref()
-            .map(|s| s.device_id.clone());
+        // The pairing the question was asked under, when the app named it,
+        // else the one checked above: the edit refuses any other.
+        let paired_now = match device.clone() {
+            Some(device) => Some(device),
+            None => self
+                .config
+                .lock()
+                .await
+                .server
+                .as_ref()
+                .map(|s| s.device_id.clone()),
+        };
         self.edit_config(move |config, _| {
             // Checked again in the same edit: commands stopped or the loan
             // withdrawn meanwhile are never given back by this answer.
