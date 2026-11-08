@@ -18,6 +18,8 @@
 //! each stream for the result.
 
 mod blocked;
+#[cfg(target_os = "linux")]
+mod cgroup;
 #[cfg(unix)]
 pub mod channel;
 mod channel_call;
@@ -110,10 +112,11 @@ pub struct Limits {
 
 impl Limits {
     /// The limits this computer's sandbox holds. Seatbelt can't hold a
-    /// memory limit (macOS doesn't enforce `RLIMIT_AS`, so MXC refuses
+    /// memory limit (macOS doesn't enforce memory rlimits, so MXC refuses
     /// `memoryMb` there) and nothing counts a run's processes on macOS yet,
     /// so both are 0 there, none, and the approval card leaves them out
-    /// rather than promise them.
+    /// rather than promise them. On Linux the memory limit is a cgroup's
+    /// (`cgroup.rs`), held where systemd delegated the daemon one.
     pub fn from_config(limits: &crate::config::Limits) -> Self {
         let held = !cfg!(target_os = "macos");
         Self {
@@ -145,8 +148,9 @@ pub struct Status {
     /// The limit that ended it: `cpu_time` (it `exited` with -1),
     /// `processes` (on Linux it was `stopped`; on Windows a process past
     /// the limit couldn't start, and it `exited` with an error) or `memory`
-    /// (Windows: an allocation past the limit failed, and it `exited` with
-    /// an error). Its wall clock is `timed_out`.
+    /// (Linux: the kernel ended it at the limit, and it `exited` with -1 or
+    /// 137; Windows: an allocation past the limit failed, and it `exited`
+    /// with an error). Its wall clock is `timed_out`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<String>,
     /// What the sandbox refused it, at most [`MAX_BLOCKED`], each once:

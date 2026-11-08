@@ -302,7 +302,8 @@ pub fn systemd_unit(exe: &Path, paths: &Paths, options: &InstallOptions) -> Stri
          Type=simple\n\
          ExecStart=\"{exe}\" daemon run\n\
          Restart=on-failure\n\
-         RestartSec=5\n",
+         RestartSec=5\n\
+         Delegate=yes\n",
         exe = exe.display()
     );
     if let Some(home) = custom_home() {
@@ -770,6 +771,8 @@ mod tests {
         );
         assert!(unit.contains("ExecStart=\"/usr/bin/cww\" daemon run"));
         assert!(unit.contains("ProtectSystem=full"));
+        // Each command's memory limit is a cgroup under the service's.
+        assert!(unit.contains("Delegate=yes"));
         assert!(unit.contains("ReadWritePaths=\"-/home/u/.cww/config\""));
         assert!(unit.contains(
             "SystemCallFilter=@system-service @sandbox mount umount2 pivot_root mount_setattr"

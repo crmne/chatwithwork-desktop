@@ -3781,7 +3781,7 @@ checksum = "a8afc6df942f4c022d70c5725e18df1a705773870e5b7f96fde94ca0334ce77a"
 [[package]]
 name = "mxc-sdk"
 version = "1.0.0"
-source = "git+https://github.com/crmne/microsoft-mxc?rev=bf823d5354e3d9db0091aee306ade7c32e0b16d4#bf823d5354e3d9db0091aee306ade7c32e0b16d4"
+source = "git+https://github.com/crmne/microsoft-mxc?rev=a9d7de89d67f42c0744d28ac5c3972d462f93795#a9d7de89d67f42c0744d28ac5c3972d462f93795"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

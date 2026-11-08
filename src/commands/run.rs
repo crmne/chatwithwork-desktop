@@ -81,6 +81,16 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
     if Instant::now() >= deadline {
         return State::TimedOut;
     }
+    // Its memory limit, which its `$( )`s are held to as well. Dropped,
+    // with anything still in it, when the run ends.
+    #[cfg(target_os = "linux")]
+    let cgroup = (plan.limits.memory_mb > 0)
+        .then(|| super::cgroup::RunCgroup::make(&plan.id, plan.limits.memory_mb))
+        .flatten();
+    #[cfg(target_os = "linux")]
+    {
+        plan.cgroup = cgroup.as_ref().map(|c| c.path().to_path_buf());
+    }
     let home = crate::paths::home_dir().ok();
     if let Err(state) = resolve_env(plan, cell, sandbox, home.as_deref(), deadline) {
         return state;
@@ -185,6 +195,12 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
             .and_then(|u| u.limit_exceeded);
         if let Some(limit) = limit_that_ended(exceeded, code) {
             lock(cell).limit = Some(limit);
+        }
+        // The kernel ended it at its memory limit.
+        #[cfg(target_os = "linux")]
+        if cgroup.as_ref().is_some_and(|c| c.ran_out_of_memory()) {
+            tracing::info!(run = %plan.id, "a command reached its memory limit");
+            lock(cell).limit = Some("memory");
         }
     }
     state
@@ -495,6 +511,9 @@ fn remove_home(home: &std::path::Path) {
 /// a Windows run's PowerShell reads.
 fn make_home(plan: &Plan) -> std::io::Result<()> {
     let mut dirs = vec![plan.home.clone(), plan.home.join("tmp")];
+    if cfg!(unix) {
+        dirs.push(plan.home.join("run"));
+    }
     if cfg!(windows) {
         dirs.push(plan.home.join("AppData").join("Local"));
         dirs.push(plan.home.join("AppData").join("Roaming"));

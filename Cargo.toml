@@ -115,8 +115,9 @@ dirs = "7"
 # namespaces, Seatbelt on macOS, and a process container (BaseContainer) on
 # Windows. Carmine's fork adds CPU time and memory limits, the Landlock
 # backend, and this computer's loopback services reached outbound with a log
-# of the connections a sandbox blocked (branch local-services).
-mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "bf823d5354e3d9db0091aee306ade7c32e0b16d4" }
+# of the connections a sandbox blocked, and a cgroup a run joins for its
+# memory limit (branch local-services).
+mxc-sdk = { git = "https://github.com/crmne/microsoft-mxc", rev = "a9d7de89d67f42c0744d28ac5c3972d462f93795" }
 
 # Terminal UI (`cww tui`). crossterm works the same on Linux, macOS and Windows.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
