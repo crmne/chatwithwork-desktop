@@ -151,7 +151,7 @@ pub fn view(
         None if asked_name.is_some() => {
             json!({ "ok": false, "text": format!("{agent_name} wasn't found on this computer") })
         }
-        None => json!({ "ok": false, "text": "No coding agent is installed on this computer" }),
+        None => json!({ "ok": false, "text": "No coding agent was found on this computer" }),
     });
     let reached = match (&request.repository, look["reaches"].as_bool()) {
         (Some(repository), Some(true)) => {
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(shown["can_allow"], false, "{shown}");
         assert_eq!(
             shown["checks"][0],
-            json!({ "ok": false, "text": "No coding agent is installed on this computer" })
+            json!({ "ok": false, "text": "No coding agent was found on this computer" })
         );
     }
 
