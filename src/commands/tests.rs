@@ -2367,10 +2367,11 @@ fn a_runs_network_follows_its_folders_level() {
 /// its only ones; it's stopped as soon as it asked for them, long before
 /// it would end; what it printed comes back with its token taken out; and
 /// its folder is gone after. Linux with Bubblewrap.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_thinking_step_returns_its_calls_stops_the_agent_and_never_prints_its_token() {
     const ACCESS: &str = "eyJhbGciOiJSUzI1NiJ9.codex-plan-token-value";
-    if !cfg!(target_os = "linux") || !(sandbox_works() && !on_landlock()) {
+    if !(sandbox_works() && !on_landlock()) {
         return;
     }
     let mut fx = fixture(false);

@@ -854,6 +854,9 @@ pub fn valid_id(id: &str) -> bool {
 
 /// Where this process's commands run: here (an unconfined daemon), through
 /// the supervisor (the confined worker), or nowhere.
+// One per daemon, and cloned only to hand it out: its size doesn't matter,
+// and on Windows, which has no supervisor, `Local` is all it holds.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Runner {
     Local(Runs),
