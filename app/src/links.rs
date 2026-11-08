@@ -24,11 +24,14 @@ pub const SCHEMES: [&str; 3] = ["chatwithwork", "cww-staging", "cww-dev"];
 const MAX_LENGTH: usize = 512;
 
 /// The sections a link may open. Each is a list, a record, or either.
-const SECTIONS: [(&str, Record); 4] = [
+/// `computer_setup` is the guide to connecting a computer, whose folder and
+/// command steps ask this app (`computer.addFolder` and the rest).
+const SECTIONS: [(&str, Record); 5] = [
     ("chats", Record::Required),
     ("decisions", Record::Never),
     ("bots", Record::Optional),
     ("projects", Record::Required),
+    ("computer_setup", Record::Never),
 ];
 
 /// A bot's page, saying to ask whether it may code here (`computer.setUpCoding`,
@@ -143,6 +146,7 @@ mod tests {
             "/482139075/bots/3",
             "/482139075/bots/3?set_up=coding",
             "/482139075/projects/12",
+            "/482139075/computer_setup",
         ] {
             assert_eq!(
                 opened(&format!("chatwithwork://work.example{path}")).as_deref(),
@@ -238,6 +242,10 @@ mod tests {
             "chatwithwork://work.example/482139075/bots/3?set_up=everything",
             "chatwithwork://work.example/482139075/chats/3?set_up=coding",
             "chatwithwork://work.example/482139075/decisions/1",
+            "chatwithwork://work.example/482139075/computer_setup/1",
+            "chatwithwork://work.example/482139075/computer_setup/",
+            "chatwithwork://work.example/482139075/computer_setup?set_up=coding",
+            "chatwithwork://work.example/computer_setup",
             // Not an account, or not a record.
             "chatwithwork://work.example/482139/chats/16",
             "chatwithwork://work.example/1234567890123456789/chats/16",

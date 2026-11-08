@@ -69,6 +69,9 @@ struct Daemon {
     /// Held while a request edits config.toml, so concurrent edits don't
     /// save over each other.
     config_edits: Mutex<()>,
+    /// Held through a reload, from reading config.toml to applying it, so a
+    /// reload that read an older config can't apply it over a newer one.
+    reloads: Mutex<()>,
     /// Events for control-channel subscribers.
     events: broadcast::Sender<ControlEvent>,
     /// Bumped whenever something in `status` changes.
@@ -399,6 +402,17 @@ fn command_tools(
     }
 }
 
+/// The shared folders, by id and label: what `roots` lists, in any order.
+fn shared_roots(config: &Config) -> Vec<(&str, &str)> {
+    let mut shared: Vec<_> = config
+        .roots
+        .iter()
+        .map(|r| (r.id.as_str(), r.label.as_str()))
+        .collect();
+    shared.sort_unstable();
+    shared
+}
+
 /// The folders that allow changes.
 fn writable_roots(config: &Config) -> Vec<PathBuf> {
     config
@@ -647,6 +661,7 @@ async fn run_with_notifications(
             shutdown.child_token(),
         ),
         config_edits: Mutex::new(()),
+        reloads: Mutex::new(()),
         events,
         changes,
         shutdown: shutdown.clone(),
@@ -1065,6 +1080,7 @@ impl Daemon {
     }
 
     async fn reload(&self) -> Result<()> {
+        let _reloading = self.reloads.lock().await;
         if self.organization.is_some() {
             self.tunnel_token.lock().await.cancel();
             self.reloaded.notify_one();
@@ -1104,10 +1120,13 @@ impl Daemon {
         self.paused.store(new.paused, Ordering::SeqCst);
         let mut config = self.config.lock().await;
         // A new set of folders that allow changes changes the tools offered:
-        // reconnect, so the server lists them again.
+        // reconnect, so the server lists them again. A new set of shared
+        // folders reconnects too, so the server asks what this computer
+        // shares (its guide to connecting a computer ticks by it).
         let pairing_changed = config.server != new.server
             || config.secret_store != new.secret_store
             || config.proxy != new.proxy
+            || shared_roots(&config) != shared_roots(&new)
             || writable_roots(&config) != writable_roots(&new)
             || command_roots(&config) != command_roots(&new)
             || crate::printing::settings::offered(&config)
@@ -2991,6 +3010,38 @@ fn credentials_retry(failures: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_removing_or_renaming_a_shared_folder_changes_what_roots_lists_reordering_doesnt() {
+        let root = |id: &str, label: &str| crate::config::Root {
+            bots: Vec::new(),
+            id: id.into(),
+            label: label.into(),
+            path: format!("/tmp/{id}").into(),
+            follow_symlinks: false,
+            writable: false,
+            commands: false,
+            network: false,
+            local_services: true,
+            reach: Vec::new(),
+            read_budget: None,
+        };
+        let config = |roots| Config {
+            roots,
+            ..Config::default()
+        };
+        let before = config(vec![root("code", "Code")]);
+        for after in [
+            config(vec![root("code", "Code"), root("docs", "Docs")]),
+            config(Vec::new()),
+            config(vec![root("code", "Projects")]),
+        ] {
+            assert_ne!(shared_roots(&before), shared_roots(&after));
+        }
+        let both = config(vec![root("code", "Code"), root("docs", "Docs")]);
+        let reordered = config(vec![root("docs", "Docs"), root("code", "Code")]);
+        assert_eq!(shared_roots(&both), shared_roots(&reordered));
+    }
 
     #[test]
     fn unreadable_credentials_are_retried_ever_more_slowly() {
