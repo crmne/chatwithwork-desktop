@@ -39,6 +39,8 @@ fn removing_a_folder_from_the_terminal_is_audited() {
             "Projects",
         ],
     );
+    let config = cww::config::Config::load(&Paths::under(&home)).unwrap();
+    let id = config.roots[0].id.clone();
     let said = cww(&home, &["roots", "remove", "Projects"]);
     assert!(said.contains("Stopped sharing"), "{said}");
 
@@ -49,6 +51,5 @@ fn removing_a_folder_from_the_terminal_is_audited() {
         .filter(|entry| entry["event"] == "root_removed")
         .collect();
     assert_eq!(removed.len(), 1, "{log}");
-    let detail = removed[0]["detail"].as_str().unwrap();
-    assert!(detail.ends_with("(Projects)"), "{detail}");
+    assert_eq!(removed[0]["detail"], format!("{id} (Projects)"));
 }

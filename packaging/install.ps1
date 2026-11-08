@@ -56,33 +56,40 @@ try {
   # The MSI goes on when the agent doesn't start, so the app can offer to
   # start it later: say so here instead of reporting success.
 
-  # A running agent answers `status` with its process; a stopped one can't.
-  function Test-Agent {
-    try { return $null -ne (& $cww status --json 2>$null | ConvertFrom-Json).pid } catch { return $false }
+  # "yes" when the agent answers `status` with its process, "no" when
+  # nothing does, "unknown" when it didn't answer within 10 seconds.
+  function Get-AgentState {
+    $out = Join-Path $tmp "status.json"
+    $probe = Start-Process -FilePath $cww -ArgumentList "status", "--json" -NoNewWindow -PassThru `
+      -RedirectStandardOutput $out -RedirectStandardError (Join-Path $tmp "status.err")
+    if (-not $probe.WaitForExit(10000)) {
+      Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+      return "unknown"
+    }
+    try { if ($null -ne (Get-Content -Raw $out | ConvertFrom-Json).pid) { return "yes" } } catch {}
+    return "no"
   }
-  $running = $false
+  $agent = "no"
   for ($i = 0; $i -lt 15; $i++) {
-    $running = Test-Agent
-    if ($running) { break }
+    $agent = Get-AgentState
+    if ($agent -ne "no") { break }
     Start-Sleep -Seconds 1
   }
-  $why = $null
-  if (-not $running) {
-    # Once more by hand, for its reason. Its error goes to stderr, which
-    # Windows PowerShell would otherwise turn into a stop.
-    $ErrorActionPreference = "Continue"
-    $why = (& $cww daemon install 2>&1 | ForEach-Object { "$_" } | Out-String).Trim()
-    $ErrorActionPreference = "Stop"
-    $running = Test-Agent
-  }
   Write-Host ""
-  if ($running) {
+  if ($agent -eq "yes") {
     Write-Host "The background agent is running for your account."
     Write-Host "Open Chat with Work from the Start menu, or run cww for the terminal interface."
     Write-Host "Nothing is shared until you pair this computer and choose a folder."
   } else {
-    Write-Warning "Chat with Work Desktop is installed, but its background agent is not running."
-    if ($why) { Write-Warning $why }
+    if ($agent -eq "unknown") {
+      Write-Warning "Chat with Work Desktop is installed, but its background agent didn't answer."
+    } else {
+      Write-Warning "Chat with Work Desktop is installed, but its background agent is not running."
+      # Why, as the installer's own step said it (cww daemon install).
+      $why = Select-String -Path $log -Pattern "WixQuietExec:\s+error: (.*)" -ErrorAction SilentlyContinue |
+        Select-Object -Last 1
+      if ($why) { Write-Warning $why.Matches[0].Groups[1].Value.Trim() }
+    }
     Write-Warning "It starts when you sign in to Windows. To start it now, open Chat with Work from the Start menu, or run: cww daemon install"
     Write-Warning "Check it with: cww status"
   }
