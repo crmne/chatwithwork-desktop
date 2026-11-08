@@ -921,6 +921,7 @@ mod tests {
             assert!(
                 Command::new("git")
                     .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                    .args(["-c", "commit.gpgsign=false"])
                     .args(args)
                     .current_dir(at)
                     .output()
