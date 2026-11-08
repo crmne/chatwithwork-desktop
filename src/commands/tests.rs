@@ -2374,7 +2374,15 @@ fn a_thinking_step_returns_its_calls_stops_the_agent_and_never_prints_its_token(
     if !(sandbox_works() && !on_landlock()) {
         return;
     }
-    let mut fx = fixture(false);
+    let mut fx = fixture(true);
+    // A step needs the internet; where the sandbox can't give one (CI's
+    // Ubuntu refuses network namespaces), there's nothing to check.
+    fx.config.roots[0].network = true;
+    let probe = fx.runs.start(&fx.config, &request("exit 0")).unwrap();
+    if wait(&fx.runs, &probe.id).status.state == "failed" {
+        eprintln!("no network for commands here");
+        return;
+    }
     let paths = fx.runs.paths.clone();
     let home = paths.person_home.clone().unwrap();
     std::fs::create_dir_all(home.join(".codex")).unwrap();

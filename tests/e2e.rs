@@ -6764,6 +6764,14 @@ async fn a_chat_thinks_with_a_plan_only_once_this_computer_said_yes() {
 
     let started = Instant::now();
     let (result, progress) = call_with_progress(&mut s, "think", step.clone()).await;
+    // A step needs the internet; where the sandbox can't give one (CI's
+    // Ubuntu refuses network namespaces), there's nothing more to check.
+    if result["structuredContent"]["error"]["message"] == "the sandbox couldn't start it" {
+        eprintln!("no network for commands here");
+        shutdown.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(10), daemon).await;
+        return;
+    }
     assert!(
         started.elapsed() < Duration::from_secs(20),
         "stopped at its call"
