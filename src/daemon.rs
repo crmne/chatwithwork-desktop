@@ -402,13 +402,15 @@ fn command_tools(
     }
 }
 
-/// The shared folders, by id and label: what `roots` lists.
+/// The shared folders, by id and label: what `roots` lists, in any order.
 fn shared_roots(config: &Config) -> Vec<(&str, &str)> {
-    config
+    let mut shared: Vec<_> = config
         .roots
         .iter()
         .map(|r| (r.id.as_str(), r.label.as_str()))
-        .collect()
+        .collect();
+    shared.sort_unstable();
+    shared
 }
 
 /// The folders that allow changes.
@@ -3010,7 +3012,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adding_removing_or_renaming_a_shared_folder_changes_what_roots_lists() {
+    fn adding_removing_or_renaming_a_shared_folder_changes_what_roots_lists_reordering_doesnt() {
         let root = |id: &str, label: &str| crate::config::Root {
             bots: Vec::new(),
             id: id.into(),
@@ -3036,10 +3038,9 @@ mod tests {
         ] {
             assert_ne!(shared_roots(&before), shared_roots(&after));
         }
-        assert_eq!(
-            shared_roots(&before),
-            shared_roots(&config(vec![root("code", "Code")]))
-        );
+        let both = config(vec![root("code", "Code"), root("docs", "Docs")]);
+        let reordered = config(vec![root("docs", "Docs"), root("code", "Code")]);
+        assert_eq!(shared_roots(&both), shared_roots(&reordered));
     }
 
     #[test]
