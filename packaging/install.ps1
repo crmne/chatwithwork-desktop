@@ -49,14 +49,43 @@ try {
 
   $dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop"
   $env:Path = "$env:Path;$dir"
+  $cww = Join-Path $dir 'cww.exe'
   Write-Host ""
-  Write-Host "Installed $(& (Join-Path $dir 'cww.exe') --version) to $dir"
+  Write-Host "Installed $(& $cww --version) to $dir"
+
+  # The MSI goes on when the agent doesn't start, so the app can offer to
+  # start it later: say so here instead of reporting success.
+
+  # A running agent answers `status` with its process; a stopped one can't.
+  function Test-Agent {
+    try { return $null -ne (& $cww status --json 2>$null | ConvertFrom-Json).pid } catch { return $false }
+  }
+  $running = $false
+  for ($i = 0; $i -lt 15; $i++) {
+    $running = Test-Agent
+    if ($running) { break }
+    Start-Sleep -Seconds 1
+  }
+  $why = $null
+  if (-not $running) {
+    # Once more by hand, for its reason. Its error goes to stderr, which
+    # Windows PowerShell would otherwise turn into a stop.
+    $ErrorActionPreference = "Continue"
+    $why = (& $cww daemon install 2>&1 | ForEach-Object { "$_" } | Out-String).Trim()
+    $ErrorActionPreference = "Stop"
+    $running = Test-Agent
+  }
   Write-Host ""
-  Write-Host "Open Chat with Work from the Start menu, or run cww for the terminal interface."
-  Write-Host "The installer registers and starts the background agent for your account."
-  Write-Host "If it could not start, open the app or run: cww daemon install"
-  Write-Host "Check the agent with: cww status"
-  Write-Host "Nothing is shared until you pair this computer and choose a folder."
+  if ($running) {
+    Write-Host "The background agent is running for your account."
+    Write-Host "Open Chat with Work from the Start menu, or run cww for the terminal interface."
+    Write-Host "Nothing is shared until you pair this computer and choose a folder."
+  } else {
+    Write-Warning "Chat with Work Desktop is installed, but its background agent is not running."
+    if ($why) { Write-Warning $why }
+    Write-Warning "It starts when you sign in to Windows. To start it now, open Chat with Work from the Start menu, or run: cww daemon install"
+    Write-Warning "Check it with: cww status"
+  }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

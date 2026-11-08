@@ -569,7 +569,8 @@ enum RootsCommand {
     AllowCommands {
         root: String,
         /// Let those commands reach the internet and the local network
-        /// (installing packages), this computer's own services with them.
+        /// (installing packages), this computer's own services with them
+        /// (not on Windows, whose sandbox can't give them).
         #[arg(long, visible_alias = "internet")]
         network: bool,
         /// Keep them from this computer's own services (a database in
@@ -582,7 +583,7 @@ enum RootsCommand {
     },
     /// Let a folder's commands reach this computer's own services, or not:
     /// its loopback, its own addresses, and its containers' networks, never
-    /// the local network or the internet.
+    /// the local network or the internet. Windows' sandbox can't give them.
     LocalServices {
         root: String,
         #[arg(value_parser = ["on", "off"])]
@@ -1300,6 +1301,12 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
         RootsCommand::Remove { root } => {
             let removed = remove_root(&mut config, &root)?;
             cww::commands::env::forget(&mut config, paths, &removed.id)?;
+            // As the daemon records a removal through its control channel.
+            audit_here(
+                paths,
+                "root_removed",
+                format!("{} ({})", removed.id, removed.label),
+            );
             println!(
                 "Stopped sharing {} ({}).",
                 removed.path.display(),
@@ -1343,10 +1350,15 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 cww::roots::set_local_services(config, &root, on == "on")
             })?;
             println!(
-                "Commands in {} ({}) now reach: {}.",
+                "Commands in {} ({}) now reach: {}.{}",
                 root.label,
                 root.path.display(),
-                cww::commands::network_access(&root).words()
+                cww::commands::network_access(&root).words(),
+                if cfg!(windows) && on == "on" {
+                    " Windows can't give commands this computer's own services."
+                } else {
+                    ""
+                }
             );
             notify_daemon(paths, "");
         }
@@ -2240,6 +2252,19 @@ fn host_exe() -> Result<PathBuf> {
         }
     }
     Ok(exe)
+}
+
+/// Records a change `cww` made to the config itself in the audit log, as the
+/// daemon records the same change made through it. A log that can't be
+/// written is said, not fatal: the change is already saved.
+fn audit_here(paths: &Paths, event: &str, detail: String) {
+    let mut entry = audit::AuditEntry::event(event);
+    entry.detail = Some(detail);
+    if let Err(e) =
+        audit::AuditLog::open(&paths.audit_file()).and_then(|log| log.try_append(&entry))
+    {
+        eprintln!("warning: couldn't write the audit log: {e:#}");
+    }
 }
 
 fn notify_daemon(paths: &Paths, if_not_running: &str) {

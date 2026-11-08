@@ -61,6 +61,8 @@ It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, a
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
+It checks that the background agent started, and warns when it didn't, with the reason: over SSH, for example, the agent's logon task waits until you sign in to Windows. Run `cww daemon install` to start it then.
+
 Windows installers and programs are signed by PlentyLabs. While the signature builds a reputation, SmartScreen may still warn about a downloaded installer: choose **More info**, then **Run anyway**. The one-liner doesn't trigger it. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
 
 **Portable Linux desktop app**

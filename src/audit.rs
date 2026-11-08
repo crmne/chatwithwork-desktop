@@ -140,7 +140,9 @@ impl AuditLog {
         }
     }
 
-    fn try_append(&self, entry: &AuditEntry) -> Result<()> {
+    /// As [`Self::append`], saying whether it was written, for `cww`, which
+    /// has no one listening and no log of its own.
+    pub fn try_append(&self, entry: &AuditEntry) -> Result<()> {
         let mut line = serde_json::to_vec(entry)?;
         line.push(b'\n');
         let mut file = self.file.lock().expect("audit lock");
