@@ -38,7 +38,7 @@
             cargoTestFlags = [ "--workspace" ];
             nativeBuildInputs = [ pkgs.makeWrapper pkgs.cmake pkgs.rustPlatform.bindgenHook ]
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ]
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libicns pkgs.rcodesign ];
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.rcodesign ];
             # fastframe-audio records through PipeWire on Linux; bindgenHook above
             # gives its bindings libclang. The window is WebKitGTK in GTK 3.
             buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [
@@ -67,7 +67,8 @@
               mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
               substitute packaging/macos/Info.plist "$app/Contents/Info.plist" \
                 --replace-fail __VERSION__ ${((pkgs.lib.importTOML ./Cargo.toml).package.version)}
-              png2icns "$app/Contents/Resources/cww-app.icns" app/assets/icon-1024.png
+              # No actool here, so no Assets.car: every macOS shows the .icns.
+              install -Dm644 app/assets/macos/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
               # The launch agent that starts the app at login with --background.
               install -Dm644 packaging/macos/autostart.plist \
                 "$app/Contents/Library/LaunchAgents/com.chatwithwork.desktop.autostart.plist"

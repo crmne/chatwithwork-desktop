@@ -45,8 +45,8 @@ open("cww-app.ico", "wb").write(out + b"".join(images))
 PY
 rm ico-*.png
 
-# macOS app icon: the mark on a white rounded square, on the 1024 px grid
-# with an 824 px body, as macOS draws app icons.
+# The mark on a white rounded square, Chocolatey's package icon. The macOS
+# app icon is macos/icon.py's, below.
 square mark.svg 560 mac-mark.tmp.png
 magick -size 1024x1024 xc:none \
     \( -size 824x824 xc:none -fill white -draw "roundrectangle 0,0 823,823 185,185" \) \
@@ -56,3 +56,6 @@ magick -size 1024x1024 xc:none \
     mac-mark.tmp.png -gravity center -geometry +0+6 -compose over -composite \
     -strip icon-1024.png
 rm mac-mark.tmp.png
+
+# macOS app icon: the Icon Composer document and the .icns.
+python3 macos/icon.py

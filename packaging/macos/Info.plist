@@ -6,7 +6,10 @@
     <key>CFBundleDisplayName</key><string>Chat with Work</string>
     <key>CFBundleIdentifier</key><string>com.chatwithwork.desktop</string>
     <key>CFBundleExecutable</key><string>cww-app</string>
-    <key>CFBundleIconFile</key><string>cww-app</string>
+    <!-- AppIcon.icns, and AppIcon in Assets.car for macOS 26 and later:
+         packaging/macos/icon.sh. -->
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>__VERSION__</string>
     <key>CFBundleVersion</key><string>__VERSION__</string>

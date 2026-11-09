@@ -18,7 +18,6 @@ version="$4"
 engine="${5:?staged browser engine}"
 numeric_version="${version%%-*}"
 here="$(cd "$(dirname "$0")" && pwd)"
-assets="$here/../../app/assets"
 python3 "$here/../../browser/engine/scripts/package.py" validate "$engine"
 
 rm -rf "$app"
@@ -33,16 +32,7 @@ sed "s/__VERSION__/$numeric_version/g" "$here/Info.plist" > "$app/Contents/Info.
 mkdir -p "$app/Contents/Library/LaunchAgents"
 install -m 644 "$here/autostart.plist" "$app/Contents/Library/LaunchAgents/com.chatwithwork.desktop.autostart.plist"
 
-iconset="$(mktemp -d)/cww-app.iconset"
-mkdir -p "$iconset"
-# iconutil reads these base sizes and their @2x versions.
-for size in 16 32 128 256 512; do
-    sips -z $size $size "$assets/icon-1024.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z $double $double "$assets/icon-1024.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$iconset" -o "$app/Contents/Resources/cww-app.icns"
-rm -rf "$(dirname "$iconset")"
+"$here/icon.sh" "$app/Contents/Resources"
 
 # Replace upstream Node's entitlements: no debugger attachment, DYLD override
 # or unsigned-library exception. V8 needs only JIT. Rehash before sealing.
