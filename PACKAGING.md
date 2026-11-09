@@ -131,7 +131,7 @@ native-packages also attaches its rendered recipes (`chatwithwork-desktop-X.Y.Z-
 | `packaging/arch/*/PKGBUILD.in`, `cww.install` | AUR recipes; `build-local.sh` builds the source recipe from the working tree. |
 | `packaging/homebrew/cww.rb.in` | The formula, with a `brew services` definition. |
 | `packaging/homebrew/chat-with-work.rb.in` | The desktop app's cask, from the notarized `.dmg`. |
-| `packaging/macos/` | `bundle.sh` (the desktop app's bundle), `pkg.sh` (the installer package), its `postinstall`, `distribution.xml` and pages, and `import-installer-identity.sh` for CI. |
+| `packaging/macos/` | `bundle.sh` (the desktop app's bundle), `icon.sh` (its icon: `app/assets/macos/AppIcon.icon` compiled by actool into `Assets.car` for macOS 26 and later, which draw it as a tile of their own, and the committed `AppIcon.icns` for older macOS; both written by `app/assets/macos/icon.py`), `pkg.sh` (the installer package), its `postinstall`, `distribution.xml` and pages, and `import-installer-identity.sh` for CI. |
 | `packaging/linux/cww-app.desktop` | Applications-menu entry and the `chatwithwork://` link handler (`Exec=cww-app %u`), installed with the `cww-app.svg` icon by every Linux package. |
 | `packaging/linux/archive.sh` | Assembles the complete Linux package payload, shared by release and packaging-test builds. |
 | `packaging/test-packaging.py` | Installer, archive and AUR package-layout regression tests, isolated from the user's account. |

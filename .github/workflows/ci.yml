@@ -75,6 +75,11 @@ jobs:
           echo test > "$RUNNER_TEMP/sane.d/dll.conf"
           echo "SANE_CONFIG_DIR=$RUNNER_TEMP/sane.d" >> "$GITHUB_ENV"
           echo "CWW_SCAN_REQUIRE_SANE=1" >> "$GITHUB_ENV"
+      # The app icon needs actool from Xcode 26 or later (Icon Composer
+      # documents); check it on pull requests too, before the slow steps.
+      - name: Compile the macOS app icon
+        if: runner.os == 'macOS'
+        run: packaging/macos/icon.sh "$RUNNER_TEMP/icon/Resources"
       - run: cargo fmt --check
       - run: mbx clippy --all-targets --locked -- -D warnings
       - run: cargo fmt -p cww-notification-broker --check
