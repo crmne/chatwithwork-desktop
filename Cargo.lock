@@ -1933,8 +1933,8 @@ checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
 
 [[package]]
 name = "fastframe-audio"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "cpal",
  "libc",
@@ -1945,8 +1945,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-autostart"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "fastframe-file",
  "log",
@@ -1959,8 +1959,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-desktop"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "log",
  "mac-usernotifications",
@@ -1969,16 +1969,16 @@ dependencies = [
 
 [[package]]
 name = "fastframe-dirs"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "directories",
 ]
 
 [[package]]
 name = "fastframe-file"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "log",
  "windows-sys 0.60.2",
@@ -1986,8 +1986,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-notifications"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "block2",
  "directories",
@@ -2009,8 +2009,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-update"
-version = "0.16.1"
-source = "git+https://github.com/crmne/fastframe?tag=v0.16.1#ebc7cecb7cfb229e3d6849abd17bff953506fdb8"
+version = "0.17.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
 dependencies = [
  "anyhow",
  "fastframe-dirs",
