@@ -543,6 +543,9 @@ mod tests {
     /// Turning commands on in a read-only folder: changes first, then one
     /// activation once the agent answers with them, and only one; a Run
     /// commands off sent meanwhile wins over an activation still waiting.
+    // Not on Windows, whose runners may not sandbox commands; the
+    // commands-windows job runs commands there.
+    #[cfg(not(windows))]
     #[test]
     fn commands_after_changes_are_sent_once_and_yield_to_a_later_off() {
         let tmp = tempfile::tempdir().unwrap();

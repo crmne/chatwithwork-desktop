@@ -125,7 +125,7 @@ pub(crate) fn once_changes_reached_within(
         return client.request(request);
     };
     let deadline = std::time::Instant::now() + patience;
-    let asked_at = NARROWED.load(std::sync::atomic::Ordering::SeqCst);
+    let asked_at = *NARROWED.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         client.wait_until(left, |status| {
@@ -136,12 +136,17 @@ pub(crate) fn once_changes_reached_within(
         })?;
         // Something this app narrowed meanwhile (commands or changes off, a
         // folder removed) wins: the activation it overtook is dropped.
-        if NARROWED.load(std::sync::atomic::Ordering::SeqCst) != asked_at {
+        // The check and the send hold the count, so a narrowing either came
+        // before (and drops this) or waits for this send, then follows it.
+        let narrowed = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
+        if *narrowed != asked_at {
             return Err(crate::control::ControlError::Refused(
                 "another change to this computer's folders came first".into(),
             ));
         }
-        match client.request(request) {
+        let answer = client.request(request);
+        drop(narrowed);
+        match answer {
             Err(crate::control::ControlError::NotRunning)
                 if std::time::Instant::now() < deadline =>
             {
@@ -154,10 +159,11 @@ pub(crate) fn once_changes_reached_within(
 
 /// How many narrowing changes this app has sent to the agent, so an
 /// activation still waiting for it (`once_changes_reached`) never undoes one.
-static NARROWED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static NARROWED: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 
 /// Counts `request` if it narrows what a folder allows. Call before sending
-/// any folder change.
+/// any folder change: it waits for an activation being sent, so the
+/// narrowing always reaches the agent after it.
 pub fn note_narrowing(request: &ControlRequest) {
     if matches!(
         request,
@@ -169,7 +175,7 @@ pub fn note_narrowing(request: &ControlRequest) {
             ..
         } | ControlRequest::RootsRemove { .. }
     ) {
-        NARROWED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *NARROWED.lock().unwrap_or_else(|e| e.into_inner()) += 1;
     }
 }
 
@@ -1001,6 +1007,27 @@ mod tests {
             changes_kept("Docs doesn't allow changes."),
             "Docs doesn't allow changes. Changes are now allowed in this folder. Commands may not be: check Run commands once the agent answers, and turn Allow changes off if you don't want them."
         );
+    }
+
+    #[test]
+    fn a_narrowing_waits_for_an_activation_being_sent() {
+        // An activation between its check and its send holds the count, so
+        // a narrowing (which takes it to count itself) waits for the send.
+        // Only takes the count here: bumping it would drop an activation
+        // another test is waiting on.
+        let sending = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let narrowing = std::thread::spawn(move || {
+            let _counting = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
+            tx.send(()).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err()
+        );
+        drop(sending);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        narrowing.join().unwrap();
     }
 
     #[test]
