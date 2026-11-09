@@ -136,17 +136,49 @@ fn seen(config: &Config) {
     LAST_SEEN.with(|last| *last.borrow_mut() = Some(config.clone()));
 }
 
+/// The settings without whether Desktop made each checkout: a run setup
+/// starts records that by itself (`trust::settle`), which isn't a change
+/// made while setup ran.
+fn unsettled(config: &Config) -> Config {
+    let mut config = config.clone();
+    for repo in &mut config.coding.repositories {
+        repo.cloned = None;
+    }
+    config
+}
+
+/// `config`, with what `stored` has settled for checkouts it says nothing
+/// about.
+fn with_settled(config: &Config, stored: &Config) -> Config {
+    let mut config = config.clone();
+    for repo in config
+        .coding
+        .repositories
+        .iter_mut()
+        .filter(|r| r.cloned.is_none())
+    {
+        repo.cloned = stored
+            .coding
+            .repositories
+            .iter()
+            .find(|s| s.root == repo.root && s.name == repo.name)
+            .and_then(|s| s.cloned);
+    }
+    config
+}
+
 fn save(config: &Config, paths: &Paths) -> Result<()> {
     let last = LAST_SEEN.with(|last| last.borrow().clone());
+    let stored = Config::load(paths)?;
     if let Some(last) = last
-        && Config::load(paths)? != last
+        && unsettled(&stored) != unsettled(&last)
     {
         bail!(
             "this computer's settings changed while setup ran (in the app, or with `cww \
              roots`); nothing was saved over them. Run `cww coding setup` again"
         );
     }
-    config.save(paths)?;
+    with_settled(config, &stored).save(paths)?;
     // As it reads back, which is what the next save compares.
     seen(&Config::load(paths)?);
     let socket = paths.socket_path();
@@ -1568,4 +1600,44 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
         "loans": loans,
         "repositories": repos,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Repository;
+
+    fn with_repository(cloned: Option<bool>) -> Config {
+        let mut config = Config::default();
+        config.coding.repositories.push(Repository {
+            root: "bots".into(),
+            name: "app".into(),
+            url: "git@github.com:acme/app.git".into(),
+            ssh_key: None,
+            github: None,
+            cloned,
+        });
+        config
+    }
+
+    #[test]
+    fn a_checkout_settled_by_a_run_setup_started_is_no_change_to_refuse() {
+        let seen = with_repository(None);
+        let settled = with_repository(Some(false));
+        assert_eq!(unsettled(&seen), unsettled(&settled));
+
+        // Anything else someone changed meanwhile still counts.
+        let mut other = settled.clone();
+        other.coding.repositories[0].url = "git@github.com:acme/other.git".into();
+        assert_ne!(unsettled(&seen), unsettled(&other));
+    }
+
+    #[test]
+    fn setup_keeps_what_a_run_settled_and_its_own_answer_wins() {
+        let stored = with_repository(Some(false));
+        let merged = with_settled(&with_repository(None), &stored);
+        assert_eq!(merged.coding.repositories[0].cloned, Some(false));
+        let cloned = with_settled(&with_repository(Some(true)), &stored);
+        assert_eq!(cloned.coding.repositories[0].cloned, Some(true));
+    }
 }

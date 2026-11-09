@@ -143,9 +143,10 @@ pub fn note_checkout(
         return Ok(());
     };
     let made = !existed
-        || repo
-            .cloned
-            .unwrap_or_else(|| settled_once(checkout, mirror, roots).unwrap_or(false));
+        || match repo.cloned {
+            Some(made) => made,
+            None => settled_once(checkout, mirror, roots)?,
+        };
     // Kept first: an answer that can't be kept stops the setup.
     if !super::repositories::writable_by_commands(mirror, roots) {
         remember(checkout, mirror, made)?;
