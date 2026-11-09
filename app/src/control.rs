@@ -93,11 +93,26 @@ impl Client {
     pub fn request_once_back(&self, request: &ControlRequest, patience: Duration) -> Result<Value> {
         let deadline = std::time::Instant::now() + patience;
         loop {
-            let answer = connect(&self.socket).and_then(|mut client| {
-                client
-                    .call_raw(request)
-                    .map_err(|e| ControlError::Refused(format!("{e:#}")))
+            // Each attempt within what's left of the patience: one the agent
+            // accepts and never answers is given up on (its thread ends with
+            // the connection's own timeout, or the agent).
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let (socket, asked) = (self.socket.clone(), request.clone());
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(connect(&socket).and_then(|mut client| {
+                    client
+                        .call_raw(&asked)
+                        .map_err(|e| ControlError::Refused(format!("{e:#}")))
+                }));
             });
+            let answer = rx
+                .recv_timeout(left.max(Duration::from_millis(250)))
+                .unwrap_or_else(|_| {
+                    Err(ControlError::Refused(
+                        "the background agent didn't answer in time".into(),
+                    ))
+                });
             match answer {
                 Ok(value) if value["ok"] == serde_json::json!(true) => return Ok(value),
                 Ok(value) => {
