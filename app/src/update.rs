@@ -995,6 +995,7 @@ mod tests {
                 url: format!(
                     "https://github.com/crmne/chatwithwork-desktop/releases/tag/v{version}"
                 ),
+                published_at: None,
             },
             notice: Notice {
                 how: "Installed from the AUR. Update it with your AUR helper.".into(),
@@ -1056,6 +1057,7 @@ mod tests {
             release: Release {
                 version: version.into(),
                 url: String::new(),
+                published_at: None,
             },
             prepared: Box::new(Prepared::sample(
                 fastframe_update::Installation {
@@ -1121,6 +1123,7 @@ mod tests {
             release: Release {
                 version: "0.12.0".into(),
                 url: String::new(),
+                published_at: None,
             },
         };
         assert_eq!(updates.available(), None);
