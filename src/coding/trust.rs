@@ -49,22 +49,25 @@ pub fn made_by_desktop(repo: &Repository, checkout: &Path, mirror: &Path) -> boo
 /// The settings for a run in the folder `root`, with whether Desktop made
 /// each of its checkouts recorded for those set up before 0.16.1: decided
 /// once, from what the folder held before any command since this version
-/// ran there. Where that can't be recorded, none of them is trusted.
-pub fn settle(config: &Config, paths: &Paths, root: &str) -> Config {
+/// ran there. Where that can't be recorded the run doesn't start, so a
+/// command can't change what a later run would read.
+pub fn settle(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Config> {
     let unsettled = |r: &Repository| r.root == root && r.cloned.is_none();
     let mut config = config.clone();
     if !config.coding.repositories.iter().any(unsettled) {
-        return config;
+        return Ok(config);
     }
-    let Some(folder) = config
-        .roots
-        .iter()
-        .find(|r| r.id == root)
-        .map(|r| r.path.clone())
-    else {
-        return config;
-    };
-    let settled = Config::edit(paths, |stored| {
+    let repositories = Config::edit(paths, |stored| {
+        // The folder as the settings say now, never as the run first read
+        // them.
+        let Some(folder) = stored
+            .roots
+            .iter()
+            .find(|r| r.id == root)
+            .map(|r| r.path.clone())
+        else {
+            return Ok(stored.coding.repositories.clone());
+        };
         for repo in stored
             .coding
             .repositories
@@ -75,22 +78,9 @@ pub fn settle(config: &Config, paths: &Paths, root: &str) -> Config {
             repo.cloned = Some(cloned_from(&folder.join(&repo.name), &mirror));
         }
         Ok(stored.coding.repositories.clone())
-    });
-    match settled {
-        Ok(repositories) => config.coding.repositories = repositories,
-        Err(_) => {
-            tracing::warn!("couldn't record whether Desktop made a folder's checkouts");
-            for repo in config
-                .coding
-                .repositories
-                .iter_mut()
-                .filter(|r| r.root == root)
-            {
-                repo.cloned.get_or_insert(false);
-            }
-        }
-    }
-    config
+    })?;
+    config.coding.repositories = repositories;
+    Ok(config)
 }
 
 /// Records whether Desktop made the checkout of `root`'s `name`, once the
@@ -202,7 +192,7 @@ fn claude_file(run: &AgentRun) -> Option<PathBuf> {
         let file = run.login.dir.as_ref()?.join(CONFIG_FILE);
         // Claude Code makes it on its first run there; made now, that run
         // reads the trust too.
-        if std::fs::symlink_metadata(&file).is_err() {
+        if absent(&file).ok()? {
             crate::paths::write_private_file(&file, b"{}\n").ok()?;
         }
         Some(file)
@@ -264,7 +254,7 @@ pub fn trust_in_claude(file: &Path, checkouts: &[PathBuf]) -> anyhow::Result<usi
 /// the file already has without a level is left alone, since a second table
 /// of that name isn't TOML. How many it marked.
 pub fn trust_in_codex(file: &Path, checkouts: &[PathBuf]) -> anyhow::Result<usize> {
-    let mut text = if std::fs::symlink_metadata(file).is_ok() {
+    let mut text = if !absent(file)? {
         String::from_utf8(read(file)?)?
     } else {
         String::new()
@@ -330,6 +320,16 @@ fn open_regular(file: &Path) -> anyhow::Result<std::fs::File> {
     let opened = options.open(file)?;
     anyhow::ensure!(opened.metadata()?.is_file(), "not a regular file");
     Ok(opened)
+}
+
+/// Whether `file` isn't there: any other error is one, never "absent", so a
+/// passing one can't replace the person's settings with only ours.
+fn absent(file: &Path) -> anyhow::Result<bool> {
+    match std::fs::symlink_metadata(file) {
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn read(file: &Path) -> anyhow::Result<Vec<u8>> {
@@ -475,7 +475,7 @@ mod tests {
         );
         config.save(&paths).unwrap();
 
-        let settled = settle(&config, &paths, "bots");
+        let settled = settle(&config, &paths, "bots").unwrap();
         let cloned: Vec<_> = settled
             .coding
             .repositories
@@ -494,7 +494,7 @@ mod tests {
             &folder.join("theirs"),
             &format!("clone: from {}", mirror.display()),
         );
-        let again = settle(&stored, &paths, "bots");
+        let again = settle(&stored, &paths, "bots").unwrap();
         assert_eq!(again.coding.repositories[1].cloned, Some(false));
     }
 

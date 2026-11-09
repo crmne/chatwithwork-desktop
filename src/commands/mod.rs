@@ -650,7 +650,14 @@ impl Runs {
         // asked for it.
         // Whether Desktop made the folder's checkouts, settled once for
         // those set up before 0.16.1.
-        let settled = crate::coding::trust::settle(config, &self.paths, &request.root);
+        let settled =
+            crate::coding::trust::settle(config, &self.paths, &request.root).map_err(|_| {
+                RunError::new(
+                    "unavailable",
+                    "this computer couldn't record its settings for the folder's repositories; \
+                     run this again",
+                )
+            })?;
         plan.coding = crate::coding::for_run(
             &settled,
             &self.paths,
