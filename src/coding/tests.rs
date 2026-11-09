@@ -1235,7 +1235,7 @@ fn a_bots_run_trusts_only_the_checkouts_desktop_made_in_its_folder() {
     let run = for_run(&config, &paths, "bots", Some("42"), |agent| {
         Login::find_for(agent, &home)
     });
-    trust::seed(&run.agents, &run.checkouts);
+    trust::seed(&run.agents, &run.checkouts, &config.roots);
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
     let projects = settings["projects"].as_object().unwrap();

@@ -673,7 +673,7 @@ impl Runs {
         );
         // The agents trust the checkouts Desktop made there, as the person,
         // before the run reads its settings.
-        crate::coding::trust::seed(&plan.coding.agents, &plan.coding.checkouts);
+        crate::coding::trust::seed(&plan.coding.agents, &plan.coding.checkouts, &config.roots);
         // The folder's environment, read here too; its `$( )` run in the
         // run's own sandbox, by its thread.
         plan.env.variables = env::for_run(config, &self.paths, &request.root)

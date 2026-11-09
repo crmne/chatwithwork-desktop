@@ -28,6 +28,9 @@ use super::{Agent, AgentRun, CONFIG_FILE};
 use crate::config::{Config, Repository};
 use crate::paths::Paths;
 
+/// In a mirror: whether its checkout from before 0.16.1 was Desktop's
+/// (`made` or `kept`), decided once ([`settle`]).
+const SETTLED: &str = "cww-checkout-settled";
 /// Codex's settings, in its folder.
 pub const CODEX_CONFIG_FILE: &str = "config.toml";
 /// Larger settings than this are left alone.
@@ -57,17 +60,23 @@ pub fn settle(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Conf
     if !config.coding.repositories.iter().any(unsettled) {
         return Ok(config);
     }
+    let snapshot = config
+        .roots
+        .iter()
+        .find(|r| r.id == root)
+        .map(|r| r.path.clone());
     let repositories = Config::edit(paths, |stored| {
-        // The folder as the settings say now, never as the run first read
-        // them.
-        let Some(folder) = stored
+        // The folder the run was given, still the one the settings name.
+        let folder = stored
             .roots
             .iter()
             .find(|r| r.id == root)
-            .map(|r| r.path.clone())
-        else {
-            return Ok(stored.coding.repositories.clone());
-        };
+            .map(|r| r.path.clone());
+        anyhow::ensure!(
+            folder.is_some() && folder == snapshot,
+            "the folder changed since the run read its settings"
+        );
+        let folder = folder.unwrap_or_default();
         for repo in stored
             .coding
             .repositories
@@ -75,12 +84,26 @@ pub fn settle(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Conf
             .filter(|r| unsettled(r))
         {
             let mirror = super::repositories::mirror_dir(paths, repo);
-            repo.cloned = Some(cloned_from(&folder.join(&repo.name), &mirror));
+            repo.cloned = Some(settled_once(&folder.join(&repo.name), &mirror)?);
         }
         Ok(stored.coding.repositories.clone())
     })?;
     config.coding.repositories = repositories;
     Ok(config)
+}
+
+/// What the mirror says it decided for its checkout from before 0.16.1, or,
+/// the first time, what the checkout's reflog says, kept in the mirror: in
+/// Desktop's data folder, where no command writes, so a settings file saved
+/// from an older copy, which loses `cloned`, can't open the question again.
+fn settled_once(checkout: &Path, mirror: &Path) -> anyhow::Result<bool> {
+    let marker = mirror.join(SETTLED);
+    if !absent(&marker)? {
+        return Ok(read(&marker)? == b"made");
+    }
+    let made = cloned_from(checkout, mirror);
+    crate::paths::write_private_file(&marker, if made { b"made" } else { b"kept" })?;
+    Ok(made)
 }
 
 /// Records whether Desktop made the checkout of `root`'s `name`, once the
@@ -153,16 +176,33 @@ pub fn checkouts(root: &Path, repos: &[(PathBuf, Repository)]) -> Vec<PathBuf> {
 /// Before a run: the agents it gets trust the checkouts it may work in.
 /// Each settings file is written only when something is missing, and a
 /// failure leaves the run as it would have been, untrusted.
-pub fn seed(agents: &[AgentRun], checkouts: &[PathBuf]) {
+pub fn seed(agents: &[AgentRun], checkouts: &[PathBuf], roots: &[crate::config::Root]) {
     if checkouts.is_empty() {
         return;
     }
+    // Never an agent's settings in a shared folder, where a command could
+    // swap a folder above them for a link while Desktop writes.
+    let shared = |file: &Path| {
+        roots.iter().any(|root| {
+            let root = crate::roots::canonical(&root.path).unwrap_or_else(|_| root.path.clone());
+            file.starts_with(&root)
+                || file
+                    .parent()
+                    .and_then(|p| crate::roots::canonical(p).ok())
+                    .is_some_and(|p| p.starts_with(&root))
+        })
+    };
     // One at a time: two runs starting together would each write what they
     // read, and the later would drop the other's entry.
     static SEEDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = SEEDING.lock().unwrap_or_else(|e| e.into_inner());
     for run in agents {
         let written = match run.agent {
+            _ if run.login.dir.as_deref().is_some_and(shared)
+                || run.login.file.as_deref().is_some_and(shared) =>
+            {
+                None
+            }
             Agent::ClaudeCode => claude_file(run).map(|file| trust_in_claude(&file, checkouts)),
             Agent::Codex => run
                 .login
@@ -489,13 +529,31 @@ mod tests {
             "recorded"
         );
 
-        // A command that writes the reflog afterwards changes nothing.
+        assert_eq!(
+            std::fs::read(mirror.join(SETTLED)).unwrap(),
+            b"made",
+            "kept where no command writes"
+        );
+
+        // A command that writes the reflog afterwards changes nothing, even
+        // after a settings file saved from an older copy lost the record.
         reflog(
             &folder.join("theirs"),
             &format!("clone: from {}", mirror.display()),
         );
         let again = settle(&stored, &paths, "bots").unwrap();
         assert_eq!(again.coding.repositories[1].cloned, Some(false));
+        config.save(&paths).unwrap();
+        let lost = settle(&config, &paths, "bots").unwrap();
+        assert_eq!(lost.coding.repositories[1].cloned, Some(false));
+
+        // A folder moved since the run read the settings: nothing is decided.
+        let mut moved = Config::load(&paths).unwrap();
+        moved.coding.repositories[0].cloned = None;
+        moved.save(&paths).unwrap();
+        let mut snapshot = moved.clone();
+        snapshot.roots[0].path = dir.path().join("elsewhere");
+        assert!(settle(&snapshot, &paths, "bots").is_err());
     }
 
     #[cfg(unix)]
