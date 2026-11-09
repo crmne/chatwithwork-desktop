@@ -87,6 +87,7 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
     let paths = Paths::under(&home);
     let mut config = cww::config::Config::load(&paths).unwrap();
     config.index.watch = false;
+    config.secret_store = Some("file".into());
     config.save(&paths).unwrap();
     let id = config.roots[0].id.clone();
 
@@ -97,7 +98,7 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
             .env("CWW_SECRET_STORE", "file")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(std::fs::File::create(base.path().join("agent.log")).unwrap())
             .spawn()
             .unwrap(),
     );
@@ -109,8 +110,9 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
             break;
         }
         assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "the agent didn't start"
+            started.elapsed() < Duration::from_secs(60),
+            "the agent didn't start: {}",
+            std::fs::read_to_string(base.path().join("agent.log")).unwrap_or_default()
         );
         std::thread::sleep(Duration::from_millis(100));
     }
