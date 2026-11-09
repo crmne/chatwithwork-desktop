@@ -58,8 +58,8 @@ try {
 
   # "yes" when the agent answers `status` with its process, "no" when
   # `cww status` says none is running, and "unknown" otherwise: it didn't
-  # answer within 10 seconds, failed, or couldn't be started.
-  function Get-AgentState {
+  # answer within $waitMs, failed, or couldn't be started.
+  function Get-AgentState([int]$waitMs = 10000) {
     $out = Join-Path $tmp "status.json"
     try {
       $probe = Start-Process -FilePath $cww -ArgumentList "status", "--json" -NoNewWindow -PassThru `
@@ -69,7 +69,7 @@ try {
     } catch {
       return "unknown"
     }
-    if (-not $probe.WaitForExit(10000)) {
+    if (-not $probe.WaitForExit($waitMs)) {
       Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
       return "unknown"
     }
@@ -79,9 +79,11 @@ try {
     if ($status.running -eq $false) { return "no" }
     return "unknown"
   }
+  # About 20 seconds in all, however long each try takes.
   $agent = "unknown"
-  for ($i = 0; $i -lt 15; $i++) {
-    $agent = Get-AgentState
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  while ($clock.ElapsedMilliseconds -lt 20000) {
+    $agent = Get-AgentState ([Math]::Min(10000, [Math]::Max(1000, 20000 - $clock.ElapsedMilliseconds)))
     if ($agent -eq "yes") { break }
     Start-Sleep -Seconds 1
   }
