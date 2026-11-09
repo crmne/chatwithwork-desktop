@@ -124,6 +124,13 @@ pub struct Repository {
     /// `url` is what this computer's Git login reached, never the server's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<String>,
+    /// Whether Desktop made this checkout, cloning it from the mirror in the
+    /// sandbox, rather than keeping one that was there already. Only one it
+    /// made is trusted for Claude Code and Codex (`crate::coding::trust`).
+    /// Not recorded before 0.16.1: then the checkout's first reflog entry
+    /// says whether it was cloned from the mirror.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloned: Option<bool>,
 }
 
 /// The browser: whether Chat with Work may use it, on which sites, and for

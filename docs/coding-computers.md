@@ -179,16 +179,27 @@ The mirror and its fetching stay out of the sandbox's reach; the checkout the bo
 
 - **The mirror** is a bare clone in Desktop's data folder (`<data>/repositories/<root>/<name>.git`), which no command can write (setup refuses, and Desktop never fetches a mirror, where a shared folder that allows changes holds the data folder): the sandbox reads it, for runs in that folder only. Its config is Desktop's alone, so fetching it runs nothing a bot wrote. It fetches branches and tags (`+refs/heads/*:refs/heads/*`), not pull requests' refs.
 - **Fetching** is Desktop's: `git fetch --prune` on the mirror, with your own Git credentials (your SSH keys and `~/.ssh/config`, never the system's `/etc/ssh` config, which ssh refuses inside the background service's user namespace; your credential helper), hooks off, run by whoever starts commands (the supervisor, or the daemon on Windows) before a command starts in that folder if the last fetch is over a minute old, with a 60-second limit, and by `cww coding fetch`. A fetch that fails doesn't stop the command; `cww coding status` shows the last failure. Nothing else runs `git` outside the sandbox, and never in a shared folder.
-- **The checkout** is `git clone <mirror> <name>`, run in the sandbox in the folder: its `origin` is the mirror's path, so `git fetch origin` in a command works without a network, keys or tokens, and a push fails. `config.toml` records the repository's address, its checkout and its folder:
+- **The checkout** is `git clone <mirror> <name>`, run in the sandbox in the folder: its `origin` is the mirror's path, so `git fetch origin` in a command works without a network, keys or tokens, and a push fails. `config.toml` records the repository's address, its checkout, its folder, and whether Desktop made the checkout ([Trusting its checkouts](#trusting-its-checkouts)):
 
 ```toml
 [[coding.repositories]]
 root = "bots"
 name = "app"
 url = "git@github.com:acme/app.git"
+cloned = true
 ```
 
 An address with a password or token in it (`https://user:token@...`) is refused: use an SSH key or a credential helper. For a deploy key (read-only, for this one repository), `--ssh-key ~/.ssh/deploy-key` fetches with only that key, never the SSH agent's or one your SSH config names (that config isn't read then); it must be outside every shared folder, and `config.toml` records only its path (`ssh_key`). Desktop writes nothing in the shared folder itself: the checkout is made by a command in the sandbox, as the bot (`git clone` from the mirror), which can change only that folder, so a link a command left there can't redirect it. A checkout already there is kept, and the same kind of command points its `origin` at the mirror and drops any push address. Changes reach GitHub only through Chat with Work's GitHub App, which commits the files the bot names from the computer and opens the pull request, each approved as the bot's policy says.
+
+### Trusting its checkouts
+
+Claude Code and Codex each keep whether a folder is trusted, and in one that isn't they still run (`claude -p`, `codex exec`) but leave out the repository's own settings: Claude Code its `.claude/settings.json` and `.claude/settings.local.json` permissions, Codex its `.codex/config.toml`. Claude Code also says so on every run ("Ignoring 19 permissions.allow entries from .claude/settings.local.json: this workspace has not been trusted"), and on 2026-11-09 an issue fixer read that as something to ask its team about. A git worktree counts as the checkout it was made from: Claude Code reads only the checkout's entry.
+
+So before a bot's run that gets Claude Code or Codex, Desktop, as you, marks as trusted each checkout in that folder that it made itself: Claude Code's `projects["<checkout>"].hasTrustDialogAccepted` in `~/.claude.json` (on Windows the `.claude.json` in `~/.claude`, which `CLAUDE_CONFIG_DIR` names for a run), and Codex's `[projects."<checkout>"] trust_level = "trusted"`, added at the end of `~/.codex/config.toml`, which keeps your comments and layout. That covers every worktree the bot makes from it for an issue. It writes only what's missing, one run at a time, never an agent's settings that are inside a shared folder, and nothing else in either file changes. On Windows it makes that `.claude.json` when Claude Code hasn't yet. A level you set yourself (`trust_level = "untrusted"`) stays.
+
+- **Made by Desktop** means cloned from the mirror, in the sandbox, as the bot, when nothing of that name was there: `config.toml` records it with the repository (`cloned = true`). For a repository set up before 0.16.1, which has no record, the checkout's first reflog entry says whether it was cloned from this mirror, read once, before the first run in that folder after the update, and recorded then, in `config.toml` and, for that checkout's path, in the mirror (`cww-checkout-settled`, where no command writes), so nothing a command writes there later changes it. A run whose folder changed meanwhile, or whose answer can't be recorded, doesn't start. Desktop reads it through no link inside the checkout, and an agent's settings only as a regular file that isn't a link.
+- **A checkout that was already there**, which Desktop only pointed at its mirror (`cloned = false`), is yours: it keeps asking as before, and trusting it stays yours (run Claude Code there once and accept its dialog).
+- **Trust doesn't widen the sandbox.** It decides which of the repository's own settings the agent reads; what a run may read, write and reach stays what the folder allows. It's in your own settings, though, so your own Claude Code or Codex in that checkout doesn't ask either.
 
 ## Letting a bot's commands run unattended from its card
 

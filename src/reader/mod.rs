@@ -262,7 +262,9 @@ impl Reader {
     /// the next reload reads the same from the config.
     pub fn note_repository(&self, repository: crate::config::Repository) {
         let mut state = self.state.write().expect("reader state");
-        if !state.coding.repositories.contains(&repository) {
+        let same =
+            |r: &crate::config::Repository| r.root == repository.root && r.name == repository.name;
+        if !state.coding.repositories.iter().any(same) {
             state.coding.repositories.push(repository);
         }
     }

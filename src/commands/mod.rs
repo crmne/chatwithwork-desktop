@@ -648,8 +648,18 @@ impl Runs {
         let mut plan = plan(config, &self.paths, request, &id)?;
         // Read here, by whoever starts the run, never by the worker that
         // asked for it.
+        // Whether Desktop made the folder's checkouts, settled once for
+        // those set up before 0.16.1.
+        let settled =
+            crate::coding::trust::settle(config, &self.paths, &request.root).map_err(|_| {
+                RunError::new(
+                    "unavailable",
+                    "this computer couldn't record its settings for the folder's repositories; \
+                     run this again",
+                )
+            })?;
         plan.coding = crate::coding::for_run(
-            config,
+            &settled,
             &self.paths,
             &request.root,
             request.bot.as_deref(),
@@ -661,6 +671,9 @@ impl Runs {
                     .unwrap_or_default()
             },
         );
+        // The agents trust the checkouts Desktop made there, as the person,
+        // before the run reads its settings.
+        crate::coding::trust::seed(&plan.coding.agents, &plan.coding.checkouts, &config.roots);
         // The folder's environment, read here too; its `$( )` run in the
         // run's own sandbox, by its thread.
         plan.env.variables = env::for_run(config, &self.paths, &request.root)
