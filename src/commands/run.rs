@@ -98,6 +98,7 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
         if cgroup.as_ref().is_some_and(|c| c.ran_out_of_memory()) {
             lock(cell).limit = Some("memory");
         }
+        say_process_limit(cell, plan.limits.processes);
         return state;
     }
     // The `$( )`s took time: a stop or the clock may have come meanwhile.
@@ -208,7 +209,23 @@ fn run(plan: &mut Plan, cell: &Arc<Mutex<Cell>>) -> State {
             lock(cell).limit = Some("memory");
         }
     }
+    say_process_limit(cell, plan.limits.processes);
     state
+}
+
+/// End the output of a run its process limit stopped with what stopped it,
+/// after what the run printed itself, so whoever reads it (a coding agent
+/// included) needn't guess at a run that just stopped.
+fn say_process_limit(cell: &Arc<Mutex<Cell>>, limit: u32) {
+    let mut cell = lock(cell);
+    if cell.limit == Some("processes") {
+        let note = format!(
+            "\nChat with Work Desktop stopped this command: it reached its limit of {limit} \
+             processes running at once. This computer's owner can change the limit \
+             (command_processes under [limits] in config.toml; 0 turns it off).\n"
+        );
+        cell.append(Stream::Err, note.as_bytes());
+    }
 }
 
 /// Work out the folder's values in order, before the command starts: text
