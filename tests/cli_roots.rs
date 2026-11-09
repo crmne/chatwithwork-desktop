@@ -70,9 +70,11 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
         }
     }
 
-    let base = tempfile::tempdir().unwrap();
-    let home = base.path().join("cww");
-    let folder = base.path().join("Projects");
+    let tmp = tempfile::tempdir().unwrap();
+    // The agent's macOS sandbox names real paths: /private/var, not /var.
+    let base = tmp.path().canonicalize().unwrap();
+    let home = base.join("cww");
+    let folder = base.join("Projects");
     std::fs::create_dir_all(&folder).unwrap();
     cww(
         &home,
@@ -98,7 +100,7 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
             .env("CWW_SECRET_STORE", "file")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(std::fs::File::create(base.path().join("agent.log")).unwrap())
+            .stderr(std::fs::File::create(base.join("agent.log")).unwrap())
             .spawn()
             .unwrap(),
     );
@@ -112,7 +114,7 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
         assert!(
             started.elapsed() < Duration::from_secs(60),
             "the agent didn't start: {}",
-            std::fs::read_to_string(base.path().join("agent.log")).unwrap_or_default()
+            std::fs::read_to_string(base.join("agent.log")).unwrap_or_default()
         );
         std::thread::sleep(Duration::from_millis(100));
     }
