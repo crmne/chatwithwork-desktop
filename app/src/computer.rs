@@ -882,6 +882,12 @@ mod tests {
     fn commands_in_a_read_only_folder_allow_changes_first_with_one_question() {
         let mut status = status();
         status.roots[0].index = "indexing".into();
+        // A Windows that sandboxes commands, as macOS and Linux always do.
+        status.commands = Some(crate::model::CommandsHost {
+            available: true,
+            detail: None,
+            drives: Vec::new(),
+        });
         let (request, question) =
             change(json!({ "action": "commands", "folder": "docs", "on": true }))
                 .plan(&status)
