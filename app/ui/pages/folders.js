@@ -174,6 +174,8 @@ function folderRow(app, root) {
   const commanding = view.commanding === root.id;
   const [indexLabel, tone] = indexState(root);
   const runsCommands = commandsHere(app);
+  // An agent before 0.16.1 refuses commands in a read-only folder.
+  const withChanges = !!app.status?.commands_with_changes;
 
   const setting = (titleText, text, control, stack = false) =>
     h("div", { class: stack ? "row row--stack" : "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
@@ -256,6 +258,7 @@ function folderRow(app, root) {
       // turning this on there allows changes too, in the same question.
       setting("Run commands", !runsCommands && !root.allows_commands ? commandsUnavailable(app)
         : root.allows_commands ? "Runs approved commands in this folder’s sandbox."
+        : !root.writable && !withChanges ? "Allow changes first. This computer’s background agent needs 0.16.1 to allow both at once."
         : !root.writable ? "Run code, tests or builds in this folder’s sandbox. Turning this on allows changes too."
         : "Run code, tests or builds in this folder’s sandbox.",
       switchInput(root.allows_commands || commanding, (on) => {
@@ -264,7 +267,7 @@ function folderRow(app, root) {
         } else {
           return change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
         }
-      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && !runsCommands) })),
+      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!runsCommands || (!root.writable && !withChanges))) })),
       commanding ? h("div", { class: "confirm" },
         h("p", {}, view.confirmation?.message || "Checking this folder’s permissions…"),
         h("div", { class: "inline" },

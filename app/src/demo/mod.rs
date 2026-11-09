@@ -295,6 +295,7 @@ fn fresh() -> State {
     let status = json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
+        "commands_with_changes": true,
         "pid": 4242,
         "connection": { "connection": "not_paired", "since": ago(5) },
         "server": null,
@@ -419,6 +420,7 @@ fn sample() -> State {
     let status = json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
+        "commands_with_changes": true,
         "pid": 4242,
         "connection": { "connection": "connected", "since": ago(26 * 3600 - 2) },
         "server": "https://chatwithwork.com",
@@ -734,9 +736,13 @@ impl Demo {
                 let which = request["root"].as_str().unwrap_or_default().to_string();
                 let commands = request["commands"].as_bool().unwrap_or(false);
                 let network = commands && request["network"].as_bool().unwrap_or(false);
+                let with_changes = commands && request["with_changes"].as_bool().unwrap_or(false);
                 self.change(|s| {
                     for r in s.status["roots"].as_array_mut().expect("roots") {
                         if r["id"] == json!(which) {
+                            if with_changes {
+                                r["writable"] = json!(true);
+                            }
                             r["allows_commands"] = json!(commands);
                             r["network"] = json!(network);
                         }

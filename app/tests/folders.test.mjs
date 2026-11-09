@@ -14,7 +14,7 @@ const root = { id: "work", label: "work", local_path: "C:\\Users\\a\\work", writ
 
 function page(platform, commands, roots = [root], context = {}) {
   const views = {};
-  const app = { context, info: { platform, home: "C:\\Users\\a" }, status: { roots, commands }, view: (n) => (views[n] ||= {}), render() {} };
+  const app = { context, info: { platform, home: "C:\\Users\\a" }, status: { roots, commands, commands_with_changes: true }, view: (n) => (views[n] ||= {}), render() {} };
   return render(app);
 }
 
@@ -125,7 +125,7 @@ test("Run commands in a read-only folder asks once, then allows changes and comm
     calls.push({command,args});
     return command==="prepare_control"?{confirmation:"one-use",message:"Let Chat with Work change files and run commands in “work”?"}:{};
   };
-  const views={};const app={page:"folders",context:{},info:{platform:"linux"},status:{roots:[{...root,writable:false,index:"indexing"}]},view:n=>views[n]||=({}),render(){}};
+  const views={};const app={page:"folders",context:{},info:{platform:"linux"},status:{roots:[{...root,writable:false,index:"indexing"}],commands_with_changes:true},view:n=>views[n]||=({}),render(){}};
   try {
     const control=[...walk(render(app))].find(e=>e.attributes?.["aria-label"]==="Run commands in work");
     const before=calls.length;control.checked=true;control.fire("change");
@@ -158,4 +158,13 @@ test("index progress updates the folder's label in place instead of drawing the 
     assert.equal(indexChanged({ page: "folders", status: { roots: [{ ...root, id: "new" }] } }), false);
     assert.equal(indexChanged({ ...app, page: "general" }), false);
   } finally { globalThis.document.querySelector = query; }
+});
+
+test("an agent before 0.16.1 keeps a read-only folder's Run commands behind Allow changes, and says why", () => {
+  const views = {};
+  const app = { context: {}, info: { platform: "linux" }, status: { roots: [{ ...root, writable: false }] }, view: (n) => (views[n] ||= {}), render() {} };
+  const tree = render(app);
+  const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
+  assert.equal(command.disabled, true);
+  assert.ok(byText(tree, "p", "needs 0.16.1"));
 });

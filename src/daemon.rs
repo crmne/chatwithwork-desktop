@@ -2092,6 +2092,8 @@ impl Daemon {
             "browser": crate::browsing::settings::status(&config.browser, self.browser.extension()),
             "commands": commands_host(&config),
             "unattended_asks": self.asks_json().await,
+            // `roots_commands` takes `with_changes` (CONTROL.md).
+            "commands_with_changes": true,
         })
     }
 

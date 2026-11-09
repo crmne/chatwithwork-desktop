@@ -113,10 +113,11 @@ pub fn with_changes(request: ControlRequest, status: &Status) -> ControlRequest 
             local_services,
             ..
         } => {
-            let read_only = status
-                .roots
-                .iter()
-                .any(|folder| folder.id == root && !folder.writable);
+            let read_only = status.takes_commands_with_changes()
+                && status
+                    .roots
+                    .iter()
+                    .any(|folder| folder.id == root && !folder.writable);
             ControlRequest::RootsCommands {
                 root,
                 commands: true,
@@ -236,6 +237,9 @@ impl Change {
                 // A read-only folder gets changes too, in the same question:
                 // commands change files (`with_changes`).
                 let changes_too = *on && !root.writable;
+                if changes_too && !status.takes_commands_with_changes() {
+                    return Err("Allow changes in this folder first: this computer's background agent is older than 0.16.1, which allows both at once.".into());
+                }
                 let question = if *on && !root.allows_commands {
                     ask(
                         "Allow Commands",
@@ -882,6 +886,7 @@ mod tests {
     fn commands_in_a_read_only_folder_allow_changes_too_with_one_question() {
         let mut status = status();
         status.roots[0].index = "indexing".into();
+        status.commands_with_changes = true;
         // A Windows that sandboxes commands, as macOS and Linux always do.
         status.commands = Some(crate::model::CommandsHost {
             available: true,
@@ -900,6 +905,15 @@ mod tests {
             "{}",
             question.message
         );
+        // A page's request goes to the agent as planned.
+        assert!(matches!(
+            &request,
+            ControlRequest::RootsCommands {
+                commands: true,
+                with_changes: true,
+                ..
+            }
+        ));
         assert!(matches!(
             with_changes(request, &status),
             ControlRequest::RootsCommands {
@@ -929,6 +943,33 @@ mod tests {
             }
         ));
         status.roots[0].writable = false;
+        // An agent before 0.16.1 can't allow both: changes come first, and
+        // nothing asks it for what it would ignore.
+        let mut old = status.clone();
+        old.commands_with_changes = false;
+        let refused = change(json!({ "action": "commands", "folder": "docs", "on": true }))
+            .plan(&old)
+            .unwrap_err();
+        assert!(
+            refused.starts_with("Allow changes in this folder first"),
+            "{refused}"
+        );
+        assert!(matches!(
+            with_changes(
+                ControlRequest::RootsCommands {
+                    root: "docs".into(),
+                    commands: true,
+                    network: false,
+                    local_services: None,
+                    with_changes: false,
+                },
+                &old
+            ),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
         let (off, _) = change(json!({ "action": "commands", "folder": "docs", "on": false }))
             .plan(&status)
             .unwrap();
