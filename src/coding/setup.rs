@@ -1084,6 +1084,7 @@ fn repository_step(
         exists,
         &checkout,
         &mirror,
+        &config.roots,
     );
     save(config, paths)?;
     let _ = ask;

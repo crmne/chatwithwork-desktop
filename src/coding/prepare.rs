@@ -692,6 +692,7 @@ impl Work {
                 exists,
                 &checkout,
                 &mirror,
+                &config.roots,
             );
             Ok(())
         })
