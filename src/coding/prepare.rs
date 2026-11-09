@@ -683,6 +683,19 @@ impl Work {
         let exists = std::fs::symlink_metadata(self.root.path.join(&repo.name)).is_ok();
         let line = repositories::checkout_command(&repo.name, &mirror, exists, cfg!(windows));
         self.command("", &line).map_err(|e| (copy.clone(), e))?;
+        let checkout = self.root.path.join(&repo.name);
+        Config::edit(&self.paths, |config| {
+            super::trust::note_checkout(
+                &mut config.coding.repositories,
+                &repo.root,
+                &repo.name,
+                exists,
+                &checkout,
+                &mirror,
+            );
+            Ok(())
+        })
+        .map_err(|e| (copy.clone(), format!("{e:#}")))?;
         self.set_step(&copy, "done");
 
         // What its code reaches, from the mirror's files: if the folder
@@ -805,6 +818,7 @@ impl Work {
             url,
             ssh_key: None,
             github: Some(format!("{}/{}", self.owner, self.name)),
+            cloned: None,
         })
     }
 
@@ -1154,6 +1168,7 @@ mod tests {
             url: "git@github.com:acme/app.git".into(),
             ssh_key: None,
             github: None,
+            cloned: None,
         });
         assert_eq!(checkout_name(&config, &root, "acme", "app"), None);
     }
@@ -1168,6 +1183,7 @@ mod tests {
             url: "git@github.com:acme/app.git".into(),
             ssh_key: None,
             github: None,
+            cloned: None,
         });
         assert_eq!(tools_dir(&config, "bots"), None, "the person's own setup");
         config.coding.repositories[0].github = Some("acme/app".into());

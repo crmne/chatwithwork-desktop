@@ -19,6 +19,7 @@ pub mod repositories;
 pub mod setup;
 #[cfg(test)]
 mod tests;
+pub mod trust;
 
 use std::path::{Path, PathBuf};
 
@@ -1227,6 +1228,9 @@ pub struct RunCoding {
     /// The folder's own place for toolchains and caches that outlast a run,
     /// once a run prepared a repository there ([`prepare::tools_env`]).
     pub tools: Option<PathBuf>,
+    /// The checkouts Desktop made in the folder, which the agents trust
+    /// ([`trust`]): only for a run that gets an agent.
+    pub checkouts: Vec<PathBuf>,
 }
 
 /// An agent for one run: the program setup checked, where it really is,
@@ -1340,7 +1344,7 @@ pub fn for_run(
     bot: Option<&str>,
     login: impl Fn(Agent) -> Login,
 ) -> RunCoding {
-    let mirrors = config
+    let mirrors: Vec<(PathBuf, crate::config::Repository)> = config
         .coding
         .repositories
         .iter()
@@ -1350,7 +1354,7 @@ pub fn for_run(
         // its config says, outside the sandbox.
         .filter(|(dir, _)| dir.is_dir() && !repositories::writable_by_commands(dir, &config.roots))
         .collect();
-    let agents = bot
+    let agents: Vec<AgentRun> = bot
         .and_then(|bot| Some((bot, config.roots.iter().find(|r| r.id == root)?)))
         .map(|(bot, root)| {
             Agent::ALL
@@ -1362,10 +1366,15 @@ pub fn for_run(
         })
         .unwrap_or_default();
     let tools = prepare::tools_dir(config, root);
+    let checkouts = match config.roots.iter().find(|r| r.id == root) {
+        Some(folder) if !agents.is_empty() => trust::checkouts(&folder.path, &mirrors),
+        _ => Vec::new(),
+    };
     RunCoding {
         mirrors,
         agents,
         tools,
+        checkouts,
     }
 }
 

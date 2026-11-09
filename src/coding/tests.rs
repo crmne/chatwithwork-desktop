@@ -163,6 +163,7 @@ fn a_bot_sees_whether_claude_is_ready_and_repository_names_only() {
         url: "git@github.com:acme/app.git".into(),
         ssh_key: None,
         github: None,
+        cloned: None,
     });
     let value = coding_for_bot(&coding, &root(Some(loan(true))), "42");
     assert_eq!(value["claude_code"], "ready");
@@ -365,6 +366,7 @@ fn checkouts_fetch_from_a_mirror_they_cant_push_to() {
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
         github: None,
+        cloned: None,
     };
     let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
     assert!(mirror.starts_with(&paths.data_dir));
@@ -439,6 +441,7 @@ fn an_adopted_checkout_fetches_and_pushes_only_through_the_mirror() {
         url: format!("file://{}", upstream.display()),
         ssh_key: None,
         github: None,
+        cloned: None,
     };
     let mirror = repositories::create_mirror(&paths, &repo, &[]).unwrap();
 
@@ -1170,4 +1173,73 @@ fn a_long_opencode_sign_in_split_across_sqlite_pages_is_found() {
     let mut torn = db.to_vec();
     torn.truncate(5000);
     let _ = sqlite_rows(&torn, Some(&torn));
+}
+
+#[test]
+fn a_bots_run_trusts_only_the_checkouts_desktop_made_in_its_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("claude");
+    std::fs::write(&program, "").unwrap();
+    let paths = crate::paths::Paths::under(&dir.path().join("cww"));
+    let folder = dir.path().join("bots");
+    let mut config = Config {
+        coding: CodingConfig {
+            claude: Some(program),
+            ..ready_coding()
+        },
+        ..Default::default()
+    };
+    config.roots.push(Root {
+        path: folder.clone(),
+        ..root(Some(loan(true)))
+    });
+    for (name, cloned) in [("made", Some(true)), ("kept", Some(false))] {
+        let repo = Repository {
+            root: "bots".into(),
+            name: name.into(),
+            url: format!("git@github.com:acme/{name}.git"),
+            ssh_key: None,
+            github: None,
+            cloned,
+        };
+        std::fs::create_dir_all(repositories::mirror_dir(&paths, &repo)).unwrap();
+        std::fs::create_dir_all(folder.join(name)).unwrap();
+        config.coding.repositories.push(repo);
+    }
+    let home = dir.path().join("home");
+    signed_in_home(&home);
+
+    let run = for_run(&config, &paths, "bots", Some("42"), |agent| {
+        Login::find_for(agent, &home)
+    });
+    assert_eq!(run.mirrors.len(), 2);
+    assert_eq!(
+        run.checkouts,
+        vec![crate::roots::canonical(&folder.join("made")).unwrap()]
+    );
+    let person = for_run(&config, &paths, "bots", None, |_| Login::default());
+    assert!(person.checkouts.is_empty(), "a person's run gets no agent");
+
+    // On Windows a run's Claude Code reads the `.claude.json` in the folder
+    // `CLAUDE_CONFIG_DIR` names.
+    let file = if cfg!(windows) {
+        let file = home.join(CONFIG_DIR).join(CONFIG_FILE);
+        std::fs::write(&file, "{}").unwrap();
+        file
+    } else {
+        home.join(CONFIG_FILE)
+    };
+    let run = for_run(&config, &paths, "bots", Some("42"), |agent| {
+        Login::find_for(agent, &home)
+    });
+    trust::seed(&run.agents, &run.checkouts);
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let projects = settings["projects"].as_object().unwrap();
+    let made = run.checkouts[0].to_string_lossy().into_owned();
+    assert_eq!(projects[&made]["hasTrustDialogAccepted"], true);
+    assert!(
+        projects.keys().all(|key| !key.ends_with("kept")),
+        "the checkout that was there already keeps asking"
+    );
 }

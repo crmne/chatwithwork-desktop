@@ -1774,6 +1774,7 @@ fn the_first_run_prepares_a_repository_by_itself_and_names_a_step_that_fails() {
             url: format!("file://{}", bare.display()),
             ssh_key: None,
             github: Some("acme/app".into()),
+            cloned: None,
         });
     fx.config.save(&paths).unwrap();
     let ask = crate::coding::prepare::Ask {

@@ -1025,6 +1025,7 @@ fn repository_step(
                 url,
                 ssh_key: None,
                 github: None,
+                cloned: None,
             }
         }
     };
@@ -1076,6 +1077,15 @@ fn repository_step(
         .print("Repository");
         return Ok(None);
     }
+    super::trust::note_checkout(
+        &mut config.coding.repositories,
+        root_id,
+        &repo.name,
+        exists,
+        &checkout,
+        &mirror,
+    );
+    save(config, paths)?;
     let _ = ask;
     Step::Ok(format!(
         "{} checked out as {}:{}, fetching from Desktop's mirror",
