@@ -34,7 +34,7 @@ Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+
 
 | Installation | Startup |
 |---|---|
-| Windows MSI / PowerShell one-liner | The installer registers and starts the agent for your account, now and at every login. |
+| Windows MSI / PowerShell one-liner | The installer registers and starts the agent for your account, now and at every login. If that fails, the install still finishes (the one-liner warns): `cww status` says whether it runs, and `cww daemon install` or the app's **Start Background Agent** starts it. |
 | macOS `.pkg` | The installer tries to register and start the agent for the logged-in console user. If nobody is logged in, finish setup after login. |
 | Linux packages, Nix, Homebrew, portable app | Open the app and choose **Start Background Agent**, or run `cww daemon install` as your own user. System-wide package installation cannot choose which user account should run the agent. |
 | macOS / Linux one-line installer | Tries `cww daemon install` for the installing user and prints recovery instructions if no user service manager is available. |
@@ -61,7 +61,7 @@ It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, a
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
 ```
 
-It checks that the background agent started, and warns when it didn't, with the reason: over SSH, for example, the agent's logon task waits until you sign in to Windows. Run `cww daemon install` to start it then.
+It checks that the background agent started, and warns when it didn't, with the reason the installer gave (over SSH, for example, the agent's logon task can't run without a desktop session).
 
 Windows installers and programs are signed by PlentyLabs. While the signature builds a reputation, SmartScreen may still warn about a downloaded installer: choose **More info**, then **Run anyway**. The one-liner doesn't trigger it. macOS app downloads are signed with Developer ID and notarized; the `.pkg` needs the separate Installer signing identity.
 

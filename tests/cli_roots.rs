@@ -53,3 +53,79 @@ fn removing_a_folder_from_the_terminal_is_audited() {
     assert_eq!(removed.len(), 1, "{log}");
     assert_eq!(removed[0]["detail"], format!("{id} (Projects)"));
 }
+
+/// With the agent running, the removal goes through it: it audits it once,
+/// as it does a removal made in the app.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn removing_a_folder_with_the_agent_running_goes_through_it() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    struct Agent(std::process::Child);
+    impl Drop for Agent {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let base = tempfile::tempdir().unwrap();
+    let home = base.path().join("cww");
+    let folder = base.path().join("Projects");
+    std::fs::create_dir_all(&folder).unwrap();
+    cww(
+        &home,
+        &[
+            "roots",
+            "add",
+            folder.to_str().unwrap(),
+            "--label",
+            "Projects",
+        ],
+    );
+    let paths = Paths::under(&home);
+    let mut config = cww::config::Config::load(&paths).unwrap();
+    config.index.watch = false;
+    config.save(&paths).unwrap();
+    let id = config.roots[0].id.clone();
+
+    let _agent = Agent(
+        Command::new(env!("CARGO_BIN_EXE_cww"))
+            .args(["daemon", "run"])
+            .env("CWW_HOME", &home)
+            .env("CWW_SECRET_STORE", "file")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let started = Instant::now();
+    loop {
+        let status: Value =
+            serde_json::from_str(&cww(&home, &["status", "--json"])).unwrap_or_default();
+        if !status["pid"].is_null() {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the agent didn't start"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let said = cww(&home, &["roots", "remove", "Projects"]);
+    assert!(said.contains("Stopped sharing"), "{said}");
+    // The by-hand path tells the agent afterwards; this one didn't need to.
+    assert!(!said.contains("picked up the change"), "{said}");
+    assert!(cww::config::Config::load(&paths).unwrap().roots.is_empty());
+    let log = std::fs::read_to_string(paths.audit_file()).unwrap();
+    let removed: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["event"] == "root_removed")
+        .collect();
+    assert_eq!(removed.len(), 1, "{log}");
+    assert_eq!(removed[0]["detail"], format!("{id} (Projects)"));
+}

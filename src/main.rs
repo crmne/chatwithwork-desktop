@@ -1299,20 +1299,44 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             }
         }
         RootsCommand::Remove { root } => {
-            let removed = remove_root(&mut config, &root)?;
-            cww::commands::env::forget(&mut config, paths, &removed.id)?;
-            // As the daemon records a removal through its control channel.
-            audit_here(
-                paths,
-                "root_removed",
-                format!("{} ({})", removed.id, removed.label),
-            );
-            println!(
-                "Stopped sharing {} ({}).",
-                removed.path.display(),
-                removed.id
-            );
-            notify_daemon(paths, "");
+            // Through the running agent, which records it in the audit log
+            // as it does every removal, tells whoever follows the log, and
+            // is then the only one writing it. By hand only when no agent
+            // answers, or its organization keeps folders to the app.
+            let answer = match control::Client::connect(&paths.socket_path())? {
+                Some(mut client) => {
+                    Some(client.call_raw(&ControlRequest::RootsRemove { root: root.clone() })?)
+                }
+                None => None,
+            };
+            match answer {
+                Some(answer) if answer["ok"] == true => println!(
+                    "Stopped sharing {} ({}).",
+                    str(&answer["root"]["path"]),
+                    str(&answer["root"]["id"])
+                ),
+                Some(answer) if answer["code"] != "chat_only" => anyhow::bail!(
+                    "{}",
+                    answer["error"]
+                        .as_str()
+                        .unwrap_or("the daemon returned an error")
+                ),
+                _ => {
+                    let removed = remove_root(&mut config, &root)?;
+                    cww::commands::env::forget(&mut config, paths, &removed.id)?;
+                    audit_here(
+                        paths,
+                        "root_removed",
+                        format!("{} ({})", removed.id, removed.label),
+                    );
+                    println!(
+                        "Stopped sharing {} ({}).",
+                        removed.path.display(),
+                        removed.id
+                    );
+                    notify_daemon(paths, "");
+                }
+            }
         }
         RootsCommand::AllowChanges { root, i_know } => {
             allow_changes(paths, &mut config, &root, true, i_know)?
@@ -2254,9 +2278,10 @@ fn host_exe() -> Result<PathBuf> {
     Ok(exe)
 }
 
-/// Records a change `cww` made to the config itself in the audit log, as the
-/// daemon records the same change made through it. A log that can't be
-/// written is said, not fatal: the change is already saved.
+/// Records a change `cww` made to the config itself, with no agent to make
+/// it, in the audit log, as the agent records the same change made through
+/// it. A log that can't be written is said, not fatal: the change is
+/// already saved.
 fn audit_here(paths: &Paths, event: &str, detail: String) {
     let mut entry = audit::AuditEntry::event(event);
     entry.detail = Some(detail);

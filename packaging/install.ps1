@@ -103,7 +103,7 @@ try {
     $said = Select-String -Path $log -Pattern "WixQuietExec:\s+error: (.*)" -ErrorAction SilentlyContinue |
       Select-Object -Last 1
     if ($said) { Write-Warning ("Starting it during the install said: " + $said.Matches[0].Groups[1].Value.Trim()) }
-    Write-Warning "It starts when you sign in to Windows. To start it now, open Chat with Work from the Start menu, or run: cww daemon install"
+    Write-Warning "To start it, open Chat with Work from the Start menu, or run: cww daemon install"
     Write-Warning "Check it with: cww status"
   }
 } finally {
