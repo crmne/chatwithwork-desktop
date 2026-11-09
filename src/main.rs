@@ -1336,14 +1336,27 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                         .as_str()
                         .unwrap_or("the daemon returned an error")
                 ),
-                // Read again: an agent that didn't answer may have removed it.
-                _ if !Config::load(paths)?.roots.iter().any(|r| r.id == id) => {
-                    println!("Stopped sharing {id}.")
-                }
                 _ => {
-                    let mut config = Config::load(paths)?;
-                    let removed = remove_root(&mut config, &id)?;
-                    cww::commands::env::forget(&mut config, paths, &removed.id)?;
+                    // Under the settings' lock the agent edits them under
+                    // too, so an agent that didn't answer can't remove it
+                    // at the same moment; it may have removed it already.
+                    let removed = Config::edit(paths, |config| {
+                        if !config.roots.iter().any(|r| r.id == id) {
+                            return Ok(None);
+                        }
+                        let removed = remove_root(config, &id)?;
+                        config.folder_env.retain(|each| each != &removed.id);
+                        Ok(Some((removed, config.clone())))
+                    })?;
+                    let Some((removed, config)) = removed else {
+                        println!("Stopped sharing {id}.");
+                        eprintln!(
+                            "warning: the daemon removed it without answering, so its audit \
+                             entry may be missing"
+                        );
+                        return Ok(());
+                    };
+                    cww::commands::env::delete_logged(&config, paths, &removed.id);
                     audit_here(
                         paths,
                         "root_removed",
