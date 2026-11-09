@@ -16,10 +16,11 @@ near-black, untouched: the white bubble with the black scribble.
   corners, and a drop shadow).
 """
 import os
-import re
+import shutil
 import struct
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOP, MIDDLE, BOTTOM = "#454B58", "#1B1E26", "#06070B"  # BOTTOM is Live Wire's --canvas.
@@ -27,8 +28,17 @@ MARK = 0.64  # The mark's width, as a share of the tile.
 NUDGE = 0.015  # Left, by the mark's width: its tail makes it heavy on the right.
 VIEWBOX = 167.91972
 
-source = open(os.path.join(HERE, "..", "mark.svg")).read()
-paths = dict(re.findall(r'<path fill="(#[0-9a-f]{6})" d="([^"]+)"', source))
+if not shutil.which("rsvg-convert"):
+    raise SystemExit("icon.py needs rsvg-convert (librsvg)")
+
+paths = {}
+for path in ET.parse(os.path.join(HERE, "..", "mark.svg")).iter("{http://www.w3.org/2000/svg}path"):
+    fill = path.get("fill", "").lower()
+    if fill in paths:
+        raise SystemExit(f"mark.svg has more than one {fill} path")
+    paths[fill] = path.get("d")
+if set(paths) != {"#ffffff", "#000000"}:
+    raise SystemExit("mark.svg should be one white path and one black path")
 BUBBLE, SCRIBBLE = paths["#ffffff"], paths["#000000"]
 
 

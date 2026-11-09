@@ -16,11 +16,11 @@ source="$here/../../app/assets/macos"
 mkdir -p "$resources"
 
 partial="$(mktemp -d)"
+trap 'rm -rf "$partial"' EXIT
 xcrun actool "$source/AppIcon.icon" --compile "$resources" \
     --platform macosx --minimum-deployment-target 13.5 \
     --app-icon AppIcon --output-partial-info-plist "$partial/icon.plist" \
     --errors --warnings --output-format human-readable-text
-rm -rf "$partial"
 # actool writes an .icns of its own with nothing above 256 pixels; the
 # committed one has every size up to 1024.
 install -m 644 "$source/AppIcon.icns" "$resources/AppIcon.icns"
