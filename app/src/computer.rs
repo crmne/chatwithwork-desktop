@@ -107,7 +107,7 @@ pub const RESTART_PATIENCE: std::time::Duration = std::time::Duration::from_secs
 /// for it: the folder keeps them.
 pub fn changes_kept(error: impl std::fmt::Display) -> String {
     format!(
-        "{error} Changes are now allowed in this folder; commands aren't. Turn Allow changes off if you don't want them."
+        "{error} Changes are now allowed in this folder. Commands may not be: check Run commands once the agent answers, and turn Allow changes off if you don't want them."
     )
 }
 
@@ -929,7 +929,7 @@ mod tests {
         assert_eq!(changes_first(&off, &status), None);
         assert_eq!(
             changes_kept("Docs doesn't allow changes."),
-            "Docs doesn't allow changes. Changes are now allowed in this folder; commands aren't. Turn Allow changes off if you don't want them."
+            "Docs doesn't allow changes. Changes are now allowed in this folder. Commands may not be: check Run commands once the agent answers, and turn Allow changes off if you don't want them."
         );
     }
 

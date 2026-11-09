@@ -98,9 +98,16 @@ impl Client {
             // the connection's own timeout, or the agent).
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             let (socket, asked) = (self.socket.clone(), request.clone());
+            // An attempt given up on before it's sent never sends: a later
+            // change the person makes isn't undone by a late one.
+            let abandoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let late = abandoned.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let _ = tx.send(connect(&socket).and_then(|mut client| {
+                    if late.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(ControlError::Refused("given up".into()));
+                    }
                     client
                         .call_raw(&asked)
                         .map_err(|e| ControlError::Refused(format!("{e:#}")))
@@ -109,6 +116,7 @@ impl Client {
             let answer = rx
                 .recv_timeout(left.max(Duration::from_millis(250)))
                 .unwrap_or_else(|_| {
+                    abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
                     Err(ControlError::Refused(
                         "the background agent didn't answer in time".into(),
                     ))
@@ -479,6 +487,34 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
         shutdown.cancel();
         runtime.block_on(daemon).unwrap().unwrap();
+    }
+
+    /// An agent that takes the connection and never answers is given up on
+    /// once the patience runs out.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_gives_up_on_an_agent_that_never_answers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("cww.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let held = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(4));
+            drop(stream);
+        });
+        let started = std::time::Instant::now();
+        let answer =
+            Client::new(socket).request_once_back(&ControlRequest::Status, Duration::from_secs(1));
+        let took = started.elapsed();
+        assert!(
+            matches!(answer, Err(ControlError::Refused(_))),
+            "{answer:?}"
+        );
+        assert!(
+            took >= Duration::from_millis(900) && took < Duration::from_secs(3),
+            "{took:?}"
+        );
+        held.join().unwrap();
     }
 
     #[test]
