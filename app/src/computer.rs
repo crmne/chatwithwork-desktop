@@ -103,6 +103,14 @@ fn commands_unsupported(status: &Status) -> String {
 /// allowing changes restarted it under a new sandbox.
 pub const RESTART_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// What a failure to turn commands on says when changes were just allowed
+/// for it: the folder keeps them.
+pub fn changes_kept(error: impl std::fmt::Display) -> String {
+    format!(
+        "{error} Changes are now allowed in this folder; commands aren't. Turn Allow changes off if you don't want them."
+    )
+}
+
 /// What must be allowed before `request` can be: commands change files, so
 /// turning them on in a read-only folder allows changes there first. The
 /// question for the commands (`Change::Commands`) says so, and one yes covers
@@ -913,6 +921,10 @@ mod tests {
             .plan(&status)
             .unwrap();
         assert_eq!(changes_first(&off, &status), None);
+        assert_eq!(
+            changes_kept("Docs doesn't allow changes."),
+            "Docs doesn't allow changes. Changes are now allowed in this folder; commands aren't. Turn Allow changes off if you don't want them."
+        );
     }
 
     #[test]

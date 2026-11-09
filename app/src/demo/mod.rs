@@ -583,7 +583,8 @@ impl Demo {
                 let seconds: u64 = std::env::var("CWW_DEMO_INDEX_SECONDS")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3);
+                    .unwrap_or(3)
+                    .max(1);
                 std::thread::spawn(move || {
                     let ticks = seconds * 4;
                     for tick in 1..=ticks {

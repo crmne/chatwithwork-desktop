@@ -126,7 +126,7 @@ pub async fn computer_change(
             desktop
                 .client
                 .request_once_back(&request, crate::computer::RESTART_PATIENCE)
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::computer::changes_kept)?;
         } else {
             desktop
                 .client

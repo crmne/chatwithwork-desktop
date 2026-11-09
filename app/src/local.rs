@@ -228,7 +228,14 @@ pub async fn control(
             return desktop
                 .client
                 .request_once_back(&request, crate::computer::RESTART_PATIENCE)
-                .map_err(refused);
+                .map_err(|e| {
+                    let code = if matches!(e, crate::control::ControlError::NotRunning) {
+                        "not_running"
+                    } else {
+                        "refused"
+                    };
+                    refusal(code, crate::computer::changes_kept(e))
+                });
         }
         desktop.client.request(&request).map_err(refused)
     })

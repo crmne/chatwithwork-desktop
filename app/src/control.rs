@@ -87,18 +87,32 @@ impl Client {
 
     /// Send `request` right after a change that may have restarted the
     /// daemon (allowing changes in a folder gives it a new sandbox, and it
-    /// restarts to take it): until the daemon answers again, within
-    /// `patience`, ask again. Only for requests that are safe to repeat.
+    /// restarts to take it): while no daemon answers, within `patience`, ask
+    /// again. An answer, a refusal included, comes back at once. Only for
+    /// requests that are safe to repeat.
     pub fn request_once_back(&self, request: &ControlRequest, patience: Duration) -> Result<Value> {
         let deadline = std::time::Instant::now() + patience;
         loop {
-            match self.request(request) {
-                Err(ControlError::NotRunning | ControlError::Refused(_))
-                    if std::time::Instant::now() < deadline =>
-                {
+            let answer = connect(&self.socket).and_then(|mut client| {
+                client
+                    .call_raw(request)
+                    .map_err(|e| ControlError::Refused(format!("{e:#}")))
+            });
+            match answer {
+                Ok(value) if value["ok"] == serde_json::json!(true) => return Ok(value),
+                Ok(value) => {
+                    return Err(ControlError::Refused(
+                        value["error"]
+                            .as_str()
+                            .unwrap_or("the daemon returned an error")
+                            .to_string(),
+                    ));
+                }
+                // No daemon, or one that went away mid-answer: it's restarting.
+                Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(250));
                 }
-                answer => return answer,
+                Err(e) => return Err(e),
             }
         }
     }
@@ -432,6 +446,22 @@ mod tests {
             .request_once_back(&ControlRequest::Status, Duration::from_secs(20))
             .unwrap();
         assert_eq!(answer["paired"], false);
+        // A refusal is an answer: it comes back at once, never retried.
+        let started = std::time::Instant::now();
+        let refused = client.request_once_back(
+            &ControlRequest::RootsCommands {
+                root: "nowhere".into(),
+                commands: true,
+                network: false,
+                local_services: None,
+            },
+            Duration::from_secs(20),
+        );
+        assert!(
+            matches!(refused, Err(ControlError::Refused(_))),
+            "{refused:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
         shutdown.cancel();
         runtime.block_on(daemon).unwrap().unwrap();
     }
