@@ -111,6 +111,7 @@ pub async fn computer_change(
     tauri::async_runtime::spawn_blocking(move || {
         let status = desktop.client.status().map_err(|e| e.to_string())?;
         let (request, question) = change.plan(&status)?;
+        crate::computer::note_narrowing(&request);
         if let Some(question) = question {
             let Some(_asking) = desktop.asking.start() else {
                 return Err(

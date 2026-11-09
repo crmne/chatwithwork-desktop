@@ -125,6 +125,7 @@ pub(crate) fn once_changes_reached_within(
         return client.request(request);
     };
     let deadline = std::time::Instant::now() + patience;
+    let asked_at = NARROWED.load(std::sync::atomic::Ordering::SeqCst);
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         client.wait_until(left, |status| {
@@ -133,6 +134,13 @@ pub(crate) fn once_changes_reached_within(
                 .iter()
                 .any(|folder| &folder.id == root && folder.writable)
         })?;
+        // Something this app narrowed meanwhile (commands or changes off, a
+        // folder removed) wins: the activation it overtook is dropped.
+        if NARROWED.load(std::sync::atomic::Ordering::SeqCst) != asked_at {
+            return Err(crate::control::ControlError::Refused(
+                "another change to this computer's folders came first".into(),
+            ));
+        }
         match client.request(request) {
             Err(crate::control::ControlError::NotRunning)
                 if std::time::Instant::now() < deadline =>
@@ -141,6 +149,27 @@ pub(crate) fn once_changes_reached_within(
             }
             answer => return answer,
         }
+    }
+}
+
+/// How many narrowing changes this app has sent to the agent, so an
+/// activation still waiting for it (`once_changes_reached`) never undoes one.
+static NARROWED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Counts `request` if it narrows what a folder allows. Call before sending
+/// any folder change.
+pub fn note_narrowing(request: &ControlRequest) {
+    if matches!(
+        request,
+        ControlRequest::RootsCommands {
+            commands: false,
+            ..
+        } | ControlRequest::RootsWritable {
+            writable: false,
+            ..
+        } | ControlRequest::RootsRemove { .. }
+    ) {
+        NARROWED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

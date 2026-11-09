@@ -182,6 +182,7 @@ pub async fn control(
 ) -> Answer {
     local_page(&webview)?;
     let request = allowed(request)?;
+    crate::computer::note_narrowing(&request);
     let desktop = desktop.inner().clone();
     blocking(move || {
         let app = desktop.app();

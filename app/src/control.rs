@@ -540,6 +540,96 @@ mod tests {
         assert!(!heard.contains("roots_commands"), "{heard}");
     }
 
+    /// Turning commands on in a read-only folder: changes first, then one
+    /// activation once the agent answers with them, and only one; a Run
+    /// commands off sent meanwhile wins over an activation still waiting.
+    #[test]
+    fn commands_after_changes_are_sent_once_and_yield_to_a_later_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let paths = cww::paths::Paths::under(&base.join("cww"));
+        let docs = base.join("Docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        cww::config::Config {
+            secret_store: Some("file".into()),
+            ..cww::config::Config::default()
+        }
+        .save(&paths)
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let daemon = runtime.spawn(cww::daemon::run(paths.clone(), shutdown.clone(), false));
+        let client = Client::new(paths.socket_path());
+        client
+            .wait_until(Duration::from_secs(20), |_| true)
+            .unwrap();
+        client.add_root(&docs, Some("Docs")).unwrap();
+        let on = ControlRequest::RootsCommands {
+            root: "docs".into(),
+            commands: true,
+            network: false,
+            local_services: None,
+        };
+        let status = client.status().unwrap();
+        let first = crate::computer::changes_first(&on, &status).expect("changes first");
+        crate::computer::note_narrowing(&first);
+        client.request(&first).unwrap();
+        crate::computer::once_changes_reached_within(&client, &on, Duration::from_secs(20))
+            .unwrap();
+        let after = client.status().unwrap();
+        assert!(after.roots[0].writable && after.roots[0].allows_commands);
+        let allowed = |client: &Client| {
+            client
+                .log(200)
+                .unwrap()
+                .iter()
+                .filter(|e| e.event == "root_commands_allowed")
+                .count()
+        };
+        assert_eq!(allowed(&client), 1);
+
+        // An activation waiting for changes, overtaken by commands off:
+        // dropped, and commands stay off.
+        let read_only = ControlRequest::RootsWritable {
+            root: "docs".into(),
+            writable: false,
+            i_know: false,
+        };
+        crate::computer::note_narrowing(&read_only);
+        client.request(&read_only).unwrap();
+        let waiting = {
+            let (client, on) = (client.clone(), on.clone());
+            std::thread::spawn(move || {
+                crate::computer::once_changes_reached_within(&client, &on, Duration::from_secs(20))
+            })
+        };
+        std::thread::sleep(Duration::from_millis(500));
+        let off = ControlRequest::RootsCommands {
+            root: "docs".into(),
+            commands: false,
+            network: false,
+            local_services: None,
+        };
+        crate::computer::note_narrowing(&off);
+        let _ = client.request(&off);
+        client
+            .request(&ControlRequest::RootsWritable {
+                root: "docs".into(),
+                writable: true,
+                i_know: false,
+            })
+            .unwrap();
+        assert!(matches!(
+            waiting.join().unwrap(),
+            Err(ControlError::Refused(_))
+        ));
+        assert!(!client.status().unwrap().roots[0].allows_commands);
+        assert_eq!(allowed(&client), 1);
+
+        shutdown.cancel();
+        runtime.block_on(daemon).unwrap().unwrap();
+    }
+
     #[test]
     fn a_missing_socket_means_not_running() {
         let tmp = tempfile::tempdir().unwrap();
