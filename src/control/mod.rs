@@ -118,6 +118,11 @@ pub enum ControlRequest {
         /// This computer's own services; absent keeps them as they are.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         local_services: Option<bool>,
+        /// Allow changes in a read-only folder too, in the same edit, when
+        /// turning commands on: commands change files. Only after asking the
+        /// person for both. Absent, a read-only folder refuses commands.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        with_changes: bool,
     },
     /// Let a folder's commands reach this computer's own services, or not
     /// (docs/commands.md, "Its network").

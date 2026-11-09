@@ -482,6 +482,7 @@ pub fn question(
             commands,
             network,
             local_services,
+            ..
         } => {
             let previous = status
                 .roots
@@ -1217,6 +1218,7 @@ mod tests {
             commands: true,
             network: false,
             local_services: None,
+            with_changes: false,
         };
         assert!(
             panels
@@ -1351,6 +1353,7 @@ mod tests {
             commands: true,
             network,
             local_services: Some(local),
+            with_changes: false,
         };
         let asked = |status: &crate::model::Status, request: R| {
             question(&request, status, &Value::Null)
@@ -1416,6 +1419,7 @@ mod tests {
                 commands: true,
                 network: true,
                 local_services: None,
+                with_changes: false,
             },
             // A network level chosen in the pane keeps its native dialog.
             R::RootsCommands {
@@ -1423,6 +1427,7 @@ mod tests {
                 commands: true,
                 network: false,
                 local_services: Some(true),
+                with_changes: false,
             },
             R::BrowserAllSites { all_sites: true },
             R::DenyExtra {

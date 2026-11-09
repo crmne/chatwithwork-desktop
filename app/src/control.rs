@@ -85,38 +85,6 @@ impl Client {
             .map_err(|e| ControlError::Refused(format!("{e:#}")))
     }
 
-    /// Wait, within `patience`, until the daemon answers with a status
-    /// `ready` accepts: after a change that may have restarted it (allowing
-    /// changes in a folder gives it a new sandbox, and it restarts to take
-    /// it). Only status is asked, from a thread of its own each time, so an
-    /// agent that never answers is given up on in time and a late answer
-    /// changes nothing. The change that follows is sent once, by the caller.
-    pub fn wait_until(&self, patience: Duration, ready: impl Fn(&Status) -> bool) -> Result<()> {
-        let deadline = std::time::Instant::now() + patience;
-        loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            let client = self.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(client.status());
-            });
-            let last = match rx.recv_timeout(left.max(Duration::from_millis(250))) {
-                Ok(Ok(status)) if ready(&status) => return Ok(()),
-                Ok(Ok(_)) => {
-                    ControlError::Refused("the change didn't reach the background agent".into())
-                }
-                Ok(Err(e)) => e,
-                Err(_) => {
-                    ControlError::Refused("the background agent didn't answer in time".into())
-                }
-            };
-            if std::time::Instant::now() >= deadline {
-                return Err(last);
-            }
-            std::thread::sleep(Duration::from_millis(250));
-        }
-    }
-
     pub fn status(&self) -> Result<Status> {
         Ok(serde_json::from_value(
             self.request(&ControlRequest::Status)?,
@@ -415,139 +383,14 @@ mod tests {
         assert_eq!(next("the daemon gone", &|s| s.is_none()), None);
     }
 
-    /// Turning commands on right after allowing changes waits for a daemon
-    /// that may be restarting, within its patience.
-    #[test]
-    fn waiting_for_a_restarting_daemon() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().canonicalize().unwrap();
-        let paths = cww::paths::Paths::under(&base.join("cww"));
-        cww::config::Config {
-            secret_store: Some("file".into()),
-            ..cww::config::Config::default()
-        }
-        .save(&paths)
-        .unwrap();
-        let client = Client::new(paths.socket_path());
-        assert!(matches!(
-            client.wait_until(Duration::from_millis(300), |_| true),
-            Err(ControlError::NotRunning)
-        ));
-
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let shutdown = tokio_util::sync::CancellationToken::new();
-        let (later, stop) = (paths.clone(), shutdown.clone());
-        let daemon = runtime.spawn(async move {
-            tokio::time::sleep(Duration::from_millis(700)).await;
-            cww::daemon::run(later, stop, false).await
-        });
-        client
-            .wait_until(Duration::from_secs(20), |status| !status.is_paired())
-            .unwrap();
-        // A status that never comes right is given up on at the patience.
-        let started = std::time::Instant::now();
-        assert!(
-            client
-                .wait_until(Duration::from_secs(1), |_| false)
-                .is_err()
-        );
-        assert!(started.elapsed() < Duration::from_secs(3));
-        shutdown.cancel();
-        runtime.block_on(daemon).unwrap().unwrap();
-    }
-
-    /// An agent that takes the connection and never answers is given up on
-    /// once the patience runs out.
-    #[cfg(unix)]
-    #[test]
-    fn waiting_gives_up_on_an_agent_that_never_answers() {
-        let tmp = tempfile::tempdir().unwrap();
-        let socket = tmp.path().join("cww.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        let held = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            std::thread::sleep(Duration::from_secs(4));
-            drop(stream);
-        });
-        let started = std::time::Instant::now();
-        let answer = Client::new(socket).wait_until(Duration::from_secs(1), |_| true);
-        let took = started.elapsed();
-        assert!(
-            matches!(answer, Err(ControlError::Refused(_))),
-            "{answer:?}"
-        );
-        assert!(
-            took >= Duration::from_millis(900) && took < Duration::from_secs(3),
-            "{took:?}"
-        );
-        held.join().unwrap();
-    }
-
-    /// Commands turned on after changes are sent once, and only once the
-    /// agent answers with the folder writable: an agent that never answers
-    /// is only ever asked for its status, so no activation is left behind to
-    /// land after a later Run commands off.
-    #[cfg(unix)]
-    #[test]
-    fn commands_are_never_sent_to_an_agent_that_never_answered() {
-        use std::io::Read;
-        let tmp = tempfile::tempdir().unwrap();
-        let socket = tmp.path().join("cww.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let heard = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let (log, stop) = (
-            heard.clone(),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        );
-        let stopping = stop.clone();
-        let server = std::thread::spawn(move || {
-            let mut held = Vec::new();
-            while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
-                if let Ok((mut stream, _)) = listener.accept() {
-                    stream
-                        .set_read_timeout(Some(Duration::from_millis(200)))
-                        .unwrap();
-                    let mut line = [0u8; 4096];
-                    if let Ok(n) = stream.read(&mut line) {
-                        log.lock()
-                            .unwrap()
-                            .push_str(&String::from_utf8_lossy(&line[..n]));
-                    }
-                    held.push(stream);
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        });
-        let request = ControlRequest::RootsCommands {
-            root: "docs".into(),
-            commands: true,
-            network: false,
-            local_services: None,
-        };
-        let client = Client::new(socket);
-        let started = std::time::Instant::now();
-        assert!(
-            crate::computer::once_changes_reached_within(&client, &request, Duration::from_secs(1))
-                .is_err()
-        );
-        assert!(started.elapsed() < Duration::from_secs(3));
-        std::thread::sleep(Duration::from_millis(500));
-        stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        server.join().unwrap();
-        let heard = heard.lock().unwrap();
-        assert!(heard.contains("\"status\""), "{heard}");
-        assert!(!heard.contains("roots_commands"), "{heard}");
-    }
-
-    /// Turning commands on in a read-only folder: changes first, then one
-    /// activation once the agent answers with them, and only one; a Run
-    /// commands off sent meanwhile wins over an activation still waiting.
-    // Not on Windows, whose runners may not sandbox commands; the
-    // commands-windows job runs commands there.
+    /// Run commands in a read-only folder, against the real daemon: refused
+    /// alone, and with `with_changes` (after the person's one yes) changes
+    /// and commands are allowed together, in one edit.
     #[cfg(not(windows))]
     #[test]
-    fn commands_after_changes_are_sent_once_and_yield_to_a_later_off() {
+    fn commands_with_changes_allow_both_in_one_edit() {
+        use std::sync::mpsc;
+
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().canonicalize().unwrap();
         let paths = cww::paths::Paths::under(&base.join("cww"));
@@ -563,71 +406,47 @@ mod tests {
         let shutdown = tokio_util::sync::CancellationToken::new();
         let daemon = runtime.spawn(cww::daemon::run(paths.clone(), shutdown.clone(), false));
         let client = Client::new(paths.socket_path());
-        client
-            .wait_until(Duration::from_secs(20), |_| true)
-            .unwrap();
+        let (tx, rx) = mpsc::channel();
+        client.spawn_watch(move |status| {
+            let _ = tx.send(status);
+        });
+        let until = |what: &str, check: &dyn Fn(&Status) -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match rx.recv_timeout(left) {
+                    Ok(Some(status)) if check(&status) => return status,
+                    Ok(_) => {}
+                    Err(e) => panic!("no status with {what}: {e}"),
+                }
+            }
+        };
+        until("the daemon running", &|_| true);
         client.add_root(&docs, Some("Docs")).unwrap();
-        let on = ControlRequest::RootsCommands {
+        until("the folder", &|s| !s.roots.is_empty());
+
+        let on = |with_changes| ControlRequest::RootsCommands {
             root: "docs".into(),
             commands: true,
             network: false,
             local_services: None,
+            with_changes,
         };
-        let status = client.status().unwrap();
-        let first = crate::computer::changes_first(&on, &status).expect("changes first");
-        crate::computer::note_narrowing(&first);
-        client.request(&first).unwrap();
-        crate::computer::once_changes_reached_within(&client, &on, Duration::from_secs(20))
-            .unwrap();
-        let after = client.status().unwrap();
-        assert!(after.roots[0].writable && after.roots[0].allows_commands);
-        let allowed = |client: &Client| {
-            client
-                .log(200)
-                .unwrap()
-                .iter()
-                .filter(|e| e.event == "root_commands_allowed")
-                .count()
-        };
-        assert_eq!(allowed(&client), 1);
-
-        // An activation waiting for changes, overtaken by commands off:
-        // dropped, and commands stay off.
-        let read_only = ControlRequest::RootsWritable {
-            root: "docs".into(),
-            writable: false,
-            i_know: false,
-        };
-        crate::computer::note_narrowing(&read_only);
-        client.request(&read_only).unwrap();
-        let waiting = {
-            let (client, on) = (client.clone(), on.clone());
-            std::thread::spawn(move || {
-                crate::computer::once_changes_reached_within(&client, &on, Duration::from_secs(20))
-            })
-        };
-        std::thread::sleep(Duration::from_millis(500));
-        let off = ControlRequest::RootsCommands {
-            root: "docs".into(),
-            commands: false,
-            network: false,
-            local_services: None,
-        };
-        crate::computer::note_narrowing(&off);
-        let _ = client.request(&off);
-        client
-            .request(&ControlRequest::RootsWritable {
-                root: "docs".into(),
-                writable: true,
-                i_know: false,
-            })
-            .unwrap();
-        assert!(matches!(
-            waiting.join().unwrap(),
-            Err(ControlError::Refused(_))
-        ));
-        assert!(!client.status().unwrap().roots[0].allows_commands);
-        assert_eq!(allowed(&client), 1);
+        match client.request(&on(false)) {
+            Err(ControlError::Refused(message)) => {
+                assert!(message.contains("doesn't allow changes"), "{message}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        client.request(&on(true)).unwrap();
+        let both = until("changes and commands", &|s| {
+            s.roots[0].writable && s.roots[0].allows_commands
+        });
+        assert!(both.roots[0].writable && both.roots[0].allows_commands);
+        let log = client.log(50).unwrap();
+        let events: Vec<_> = log.iter().map(|e| e.event.as_str()).collect();
+        assert!(events.contains(&"root_changes_allowed"), "{events:?}");
+        assert!(events.contains(&"root_commands_allowed"), "{events:?}");
 
         shutdown.cancel();
         runtime.block_on(daemon).unwrap().unwrap();

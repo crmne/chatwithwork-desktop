@@ -182,7 +182,6 @@ pub async fn control(
 ) -> Answer {
     local_page(&webview)?;
     let request = allowed(request)?;
-    crate::computer::note_narrowing(&request);
     let desktop = desktop.inner().clone();
     blocking(move || {
         let app = desktop.app();
@@ -218,24 +217,13 @@ pub async fn control(
             crate::preferences::grant_context(&app, &desktop, &webview, &request)
                 .map_err(|e| refusal("forbidden", e))?;
         }
-        let refused = |e: crate::control::ControlError| match e {
+        // Run commands in a read-only folder: its one question covered
+        // changes too, so the agent allows both in one edit.
+        let request = crate::computer::with_changes(request, &status);
+        desktop.client.request(&request).map_err(|e| match e {
             crate::control::ControlError::NotRunning => refusal("not_running", e.to_string()),
             other => refusal("refused", other.to_string()),
-        };
-        // Run commands in a read-only folder: its one question covered
-        // changes too (computer.rs, `changes_first`).
-        if let Some(first) = crate::computer::changes_first(&request, &status) {
-            desktop.client.request(&first).map_err(refused)?;
-            return crate::computer::once_changes_reached(&desktop.client, &request).map_err(|e| {
-                let code = if matches!(e, crate::control::ControlError::NotRunning) {
-                    "not_running"
-                } else {
-                    "refused"
-                };
-                refusal(code, crate::computer::changes_kept(e))
-            });
-        }
-        desktop.client.request(&request).map_err(refused)
+        })
     })
     .await?
 }

@@ -111,7 +111,6 @@ pub async fn computer_change(
     tauri::async_runtime::spawn_blocking(move || {
         let status = desktop.client.status().map_err(|e| e.to_string())?;
         let (request, question) = change.plan(&status)?;
-        crate::computer::note_narrowing(&request);
         if let Some(question) = question {
             let Some(_asking) = desktop.asking.start() else {
                 return Err(
@@ -122,16 +121,10 @@ pub async fn computer_change(
                 return Ok(json!({ "declined": true }));
             }
         }
-        if let Some(first) = crate::computer::changes_first(&request, &status) {
-            desktop.client.request(&first).map_err(|e| e.to_string())?;
-            crate::computer::once_changes_reached(&desktop.client, &request)
-                .map_err(crate::computer::changes_kept)?;
-        } else {
-            desktop
-                .client
-                .request(&request)
-                .map_err(|e| e.to_string())?;
-        }
+        desktop
+            .client
+            .request(&request)
+            .map_err(|e| e.to_string())?;
         let status = desktop.client.status().ok();
         Ok(crate::computer::view(status.as_ref()))
     })

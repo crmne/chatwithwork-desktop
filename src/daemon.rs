@@ -1243,18 +1243,33 @@ impl Daemon {
         commands: bool,
         network: bool,
         local_services: Option<bool>,
+        with_changes: bool,
     ) -> Result<Value> {
-        let root = self
+        let (root, changes_allowed) = self
             .edit_config(move |config, _| {
-                crate::roots::set_commands_reaching(
+                // Changes too, in the same edit, when the person allowed both
+                // (`with_changes`): one restart under the new sandbox.
+                let changes_allowed = commands
+                    && with_changes
+                    && crate::roots::find(config, &which).is_ok_and(|root| !root.writable);
+                if changes_allowed {
+                    set_writable(config, &which, true, false)?;
+                }
+                let root = crate::roots::set_commands_reaching(
                     config,
                     &which,
                     commands,
                     network,
                     local_services,
-                )
+                )?;
+                Ok((root, changes_allowed))
             })
             .await?;
+        if changes_allowed {
+            let mut entry = AuditEntry::event("root_changes_allowed");
+            entry.detail = Some(format!("{} ({})", root.id, root.label));
+            self.audit.append(&entry);
+        }
         if !commands {
             self.once.forget(&root.id);
         }
@@ -2332,8 +2347,9 @@ impl ControlHandler for Daemon {
                 commands,
                 network,
                 local_services,
+                with_changes,
             } => {
-                self.set_commands(root, commands, network, local_services)
+                self.set_commands(root, commands, network, local_services, with_changes)
                     .await
             }
             ControlRequest::RootsLocalServices { root, on } => {

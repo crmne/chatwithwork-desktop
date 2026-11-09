@@ -99,113 +99,34 @@ fn commands_unsupported(status: &Status) -> String {
     }
 }
 
-/// How long turning commands on waits for the daemon to come back after
-/// allowing changes restarted it under a new sandbox.
-pub const RESTART_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// Sends `request` (commands on, `changes_first` just sent) once the agent
-/// answers with changes allowed in its folder: allowing them may have
-/// restarted it under a new sandbox. It's asked again only when no agent
-/// was listening, so nothing was sent; an answer, or a connection lost
-/// once the request may have been read, comes back as it is, and a late
-/// activation can never follow a later Run commands off.
-pub fn once_changes_reached(
-    client: &crate::control::Client,
-    request: &ControlRequest,
-) -> crate::control::Result<Value> {
-    once_changes_reached_within(client, request, RESTART_PATIENCE)
-}
-
-pub(crate) fn once_changes_reached_within(
-    client: &crate::control::Client,
-    request: &ControlRequest,
-    patience: std::time::Duration,
-) -> crate::control::Result<Value> {
-    let ControlRequest::RootsCommands { root, .. } = request else {
-        return client.request(request);
-    };
-    let deadline = std::time::Instant::now() + patience;
-    let asked_at = *NARROWED.lock().unwrap_or_else(|e| e.into_inner());
-    loop {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        client.wait_until(left, |status| {
-            status
+/// Commands change files, so turning them on in a read-only folder allows
+/// changes there too, in the same request (`with_changes`): one edit of the
+/// agent's settings, one restart under the new sandbox, nothing left to send
+/// after it. The question for the commands (`Change::Commands`) says so, and
+/// one yes covers both. Indexing never holds either up.
+pub fn with_changes(request: ControlRequest, status: &Status) -> ControlRequest {
+    match request {
+        ControlRequest::RootsCommands {
+            root,
+            commands: true,
+            network,
+            local_services,
+            ..
+        } => {
+            let read_only = status
                 .roots
                 .iter()
-                .any(|folder| &folder.id == root && folder.writable)
-        })?;
-        // Something this app narrowed meanwhile (commands or changes off, a
-        // folder removed) wins: the activation it overtook is dropped.
-        // The check and the send hold the count, so a narrowing either came
-        // before (and drops this) or waits for this send, then follows it.
-        let narrowed = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
-        if *narrowed != asked_at {
-            return Err(crate::control::ControlError::Refused(
-                "another change to this computer's folders came first".into(),
-            ));
-        }
-        let answer = client.request(request);
-        drop(narrowed);
-        match answer {
-            Err(crate::control::ControlError::NotRunning)
-                if std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                .any(|folder| folder.id == root && !folder.writable);
+            ControlRequest::RootsCommands {
+                root,
+                commands: true,
+                network,
+                local_services,
+                with_changes: read_only,
             }
-            answer => return answer,
         }
+        other => other,
     }
-}
-
-/// How many narrowing changes this app has sent to the agent, so an
-/// activation still waiting for it (`once_changes_reached`) never undoes one.
-pub(crate) static NARROWED: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-
-/// Counts `request` if it narrows what a folder allows. Call before sending
-/// any folder change: it waits for an activation being sent, so the
-/// narrowing always reaches the agent after it.
-pub fn note_narrowing(request: &ControlRequest) {
-    if matches!(
-        request,
-        ControlRequest::RootsCommands {
-            commands: false,
-            ..
-        } | ControlRequest::RootsWritable {
-            writable: false,
-            ..
-        } | ControlRequest::RootsRemove { .. }
-    ) {
-        *NARROWED.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-    }
-}
-
-/// What a failure to turn commands on says when changes were just allowed
-/// for it: the folder keeps them.
-pub fn changes_kept(error: impl std::fmt::Display) -> String {
-    format!(
-        "{error} Changes are now allowed in this folder. Commands may not be: check Run commands once the agent answers, and turn Allow changes off if you don't want them."
-    )
-}
-
-/// What must be allowed before `request` can be: commands change files, so
-/// turning them on in a read-only folder allows changes there first. The
-/// question for the commands (`Change::Commands`) says so, and one yes covers
-/// both. Indexing never holds either up.
-pub fn changes_first(request: &ControlRequest, status: &Status) -> Option<ControlRequest> {
-    let ControlRequest::RootsCommands {
-        root,
-        commands: true,
-        ..
-    } = request
-    else {
-        return None;
-    };
-    let folder = status.roots.iter().find(|folder| &folder.id == root)?;
-    (!folder.writable).then(|| ControlRequest::RootsWritable {
-        root: root.clone(),
-        writable: true,
-        i_know: false,
-    })
 }
 
 /// What a page may ask. Anything else is refused before it reaches the
@@ -313,7 +234,7 @@ impl Change {
                     return Err(commands_unsupported(status));
                 }
                 // A read-only folder gets changes too, in the same question:
-                // commands change files (`changes_first`).
+                // commands change files (`with_changes`).
                 let changes_too = *on && !root.writable;
                 let question = if *on && !root.allows_commands {
                     ask(
@@ -344,6 +265,7 @@ impl Change {
                         // Asking again for what's allowed keeps its network as it is.
                         network: *on && root.allows_commands && root.network,
                         local_services: None,
+                        with_changes: changes_too,
                     },
                     question,
                 )
@@ -371,6 +293,7 @@ impl Change {
                         commands: true,
                         network: *on,
                         local_services: None,
+                        with_changes: false,
                     },
                     question,
                 )
@@ -755,6 +678,7 @@ mod tests {
                 commands: true,
                 network: true,
                 local_services: None,
+                with_changes: false,
             }
         );
     }
@@ -955,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_in_a_read_only_folder_allow_changes_first_with_one_question() {
+    fn commands_in_a_read_only_folder_allow_changes_too_with_one_question() {
         let mut status = status();
         status.roots[0].index = "indexing".into();
         // A Windows that sandboxes commands, as macOS and Linux always do.
@@ -976,16 +900,16 @@ mod tests {
             "{}",
             question.message
         );
-        assert_eq!(
-            changes_first(&request, &status),
-            Some(ControlRequest::RootsWritable {
-                root: "docs".into(),
-                writable: true,
-                i_know: false,
-            })
-        );
-        // A folder that allows changes needs nothing first, and its question
-        // speaks of commands alone; turning commands off needs nothing either.
+        assert!(matches!(
+            with_changes(request, &status),
+            ControlRequest::RootsCommands {
+                commands: true,
+                with_changes: true,
+                ..
+            }
+        ));
+        // A folder that allows changes needs nothing more, and its question
+        // speaks of commands alone; turning commands off never allows changes.
         status.roots[0].writable = true;
         let (request, question) =
             change(json!({ "action": "commands", "folder": "docs", "on": true }))
@@ -997,37 +921,24 @@ mod tests {
                 .message
                 .starts_with("Let Chat with Work run commands in “Docs”?")
         );
-        assert_eq!(changes_first(&request, &status), None);
+        assert!(matches!(
+            with_changes(request, &status),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
         status.roots[0].writable = false;
         let (off, _) = change(json!({ "action": "commands", "folder": "docs", "on": false }))
             .plan(&status)
             .unwrap();
-        assert_eq!(changes_first(&off, &status), None);
-        assert_eq!(
-            changes_kept("Docs doesn't allow changes."),
-            "Docs doesn't allow changes. Changes are now allowed in this folder. Commands may not be: check Run commands once the agent answers, and turn Allow changes off if you don't want them."
-        );
-    }
-
-    #[test]
-    fn a_narrowing_waits_for_an_activation_being_sent() {
-        // An activation between its check and its send holds the count, so
-        // a narrowing (which takes it to count itself) waits for the send.
-        // Only takes the count here: bumping it would drop an activation
-        // another test is waiting on.
-        let sending = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
-        let (tx, rx) = std::sync::mpsc::channel();
-        let narrowing = std::thread::spawn(move || {
-            let _counting = NARROWED.lock().unwrap_or_else(|e| e.into_inner());
-            tx.send(()).unwrap();
-        });
-        assert!(
-            rx.recv_timeout(std::time::Duration::from_millis(300))
-                .is_err()
-        );
-        drop(sending);
-        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        narrowing.join().unwrap();
+        assert!(matches!(
+            with_changes(off, &status),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
     }
 
     #[test]
