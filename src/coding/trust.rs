@@ -319,6 +319,14 @@ fn open_regular(file: &Path) -> anyhow::Result<std::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    // The link itself, never what it leads to, which the check on the
+    // opened file then refuses.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let opened = options.open(file)?;
     anyhow::ensure!(opened.metadata()?.is_file(), "not a regular file");
     Ok(opened)
@@ -517,6 +525,26 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_to_string(&private).unwrap(), "secret = 1\n");
+    }
+
+    /// A file link where the settings were, opened as the link itself: on
+    /// Windows too, where making one needs Developer Mode or an
+    /// administrator (skipped without).
+    #[test]
+    fn a_settings_file_that_is_a_link_is_never_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("private.toml");
+        std::fs::write(&private, "secret = 1\n").unwrap();
+        let file = dir.path().join(CODEX_CONFIG_FILE);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&private, &file).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&private, &file).is_err() {
+            return;
+        }
+        assert!(open_regular(&file).is_err());
+        assert!(read(&file).is_err());
+        assert!(open_regular(&private).is_ok());
     }
 
     #[cfg(unix)]
