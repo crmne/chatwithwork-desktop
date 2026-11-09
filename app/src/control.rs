@@ -85,58 +85,35 @@ impl Client {
             .map_err(|e| ControlError::Refused(format!("{e:#}")))
     }
 
-    /// Send `request` right after a change that may have restarted the
-    /// daemon (allowing changes in a folder gives it a new sandbox, and it
-    /// restarts to take it): while no daemon answers, within `patience`, ask
-    /// again. An answer, a refusal included, comes back at once. Only for
-    /// requests that are safe to repeat.
-    pub fn request_once_back(&self, request: &ControlRequest, patience: Duration) -> Result<Value> {
+    /// Wait, within `patience`, until the daemon answers with a status
+    /// `ready` accepts: after a change that may have restarted it (allowing
+    /// changes in a folder gives it a new sandbox, and it restarts to take
+    /// it). Only status is asked, from a thread of its own each time, so an
+    /// agent that never answers is given up on in time and a late answer
+    /// changes nothing. The change that follows is sent once, by the caller.
+    pub fn wait_until(&self, patience: Duration, ready: impl Fn(&Status) -> bool) -> Result<()> {
         let deadline = std::time::Instant::now() + patience;
         loop {
-            // Each attempt within what's left of the patience: one the agent
-            // accepts and never answers is given up on (its thread ends with
-            // the connection's own timeout, or the agent).
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            let (socket, asked) = (self.socket.clone(), request.clone());
-            // An attempt given up on before it's sent never sends: a later
-            // change the person makes isn't undone by a late one.
-            let abandoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let late = abandoned.clone();
+            let client = self.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(connect(&socket).and_then(|mut client| {
-                    if late.load(std::sync::atomic::Ordering::SeqCst) {
-                        return Err(ControlError::Refused("given up".into()));
-                    }
-                    client
-                        .call_raw(&asked)
-                        .map_err(|e| ControlError::Refused(format!("{e:#}")))
-                }));
+                let _ = tx.send(client.status());
             });
-            let answer = rx
-                .recv_timeout(left.max(Duration::from_millis(250)))
-                .unwrap_or_else(|_| {
-                    abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Err(ControlError::Refused(
-                        "the background agent didn't answer in time".into(),
-                    ))
-                });
-            match answer {
-                Ok(value) if value["ok"] == serde_json::json!(true) => return Ok(value),
-                Ok(value) => {
-                    return Err(ControlError::Refused(
-                        value["error"]
-                            .as_str()
-                            .unwrap_or("the daemon returned an error")
-                            .to_string(),
-                    ));
+            let last = match rx.recv_timeout(left.max(Duration::from_millis(250))) {
+                Ok(Ok(status)) if ready(&status) => return Ok(()),
+                Ok(Ok(_)) => {
+                    ControlError::Refused("the change didn't reach the background agent".into())
                 }
-                // No daemon, or one that went away mid-answer: it's restarting.
-                Err(_) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(250));
+                Ok(Err(e)) => e,
+                Err(_) => {
+                    ControlError::Refused("the background agent didn't answer in time".into())
                 }
-                Err(e) => return Err(e),
+            };
+            if std::time::Instant::now() >= deadline {
+                return Err(last);
             }
+            std::thread::sleep(Duration::from_millis(250));
         }
     }
 
@@ -438,11 +415,10 @@ mod tests {
         assert_eq!(next("the daemon gone", &|s| s.is_none()), None);
     }
 
-    /// Turning commands on right after allowing changes asks a daemon
-    /// that may be restarting: the request waits for it to answer again,
-    /// within its patience.
+    /// Turning commands on right after allowing changes waits for a daemon
+    /// that may be restarting, within its patience.
     #[test]
-    fn a_request_waits_for_a_restarting_daemon() {
+    fn waiting_for_a_restarting_daemon() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().canonicalize().unwrap();
         let paths = cww::paths::Paths::under(&base.join("cww"));
@@ -454,7 +430,7 @@ mod tests {
         .unwrap();
         let client = Client::new(paths.socket_path());
         assert!(matches!(
-            client.request_once_back(&ControlRequest::Status, Duration::from_millis(300)),
+            client.wait_until(Duration::from_millis(300), |_| true),
             Err(ControlError::NotRunning)
         ));
 
@@ -465,26 +441,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(700)).await;
             cww::daemon::run(later, stop, false).await
         });
-        let answer = client
-            .request_once_back(&ControlRequest::Status, Duration::from_secs(20))
+        client
+            .wait_until(Duration::from_secs(20), |status| !status.is_paired())
             .unwrap();
-        assert_eq!(answer["paired"], false);
-        // A refusal is an answer: it comes back at once, never retried.
+        // A status that never comes right is given up on at the patience.
         let started = std::time::Instant::now();
-        let refused = client.request_once_back(
-            &ControlRequest::RootsCommands {
-                root: "nowhere".into(),
-                commands: true,
-                network: false,
-                local_services: None,
-            },
-            Duration::from_secs(20),
-        );
         assert!(
-            matches!(refused, Err(ControlError::Refused(_))),
-            "{refused:?}"
+            client
+                .wait_until(Duration::from_secs(1), |_| false)
+                .is_err()
         );
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(3));
         shutdown.cancel();
         runtime.block_on(daemon).unwrap().unwrap();
     }
@@ -493,7 +460,7 @@ mod tests {
     /// once the patience runs out.
     #[cfg(unix)]
     #[test]
-    fn a_request_gives_up_on_an_agent_that_never_answers() {
+    fn waiting_gives_up_on_an_agent_that_never_answers() {
         let tmp = tempfile::tempdir().unwrap();
         let socket = tmp.path().join("cww.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -503,8 +470,7 @@ mod tests {
             drop(stream);
         });
         let started = std::time::Instant::now();
-        let answer =
-            Client::new(socket).request_once_back(&ControlRequest::Status, Duration::from_secs(1));
+        let answer = Client::new(socket).wait_until(Duration::from_secs(1), |_| true);
         let took = started.elapsed();
         assert!(
             matches!(answer, Err(ControlError::Refused(_))),
@@ -515,6 +481,63 @@ mod tests {
             "{took:?}"
         );
         held.join().unwrap();
+    }
+
+    /// Commands turned on after changes are sent once, and only once the
+    /// agent answers with the folder writable: an agent that never answers
+    /// is only ever asked for its status, so no activation is left behind to
+    /// land after a later Run commands off.
+    #[cfg(unix)]
+    #[test]
+    fn commands_are_never_sent_to_an_agent_that_never_answered() {
+        use std::io::Read;
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("cww.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let (log, stop) = (
+            heard.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        let stopping = stop.clone();
+        let server = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(200)))
+                        .unwrap();
+                    let mut line = [0u8; 4096];
+                    if let Ok(n) = stream.read(&mut line) {
+                        log.lock()
+                            .unwrap()
+                            .push_str(&String::from_utf8_lossy(&line[..n]));
+                    }
+                    held.push(stream);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let request = ControlRequest::RootsCommands {
+            root: "docs".into(),
+            commands: true,
+            network: false,
+            local_services: None,
+        };
+        let client = Client::new(socket);
+        let started = std::time::Instant::now();
+        assert!(
+            crate::computer::once_changes_reached_within(&client, &request, Duration::from_secs(1))
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(500));
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.join().unwrap();
+        let heard = heard.lock().unwrap();
+        assert!(heard.contains("\"status\""), "{heard}");
+        assert!(!heard.contains("roots_commands"), "{heard}");
     }
 
     #[test]

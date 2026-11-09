@@ -225,17 +225,14 @@ pub async fn control(
         // changes too (computer.rs, `changes_first`).
         if let Some(first) = crate::computer::changes_first(&request, &status) {
             desktop.client.request(&first).map_err(refused)?;
-            return desktop
-                .client
-                .request_once_back(&request, crate::computer::RESTART_PATIENCE)
-                .map_err(|e| {
-                    let code = if matches!(e, crate::control::ControlError::NotRunning) {
-                        "not_running"
-                    } else {
-                        "refused"
-                    };
-                    refusal(code, crate::computer::changes_kept(e))
-                });
+            return crate::computer::once_changes_reached(&desktop.client, &request).map_err(|e| {
+                let code = if matches!(e, crate::control::ControlError::NotRunning) {
+                    "not_running"
+                } else {
+                    "refused"
+                };
+                refusal(code, crate::computer::changes_kept(e))
+            });
         }
         desktop.client.request(&request).map_err(refused)
     })

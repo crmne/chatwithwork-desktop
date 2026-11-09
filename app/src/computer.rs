@@ -103,6 +103,47 @@ fn commands_unsupported(status: &Status) -> String {
 /// allowing changes restarted it under a new sandbox.
 pub const RESTART_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Sends `request` (commands on, `changes_first` just sent) once the agent
+/// answers with changes allowed in its folder: allowing them may have
+/// restarted it under a new sandbox. It's asked again only when no agent
+/// was listening, so nothing was sent; an answer, or a connection lost
+/// once the request may have been read, comes back as it is, and a late
+/// activation can never follow a later Run commands off.
+pub fn once_changes_reached(
+    client: &crate::control::Client,
+    request: &ControlRequest,
+) -> crate::control::Result<Value> {
+    once_changes_reached_within(client, request, RESTART_PATIENCE)
+}
+
+pub(crate) fn once_changes_reached_within(
+    client: &crate::control::Client,
+    request: &ControlRequest,
+    patience: std::time::Duration,
+) -> crate::control::Result<Value> {
+    let ControlRequest::RootsCommands { root, .. } = request else {
+        return client.request(request);
+    };
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        client.wait_until(left, |status| {
+            status
+                .roots
+                .iter()
+                .any(|folder| &folder.id == root && folder.writable)
+        })?;
+        match client.request(request) {
+            Err(crate::control::ControlError::NotRunning)
+                if std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            answer => return answer,
+        }
+    }
+}
+
 /// What a failure to turn commands on says when changes were just allowed
 /// for it: the folder keeps them.
 pub fn changes_kept(error: impl std::fmt::Display) -> String {

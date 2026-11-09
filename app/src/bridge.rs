@@ -123,9 +123,7 @@ pub async fn computer_change(
         }
         if let Some(first) = crate::computer::changes_first(&request, &status) {
             desktop.client.request(&first).map_err(|e| e.to_string())?;
-            desktop
-                .client
-                .request_once_back(&request, crate::computer::RESTART_PATIENCE)
+            crate::computer::once_changes_reached(&desktop.client, &request)
                 .map_err(crate::computer::changes_kept)?;
         } else {
             desktop
