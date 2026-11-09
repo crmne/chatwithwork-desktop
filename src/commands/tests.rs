@@ -306,7 +306,7 @@ fn macos_promises_no_memory_or_process_limit() {
     } else {
         assert_eq!(
             (limits.memory_mb, limits.processes),
-            (crate::config::default_command_memory_mb(), 256)
+            (crate::config::default_command_memory_mb(), 4_096)
         );
     }
 }
@@ -697,6 +697,34 @@ fn the_list_says_what_runs_where_running_first() {
     wait(&fx.runs, &running.id);
 }
 
+/// A coding bot's run starts many: the agent, its tools, and a test suite
+/// with a browser per worker (chalk, 24 cores, 2026-11-09: 256 stopped one).
+#[test]
+fn a_test_suite_fits_the_default_process_limit() {
+    if !sandbox_works() {
+        return;
+    }
+    let fx = fixture(true);
+    assert_eq!(fx.config.limits.command_processes, 4_096);
+    let status = fx
+        .runs
+        .start(
+            &fx.config,
+            // Counted while they all run, and long enough for the daemon
+            // to count them too.
+            &shell(
+                "for i in $(seq 1 600); do sleep 3 & done; jobs -p > pids; n=0; \
+                 while read p; do kill -0 \"$p\" && n=$((n+1)); done < pids; \
+                 echo \"alive $n\"; wait",
+            ),
+        )
+        .unwrap();
+    let done = wait(&fx.runs, &status.id);
+    assert_eq!(done.status.limit, None, "{done:?}");
+    assert_eq!(done.status.exit_code, Some(0), "{done:?}");
+    assert!(done.stdout.contains("alive 600"), "{done:?}");
+}
+
 #[test]
 fn a_command_is_stopped_at_its_process_limit() {
     if !sandbox_works() || !cfg!(target_os = "linux") {
@@ -715,6 +743,11 @@ fn a_command_is_stopped_at_its_process_limit() {
     assert_eq!(done.status.state, "stopped");
     assert_eq!(done.status.limit.as_deref(), Some("processes"));
     assert!(done.status.duration_ms < 10_000);
+    // The end of its output says what stopped it, for whoever reads it.
+    assert!(
+        done.stderr.contains("limit of 4 processes") && done.stderr.contains("command_processes"),
+        "{done:?}"
+    );
 
     fx.config.limits.command_processes = 64;
     let status = fx

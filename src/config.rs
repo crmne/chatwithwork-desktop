@@ -516,7 +516,10 @@ pub struct Limits {
     /// How long a command may run, in seconds, before it's stopped.
     pub command_timeout_seconds: u64,
     /// Processes a command may have at once, itself included, before it's
-    /// stopped. Checked by the daemon on Linux; MXC can't hold it there.
+    /// stopped, and its output says so. Checked by the daemon on Linux; MXC
+    /// can't hold it there. Generous on purpose: this is a backstop against
+    /// a runaway, and a coding bot's test suite starts one browser per
+    /// worker, about a dozen processes each. Zero is no limit.
     pub command_processes: u32,
     /// Commands running at once, across all chats. Zero is no limit; the
     /// default is this computer's CPU count ([`default_commands_running`]).
@@ -583,6 +586,9 @@ impl Limits {
         if self.command_memory_mb == 4_096 {
             self.command_memory_mb = new.command_memory_mb;
         }
+        if self.command_processes == 256 {
+            self.command_processes = new.command_processes;
+        }
     }
 }
 
@@ -627,7 +633,7 @@ impl Default for Limits {
             command_cpu_seconds: 0,
             command_memory_mb: default_command_memory_mb(),
             command_timeout_seconds: 1_800,
-            command_processes: 256,
+            command_processes: 4_096,
             commands_running: default_commands_running(),
             command_output_chars: 20_000,
             copy_bytes_per_hour: 0,
@@ -784,6 +790,26 @@ mod tests {
         assert_eq!(custom.command_cpu_seconds, 120);
         assert_eq!(custom.command_memory_mb, 6_000);
         assert!(Limits::default().commands_running >= 1);
+    }
+
+    /// 0.16.0 and earlier held each command to 256 processes, too few for
+    /// a test suite with a browser per worker: a config that still says
+    /// exactly that moves to the new default.
+    #[test]
+    fn the_old_process_limit_moves_up_and_a_custom_one_stays() {
+        assert_eq!(Limits::default().command_processes, 4_096);
+        let mut limits = Limits {
+            command_processes: 256,
+            ..Limits::default()
+        };
+        limits.raise_old_defaults();
+        assert_eq!(limits.command_processes, 4_096);
+        let mut custom = Limits {
+            command_processes: 500,
+            ..Limits::default()
+        };
+        custom.raise_old_defaults();
+        assert_eq!(custom.command_processes, 500);
     }
 
     /// 0.15.0 and earlier held each command to 4 GB: a config that still
