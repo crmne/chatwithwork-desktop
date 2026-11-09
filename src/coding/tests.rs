@@ -1178,7 +1178,10 @@ fn a_long_opencode_sign_in_split_across_sqlite_pages_is_found() {
 #[test]
 fn a_bots_run_trusts_only_the_checkouts_desktop_made_in_its_folder() {
     let dir = tempfile::tempdir().unwrap();
-    let program = dir.path().join("claude");
+    // In a folder of its own: one holding the shared folder is too broad to
+    // read, and on Windows the run then gets no Claude Code.
+    let program = dir.path().join("bin").join("claude");
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
     std::fs::write(&program, "").unwrap();
     let paths = crate::paths::Paths::under(&dir.path().join("cww"));
     let folder = dir.path().join("bots");

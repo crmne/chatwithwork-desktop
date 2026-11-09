@@ -827,7 +827,12 @@ impl Work {
     fn record(&self, repo: &Repository) -> Result<(), String> {
         Config::edit(&self.paths, |config| {
             self.still_allowed(config).map_err(anyhow::Error::msg)?;
-            if !config.coding.repositories.contains(repo) {
+            if !config
+                .coding
+                .repositories
+                .iter()
+                .any(|r| r.root == repo.root && r.name == repo.name)
+            {
                 config.coding.repositories.push(repo.clone());
             }
             Ok(())

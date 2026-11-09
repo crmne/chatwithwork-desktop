@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{Agent, AgentRun, CONFIG_FILE};
-use crate::config::Repository;
+use crate::config::{Config, Repository};
+use crate::paths::Paths;
 
 /// Codex's settings, in its folder.
 pub const CODEX_CONFIG_FILE: &str = "config.toml";
@@ -38,8 +39,58 @@ const REFLOG_MOST: u64 = 64 * 1024;
 /// `mirror`: as recorded since 0.16.1, or, for one recorded before, when
 /// the checkout's first reflog entry is git's own for a clone from that
 /// mirror. A checkout that was there already starts from somewhere else.
+/// The reflog is in the shared folder, so a run reads it only through
+/// [`settle`], once, before the first run there, which records the answer:
+/// what a command writes after that changes nothing.
 pub fn made_by_desktop(repo: &Repository, checkout: &Path, mirror: &Path) -> bool {
     repo.cloned.unwrap_or_else(|| cloned_from(checkout, mirror))
+}
+
+/// The settings for a run in the folder `root`, with whether Desktop made
+/// each of its checkouts recorded for those set up before 0.16.1: decided
+/// once, from what the folder held before any command since this version
+/// ran there. Where that can't be recorded, none of them is trusted.
+pub fn settle(config: &Config, paths: &Paths, root: &str) -> Config {
+    let unsettled = |r: &Repository| r.root == root && r.cloned.is_none();
+    let mut config = config.clone();
+    if !config.coding.repositories.iter().any(unsettled) {
+        return config;
+    }
+    let Some(folder) = config
+        .roots
+        .iter()
+        .find(|r| r.id == root)
+        .map(|r| r.path.clone())
+    else {
+        return config;
+    };
+    let settled = Config::edit(paths, |stored| {
+        for repo in stored
+            .coding
+            .repositories
+            .iter_mut()
+            .filter(|r| unsettled(r))
+        {
+            let mirror = super::repositories::mirror_dir(paths, repo);
+            repo.cloned = Some(cloned_from(&folder.join(&repo.name), &mirror));
+        }
+        Ok(stored.coding.repositories.clone())
+    });
+    match settled {
+        Ok(repositories) => config.coding.repositories = repositories,
+        Err(_) => {
+            tracing::warn!("couldn't record whether Desktop made a folder's checkouts");
+            for repo in config
+                .coding
+                .repositories
+                .iter_mut()
+                .filter(|r| r.root == root)
+            {
+                repo.cloned.get_or_insert(false);
+            }
+        }
+    }
+    config
 }
 
 /// Records whether Desktop made the checkout of `root`'s `name`, once the
@@ -62,11 +113,10 @@ pub fn note_checkout(
 pub fn cloned_from(checkout: &Path, mirror: &Path) -> bool {
     let log = checkout.join(".git").join("logs").join("HEAD");
     // Git's own files, never one a link leads to.
-    let plain = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink());
-    if !plain(&checkout.join(".git")) || !plain(&log) {
+    if !std::fs::symlink_metadata(checkout.join(".git")).is_ok_and(|m| m.is_dir()) {
         return false;
     }
-    let Ok(file) = std::fs::File::open(&log) else {
+    let Ok(file) = open_regular(&log) else {
         return false;
     };
     use std::io::{BufRead, Read};
@@ -95,7 +145,9 @@ pub fn checkouts(root: &Path, repos: &[(PathBuf, Repository)]) -> Vec<PathBuf> {
     };
     repos
         .iter()
-        .filter_map(|(mirror, repo)| {
+        // Recorded only: a reflog is read through `settle`, once.
+        .filter(|(_, repo)| repo.cloned == Some(true))
+        .filter_map(|(_, repo)| {
             let checkout = root.join(&repo.name);
             // Never through a link a command left in the folder.
             let real = std::fs::symlink_metadata(&checkout)
@@ -103,7 +155,7 @@ pub fn checkouts(root: &Path, repos: &[(PathBuf, Repository)]) -> Vec<PathBuf> {
                 .filter(|m| m.is_dir())
                 .and_then(|_| crate::roots::canonical(&checkout).ok())
                 .filter(|real| real.parent() == Some(root.as_path()))?;
-            made_by_desktop(repo, &real, mirror).then_some(real)
+            Some(real)
         })
         .collect()
 }
@@ -115,6 +167,10 @@ pub fn seed(agents: &[AgentRun], checkouts: &[PathBuf]) {
     if checkouts.is_empty() {
         return;
     }
+    // One at a time: two runs starting together would each write what they
+    // read, and the later would drop the other's entry.
+    static SEEDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = SEEDING.lock().unwrap_or_else(|e| e.into_inner());
     for run in agents {
         let written = match run.agent {
             Agent::ClaudeCode => claude_file(run).map(|file| trust_in_claude(&file, checkouts)),
@@ -143,11 +199,13 @@ pub fn seed(agents: &[AgentRun], checkouts: &[PathBuf]) {
 /// the `.claude.json` inside that folder.
 fn claude_file(run: &AgentRun) -> Option<PathBuf> {
     if cfg!(windows) {
-        run.login
-            .dir
-            .as_ref()
-            .map(|dir| dir.join(CONFIG_FILE))
-            .filter(|file| file.is_file())
+        let file = run.login.dir.as_ref()?.join(CONFIG_FILE);
+        // Claude Code makes it on its first run there; made now, that run
+        // reads the trust too.
+        if std::fs::symlink_metadata(&file).is_err() {
+            crate::paths::write_private_file(&file, b"{}\n").ok()?;
+        }
+        Some(file)
     } else {
         run.login.file.clone()
     }
@@ -206,7 +264,7 @@ pub fn trust_in_claude(file: &Path, checkouts: &[PathBuf]) -> anyhow::Result<usi
 /// the file already has without a level is left alone, since a second table
 /// of that name isn't TOML. How many it marked.
 pub fn trust_in_codex(file: &Path, checkouts: &[PathBuf]) -> anyhow::Result<usize> {
-    let mut text = if file.exists() {
+    let mut text = if std::fs::symlink_metadata(file).is_ok() {
         String::from_utf8(read(file)?)?
     } else {
         String::new()
@@ -245,10 +303,35 @@ pub fn trust_in_codex(file: &Path, checkouts: &[PathBuf]) -> anyhow::Result<usiz
     Ok(marked)
 }
 
+/// `file`, only when it's a regular file itself: never through a link (a
+/// command could link an agent's settings to a private file of the
+/// person's, which Desktop would then copy where commands read it), and
+/// never a FIFO, which would hold the run's start.
+fn open_regular(file: &Path) -> anyhow::Result<std::fs::File> {
+    anyhow::ensure!(
+        std::fs::symlink_metadata(file)?.is_file(),
+        "not a regular file"
+    );
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let opened = options.open(file)?;
+    anyhow::ensure!(opened.metadata()?.is_file(), "not a regular file");
+    Ok(opened)
+}
+
 fn read(file: &Path) -> anyhow::Result<Vec<u8>> {
-    let size = std::fs::metadata(file)?.len();
-    anyhow::ensure!(size <= MOST, "too large");
-    Ok(std::fs::read(file)?)
+    use std::io::Read;
+    let mut contents = Vec::new();
+    open_regular(file)?
+        .take(MOST + 1)
+        .read_to_end(&mut contents)?;
+    anyhow::ensure!(contents.len() as u64 <= MOST, "too large");
+    Ok(contents)
 }
 
 /// Writes `file` whole, beside it first, then over it, so the agent never
@@ -303,14 +386,17 @@ mod tests {
             "recorded as kept"
         );
         assert_eq!(
-            checkouts(&root, &[(mirror.clone(), repo(None))]),
+            checkouts(&root, &[(mirror.clone(), repo(Some(true)))]),
             vec![real]
+        );
+        assert!(
+            checkouts(&root, &[(mirror.clone(), repo(None))]).is_empty(),
+            "never from the reflog a command could have written, before it's settled"
         );
 
         // A checkout that was there already started from somewhere else.
         reflog(&checkout, "clone: from git@github.com:acme/app.git");
         assert!(!made_by_desktop(&repo(None), &checkout, &mirror));
-        assert!(checkouts(&root, &[(mirror.clone(), repo(None))]).is_empty());
         reflog(
             &checkout,
             &format!("clone: from {}-other", mirror.display()),
@@ -344,6 +430,93 @@ mod tests {
         assert_eq!(theirs[0].cloned, Some(false));
         note_checkout(&mut theirs, "bots", "other", false, &checkout, &mirror);
         assert_eq!(theirs[0].cloned, Some(false), "another checkout's");
+    }
+
+    #[test]
+    fn a_checkout_from_before_is_settled_once_before_the_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("cww"));
+        let folder = dir.path().join("bots");
+        let mut config = Config::default();
+        config.roots.push(crate::config::Root {
+            id: "bots".into(),
+            label: "bots".into(),
+            path: folder.clone(),
+            follow_symlinks: false,
+            writable: true,
+            commands: true,
+            network: true,
+            local_services: true,
+            reach: Vec::new(),
+            bots: Vec::new(),
+            read_budget: None,
+        });
+        let theirs = Repository {
+            name: "theirs".into(),
+            ..repo(None)
+        };
+        config.coding.repositories = vec![repo(None), theirs];
+        let mirror = super::super::repositories::mirror_dir(&paths, &repo(None));
+        reflog(
+            &folder.join("app"),
+            &format!("clone: from {}", mirror.display()),
+        );
+        reflog(
+            &folder.join("theirs"),
+            "clone: from git@github.com:acme/theirs.git",
+        );
+        config.save(&paths).unwrap();
+
+        let settled = settle(&config, &paths, "bots");
+        let cloned: Vec<_> = settled
+            .coding
+            .repositories
+            .iter()
+            .map(|r| r.cloned)
+            .collect();
+        assert_eq!(cloned, vec![Some(true), Some(false)]);
+        let stored = Config::load(&paths).unwrap();
+        assert_eq!(
+            stored.coding.repositories, settled.coding.repositories,
+            "recorded"
+        );
+
+        // A command that writes the reflog afterwards changes nothing.
+        reflog(
+            &folder.join("theirs"),
+            &format!("clone: from {}", mirror.display()),
+        );
+        let again = settle(&stored, &paths, "bots");
+        assert_eq!(again.coding.repositories[1].cloned, Some(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_a_link_is_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("app");
+        std::fs::create_dir_all(checkout.join(".git/logs")).unwrap();
+        let fifo =
+            std::ffi::CString::new(checkout.join(".git/logs/HEAD").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(
+            !cloned_from(&checkout, &dir.path().join("app.git")),
+            "and doesn't wait for a writer"
+        );
+
+        // A Codex settings file a command linked to a private file.
+        let private = dir.path().join("private.toml");
+        std::fs::write(&private, "secret = 1\n").unwrap();
+        let file = dir.path().join(CODEX_CONFIG_FILE);
+        std::os::unix::fs::symlink(&private, &file).unwrap();
+        assert!(trust_in_codex(&file, &[dir.path().join("app")]).is_err());
+        assert!(
+            std::fs::symlink_metadata(&file)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&private).unwrap(), "secret = 1\n");
     }
 
     #[cfg(unix)]

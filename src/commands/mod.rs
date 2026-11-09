@@ -648,8 +648,11 @@ impl Runs {
         let mut plan = plan(config, &self.paths, request, &id)?;
         // Read here, by whoever starts the run, never by the worker that
         // asked for it.
+        // Whether Desktop made the folder's checkouts, settled once for
+        // those set up before 0.16.1.
+        let settled = crate::coding::trust::settle(config, &self.paths, &request.root);
         plan.coding = crate::coding::for_run(
-            config,
+            &settled,
             &self.paths,
             &request.root,
             request.bot.as_deref(),
