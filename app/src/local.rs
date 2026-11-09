@@ -217,10 +217,20 @@ pub async fn control(
             crate::preferences::grant_context(&app, &desktop, &webview, &request)
                 .map_err(|e| refusal("forbidden", e))?;
         }
-        desktop.client.request(&request).map_err(|e| match e {
+        let refused = |e: crate::control::ControlError| match e {
             crate::control::ControlError::NotRunning => refusal("not_running", e.to_string()),
             other => refusal("refused", other.to_string()),
-        })
+        };
+        // Run commands in a read-only folder: its one question covered
+        // changes too (computer.rs, `changes_first`).
+        if let Some(first) = crate::computer::changes_first(&request, &status) {
+            desktop.client.request(&first).map_err(refused)?;
+            return desktop
+                .client
+                .request_once_back(&request, crate::computer::RESTART_PATIENCE)
+                .map_err(refused);
+        }
+        desktop.client.request(&request).map_err(refused)
     })
     .await?
 }

@@ -121,10 +121,18 @@ pub async fn computer_change(
                 return Ok(json!({ "declined": true }));
             }
         }
-        desktop
-            .client
-            .request(&request)
-            .map_err(|e| e.to_string())?;
+        if let Some(first) = crate::computer::changes_first(&request, &status) {
+            desktop.client.request(&first).map_err(|e| e.to_string())?;
+            desktop
+                .client
+                .request_once_back(&request, crate::computer::RESTART_PATIENCE)
+                .map_err(|e| e.to_string())?;
+        } else {
+            desktop
+                .client
+                .request(&request)
+                .map_err(|e| e.to_string())?;
+        }
         let status = desktop.client.status().ok();
         Ok(crate::computer::view(status.as_ref()))
     })

@@ -85,6 +85,24 @@ impl Client {
             .map_err(|e| ControlError::Refused(format!("{e:#}")))
     }
 
+    /// Send `request` right after a change that may have restarted the
+    /// daemon (allowing changes in a folder gives it a new sandbox, and it
+    /// restarts to take it): until the daemon answers again, within
+    /// `patience`, ask again. Only for requests that are safe to repeat.
+    pub fn request_once_back(&self, request: &ControlRequest, patience: Duration) -> Result<Value> {
+        let deadline = std::time::Instant::now() + patience;
+        loop {
+            match self.request(request) {
+                Err(ControlError::NotRunning | ControlError::Refused(_))
+                    if std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                answer => return answer,
+            }
+        }
+    }
+
     pub fn status(&self) -> Result<Status> {
         Ok(serde_json::from_value(
             self.request(&ControlRequest::Status)?,
@@ -381,6 +399,41 @@ mod tests {
         shutdown.cancel();
         runtime.block_on(daemon).unwrap().unwrap();
         assert_eq!(next("the daemon gone", &|s| s.is_none()), None);
+    }
+
+    /// Turning commands on right after allowing changes asks a daemon
+    /// that may be restarting: the request waits for it to answer again,
+    /// within its patience.
+    #[test]
+    fn a_request_waits_for_a_restarting_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let paths = cww::paths::Paths::under(&base.join("cww"));
+        cww::config::Config {
+            secret_store: Some("file".into()),
+            ..cww::config::Config::default()
+        }
+        .save(&paths)
+        .unwrap();
+        let client = Client::new(paths.socket_path());
+        assert!(matches!(
+            client.request_once_back(&ControlRequest::Status, Duration::from_millis(300)),
+            Err(ControlError::NotRunning)
+        ));
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let (later, stop) = (paths.clone(), shutdown.clone());
+        let daemon = runtime.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            cww::daemon::run(later, stop, false).await
+        });
+        let answer = client
+            .request_once_back(&ControlRequest::Status, Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(answer["paired"], false);
+        shutdown.cancel();
+        runtime.block_on(daemon).unwrap().unwrap();
     }
 
     #[test]

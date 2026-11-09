@@ -577,16 +577,28 @@ impl Demo {
                     Self::event(s, "reloaded");
                 });
                 let me = Arc::clone(self);
+                // It indexes as a real folder does, reporting every 500
+                // files for a while, so pictures and tries see the switches
+                // work while it does (`CWW_DEMO_INDEX_SECONDS`, else 3).
+                let seconds: u64 = std::env::var("CWW_DEMO_INDEX_SECONDS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3);
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(3));
-                    me.change(|s| {
-                        for r in s.status["roots"].as_array_mut().expect("roots") {
-                            if r["id"] == json!(id) {
-                                r["index"] = json!("ready");
-                                r["indexed_files"] = json!(87);
+                    let ticks = seconds * 4;
+                    for tick in 1..=ticks {
+                        std::thread::sleep(Duration::from_millis(250));
+                        let done = tick == ticks;
+                        me.change(|s| {
+                            for r in s.status["roots"].as_array_mut().expect("roots") {
+                                if r["id"] == json!(id) {
+                                    r["index"] = json!(if done { "ready" } else { "indexing" });
+                                    r["indexed_files"] =
+                                        json!(if done { 87 + tick * 500 } else { tick * 500 });
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 });
                 json!({ "ok": true, "root": root })
             }

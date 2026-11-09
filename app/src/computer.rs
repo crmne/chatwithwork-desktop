@@ -99,6 +99,31 @@ fn commands_unsupported(status: &Status) -> String {
     }
 }
 
+/// How long turning commands on waits for the daemon to come back after
+/// allowing changes restarted it under a new sandbox.
+pub const RESTART_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What must be allowed before `request` can be: commands change files, so
+/// turning them on in a read-only folder allows changes there first. The
+/// question for the commands (`Change::Commands`) says so, and one yes covers
+/// both. Indexing never holds either up.
+pub fn changes_first(request: &ControlRequest, status: &Status) -> Option<ControlRequest> {
+    let ControlRequest::RootsCommands {
+        root,
+        commands: true,
+        ..
+    } = request
+    else {
+        return None;
+    };
+    let folder = status.roots.iter().find(|folder| &folder.id == root)?;
+    (!folder.writable).then(|| ControlRequest::RootsWritable {
+        root: root.clone(),
+        writable: true,
+        i_know: false,
+    })
+}
+
 /// What a page may ask. Anything else is refused before it reaches the
 /// daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -203,14 +228,19 @@ impl Change {
                 if *on && !root.allows_commands && !commands_supported(Some(status)) {
                     return Err(commands_unsupported(status));
                 }
-                if *on && !root.writable {
-                    return Err("Allow changes in this folder first.".into());
-                }
+                // A read-only folder gets changes too, in the same question:
+                // commands change files (`changes_first`).
+                let changes_too = *on && !root.writable;
                 let question = if *on && !root.allows_commands {
                     ask(
                         "Allow Commands",
                         format!(
-                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. {}",
+                            "Let Chat with Work {} in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. {}",
+                            if changes_too {
+                                "change files and run commands"
+                            } else {
+                                "run commands"
+                            },
                             root.label,
                             if cfg!(windows) {
                                 "It has no network unless you allow the internet."
@@ -829,11 +859,6 @@ mod tests {
                 .is_err()
         );
         assert!(
-            change(json!({ "action": "commands", "folder": "docs", "on": true }))
-                .plan(&status)
-                .is_err()
-        );
-        assert!(
             change(json!({ "action": "network", "folder": "docs", "on": true }))
                 .plan(&status)
                 .is_err()
@@ -843,6 +868,51 @@ mod tests {
                 .plan(&status)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn commands_in_a_read_only_folder_allow_changes_first_with_one_question() {
+        let mut status = status();
+        status.roots[0].index = "indexing".into();
+        let (request, question) =
+            change(json!({ "action": "commands", "folder": "docs", "on": true }))
+                .plan(&status)
+                .unwrap();
+        let question = question.expect("widening asks");
+        assert!(
+            question
+                .message
+                .starts_with("Let Chat with Work change files and run commands in “Docs”?"),
+            "{}",
+            question.message
+        );
+        assert_eq!(
+            changes_first(&request, &status),
+            Some(ControlRequest::RootsWritable {
+                root: "docs".into(),
+                writable: true,
+                i_know: false,
+            })
+        );
+        // A folder that allows changes needs nothing first, and its question
+        // speaks of commands alone; turning commands off needs nothing either.
+        status.roots[0].writable = true;
+        let (request, question) =
+            change(json!({ "action": "commands", "folder": "docs", "on": true }))
+                .plan(&status)
+                .unwrap();
+        assert!(
+            question
+                .unwrap()
+                .message
+                .starts_with("Let Chat with Work run commands in “Docs”?")
+        );
+        assert_eq!(changes_first(&request, &status), None);
+        status.roots[0].writable = false;
+        let (off, _) = change(json!({ "action": "commands", "folder": "docs", "on": false }))
+            .plan(&status)
+            .unwrap();
+        assert_eq!(changes_first(&off, &status), None);
     }
 
     #[test]
