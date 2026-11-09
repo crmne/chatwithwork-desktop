@@ -2285,9 +2285,7 @@ fn host_exe() -> Result<PathBuf> {
 fn audit_here(paths: &Paths, event: &str, detail: String) {
     let mut entry = audit::AuditEntry::event(event);
     entry.detail = Some(detail);
-    if let Err(e) =
-        audit::AuditLog::open(&paths.audit_file()).and_then(|log| log.try_append(&entry))
-    {
+    if let Err(e) = audit::append_from_outside(&paths.audit_file(), &entry) {
         eprintln!("warning: couldn't write the audit log: {e:#}");
     }
 }

@@ -140,9 +140,7 @@ impl AuditLog {
         }
     }
 
-    /// As [`Self::append`], saying whether it was written, for `cww`, which
-    /// has no one listening and no log of its own.
-    pub fn try_append(&self, entry: &AuditEntry) -> Result<()> {
+    fn try_append(&self, entry: &AuditEntry) -> Result<()> {
         let mut line = serde_json::to_vec(entry)?;
         line.push(b'\n');
         let mut file = self.file.lock().expect("audit lock");
@@ -153,6 +151,20 @@ impl AuditLog {
         file.write_all(&line)?;
         Ok(())
     }
+}
+
+/// Appends one entry to the log at `path` from another process than the
+/// agent's (`cww` changing the config itself), saying whether it was
+/// written. It never rotates the log: an agent starting at that moment may
+/// already hold it open, and rotates it on its own next entry.
+pub fn append_from_outside(path: &Path, entry: &AuditEntry) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        crate::paths::ensure_private_dir(dir)?;
+    }
+    let mut line = serde_json::to_vec(entry)?;
+    line.push(b'\n');
+    open_append(path)?.write_all(&line)?;
+    Ok(())
 }
 
 fn open_append(path: &Path) -> Result<File> {
