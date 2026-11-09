@@ -295,6 +295,7 @@ fn fresh() -> State {
     let status = json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
+        "commands_with_changes": true,
         "pid": 4242,
         "connection": { "connection": "not_paired", "since": ago(5) },
         "server": null,
@@ -419,6 +420,7 @@ fn sample() -> State {
     let status = json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
+        "commands_with_changes": true,
         "pid": 4242,
         "connection": { "connection": "connected", "since": ago(26 * 3600 - 2) },
         "server": "https://chatwithwork.com",
@@ -577,16 +579,29 @@ impl Demo {
                     Self::event(s, "reloaded");
                 });
                 let me = Arc::clone(self);
+                // It indexes as a real folder does, reporting every 500
+                // files for a while, so pictures and tries see the switches
+                // work while it does (`CWW_DEMO_INDEX_SECONDS`, else 3).
+                let seconds: u64 = std::env::var("CWW_DEMO_INDEX_SECONDS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3)
+                    .max(1);
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(3));
-                    me.change(|s| {
-                        for r in s.status["roots"].as_array_mut().expect("roots") {
-                            if r["id"] == json!(id) {
-                                r["index"] = json!("ready");
-                                r["indexed_files"] = json!(87);
+                    let ticks = seconds * 4;
+                    for tick in 1..=ticks {
+                        std::thread::sleep(Duration::from_millis(250));
+                        let done = tick == ticks;
+                        me.change(|s| {
+                            for r in s.status["roots"].as_array_mut().expect("roots") {
+                                if r["id"] == json!(id) {
+                                    r["index"] = json!(if done { "ready" } else { "indexing" });
+                                    r["indexed_files"] =
+                                        json!(if done { 87 + tick * 500 } else { tick * 500 });
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 });
                 json!({ "ok": true, "root": root })
             }
@@ -721,9 +736,13 @@ impl Demo {
                 let which = request["root"].as_str().unwrap_or_default().to_string();
                 let commands = request["commands"].as_bool().unwrap_or(false);
                 let network = commands && request["network"].as_bool().unwrap_or(false);
+                let with_changes = commands && request["with_changes"].as_bool().unwrap_or(false);
                 self.change(|s| {
                     for r in s.status["roots"].as_array_mut().expect("roots") {
                         if r["id"] == json!(which) {
+                            if with_changes {
+                                r["writable"] = json!(true);
+                            }
                             r["allows_commands"] = json!(commands);
                             r["network"] = json!(network);
                         }

@@ -150,6 +150,21 @@ export function statusChanged(app) {
   if (app.page === "folders") enter(app);
 }
 
+// Only a folder's index moved on: its label changes where it is, and
+// nothing else is drawn again, so a switch being pressed stays under the
+// pointer while a folder indexes.
+export function indexChanged(app) {
+  if (app.page !== "folders") return false;
+  for (const root of app.status?.roots || []) {
+    const label = document.querySelector(`[data-index-of="${CSS.escape(root.id)}"]`);
+    if (!label) return false;
+    const [text, tone] = indexState(root);
+    label.textContent = text;
+    label.className = `state state--${tone}`;
+  }
+  return true;
+}
+
 function folderRow(app, root) {
   const view = app.view("folders");
   const busy = view.busy === root.id;
@@ -159,6 +174,8 @@ function folderRow(app, root) {
   const commanding = view.commanding === root.id;
   const [indexLabel, tone] = indexState(root);
   const runsCommands = commandsHere(app);
+  // An agent before 0.16.1 refuses commands in a read-only folder.
+  const withChanges = !!app.status?.commands_with_changes;
 
   const setting = (titleText, text, control, stack = false) =>
     h("div", { class: stack ? "row row--stack" : "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), h("p", {}, text)), h("div", { class: "row__actions" }, control));
@@ -166,7 +183,7 @@ function folderRow(app, root) {
   return h("div", { class: "row row--stack" },
     h("div", { class: "row__head" },
       h("div", { class: "row__body" },
-        h("h3", {}, root.label, h("span", { class: `state state--${tone}` }, indexLabel)),
+        h("h3", {}, root.label, h("span", { class: `state state--${tone}`, "data-index-of": root.id }, indexLabel)),
         h("span", { class: "micro truncate", title: `Chat with Work sees this folder as “${root.id}:”` },
           displayPath(root.local_path, app.info.home))),
       !renaming && !removing ? h("div", { class: "row__actions" },
@@ -237,9 +254,12 @@ function folderRow(app, root) {
           button("Allow Changes", () => allow(app, root), { kind: "btn-primary", disabled: !view.confirmation }))) : null,
 
       // Keep the switch visible when a prerequisite is missing. An existing grant can still be stopped.
-      setting("Run commands", !root.writable ? "Allow changes first."
-        : !runsCommands && !root.allows_commands ? commandsUnavailable(app)
+      // Never waits for the index, and a read-only folder isn't a dead end:
+      // turning this on there allows changes too, in the same question.
+      setting("Run commands", !runsCommands && !root.allows_commands ? commandsUnavailable(app)
         : root.allows_commands ? "Runs approved commands in this folder’s sandbox."
+        : !root.writable && !withChanges ? "Allow changes first. This computer’s background agent needs 0.16.1 to allow both at once."
+        : !root.writable ? "Run code, tests or builds in this folder’s sandbox. Turning this on allows changes too."
         : "Run code, tests or builds in this folder’s sandbox.",
       switchInput(root.allows_commands || commanding, (on) => {
         if (on) {
@@ -247,7 +267,7 @@ function folderRow(app, root) {
         } else {
           return change(app, root.id, { cmd: "roots_commands", root: root.id, commands: false, network: false });
         }
-      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!root.writable || !runsCommands)) })),
+      }, { label: `Run commands in ${root.label}`, disabled: busy || commanding || (!root.allows_commands && (!runsCommands || (!root.writable && !withChanges))) })),
       commanding ? h("div", { class: "confirm" },
         h("p", {}, view.confirmation?.message || "Checking this folder’s permissions…"),
         h("div", { class: "inline" },
@@ -395,4 +415,4 @@ export function render(app) {
   return page;
 }
 
-export default { title, icon, render, enter, statusChanged, leave, listen };
+export default { title, icon, render, enter, statusChanged, indexChanged, leave, listen };

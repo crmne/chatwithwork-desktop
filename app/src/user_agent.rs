@@ -11,7 +11,7 @@
 
 /// What this build can do for the page, as `bridge-components`. Add a name
 /// when the page API gains something the server should know about.
-pub const COMPONENTS: [&str; 9] = [
+pub const COMPONENTS: [&str; 10] = [
     "external",
     "preferences",
     "auth-session",
@@ -21,6 +21,9 @@ pub const COMPONENTS: [&str; 9] = [
     "settings-pane-v1",
     "coding-setup",
     "allow-reach",
+    // `allowCommands` in a read-only folder asks once and allows changes
+    // too, so the page needn't hold Run commands back behind Allow changes.
+    "commands-with-changes",
 ];
 
 pub fn platform() -> &'static str {
@@ -80,7 +83,7 @@ mod tests {
         let ua = user_agent("0.4.0");
         assert!(ua.starts_with("Mozilla/5.0 ("));
         assert!(ua.ends_with(&format!(
-            "(Chat with Work Desktop; platform={}; version=0.4.0; build=400; bridge-components: [external preferences auth-session downloads computer scan settings-pane-v1 coding-setup allow-reach])",
+            "(Chat with Work Desktop; platform={}; version=0.4.0; build=400; bridge-components: [external preferences auth-session downloads computer scan settings-pane-v1 coding-setup allow-reach commands-with-changes])",
             platform()
         )));
     }

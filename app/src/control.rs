@@ -383,6 +383,75 @@ mod tests {
         assert_eq!(next("the daemon gone", &|s| s.is_none()), None);
     }
 
+    /// Run commands in a read-only folder, against the real daemon: refused
+    /// alone, and with `with_changes` (after the person's one yes) changes
+    /// and commands are allowed together, in one edit.
+    #[cfg(not(windows))]
+    #[test]
+    fn commands_with_changes_allow_both_in_one_edit() {
+        use std::sync::mpsc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let paths = cww::paths::Paths::under(&base.join("cww"));
+        let docs = base.join("Docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        cww::config::Config {
+            secret_store: Some("file".into()),
+            ..cww::config::Config::default()
+        }
+        .save(&paths)
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let daemon = runtime.spawn(cww::daemon::run(paths.clone(), shutdown.clone(), false));
+        let client = Client::new(paths.socket_path());
+        let (tx, rx) = mpsc::channel();
+        client.spawn_watch(move |status| {
+            let _ = tx.send(status);
+        });
+        let until = |what: &str, check: &dyn Fn(&Status) -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match rx.recv_timeout(left) {
+                    Ok(Some(status)) if check(&status) => return status,
+                    Ok(_) => {}
+                    Err(e) => panic!("no status with {what}: {e}"),
+                }
+            }
+        };
+        until("the daemon running", &|_| true);
+        client.add_root(&docs, Some("Docs")).unwrap();
+        until("the folder", &|s| !s.roots.is_empty());
+
+        let on = |with_changes| ControlRequest::RootsCommands {
+            root: "docs".into(),
+            commands: true,
+            network: false,
+            local_services: None,
+            with_changes,
+        };
+        match client.request(&on(false)) {
+            Err(ControlError::Refused(message)) => {
+                assert!(message.contains("doesn't allow changes"), "{message}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        client.request(&on(true)).unwrap();
+        let both = until("changes and commands", &|s| {
+            s.roots[0].writable && s.roots[0].allows_commands
+        });
+        assert!(both.roots[0].writable && both.roots[0].allows_commands);
+        let log = client.log(50).unwrap();
+        let events: Vec<_> = log.iter().map(|e| e.event.as_str()).collect();
+        assert!(events.contains(&"root_changes_allowed"), "{events:?}");
+        assert!(events.contains(&"root_commands_allowed"), "{events:?}");
+
+        shutdown.cancel();
+        runtime.block_on(daemon).unwrap().unwrap();
+    }
+
     #[test]
     fn a_missing_socket_means_not_running() {
         let tmp = tempfile::tempdir().unwrap();

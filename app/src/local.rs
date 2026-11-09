@@ -217,6 +217,9 @@ pub async fn control(
             crate::preferences::grant_context(&app, &desktop, &webview, &request)
                 .map_err(|e| refusal("forbidden", e))?;
         }
+        // Run commands in a read-only folder: its one question covered
+        // changes too, so the agent allows both in one edit.
+        let request = crate::computer::with_changes(request, &status);
         desktop.client.request(&request).map_err(|e| match e {
             crate::control::ControlError::NotRunning => refusal("not_running", e.to_string()),
             other => refusal("refused", other.to_string()),

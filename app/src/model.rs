@@ -37,6 +37,9 @@ pub struct Status {
     /// unattended or to run Claude Code, waiting for the person here
     /// (CONTROL.md, `status`).
     pub unattended_asks: Vec<UnattendedAsk>,
+    /// The agent takes `roots_commands` with `with_changes` (0.16.1); an
+    /// older one refuses commands in a read-only folder.
+    pub commands_with_changes: bool,
 }
 
 /// A bot's request for unattended commands, named from this computer's own
@@ -220,6 +223,13 @@ pub struct DenyList {
 }
 
 impl Status {
+    /// Whether the background agent takes `roots_commands` with
+    /// `with_changes` (0.16.1): an older one refuses commands in a read-only
+    /// folder, so changes come first there.
+    pub fn takes_commands_with_changes(&self) -> bool {
+        self.commands_with_changes
+    }
+
     pub fn is_paired(&self) -> bool {
         self.server.is_some()
     }

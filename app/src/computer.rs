@@ -99,6 +99,37 @@ fn commands_unsupported(status: &Status) -> String {
     }
 }
 
+/// Commands change files, so turning them on in a read-only folder allows
+/// changes there too, in the same request (`with_changes`): one edit of the
+/// agent's settings, one restart under the new sandbox, nothing left to send
+/// after it. The question for the commands (`Change::Commands`) says so, and
+/// one yes covers both. Indexing never holds either up.
+pub fn with_changes(request: ControlRequest, status: &Status) -> ControlRequest {
+    match request {
+        ControlRequest::RootsCommands {
+            root,
+            commands: true,
+            network,
+            local_services,
+            ..
+        } => {
+            let read_only = status.takes_commands_with_changes()
+                && status
+                    .roots
+                    .iter()
+                    .any(|folder| folder.id == root && !folder.writable);
+            ControlRequest::RootsCommands {
+                root,
+                commands: true,
+                network,
+                local_services,
+                with_changes: read_only,
+            }
+        }
+        other => other,
+    }
+}
+
 /// What a page may ask. Anything else is refused before it reaches the
 /// daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -203,14 +234,22 @@ impl Change {
                 if *on && !root.allows_commands && !commands_supported(Some(status)) {
                     return Err(commands_unsupported(status));
                 }
-                if *on && !root.writable {
-                    return Err("Allow changes in this folder first.".into());
+                // A read-only folder gets changes too, in the same question:
+                // commands change files (`with_changes`).
+                let changes_too = *on && !root.writable;
+                if changes_too && !status.takes_commands_with_changes() {
+                    return Err("Allow changes in this folder first: this computer's background agent is older than 0.16.1, which allows both at once.".into());
                 }
                 let question = if *on && !root.allows_commands {
                     ask(
                         "Allow Commands",
                         format!(
-                            "Let Chat with Work run commands in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. {}",
+                            "Let Chat with Work {} in “{}”? Each one is approved in Chat with Work, or runs without asking in a chat where you chose Allow everything. A command can change or delete anything in this folder, and nothing outside it. {}",
+                            if changes_too {
+                                "change files and run commands"
+                            } else {
+                                "run commands"
+                            },
                             root.label,
                             if cfg!(windows) {
                                 "It has no network unless you allow the internet."
@@ -230,6 +269,7 @@ impl Change {
                         // Asking again for what's allowed keeps its network as it is.
                         network: *on && root.allows_commands && root.network,
                         local_services: None,
+                        with_changes: changes_too,
                     },
                     question,
                 )
@@ -257,6 +297,7 @@ impl Change {
                         commands: true,
                         network: *on,
                         local_services: None,
+                        with_changes: false,
                     },
                     question,
                 )
@@ -641,6 +682,7 @@ mod tests {
                 commands: true,
                 network: true,
                 local_services: None,
+                with_changes: false,
             }
         );
     }
@@ -829,11 +871,6 @@ mod tests {
                 .is_err()
         );
         assert!(
-            change(json!({ "action": "commands", "folder": "docs", "on": true }))
-                .plan(&status)
-                .is_err()
-        );
-        assert!(
             change(json!({ "action": "network", "folder": "docs", "on": true }))
                 .plan(&status)
                 .is_err()
@@ -843,6 +880,106 @@ mod tests {
                 .plan(&status)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn commands_in_a_read_only_folder_allow_changes_too_with_one_question() {
+        let mut status = status();
+        status.roots[0].index = "indexing".into();
+        status.commands_with_changes = true;
+        // A Windows that sandboxes commands, as macOS and Linux always do.
+        status.commands = Some(crate::model::CommandsHost {
+            available: true,
+            detail: None,
+            drives: Vec::new(),
+        });
+        let (request, question) =
+            change(json!({ "action": "commands", "folder": "docs", "on": true }))
+                .plan(&status)
+                .unwrap();
+        let question = question.expect("widening asks");
+        assert!(
+            question
+                .message
+                .starts_with("Let Chat with Work change files and run commands in “Docs”?"),
+            "{}",
+            question.message
+        );
+        // A page's request goes to the agent as planned.
+        assert!(matches!(
+            &request,
+            ControlRequest::RootsCommands {
+                commands: true,
+                with_changes: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            with_changes(request, &status),
+            ControlRequest::RootsCommands {
+                commands: true,
+                with_changes: true,
+                ..
+            }
+        ));
+        // A folder that allows changes needs nothing more, and its question
+        // speaks of commands alone; turning commands off never allows changes.
+        status.roots[0].writable = true;
+        let (request, question) =
+            change(json!({ "action": "commands", "folder": "docs", "on": true }))
+                .plan(&status)
+                .unwrap();
+        assert!(
+            question
+                .unwrap()
+                .message
+                .starts_with("Let Chat with Work run commands in “Docs”?")
+        );
+        assert!(matches!(
+            with_changes(request, &status),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
+        status.roots[0].writable = false;
+        // An agent before 0.16.1 can't allow both: changes come first, and
+        // nothing asks it for what it would ignore.
+        let mut old = status.clone();
+        old.commands_with_changes = false;
+        let refused = change(json!({ "action": "commands", "folder": "docs", "on": true }))
+            .plan(&old)
+            .unwrap_err();
+        assert!(
+            refused.starts_with("Allow changes in this folder first"),
+            "{refused}"
+        );
+        assert!(matches!(
+            with_changes(
+                ControlRequest::RootsCommands {
+                    root: "docs".into(),
+                    commands: true,
+                    network: false,
+                    local_services: None,
+                    with_changes: false,
+                },
+                &old
+            ),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
+        let (off, _) = change(json!({ "action": "commands", "folder": "docs", "on": false }))
+            .plan(&status)
+            .unwrap();
+        assert!(matches!(
+            with_changes(off, &status),
+            ControlRequest::RootsCommands {
+                with_changes: false,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -417,6 +417,7 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
                 commands: *commands,
                 network: *network,
                 local_services: *local_services,
+                with_changes: false,
             };
             let done = |label: &str, level: crate::reach::Level| match (*commands, local_services) {
                 (true, Some(_)) => format!("Commands in {label} reach: {}.", level.words()),

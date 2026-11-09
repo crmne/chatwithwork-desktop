@@ -14,7 +14,7 @@ const root = { id: "work", label: "work", local_path: "C:\\Users\\a\\work", writ
 
 function page(platform, commands, roots = [root], context = {}) {
   const views = {};
-  const app = { context, info: { platform, home: "C:\\Users\\a" }, status: { roots, commands }, view: (n) => (views[n] ||= {}), render() {} };
+  const app = { context, info: { platform, home: "C:\\Users\\a" }, status: { roots, commands, commands_with_changes: true }, view: (n) => (views[n] ||= {}), render() {} };
   return render(app);
 }
 
@@ -40,12 +40,12 @@ test("a drive Node.js can't see is offered to an administrator", () => {
 });
 
 
-test("read-only folders still explain how to enable commands, and private exclusions live below folders", () => {
+test("read-only folders can turn on commands, which allows changes too, and private exclusions live below folders", () => {
   const tree = page("linux", null, [{...root, writable:false, bots:[{id:"42",name:"Issue fixer"}]}]);
   assert.ok(byText(tree, "h3", "Run commands"));
-  assert.ok(byText(tree, "p", "Allow changes"));
+  assert.ok(byText(tree, "p", "Turning this on allows changes too."));
   const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
-  assert.equal(command.disabled, true);
+  assert.equal(command.disabled, false);
   assert.ok(byText(tree, "h2", "Excluded files and folders"));
   assert.ok(tree.textContent.includes("Issue fixer"));
   assert.ok(!tree.textContent.includes("Lend"));
@@ -105,4 +105,66 @@ test("leaving before inline preparation returns cancels that token without chang
     assert.deepEqual(calls.slice(before).map(c=>c.command),["prepare_control","cancel_control"]);
     assert.equal(byText(render(app),"button","Allow Changes"),null);
   } finally {globalThis.__TAURI_INTERNALS__.invoke=invoke;}
+});
+
+test("no choice waits for a folder to finish indexing", () => {
+  for (const index of ["pending", "indexing", "error"]) {
+    for (const writable of [false, true]) {
+      const tree = page("linux", null, [{ ...root, writable, index, indexed_files: 1200 }]);
+      for (const label of ["Allow changes in work", "Run commands in work"]) {
+        const control = [...walk(tree)].find(e => e.attributes?.["aria-label"] === label);
+        assert.equal(control.disabled, false, `${label} while ${index}, writable ${writable}`);
+      }
+    }
+  }
+});
+
+test("Run commands in a read-only folder asks once, then allows changes and commands", async () => {
+  const invoke=globalThis.__TAURI_INTERNALS__.invoke;
+  globalThis.__TAURI_INTERNALS__.invoke=async(command,args)=>{
+    calls.push({command,args});
+    return command==="prepare_control"?{confirmation:"one-use",message:"Let Chat with Work change files and run commands in “work”?"}:{};
+  };
+  const views={};const app={page:"folders",context:{},info:{platform:"linux"},status:{roots:[{...root,writable:false,index:"indexing"}],commands_with_changes:true},view:n=>views[n]||=({}),render(){}};
+  try {
+    const control=[...walk(render(app))].find(e=>e.attributes?.["aria-label"]==="Run commands in work");
+    const before=calls.length;control.checked=true;control.fire("change");
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(calls.slice(before).map(c=>c.command),["prepare_control"]);
+    assert.ok(byText(render(app),"p","change files and run commands"));
+    byText(render(app),"button","Allow Commands").fire("click");
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(calls.at(-1),{command:"control",args:{request:{cmd:"roots_commands",root:"work",commands:true,network:false},confirmation:"one-use"}});
+  } finally {globalThis.__TAURI_INTERNALS__.invoke=invoke;}
+});
+
+test("index progress updates the folder's label in place instead of drawing the page again", async () => {
+  const { indexChanged } = await import("../ui/pages/folders.js");
+  const { withoutIndexProgress } = await import("../ui/app.js");
+  const before = { roots: [{ ...root, index: "indexing", indexed_files: 500 }] };
+  const after = { roots: [{ ...root, index: "indexing", indexed_files: 1000 }] };
+  assert.equal(withoutIndexProgress(before), withoutIndexProgress(after));
+  assert.notEqual(withoutIndexProgress(before), withoutIndexProgress({ roots: [{ ...root, writable: false }] }));
+  const label = { textContent: "Indexing…", className: "state state--live" };
+  const query = globalThis.document.querySelector;
+  globalThis.CSS = { escape: (s) => s };
+  globalThis.document.querySelector = (selector) => selector === '[data-index-of="work"]' ? label : null;
+  try {
+    const app = { page: "folders", status: { roots: [{ ...root, index: "ready", indexed_files: 1500 }] } };
+    assert.equal(indexChanged(app), true);
+    assert.equal(label.textContent, "Indexed · 1,500 files");
+    assert.equal(label.className, "state state--positive");
+    // A folder the page doesn't show yet draws the page again.
+    assert.equal(indexChanged({ page: "folders", status: { roots: [{ ...root, id: "new" }] } }), false);
+    assert.equal(indexChanged({ ...app, page: "general" }), false);
+  } finally { globalThis.document.querySelector = query; }
+});
+
+test("an agent before 0.16.1 keeps a read-only folder's Run commands behind Allow changes, and says why", () => {
+  const views = {};
+  const app = { context: {}, info: { platform: "linux" }, status: { roots: [{ ...root, writable: false }] }, view: (n) => (views[n] ||= {}), render() {} };
+  const tree = render(app);
+  const command = [...walk(tree)].find(e => e.attributes?.["aria-label"] === "Run commands in work");
+  assert.equal(command.disabled, true);
+  assert.ok(byText(tree, "p", "needs 0.16.1"));
 });

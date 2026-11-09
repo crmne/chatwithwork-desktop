@@ -255,6 +255,13 @@ function renderNav() {
   );
 }
 
+// A status payload without what indexing moves on its own: each folder's
+// index state and file count.
+export function withoutIndexProgress(payload) {
+  return JSON.stringify(payload, (key, value) =>
+    key === "index" || key === "indexed_files" ? undefined : value);
+}
+
 async function start() {
   app.info = await call("app_info");
   const take = (payload) => {
@@ -266,19 +273,26 @@ async function start() {
   // Redraw only when the status really changed: compare each payload with
   // the one before, as the app serialized them.
   let previous = JSON.stringify(app.info.status);
+  let previousShape = withoutIndexProgress(app.info.status);
   await on("status", (payload) => {
     const serialized = JSON.stringify(payload);
     const changed = serialized !== previous;
+    const shape = withoutIndexProgress(payload);
+    const progressOnly = changed && shape === previousShape;
     previous = serialized;
+    previousShape = shape;
     take(payload);
     if (app.reconnecting && app.status) {
       app.reconnecting = false;
       reconnect(app);
     }
-    if (changed) {
-      for (const page of Object.values(PAGES)) page.statusChanged?.(app);
-      app.render();
-    }
+    if (!changed) return;
+    // Indexing reports every few hundred files. Drawing the page again each
+    // time would swap a switch out from under a click, so a page that can
+    // update its index labels in place does only that.
+    if (progressOnly && PAGES[app.page]?.indexChanged?.(app)) return;
+    for (const page of Object.values(PAGES)) page.statusChanged?.(app);
+    app.render();
   });
   await on("navigate", (page) => {
     if (page === "reconnect") reconnectWhenKnown(app);
