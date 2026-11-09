@@ -6,7 +6,7 @@ pointer orchestration. It never connects to the person's profile or accounts.
 
 ## What is reused
 
-`@xmorse/playwright-core@1.59.14` is pinned from npm, the version named by the
+`@xmorse/playwright-core@1.59.15` is pinned from npm, the version named by the
 inspected Playwriter checkout. Its `CRBrowser`, frame/execution-context handling,
 `ElementHandle.click`, `ElementHandle.check`, `ProgressController`, injected
 script, actionability polling, scrolling, hit-target interception and trusted
