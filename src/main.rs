@@ -1303,11 +1303,26 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             // as it does every removal, tells whoever follows the log, and
             // is then the only one writing it. By hand only when no agent
             // answers, or its organization keeps folders to the app.
-            let answer = match control::Client::connect(&paths.socket_path())? {
-                Some(mut client) => {
-                    Some(client.call_raw(&ControlRequest::RootsRemove { root: root.clone() })?)
+
+            // The folder as this terminal names it: a relative path means
+            // one thing here and another in the agent's working directory.
+            let id = cww::roots::find(&config, &root)?.id.clone();
+            let answer = match control::Client::connect(&paths.socket_path()) {
+                Ok(Some(mut client)) => {
+                    match client.call_raw(&ControlRequest::RootsRemove { root: id.clone() }) {
+                        Ok(answer) => Some(answer),
+                        // An agent that can't answer doesn't keep the folder
+                        // shared: it's removed here, as with no agent, and an
+                        // agent that gets to it later finds it gone.
+                        Err(e) => {
+                            eprintln!(
+                                "warning: the daemon didn't answer ({e:#}); removing it here"
+                            );
+                            None
+                        }
+                    }
                 }
-                None => None,
+                _ => None,
             };
             match answer {
                 Some(answer) if answer["ok"] == true => println!(
@@ -1321,8 +1336,13 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                         .as_str()
                         .unwrap_or("the daemon returned an error")
                 ),
+                // Read again: an agent that didn't answer may have removed it.
+                _ if !Config::load(paths)?.roots.iter().any(|r| r.id == id) => {
+                    println!("Stopped sharing {id}.")
+                }
                 _ => {
-                    let removed = remove_root(&mut config, &root)?;
+                    let mut config = Config::load(paths)?;
+                    let removed = remove_root(&mut config, &id)?;
                     cww::commands::env::forget(&mut config, paths, &removed.id)?;
                     audit_here(
                         paths,

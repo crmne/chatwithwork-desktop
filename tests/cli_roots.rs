@@ -119,8 +119,28 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    // Whoever follows the log hears of it, as of a removal in the app.
+    let events = cww::control::Client::connect(&paths.socket_path())
+        .unwrap()
+        .expect("the agent answers")
+        .subscribe(&[cww::control::Topic::Audit])
+        .unwrap();
+    let (heard, hear) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for event in events.flatten() {
+            if event["entry"]["event"] == "root_removed" {
+                let _ = heard.send(event["entry"]["detail"].clone());
+                return;
+            }
+        }
+    });
+
     let said = cww(&home, &["roots", "remove", "Projects"]);
     assert!(said.contains("Stopped sharing"), "{said}");
+    assert_eq!(
+        hear.recv_timeout(Duration::from_secs(10)).unwrap(),
+        format!("{id} (Projects)")
+    );
     // The by-hand path tells the agent afterwards; this one didn't need to.
     assert!(!said.contains("picked up the change"), "{said}");
     assert!(cww::config::Config::load(&paths).unwrap().roots.is_empty());
