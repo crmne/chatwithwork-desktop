@@ -569,7 +569,8 @@ enum RootsCommand {
     AllowCommands {
         root: String,
         /// Let those commands reach the internet and the local network
-        /// (installing packages), this computer's own services with them.
+        /// (installing packages), this computer's own services with them
+        /// (not on Windows, whose sandbox can't give them).
         #[arg(long, visible_alias = "internet")]
         network: bool,
         /// Keep them from this computer's own services (a database in
@@ -582,7 +583,7 @@ enum RootsCommand {
     },
     /// Let a folder's commands reach this computer's own services, or not:
     /// its loopback, its own addresses, and its containers' networks, never
-    /// the local network or the internet.
+    /// the local network or the internet. Windows' sandbox can't give them.
     LocalServices {
         root: String,
         #[arg(value_parser = ["on", "off"])]
@@ -1298,14 +1299,77 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             }
         }
         RootsCommand::Remove { root } => {
-            let removed = remove_root(&mut config, &root)?;
-            cww::commands::env::forget(&mut config, paths, &removed.id)?;
-            println!(
-                "Stopped sharing {} ({}).",
-                removed.path.display(),
-                removed.id
-            );
-            notify_daemon(paths, "");
+            // Through the running agent, which records it in the audit log
+            // as it does every removal, tells whoever follows the log, and
+            // is then the only one writing it. By hand only when no agent
+            // answers, or its organization keeps folders to the app.
+
+            // The folder as this terminal names it: a relative path means
+            // one thing here and another in the agent's working directory.
+            let id = cww::roots::find(&config, &root)?.id.clone();
+            let answer = match control::Client::connect(&paths.socket_path()) {
+                Ok(Some(mut client)) => {
+                    match client.call_raw(&ControlRequest::RootsRemove { root: id.clone() }) {
+                        Ok(answer) => Some(answer),
+                        // An agent that can't answer doesn't keep the folder
+                        // shared: it's removed here, as with no agent, and an
+                        // agent that gets to it later finds it gone.
+                        Err(e) => {
+                            eprintln!(
+                                "warning: the daemon didn't answer ({e:#}); removing it here"
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+            match answer {
+                Some(answer) if answer["ok"] == true => println!(
+                    "Stopped sharing {} ({}).",
+                    str(&answer["root"]["path"]),
+                    str(&answer["root"]["id"])
+                ),
+                Some(answer) if answer["code"] != "chat_only" => anyhow::bail!(
+                    "{}",
+                    answer["error"]
+                        .as_str()
+                        .unwrap_or("the daemon returned an error")
+                ),
+                _ => {
+                    // Under the settings' lock the agent edits them under
+                    // too, so an agent that didn't answer can't remove it
+                    // at the same moment; it may have removed it already.
+                    let removed = Config::edit(paths, |config| {
+                        if !config.roots.iter().any(|r| r.id == id) {
+                            return Ok(None);
+                        }
+                        let removed = remove_root(config, &id)?;
+                        config.folder_env.retain(|each| each != &removed.id);
+                        Ok(Some((removed, config.clone())))
+                    })?;
+                    let Some((removed, config)) = removed else {
+                        println!("Stopped sharing {id}.");
+                        eprintln!(
+                            "warning: the daemon removed it without answering, so its audit \
+                             entry may be missing"
+                        );
+                        return Ok(());
+                    };
+                    cww::commands::env::delete_logged(&config, paths, &removed.id);
+                    audit_here(
+                        paths,
+                        "root_removed",
+                        format!("{} ({})", removed.id, removed.label),
+                    );
+                    println!(
+                        "Stopped sharing {} ({}).",
+                        removed.path.display(),
+                        removed.id
+                    );
+                    notify_daemon(paths, "");
+                }
+            }
         }
         RootsCommand::AllowChanges { root, i_know } => {
             allow_changes(paths, &mut config, &root, true, i_know)?
@@ -1343,10 +1407,15 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                 cww::roots::set_local_services(config, &root, on == "on")
             })?;
             println!(
-                "Commands in {} ({}) now reach: {}.",
+                "Commands in {} ({}) now reach: {}.{}",
                 root.label,
                 root.path.display(),
-                cww::commands::network_access(&root).words()
+                cww::commands::network_access(&root).words(),
+                if cfg!(windows) && on == "on" {
+                    " Windows can't give commands this computer's own services."
+                } else {
+                    ""
+                }
             );
             notify_daemon(paths, "");
         }
@@ -2240,6 +2309,18 @@ fn host_exe() -> Result<PathBuf> {
         }
     }
     Ok(exe)
+}
+
+/// Records a change `cww` made to the config itself, with no agent to make
+/// it, in the audit log, as the agent records the same change made through
+/// it. A log that can't be written is said, not fatal: the change is
+/// already saved.
+fn audit_here(paths: &Paths, event: &str, detail: String) {
+    let mut entry = audit::AuditEntry::event(event);
+    entry.detail = Some(detail);
+    if let Err(e) = audit::append_from_outside(&paths.audit_file(), &entry) {
+        eprintln!("warning: couldn't write the audit log: {e:#}");
+    }
 }
 
 fn notify_daemon(paths: &Paths, if_not_running: &str) {

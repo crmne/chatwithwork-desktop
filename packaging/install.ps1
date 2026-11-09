@@ -49,14 +49,63 @@ try {
 
   $dir = Join-Path $env:LOCALAPPDATA "Programs\Chat with Work Desktop"
   $env:Path = "$env:Path;$dir"
+  $cww = Join-Path $dir 'cww.exe'
   Write-Host ""
-  Write-Host "Installed $(& (Join-Path $dir 'cww.exe') --version) to $dir"
+  Write-Host "Installed $(& $cww --version) to $dir"
+
+  # The MSI goes on when the agent doesn't start, so the app can offer to
+  # start it later: say so here instead of reporting success.
+
+  # "yes" when the agent answers `status` with its process, "no" when
+  # `cww status` says none is running, and "unknown" otherwise: it didn't
+  # answer within $waitMs, failed, or couldn't be started.
+  function Get-AgentState([int]$waitMs = 10000) {
+    $out = Join-Path $tmp "status.json"
+    try {
+      $probe = Start-Process -FilePath $cww -ArgumentList "status", "--json" -NoNewWindow -PassThru `
+        -RedirectStandardOutput $out -RedirectStandardError (Join-Path $tmp "status.err")
+      # Windows PowerShell keeps the exit code only once the handle was read.
+      $null = $probe.Handle
+    } catch {
+      return "unknown"
+    }
+    if (-not $probe.WaitForExit($waitMs)) {
+      Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+      return "unknown"
+    }
+    if ($probe.ExitCode -ne 0) { return "unknown" }
+    try { $status = Get-Content -Raw $out | ConvertFrom-Json } catch { return "unknown" }
+    if ($null -ne $status.pid) { return "yes" }
+    if ($status.running -eq $false) { return "no" }
+    return "unknown"
+  }
+  # About 20 seconds in all, however long each try takes.
+  $agent = "unknown"
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  while ($clock.ElapsedMilliseconds -lt 20000) {
+    $agent = Get-AgentState ([Math]::Min(10000, [Math]::Max(1000, 20000 - $clock.ElapsedMilliseconds)))
+    if ($agent -eq "yes") { break }
+    Start-Sleep -Seconds 1
+  }
   Write-Host ""
-  Write-Host "Open Chat with Work from the Start menu, or run cww for the terminal interface."
-  Write-Host "The installer registers and starts the background agent for your account."
-  Write-Host "If it could not start, open the app or run: cww daemon install"
-  Write-Host "Check the agent with: cww status"
-  Write-Host "Nothing is shared until you pair this computer and choose a folder."
+  if ($agent -eq "yes") {
+    Write-Host "The background agent is running for your account."
+    Write-Host "Open Chat with Work from the Start menu, or run cww for the terminal interface."
+    Write-Host "Nothing is shared until you pair this computer and choose a folder."
+  } else {
+    if ($agent -eq "no") {
+      Write-Warning "Chat with Work Desktop is installed, but its background agent is not running."
+    } else {
+      Write-Warning "Chat with Work Desktop is installed, but this installer couldn't tell whether its background agent is running."
+    }
+    # What the installer's own step said when it started it (cww daemon
+    # install), which the log, deleted below, otherwise keeps to itself.
+    $said = Select-String -Path $log -Pattern "WixQuietExec:\s+error: (.*)" -ErrorAction SilentlyContinue |
+      Select-Object -Last 1
+    if ($said) { Write-Warning ("Starting it during the install said: " + $said.Matches[0].Groups[1].Value.Trim()) }
+    Write-Warning "To start it, open Chat with Work from the Start menu, or run: cww daemon install"
+    Write-Warning "Check it with: cww status"
+  }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

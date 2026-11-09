@@ -36,11 +36,20 @@ impl Level {
         }
     }
 
-    /// What the app and `cww` call it.
+    /// What the app and `cww` call it on this computer.
     pub fn words(self) -> &'static str {
+        self.words_on(cfg!(windows))
+    }
+
+    /// What the app and `cww` call it, on Windows or elsewhere. Windows
+    /// can't give commands this computer's own services, so there the
+    /// internet is only the internet (and the local network), as the app's
+    /// Network choice says.
+    pub fn words_on(self, windows: bool) -> &'static str {
         match self {
             Self::None => "None",
             Self::Local => "Local services",
+            Self::Internet if windows => "The internet",
             Self::Internet => "Local services and the internet",
         }
     }
@@ -987,7 +996,17 @@ mod tests {
         assert_eq!(Level::of(true, false), Level::Local);
         assert_eq!(Level::of(false, true), Level::Internet);
         assert_eq!(Level::of(false, false), Level::None);
-        assert_eq!(Level::Internet.words(), "Local services and the internet");
+        assert_eq!(
+            Level::Internet.words_on(false),
+            "Local services and the internet"
+        );
+        assert_eq!(Level::Internet.words_on(true), "The internet");
+        assert_eq!(Level::Local.words_on(false), "Local services");
+        assert_eq!(Level::None.words_on(true), "None");
+        assert_eq!(
+            Level::Internet.words(),
+            Level::Internet.words_on(cfg!(windows))
+        );
     }
 
     #[test]

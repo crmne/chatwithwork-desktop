@@ -8,7 +8,7 @@ A folder that allows commands has one of three levels, set on this computer only
 
 - **None.** Nothing at all.
 - **Local services** (the default, `local_services = true`). This computer's own services, without the internet: its loopback (a command's own `localhost:5432` reaches the PostgreSQL this computer serves on `127.0.0.1:5432`), its own addresses, and the networks of the containers and virtual machines it runs: Docker's `docker0` and Compose's `br-<network id>` (never another `br-` bridge, which can be the local network's), Podman's, libvirt's `virbr*`, CNI's, LXC's, LXD's and Incus's (172.17.0.4:5432, a container's own address, is this computer). Never the local network, never the internet, and name lookups fail, since a name server is outside this computer.
-- **Local services and the internet** (`network = true`, "Internet"). Everything, as before 0.16.0: the internet and the local network, and this computer's services with them.
+- **Local services and the internet** (`network = true`, "Internet"). Everything, as before 0.16.0: the internet and the local network, and this computer's services with them. On Windows, which can't give local services, the app and `cww` call it "The internet", and `cww roots local-services on` says it changes nothing there.
 
 Narrowing a folder's network (to None, from the internet, or taking an exact address away) stops the commands running there, whose sandboxes were made with the wider one.
 

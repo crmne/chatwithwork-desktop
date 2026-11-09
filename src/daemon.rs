@@ -1267,7 +1267,9 @@ impl Daemon {
             "{} ({}), {}",
             root.id,
             root.label,
-            root.network_level().words().to_lowercase()
+            crate::commands::network_access(&root)
+                .words()
+                .to_lowercase()
         ));
         self.audit.append(&entry);
         self.reload().await?;
