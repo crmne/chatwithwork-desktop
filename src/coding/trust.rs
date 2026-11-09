@@ -73,6 +73,12 @@ pub fn settle(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Conf
             .filter(|r| unsettled(r))
         {
             let mirror = super::repositories::mirror_dir(paths, repo);
+            // No mirror yet: nothing to read it against, and no run gets
+            // this repository. It stays undecided, and untrusted, until
+            // preparing makes the mirror.
+            if !mirror.is_dir() {
+                continue;
+            }
             let checkout = folder.join(&repo.name);
             repo.cloned = Some(settled_once(&checkout, &mirror, &stored.roots)?);
         }
@@ -114,6 +120,8 @@ fn remembered(checkout: &Path, mirror: &Path) -> anyhow::Result<Option<bool>> {
 }
 
 fn remember(checkout: &Path, mirror: &Path, made: bool) -> anyhow::Result<()> {
+    // Never made here: git won't clone a mirror into a folder with this in it.
+    anyhow::ensure!(mirror.is_dir(), "no mirror");
     let answer = if made { "made" } else { "kept" };
     let text = format!("{answer}\n{}", checkout.display());
     crate::paths::write_private_file(&mirror.join(SETTLED), text.as_bytes())
@@ -130,20 +138,20 @@ pub fn note_checkout(
     checkout: &Path,
     mirror: &Path,
     roots: &[Root],
-) {
+) -> anyhow::Result<()> {
     let Some(repo) = repos.iter_mut().find(|r| r.root == root && r.name == name) else {
-        return;
+        return Ok(());
     };
     let made = !existed
         || repo
             .cloned
             .unwrap_or_else(|| settled_once(checkout, mirror, roots).unwrap_or(false));
-    repo.cloned = Some(made);
-    if !super::repositories::writable_by_commands(mirror, roots)
-        && remember(checkout, mirror, made).is_err()
-    {
-        tracing::warn!("couldn't keep whether Desktop made a checkout");
+    // Kept first: an answer that can't be kept stops the setup.
+    if !super::repositories::writable_by_commands(mirror, roots) {
+        remember(checkout, mirror, made)?;
     }
+    repo.cloned = Some(made);
+    Ok(())
 }
 
 /// Whether the checkout's history starts with a clone from `mirror`.
@@ -486,9 +494,10 @@ mod tests {
     fn a_checkout_is_recorded_as_made_only_when_desktop_cloned_it() {
         let dir = tempfile::tempdir().unwrap();
         let mirror = dir.path().join("app.git");
+        std::fs::create_dir_all(&mirror).unwrap();
         let checkout = dir.path().join("bots/app");
         let mut repos = vec![repo(None)];
-        note_checkout(&mut repos, "bots", "app", false, &checkout, &mirror, &[]);
+        note_checkout(&mut repos, "bots", "app", false, &checkout, &mirror, &[]).unwrap();
         assert_eq!(
             repos[0].cloned,
             Some(true),
@@ -496,33 +505,64 @@ mod tests {
         );
 
         // Set up again over the same checkout: still Desktop's.
-        note_checkout(&mut repos, "bots", "app", true, &checkout, &mirror, &[]);
+        note_checkout(&mut repos, "bots", "app", true, &checkout, &mirror, &[]).unwrap();
         assert_eq!(repos[0].cloned, Some(true));
 
         // One that was there, and isn't a clone of the mirror, is the person's.
         let mut theirs = vec![repo(None)];
         let mirror = dir.path().join("theirs.git");
+        std::fs::create_dir_all(&mirror).unwrap();
         reflog(&checkout, "clone: from git@github.com:acme/app.git");
-        note_checkout(&mut theirs, "bots", "app", true, &checkout, &mirror, &[]);
+        note_checkout(&mut theirs, "bots", "app", true, &checkout, &mirror, &[]).unwrap();
         assert_eq!(theirs[0].cloned, Some(false));
-        note_checkout(&mut theirs, "bots", "other", false, &checkout, &mirror, &[]);
+        note_checkout(&mut theirs, "bots", "other", false, &checkout, &mirror, &[]).unwrap();
         assert_eq!(theirs[0].cloned, Some(false), "another checkout's");
 
         // The record lost to a stale save, then the reflog forged: still kept.
         let mut lost = vec![repo(None)];
         reflog(&checkout, &format!("clone: from {}", mirror.display()));
-        note_checkout(&mut lost, "bots", "app", true, &checkout, &mirror, &[]);
+        note_checkout(&mut lost, "bots", "app", true, &checkout, &mirror, &[]).unwrap();
         assert_eq!(lost[0].cloned, Some(false));
 
         // Desktop really cloning it later supersedes that, for good.
-        note_checkout(&mut lost, "bots", "app", false, &checkout, &mirror, &[]);
+        note_checkout(&mut lost, "bots", "app", false, &checkout, &mirror, &[]).unwrap();
         assert_eq!(remembered(&checkout, &mirror).unwrap(), Some(true));
+    }
+
+    #[test]
+    fn an_answer_that_cant_be_kept_stops_and_no_mirror_is_made_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("bots/app");
+        let mirror = dir.path().join("missing.git");
+        let mut repos = vec![repo(None)];
+        assert!(note_checkout(&mut repos, "bots", "app", false, &checkout, &mirror, &[]).is_err());
+        assert_eq!(repos[0].cloned, None, "not recorded as anything");
+        assert!(!mirror.exists(), "git must still be able to clone there");
+    }
+
+    #[test]
+    fn a_repository_with_no_mirror_stays_undecided() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("cww"));
+        let folder = dir.path().join("bots");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut config = Config::default();
+        config.roots.push(shared_folder(folder));
+        config.coding.repositories = vec![repo(None)];
+        config.save(&paths).unwrap();
+        let settled = settle(&config, &paths, "bots").unwrap();
+        assert_eq!(settled.coding.repositories[0].cloned, None);
+        assert!(
+            !super::super::repositories::mirror_dir(&paths, &repo(None)).exists(),
+            "not made by settling"
+        );
     }
 
     #[test]
     fn the_answer_in_a_mirror_is_about_one_checkout_and_a_writable_mirror_has_none() {
         let dir = tempfile::tempdir().unwrap();
         let mirror = dir.path().join("app.git");
+        std::fs::create_dir_all(&mirror).unwrap();
         let checkout = dir.path().join("bots/app");
         remember(&checkout, &mirror, true).unwrap();
         assert_eq!(remembered(&checkout, &mirror).unwrap(), Some(true));
@@ -623,8 +663,10 @@ mod tests {
             name: "theirs".into(),
             ..repo(None)
         };
-        config.coding.repositories = vec![repo(None), theirs];
+        config.coding.repositories = vec![repo(None), theirs.clone()];
         let mirror = super::super::repositories::mirror_dir(&paths, &repo(None));
+        std::fs::create_dir_all(&mirror).unwrap();
+        std::fs::create_dir_all(super::super::repositories::mirror_dir(&paths, &theirs)).unwrap();
         reflog(
             &folder.join("app"),
             &format!("clone: from {}", mirror.display()),

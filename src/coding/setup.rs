@@ -1085,7 +1085,7 @@ fn repository_step(
         &checkout,
         &mirror,
         &config.roots,
-    );
+    )?;
     save(config, paths)?;
     let _ = ask;
     Step::Ok(format!(

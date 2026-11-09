@@ -693,8 +693,7 @@ impl Work {
                 &checkout,
                 &mirror,
                 &config.roots,
-            );
-            Ok(())
+            )
         })
         .map_err(|e| (copy.clone(), format!("{e:#}")))?;
         self.set_step(&copy, "done");
