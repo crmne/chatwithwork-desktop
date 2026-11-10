@@ -761,6 +761,20 @@ fn main() {
         }
         return;
     }
+    // Started by a thinking step, in its sandbox, to drive `codex app-server`
+    // for that one step (docs/own-plans.md).
+    if args.get(1).is_some_and(|a| a == "plan-codex") {
+        let Some(dir) = args.get(2) else {
+            eprintln!("usage: cww plan-codex <step folder> [model]");
+            std::process::exit(2);
+        };
+        let model = args.get(3).and_then(|m| m.to_str());
+        if let Err(e) = cww::plans::codex_server::serve(std::path::Path::new(dir), model) {
+            eprintln!("error: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // Started by the browser as the extension's native messaging host.
     cww::browsing::host_if_invoked();
     if let Err(e) = run(Cli::parse()) {
@@ -1884,6 +1898,9 @@ fn plans(paths: &Paths, command: Option<PlansCommand>, json: bool) -> Result<()>
     {
         anyhow::bail!("{bot:?} isn't a bot's ID");
     }
+    if !off && !cww::plans::offered(&Config::load(paths)?, which) {
+        anyhow::bail!("{} isn't offered on this computer", cww::plans::name(which));
+    }
     let whom = cww::plans::for_whom(bot.as_deref());
     let request = ControlRequest::PlansAllow {
         agent: which.key().into(),
@@ -1903,6 +1920,13 @@ fn plans(paths: &Paths, command: Option<PlansCommand>, json: bool) -> Result<()>
             entry.detail = Some(format!("{} for {whom}", which.key()));
             audit::AuditLog::open(&paths.audit_file())?.append(&entry);
         }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "agent": which.key(), "bot": bot, "allowed": !off })
+        );
+        return Ok(());
     }
     let who = match &bot {
         Some(bot) => format!("Bot {bot}"),

@@ -327,26 +327,24 @@ Each folder still allows only what it allows anyone: changes where changes are a
 
 ### 7.2.2 Thinking with a person's own plan
 
-From 0.17.0 a chat or bot can use the ChatGPT plan (Codex) or Claude plan (Claude Code) of the person whose computer this is as its model ([docs/own-plans.md](docs/own-plans.md)). The agent is only the model: Chat with Work keeps running every tool. Three tools, never in `tools/list`, called by the server by name; each takes the bot's ID in `_meta` when a bot's chat calls it, and is otherwise for the computer's owner's own chats. An older daemon answers `-32602` unknown tool.
+From 0.17.0 a chat or bot can use the ChatGPT plan (Codex) of the person whose computer this is as its model ([docs/own-plans.md](docs/own-plans.md)). These requests go to OpenAI, outside the EU, under the person's own account. The agent is only the model: Chat with Work keeps running every tool. Claude Code's path exists but is offered to nobody: `plans` doesn't list it, and `ask_plan`, `plans_allow` and `think` refuse it (`unavailable`), unless `[plans] offer_claude = true` was set by hand on the computer. Three tools, never in `tools/list`, called by the server by name; each takes the bot's ID in `_meta` when a bot's chat calls it, and is otherwise for the computer's owner's own chats. An older daemon answers `-32602` unknown tool.
 
 **`plans`**, `{}`: what this computer has for each agent, and what its owner allowed:
 
 ```json
 { "plans": [
   { "agent": "codex", "name": "Codex", "installed": true, "signed_in": true, "billing": "plan",
-    "chats": true, "bot": false, "unavailable": null },
-  { "agent": "claude_code", "name": "Claude", "installed": true, "signed_in": false, "billing": "unknown",
-    "chats": false, "bot": null, "unavailable": null } ] }
+    "chats": true, "bot": false, "unavailable": null } ] }
 ```
 
 `billing` is `plan`, `api_key` or `unknown`, from the sign-in. `chats` is the owner's yes for their own chats; `bot` the yes for the bot in `_meta`, `null` without one. `unavailable` says why steps can't run here (no sandbox that can give the internet safely, or Codex on macOS), else `null`. Never a path, a version or a token.
 
-**`ask_plan`**, `{"agent": "codex" | "claude_code"}`: asks the person on this computer, and only asks, as `ask_unattended` does. It answers `{"status": "asked"}` (also when the same request already waits) or `{"status": "already"}`, and refuses as `ask_unattended` does (`rate_limited`, `internal`). The app's dialog is named from this computer's own data, never the server's words ("Let Chat with Work use your ChatGPT plan for your chats?", "...for Issue fixer?", Allow or Deny); `cww plans allow`, and the control API's `plans_allow` or `roots_unattended_answer` with `"kind": "plan"` (CONTROL.md), answer it too. The audit log records `plan_asked`, then `plan_allowed` or `plan_declined`.
+**`ask_plan`**, `{"agent": "codex"}`: asks the person on this computer, and only asks, as `ask_unattended` does. It answers `{"status": "asked"}` (also when the same request already waits) or `{"status": "already"}`, and refuses as `ask_unattended` does (`rate_limited`, `internal`). The app's dialog is named from this computer's own data, never the server's words ("Let Chat with Work use your ChatGPT plan for your chats?", "...for Issue fixer?", saying that what the person asks, the chat so far and what tools read for them go to OpenAI, outside the EU, under their own account, Allow or Deny); `cww plans allow`, and the control API's `plans_allow` or `roots_unattended_answer` with `"kind": "plan"` (CONTROL.md), answer it too. The audit log records `plan_asked`, then `plan_allowed` or `plan_declined`.
 
 **`think`**: one step.
 
 ```json
-{ "agent": "codex" | "claude_code",
+{ "agent": "codex",
   "instructions": "<system prompt>",
   "transcript": "<the conversation so far, as text>",
   "tools": [{ "name": "gmail_search", "description": "...", "input_schema": { "type": "object" } }],

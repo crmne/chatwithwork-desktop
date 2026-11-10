@@ -6698,6 +6698,7 @@ async fn a_chat_thinks_with_a_plan_only_once_this_computer_said_yes() {
     }
     let mut config = Config::load(&fx.paths).unwrap();
     config.coding.claude = Some(program);
+    config.plans.offer_claude = true;
     config.save(&fx.paths).unwrap();
 
     let shutdown = CancellationToken::new();

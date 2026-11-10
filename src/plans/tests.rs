@@ -59,6 +59,7 @@ chats = false
 #[test]
 fn the_owners_yes_and_a_bots_are_given_and_taken_back_apart() {
     let mut config = Config::default();
+    config.plans.offer_claude = true;
     assert!(set(&mut config, Agent::ClaudeCode, Some("42"), true));
     assert!(!set(&mut config, Agent::ClaudeCode, Some("42"), true));
     assert!(allowed(&config, Agent::ClaudeCode, Some("42")));
@@ -134,13 +135,20 @@ fn the_command_line_is_built_here_and_holds_none_of_the_servers_words() {
         let line = command(agent, dir, shim, Some("model-1"));
         assert!(!line.contains("You are Chat with Work"));
         assert!(!line.contains("gmail_search"));
-        assert!(line.contains("prompt.md"), "{line}");
+        assert_eq!(line.contains("prompt.md"), agent != Agent::Codex, "{line}");
         let words = arguments(agent, dir, shim, None);
         match agent {
             Agent::Codex => {
-                for flag in ["--ignore-user-config", "--ephemeral", "--json", "-"] {
-                    assert!(words.iter().any(|w| w == flag), "{flag}");
-                }
+                assert_eq!(
+                    &words[..3],
+                    [
+                        "/usr/bin/cww",
+                        "plan-codex",
+                        "/data/cww/thinking/0123456789ab"
+                    ]
+                );
+                let words = codex_server_arguments(dir, shim);
+                assert_eq!(words[0], "app-server");
                 for feature in ["shell_tool", "unified_exec", "apps", "plugins", "hooks"] {
                     assert!(
                         words.contains(&format!("features.{feature}=false")),
@@ -188,6 +196,7 @@ fn the_step_files_are_written_new_and_the_tools_in_mcp_shape() {
         &ask,
         Agent::ClaudeCode,
         Path::new("/usr/bin/cww"),
+        None,
     )
     .unwrap();
     let tools: Value =
@@ -208,7 +217,8 @@ fn the_step_files_are_written_new_and_the_tools_in_mcp_shape() {
             dir.path(),
             &ask,
             Agent::ClaudeCode,
-            Path::new("/usr/bin/cww")
+            Path::new("/usr/bin/cww"),
+            None,
         )
         .is_err()
     );
@@ -286,43 +296,226 @@ fn codexs_parallel_calls_wait_for_each_other_then_stop() {
         .collect();
     events.line(&lines[0], start);
     events.line(&lines[1], start);
-    events.line(&lines[2], start);
     assert!(
         !events.done(start),
         "the model's other calls may still start"
     );
-    events.line(&lines[3], start + Duration::from_millis(5));
+    events.line(&lines[2], start + Duration::from_millis(5));
     assert!(!events.done(start + Duration::from_millis(1000)));
     assert!(events.done(start + Duration::from_millis(5) + parse::CODEX_GRACE));
     let step = events.step();
     let names: Vec<&str> = step.tool_calls.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["gmail_search", "calendar_list"]);
-    assert_eq!(step.tool_calls[0].id, "0123456789ab-item_0");
+    assert!(step.tool_calls[0].id.starts_with("0123456789ab-exec-"));
     assert_eq!(step.tool_calls[1].arguments, json!({ "day": "2026-11-09" }));
     assert_eq!(step.model.as_deref(), Some("gpt-6"));
     assert_eq!(step.result()["stop"], "tool_use");
-    assert_eq!(step.result()["usage"], Value::Null);
+    assert_eq!(step.usage.unwrap().input_tokens, 7332);
 }
 
 #[test]
 fn codexs_text_and_usage_end_the_turn() {
     let (events, stopped) = feed(Agent::Codex, "codex_text_answer.jsonl");
     let step = events.step();
-    assert!(step.text.starts_with("The sea rolls toward the shore"));
+    assert_eq!(step.text, "ready");
     assert!(step.tool_calls.is_empty());
     assert_eq!(step.stop, Some(Stop::EndTurn));
     let usage = step.usage.unwrap();
     assert_eq!(
         (usage.input_tokens, usage.output_tokens, usage.cached_tokens),
-        (15231, 30, 0)
+        (7313, 5, 0)
     );
-    assert_eq!(stopped, Some(3));
-    // A call another server's tool names is never Chat with Work's, and
-    // warnings Codex prints as items are no error.
-    let (events, _) = feed(Agent::Codex, "codex_sequential_calls_refused.jsonl");
+    assert_eq!(stopped, Some(4));
+}
+
+fn codex_line(method: &str, params: Value) -> String {
+    json!({ "method": method, "params": params }).to_string()
+}
+
+/// A call of another server's tool is never Chat with Work's, a warning
+/// that retried is no error, and a text-only answer that follows it stands.
+#[test]
+fn codexs_retries_and_other_servers_calls_dont_end_a_step() {
+    let mut events = parse::parser(Agent::Codex, "0123456789ab", None);
+    let now = Instant::now();
+    events.line(
+        &codex_line(
+            "item/started",
+            json!({ "item": { "type": "mcpToolCall", "id": "a", "server": "other", "tool": "x", "arguments": {} } }),
+        ),
+        now,
+    );
+    events.line(
+        &codex_line(
+            "error",
+            json!({ "error": { "message": "reconnecting" }, "willRetry": true }),
+        ),
+        now,
+    );
+    events.line(
+        &codex_line(
+            "item/agentMessage/delta",
+            json!({ "itemId": "m", "delta": "He" }),
+        ),
+        now,
+    );
+    events.line(
+        &codex_line(
+            "item/agentMessage/delta",
+            json!({ "itemId": "m", "delta": "llo" }),
+        ),
+        now,
+    );
+    events.line(
+        &codex_line(
+            "item/completed",
+            json!({ "item": { "type": "agentMessage", "id": "m", "text": "Hello" } }),
+        ),
+        now,
+    );
+    events.line(
+        &codex_line(
+            "turn/completed",
+            json!({ "turn": { "status": "completed" } }),
+        ),
+        now,
+    );
     let step = events.step();
-    assert_eq!(step.tool_calls.len(), 2);
+    assert_eq!(step.text, "Hello", "deltas and the whole item count once");
+    assert!(step.tool_calls.is_empty());
     assert!(step.error.is_none());
+    assert_eq!(step.stop, Some(Stop::EndTurn));
+    assert!(events.done(now));
+}
+
+#[test]
+fn a_failed_turn_or_a_codex_error_is_said() {
+    let mut events = parse::parser(Agent::Codex, "0123456789ab", None);
+    let now = Instant::now();
+    events.line(
+        &codex_line(
+            "turn/completed",
+            json!({ "turn": { "status": "failed", "error": { "message": "over its limit" } } }),
+        ),
+        now,
+    );
+    assert_eq!(events.step().error.as_deref(), Some("over its limit"));
+    assert!(events.done(now));
+}
+
+/// `cww plan-codex`, message by message: it says who it is, starts one
+/// ephemeral read-only thread and one turn with the conversation, declines
+/// anything Codex asks, prints only what matters, and ends with the turn.
+#[test]
+fn the_codex_driver_says_who_it_is_and_runs_one_turn() {
+    use codex_server::Conversation;
+    let conversation = Conversation::new("/step".into(), "User: hi".into(), Some("gpt-6".into()));
+    let first = conversation.first();
+    assert_eq!(first["method"], "initialize");
+    assert_eq!(
+        first["params"]["clientInfo"]["name"],
+        codex_server::CLIENT_NAME
+    );
+
+    let reaction = conversation.react(json!({ "id": 1, "result": {} }));
+    assert_eq!(reaction.send[0]["method"], "initialized");
+    let start = &reaction.send[1];
+    assert_eq!(start["method"], "thread/start");
+    assert_eq!(start["params"]["ephemeral"], true);
+    assert_eq!(start["params"]["approvalPolicy"], "never");
+    assert_eq!(start["params"]["sandbox"], "read-only");
+    assert_eq!(start["params"]["model"], "gpt-6");
+
+    let reaction = conversation.react(json!({ "id": 2, "result": { "thread": { "id": "t" } } }));
+    assert_eq!(reaction.send[0]["method"], "turn/start");
+    assert_eq!(reaction.send[0]["params"]["threadId"], "t");
+    assert_eq!(reaction.send[0]["params"]["input"][0]["text"], "User: hi");
+
+    // A request of Codex's is declined, never printed.
+    let reaction = conversation
+        .react(json!({ "id": 9, "method": "item/tool/requestUserInput", "params": {} }));
+    assert_eq!(reaction.send[0]["id"], 9);
+    assert!(reaction.send[0].get("error").is_some());
+    assert!(reaction.print.is_none());
+
+    // Nothing that isn't the answer leaves the step: not the transcript's
+    // user message, not this computer's installation id.
+    assert!(
+        conversation
+            .react(
+                json!({ "method": "item/started", "params": { "item": { "type": "userMessage" } } })
+            )
+            .print
+            .is_none()
+    );
+    assert!(conversation.react(json!({ "method": "remoteControl/status/changed", "params": { "installationId": "x" } })).print.is_none());
+    assert!(
+        conversation
+            .react(
+                json!({ "method": "item/started", "params": { "item": { "type": "mcpToolCall" } } })
+            )
+            .print
+            .is_some()
+    );
+
+    let reaction = conversation.react(json!({ "method": "turn/completed", "params": { "turn": { "items": [1], "status": "completed" } } }));
+    assert!(reaction.done);
+    assert_eq!(
+        reaction.print.unwrap()["params"]["turn"]["items"],
+        json!([])
+    );
+
+    // A request refused ends the step, in words the parser reads.
+    let reaction = conversation.react(json!({ "id": 2, "error": { "message": "no such model" } }));
+    assert!(reaction.done);
+    let line = reaction.print.unwrap().to_string();
+    let mut events = parse::parser(Agent::Codex, "0123456789ab", None);
+    events.line(&line, Instant::now());
+    assert_eq!(events.step().error.as_deref(), Some("no such model"));
+}
+
+#[test]
+fn a_steps_codex_home_holds_only_the_sign_in_and_gives_a_new_one_back() {
+    let person = tempfile::tempdir().unwrap();
+    std::fs::write(person.path().join("auth.json"), "old").unwrap();
+    std::fs::write(person.path().join("config.toml"), "mine").unwrap();
+    std::fs::write(person.path().join("AGENTS.md"), "mine").unwrap();
+    let step = tempfile::tempdir().unwrap();
+    write_files(
+        step.path(),
+        &ask(),
+        Agent::Codex,
+        Path::new("/usr/bin/cww"),
+        Some(person.path()),
+    )
+    .unwrap();
+    let home = step.path().join(CODEX_HOME_DIR);
+    assert!(!home.join("config.toml").exists());
+    assert!(!home.join("AGENTS.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(home.join("auth.json")).unwrap(),
+        "old"
+    );
+    // Codex replaced the link, or on Windows changed the copy: put back.
+    std::fs::remove_file(home.join("auth.json")).unwrap();
+    std::fs::write(home.join("auth.json"), "refreshed").unwrap();
+    return_codex_sign_in(step.path(), person.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(person.path().join("auth.json")).unwrap(),
+        "refreshed"
+    );
+}
+
+#[test]
+fn claude_is_offered_to_nobody_until_set_by_hand() {
+    let mut config = Config::default();
+    assert!(offered(&config, Agent::Codex));
+    assert!(!offered(&config, Agent::ClaudeCode));
+    // A yes on its own doesn't reach it.
+    set(&mut config, Agent::ClaudeCode, None, true);
+    assert!(!allowed(&config, Agent::ClaudeCode, None));
+    config.plans.offer_claude = true;
+    assert!(allowed(&config, Agent::ClaudeCode, None));
 }
 
 #[test]
@@ -385,6 +578,7 @@ fn the_question_names_the_plan_and_the_bot_from_this_computer() {
     assert!(question(Agent::ClaudeCode, Some("42"), "Issue fixer").contains("for Issue fixer?"));
     for agent in AGENTS {
         assert!(!question(agent, None, "").contains("Claude Code"));
+        assert!(question(Agent::Codex, None, "").contains("OpenAI, outside the EU"));
         assert!(!title(agent).contains("Claude Code"));
     }
 }

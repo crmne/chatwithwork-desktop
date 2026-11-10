@@ -892,12 +892,26 @@ impl LocalFiles {
             .filter(|_| key != "claude")
             .ok_or_else(|| ToolError::invalid_argument("`agent` is `codex` or `claude_code`"))?;
         let bot = caller_bot(caller);
+        if let Some(bot) = &bot
+            && !crate::plans::valid_bot(bot)
+        {
+            return Err(ToolError::invalid_argument("that isn't a bot's ID"));
+        }
         // As whoever starts the steps reads the config now.
         let plans = self
             .runner()
             .plans(bot.clone())
             .await
             .map_err(|e| ToolError::new(ErrorCode::Unavailable, e.message))?;
+        if !plans.iter().any(|plan| plan.agent == agent.key()) {
+            return Err(ToolError::new(
+                ErrorCode::Unavailable,
+                format!(
+                    "{} isn't offered on this computer",
+                    crate::plans::name(agent)
+                ),
+            ));
+        }
         let allowed = plans.iter().any(|plan| {
             plan.agent == agent.key()
                 && match &bot {
@@ -2359,17 +2373,28 @@ impl ServerHandler for LocalFiles {
             });
             report
         });
-        match self
-            .call_as(
-                &request.name,
-                request.arguments,
-                chat_id,
-                request_id,
-                progress,
-                caller,
-            )
-            .await
-        {
+        let is_think = request.name == THINK;
+        let call = self.call_as(
+            &request.name,
+            request.arguments,
+            chat_id,
+            request_id,
+            progress,
+            caller,
+        );
+        let result = if is_think {
+            // A step stops when the server cancels it: dropping the call
+            // stops the step (`Stopper`).
+            tokio::select! {
+                () = context.ct.cancelled() => {
+                    return Err(McpError::internal_error("the call was cancelled", None));
+                }
+                result = call => result,
+            }
+        } else {
+            call.await
+        };
+        match result {
             Some(result) => Ok(result.into()),
             None => Err(McpError::invalid_params(
                 format!(

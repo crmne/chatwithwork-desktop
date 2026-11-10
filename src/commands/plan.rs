@@ -295,7 +295,7 @@ impl Networks {
 /// the internet fails and says why, as before. Asked of MXC, at most once a
 /// minute.
 #[cfg(target_os = "linux")]
-fn own_network_available() -> bool {
+pub(super) fn own_network_available() -> bool {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     static KNOWN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
@@ -460,6 +460,8 @@ const PRIVATE_RANGES: &[&str] = &[
     "169.254.0.0/16",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    // Benchmarking addresses, which some home and VPN networks use.
+    "198.18.0.0/15",
 ];
 
 const RESOLVER_SOCKETS: &[&str] = &[

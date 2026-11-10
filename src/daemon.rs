@@ -435,6 +435,7 @@ fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
         let parent_shutdown = CancellationToken::new();
         let profiles = organizations::spawn(paths.clone(), helper.clone(), parent_shutdown.child_token());
         let mut notifications = crate::notification_delivery::spawn(helper, parent_shutdown.child_token());
+        crate::commands::think::sweep(paths);
         loop {
             // Each worker's commands, stopped when it ends.
             #[cfg(unix)]
@@ -913,7 +914,16 @@ impl Daemon {
         let _ = self.notifications.withdraw_notice(&ask.notice_id());
         let whom = (!bot.is_empty()).then_some(bot);
         if allow {
-            return self.plans_allow(agent, whom, true).await;
+            let allowed = self.plans_allow(agent, whom.clone(), true).await;
+            if allowed.is_err() {
+                // Still waiting, so the person can answer again.
+                let (root, asker) = (agent.key().to_string(), whom.unwrap_or_default());
+                let _ = self
+                    .with_asks(move |asks| asks.ask(&root, &asker, AskKind::Plan))
+                    .await;
+                self.changes.bump();
+            }
+            return allowed;
         }
         let mut entry = AuditEntry::event("plan_declined");
         entry.detail = Some(format!(
@@ -938,6 +948,12 @@ impl Daemon {
             && !crate::plans::valid_bot(bot)
         {
             anyhow::bail!("{bot:?} isn't a bot's ID");
+        }
+        if allow && !crate::plans::offered(&*self.config.lock().await, agent) {
+            anyhow::bail!(
+                "{} isn't offered on this computer",
+                crate::plans::name(agent)
+            );
         }
         let whom = bot.clone();
         let changed = self

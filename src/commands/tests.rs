@@ -2399,24 +2399,37 @@ fn a_thinking_step_returns_its_calls_stops_the_agent_and_never_prints_its_token(
     std::fs::write(
         &program,
         r#"#!/bin/sh
-T=$(sed 's/.*access_token":"\([^"]*\)".*/\1/' "$HOME/.codex/auth.json")
-case "$*" in *--ignore-user-config*model_instructions_file*) A=args-ok ;; *) A=args-wrong ;; esac
-I=$(cat instructions.md)
-P=$(cat)
-S=no-ssh; test -r "$HOME/.ssh/id_ed25519" && S=ssh-readable
-test -r /root/.ssh 2>/dev/null && S=ssh-readable
-echo '{"type":"thread.started","thread_id":"t"}'
-echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"$A $T $I / $P / $S\"}}"
-echo '{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"cww","tool":"gmail_search","arguments":{"query":"budget"},"status":"in_progress"}}'
-echo '{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"other","tool":"rm","arguments":{},"status":"in_progress"}}'
-echo '{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"cww","tool":"calendar_list","arguments":{"day":"today"},"status":"in_progress"}}'
-exec sleep 60
+exit 1
 "#,
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     fx.config.coding.codex = Some(program);
+    // Stands in for `cww plan-codex`, which only the real `cww` is: the
+    // events it prints are `codex app-server`'s, as `plan-codex` passes them.
+    let shim = install.join("cww-stand-in");
+    std::fs::write(
+        &shim,
+        r#"#!/bin/sh
+case "$1" in plan-codex) A=args-ok ;; *) A=args-wrong ;; esac
+cd "$2" || exit 3
+T=$(sed 's/.*access_token":"\([^"]*\)".*/\1/' codex_home/auth.json)
+I=$(cat instructions.md)
+P=$(cat prompt.md)
+S=no-ssh; test -r "$HOME/.ssh/id_ed25519" && S=ssh-readable
+test -r /root/.ssh 2>/dev/null && S=ssh-readable
+echo '{"method":"thread/started","params":{"thread":{"id":"t"}}}'
+echo "{\"method\":\"item/completed\",\"params\":{\"item\":{\"id\":\"item_0\",\"type\":\"agentMessage\",\"text\":\"$A $T $I / $P / $S\"}}}"
+echo '{"method":"item/started","params":{"item":{"id":"item_1","type":"mcpToolCall","server":"cww","tool":"gmail_search","arguments":{"query":"budget"}}}}'
+echo '{"method":"item/started","params":{"item":{"id":"item_2","type":"mcpToolCall","server":"other","tool":"rm","arguments":{}}}}'
+echo '{"method":"item/started","params":{"item":{"id":"item_3","type":"mcpToolCall","server":"cww","tool":"calendar_list","arguments":{"day":"today"}}}}'
+exec sleep 60
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    think::TEST_SHIM.with(|s| *s.borrow_mut() = Some(shim));
     let ask = |bot: Option<&str>| crate::plans::ThinkAsk {
         agent: "codex".into(),
         bot: bot.map(String::from),
@@ -2538,6 +2551,7 @@ fn real_agent_thinks_from_the_sandbox() {
     if let Ok(program) = std::env::var("CWW_TEST_PROGRAM") {
         crate::coding::setup::record_program(&mut fx.config.coding, agent, PathBuf::from(program));
     }
+    fx.config.plans.offer_claude = true;
     crate::plans::set(&mut fx.config, agent, None, true);
     let model = std::env::var("CWW_TEST_MODEL").ok();
     let step = |transcript: &str| {

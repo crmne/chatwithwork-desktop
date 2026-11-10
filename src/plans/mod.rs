@@ -14,6 +14,7 @@
 //! (`[plans]` in `config.toml`, `cww plans allow`, or the app's dialog after
 //! `ask_plan`): the server can only ask.
 
+pub mod codex_server;
 pub mod parse;
 pub mod shim;
 #[cfg(test)]
@@ -65,6 +66,13 @@ pub fn plan_name(agent: Agent) -> &'static str {
     }
 }
 
+/// Whether this computer offers `agent` to chats at all. ChatGPT, through
+/// Codex; Claude Code's path stays, but it's offered to nobody unless
+/// `[plans] offer_claude = true` is set by hand (docs/own-plans.md).
+pub fn offered(config: &Config, agent: Agent) -> bool {
+    agent != Agent::ClaudeCode || config.plans.offer_claude
+}
+
 fn yes(config: &Config, agent: Agent) -> &PlanYes {
     match agent {
         Agent::Codex => &config.plans.codex,
@@ -82,7 +90,7 @@ fn yes_mut(config: &mut Config, agent: Agent) -> &mut PlanYes {
 /// Whether the person on this computer let `agent` think for this
 /// computer's owner's own chats (`bot` is `None`) or for that bot.
 pub fn allowed(config: &Config, agent: Agent, bot: Option<&str>) -> bool {
-    if !AGENTS.contains(&agent) {
+    if !AGENTS.contains(&agent) || !offered(config, agent) {
         return false;
     }
     let yes = yes(config, agent);
@@ -153,6 +161,7 @@ pub fn look(
     let home = paths.person_home.as_deref();
     AGENTS
         .into_iter()
+        .filter(|agent| offered(config, *agent))
         .map(|agent| {
             let login = home.map(|h| Login::find_for(agent, h)).unwrap_or_default();
             PlanLook {
@@ -267,13 +276,25 @@ pub const INSTRUCTIONS_FILE: &str = "instructions.md";
 pub const PROMPT_FILE: &str = "prompt.md";
 pub const TOOLS_FILE: &str = "tools.json";
 pub const MCP_FILE: &str = "mcp.json";
+/// The folder Codex is given as its home for a step.
+pub const CODEX_HOME_DIR: &str = "codex_home";
+/// All a step takes of the person's `~/.codex`: its sign-in, and the locks
+/// that keep two refreshes of it apart. No `config.toml`, `AGENTS.md`,
+/// rules, skills or hooks of theirs.
+const CODEX_SIGN_IN: [&str; 3] = ["auth.json", "auth.json.lock", "auth.lock"];
 
 /// The server name the agent knows Chat with Work's tools by.
 pub const SERVER: &str = "cww";
 
 /// Write the step's files into `dir`, a folder made for it alone: each
 /// new, never through anything already there.
-pub fn write_files(dir: &Path, ask: &ThinkAsk, agent: Agent, shim: &Path) -> std::io::Result<()> {
+pub fn write_files(
+    dir: &Path,
+    ask: &ThinkAsk,
+    agent: Agent,
+    shim: &Path,
+    sign_in: Option<&Path>,
+) -> std::io::Result<()> {
     let tools: Vec<Value> = ask
         .tools
         .iter()
@@ -303,7 +324,64 @@ pub fn write_files(dir: &Path, ask: &ThinkAsk, agent: Agent, shim: &Path) -> std
         use std::io::Write;
         options.open(dir.join(name))?.write_all(&bytes)?;
     }
+    if agent == Agent::Codex
+        && let Some(sign_in) = sign_in
+    {
+        lend_codex_sign_in(dir, sign_in)?;
+    }
     Ok(())
+}
+
+/// A Codex home of the step's own holding only the sign-in: `codex
+/// app-server`, unlike `codex exec`, can't be told to ignore `config.toml`.
+/// Each file links to the person's, so a refreshed token lands there; on
+/// Windows, where links need Developer Mode, `auth.json` is a copy, which
+/// [`return_codex_sign_in`] puts back.
+fn lend_codex_sign_in(dir: &Path, sign_in: &Path) -> std::io::Result<()> {
+    let home = dir.join(CODEX_HOME_DIR);
+    std::fs::create_dir(&home)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))?;
+        for name in CODEX_SIGN_IN {
+            std::os::unix::fs::symlink(sign_in.join(name), home.join(name))?;
+        }
+    }
+    #[cfg(not(unix))]
+    std::fs::copy(sign_in.join(CODEX_SIGN_IN[0]), home.join(CODEX_SIGN_IN[0]))?;
+    Ok(())
+}
+
+/// Once a step ended: the sign-in Codex rewrote in place of the link (or
+/// the copy, on Windows), back where the person keeps it, so a token it
+/// refreshed and rotated is never lost. Nothing when it's still a link or
+/// didn't change.
+pub fn return_codex_sign_in(dir: &Path, sign_in: &Path) -> std::io::Result<()> {
+    let name = CODEX_SIGN_IN[0];
+    let lent = dir.join(CODEX_HOME_DIR).join(name);
+    let Ok(metadata) = std::fs::symlink_metadata(&lent) else {
+        return Ok(());
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    let bytes = std::fs::read(&lent)?;
+    let real = sign_in.join(name);
+    if std::fs::read(&real).is_ok_and(|now| now == bytes) {
+        return Ok(());
+    }
+    let beside = sign_in.join(format!("{name}.cww-{}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options.open(&beside)?.write_all(&bytes)?;
+    std::fs::rename(&beside, &real)
 }
 
 fn display(path: &Path) -> String {
@@ -343,79 +421,38 @@ pub const CODEX_FEATURES_OFF: &[&str] = &[
 
 /// The command line for a step of `agent` in `dir`, built here from the
 /// agent's kind alone: the server never gives a word of it. `shim` is this
-/// `cww`, which serves the tools; `model` was checked by [`valid_model`].
-/// `sh` on Linux and macOS; on Windows `cmd.exe` reads the prompt, as
-/// PowerShell 5.1 would re-encode it.
+/// `cww`, which serves the tools and drives Codex; `model` was checked by
+/// [`valid_model`]. `sh` on Linux and macOS; on Windows `cmd.exe`, which
+/// finds `claude.cmd` and reads the prompt, as PowerShell 5.1 would
+/// re-encode it.
 pub fn command(agent: Agent, dir: &Path, shim: &Path, model: Option<&str>) -> String {
     let words = arguments(agent, dir, shim, model);
-    let prompt = display(&dir.join(PROMPT_FILE));
+    // `cww plan-codex` reads the prompt itself; Claude Code from its stdin.
+    let prompt = (agent != Agent::Codex).then(|| display(&dir.join(PROMPT_FILE)));
     if cfg!(windows) {
         let line: Vec<String> = words.iter().map(|w| cmd_quote(w)).collect();
-        format!(
-            "cmd.exe /d /s /c \"{} < {}\"",
-            line.join(" "),
-            cmd_quote(&prompt)
-        )
+        let redirect = prompt.map_or(String::new(), |p| format!(" < {}", cmd_quote(&p)));
+        format!("cmd.exe /d /s /c \"{}{redirect}\"", line.join(" "))
     } else {
         let line: Vec<String> = words.iter().map(|w| shell_quote(w)).collect();
-        format!("exec {} < {}", line.join(" "), shell_quote(&prompt))
+        let redirect = prompt.map_or(String::new(), |p| format!(" < {}", shell_quote(&p)));
+        format!("exec {}{redirect}", line.join(" "))
     }
 }
 
-/// The agent's program and its arguments.
+/// The agent's program and its arguments. Codex runs under `cww
+/// plan-codex`, which drives `codex app-server` ([`codex_server`]).
 pub fn arguments(agent: Agent, dir: &Path, shim: &Path, model: Option<&str>) -> Vec<String> {
     let file = |name: &str| display(&dir.join(name));
     let mut words: Vec<String> = Vec::new();
     match agent {
         Agent::Codex => {
-            words.extend(
-                [
-                    "codex",
-                    "exec",
-                    "--json",
-                    "--skip-git-repo-check",
-                    "--ephemeral",
-                    "--ignore-user-config",
-                    "--ignore-rules",
-                    "--sandbox",
-                    "read-only",
-                ]
-                .map(String::from),
-            );
-            let mut config: Vec<String> = CODEX_FEATURES_OFF
-                .iter()
-                .map(|f| format!("features.{f}=false"))
-                .collect();
-            config.extend([
-                "web_search=\"disabled\"".to_string(),
-                format!(
-                    "model_instructions_file={}",
-                    toml_string(&file(INSTRUCTIONS_FILE))
-                ),
-                format!(
-                    "mcp_servers.{SERVER}.command={}",
-                    toml_string(&display(shim))
-                ),
-                format!(
-                    "mcp_servers.{SERVER}.args=[\"plan-tools\", {}]",
-                    toml_string(&file(TOOLS_FILE))
-                ),
-                // Its calls reach `plan-tools`, which never answers, so a
-                // step stops at them, never at a refusal the model would read.
-                format!("mcp_servers.{SERVER}.default_tools_approval_mode=\"approve\""),
-                format!("mcp_servers.{SERVER}.supports_parallel_tool_calls=true"),
-                format!("mcp_servers.{SERVER}.tool_timeout_sec={STEP_SECONDS}"),
-                format!("mcp_servers.{SERVER}.startup_timeout_sec=30"),
-            ]);
-            for value in config {
-                words.push("-c".into());
-                words.push(value);
-            }
+            words.push(display(shim));
+            words.push("plan-codex".into());
+            words.push(display(dir));
             if let Some(model) = model {
-                words.push("--model".into());
                 words.push(model.into());
             }
-            words.push("-".into());
         }
         _ => {
             words.extend(
@@ -455,6 +492,46 @@ pub fn arguments(agent: Agent, dir: &Path, shim: &Path, model: Option<&str>) -> 
     words
 }
 
+/// `codex app-server`'s arguments for a step in `dir`. `shim` is the `cww`
+/// that serves the tools, this program. The step's own Codex home has no
+/// config of the person's, so these are the only settings there are.
+pub fn codex_server_arguments(dir: &Path, shim: &Path) -> Vec<String> {
+    let file = |name: &str| display(&dir.join(name));
+    let mut words: Vec<String> = ["app-server", "--listen", "stdio://"]
+        .map(String::from)
+        .to_vec();
+    let mut config: Vec<String> = CODEX_FEATURES_OFF
+        .iter()
+        .map(|f| format!("features.{f}=false"))
+        .collect();
+    config.extend([
+        "web_search=\"disabled\"".to_string(),
+        format!(
+            "model_instructions_file={}",
+            toml_string(&file(INSTRUCTIONS_FILE))
+        ),
+        format!(
+            "mcp_servers.{SERVER}.command={}",
+            toml_string(&display(shim))
+        ),
+        format!(
+            "mcp_servers.{SERVER}.args=[\"plan-tools\", {}]",
+            toml_string(&file(TOOLS_FILE))
+        ),
+        // Its calls reach `plan-tools`, which never answers, so a step
+        // stops at them, never at a refusal the model would read.
+        format!("mcp_servers.{SERVER}.default_tools_approval_mode=\"approve\""),
+        format!("mcp_servers.{SERVER}.supports_parallel_tool_calls=true"),
+        format!("mcp_servers.{SERVER}.tool_timeout_sec={STEP_SECONDS}"),
+        format!("mcp_servers.{SERVER}.startup_timeout_sec=30"),
+    ]);
+    for value in config {
+        words.push("-c".into());
+        words.push(value);
+    }
+    words
+}
+
 /// `text` as a TOML basic string: JSON's escapes are TOML's.
 fn toml_string(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
@@ -467,7 +544,7 @@ fn shell_quote(text: &str) -> String {
 
 /// `text` as one word of `cmd.exe`: quoted, its own quotes doubled, as the
 /// C runtime's argument parsing reads them.
-fn cmd_quote(text: &str) -> String {
+pub(crate) fn cmd_quote(text: &str) -> String {
     if !text.is_empty()
         && text
             .bytes()
@@ -486,13 +563,21 @@ pub fn question(agent: Agent, bot: Option<&str>, bot_name: &str) -> String {
         Some(bot) if bot_name.trim().is_empty() => format!("Bot {bot}"),
         Some(_) => bot_name.trim().to_string(),
     };
-    format!(
-        "Let Chat with Work use your {} plan for {whom}? It thinks with {}'s sign-in on this \
-         computer, with no files or commands here: Chat with Work runs its tools, each as \
-         you allow there.",
-        plan_name(agent),
-        name(agent)
-    )
+    match agent {
+        Agent::Codex => format!(
+            "Let Chat with Work use your ChatGPT plan for {whom}? Answers run on Codex on this \
+             computer and count toward your plan's limits. What you ask, the chat so far, and \
+             what tools read for you go to OpenAI, outside the EU, under your own account. Plus \
+             and Pro accounts are used for training unless you turned that off in ChatGPT."
+        ),
+        _ => format!(
+            "Let Chat with Work use your {} plan for {whom}? It thinks with {}'s sign-in on \
+             this computer, with no files or commands here: Chat with Work runs its tools, \
+             each as you allow there.",
+            plan_name(agent),
+            name(agent)
+        ),
+    }
 }
 
 /// The dialog's title.

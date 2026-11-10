@@ -1,4 +1,4 @@
-//! Reading an agent's own event stream (`codex exec --json`, Claude Code's
+//! Reading an agent's own event stream (`codex app-server`'s, Claude Code's
 //! `stream-json`) into one step's answer: its text, the calls of Chat with
 //! Work's tools it asked for, why it stopped, and what it used.
 //!
@@ -110,14 +110,18 @@ pub fn parser(agent: Agent, id: &str, model: Option<String>) -> Box<dyn Events> 
     }
 }
 
-/// `codex exec --json`: `item.completed` with an `agent_message` carries
-/// text, whole; `item.started` with an `mcp_tool_call` of server `cww`
-/// carries a call and its arguments; `turn.completed` the usage.
+/// `codex app-server`'s notifications, as `cww plan-codex` prints them:
+/// `item/agentMessage/delta` carries text as it comes, an `agentMessage`
+/// item's completion all of it, `item/started` of an `mcpToolCall` of
+/// server `cww` a call and its arguments, `thread/tokenUsage/updated` the
+/// usage, and `turn/completed` the end.
 #[derive(Default)]
 struct Codex {
     id: String,
     step: Step,
     seen: Vec<String>,
+    /// The message items whose text came as deltas.
+    deltas: Vec<String>,
     /// When to stop after the latest call started.
     stop_at: Option<Instant>,
     ended: bool,
@@ -128,16 +132,28 @@ impl Events for Codex {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             return;
         };
-        match event["type"].as_str().unwrap_or_default() {
-            "item.started" | "item.completed" | "item.updated" => {
-                let item = &event["item"];
+        let params = &event["params"];
+        match event["method"].as_str().unwrap_or_default() {
+            "item/agentMessage/delta" => {
+                let item_id = params["itemId"].as_str().unwrap_or_default().to_string();
+                let first = !self.deltas.contains(&item_id);
+                if first {
+                    self.deltas.push(item_id);
+                }
+                self.step
+                    .push_text(params["delta"].as_str().unwrap_or_default(), first);
+            }
+            "item/started" | "item/completed" => {
+                let item = &params["item"];
+                let item_id = item["id"].as_str().unwrap_or_default().to_string();
                 match item["type"].as_str().unwrap_or_default() {
-                    "agent_message" if event["type"] == "item.completed" => {
-                        let text = item["text"].as_str().unwrap_or_default();
-                        self.step.push_text(text, true);
+                    "agentMessage" if event["method"] == "item/completed" => {
+                        if !self.deltas.contains(&item_id) {
+                            self.step
+                                .push_text(item["text"].as_str().unwrap_or_default(), true);
+                        }
                     }
-                    "mcp_tool_call" if item["server"] == super::SERVER => {
-                        let item_id = item["id"].as_str().unwrap_or_default().to_string();
+                    "mcpToolCall" if item["server"] == super::SERVER => {
                         if self.seen.contains(&item_id) {
                             return;
                         }
@@ -156,24 +172,29 @@ impl Events for Codex {
                     _ => {}
                 }
             }
-            "turn.completed" => {
-                let usage = &event["usage"];
+            "thread/tokenUsage/updated" => {
+                let total = &params["tokenUsage"]["total"];
                 self.step.usage = Some(Usage {
-                    input_tokens: number(&usage["input_tokens"]),
-                    output_tokens: number(&usage["output_tokens"]),
-                    cached_tokens: number(&usage["cached_input_tokens"]),
+                    input_tokens: number(&total["inputTokens"]),
+                    output_tokens: number(&total["outputTokens"]),
+                    cached_tokens: number(&total["cachedInputTokens"]),
                 });
-                if self.step.stop.is_none() {
-                    self.step.stop = Some(Stop::EndTurn);
+            }
+            "turn/completed" => {
+                let turn = &params["turn"];
+                if turn["status"] == "failed" {
+                    self.step.error = Some(cut(turn["error"]["message"].as_str().unwrap_or("")));
+                } else {
+                    // A retried error doesn't outlive the turn that went on.
+                    self.step.error = None;
+                    if self.step.stop.is_none() {
+                        self.step.stop = Some(Stop::EndTurn);
+                    }
                 }
                 self.ended = true;
             }
-            "turn.failed" => {
-                self.step.error = Some(cut(event["error"]["message"].as_str().unwrap_or("")));
-                self.ended = true;
-            }
-            "error" => {
-                self.step.error = Some(cut(event["message"].as_str().unwrap_or("")));
+            "error" if params["willRetry"] != true => {
+                self.step.error = Some(cut(params["error"]["message"].as_str().unwrap_or("")));
             }
             _ => {}
         }

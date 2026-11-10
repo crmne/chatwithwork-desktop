@@ -872,6 +872,7 @@ impl Runner {
     /// checked against the config on disk as the supervisor would, each in
     /// a sandbox of its own all the same.
     pub fn local(paths: &Paths) -> Self {
+        think::sweep(paths);
         Self::Local(Runs::new(paths.clone()))
     }
 

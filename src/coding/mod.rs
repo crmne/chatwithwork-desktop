@@ -551,9 +551,13 @@ impl Login {
         // An Anthropic Console key Claude Code keeps itself in `~/.claude.json`
         // (`primaryApiKey`), from signing in with a Console account: billed by
         // use, and taken out of what a run prints like any token.
-        if let Some(key) = file
+        let claude_json = file
             .as_deref()
-            .and_then(|f| read_up_to(f, MAX_CLAUDE_JSON_BYTES))
+            .and_then(|f| read_up_to(f, MAX_CLAUDE_JSON_BYTES));
+        // A file too big to read for its key isn't lent: its key couldn't
+        // be taken out of what a run prints.
+        let file = file.filter(|_| claude_json.is_some());
+        if let Some(key) = claude_json
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|v| v["primaryApiKey"].as_str().map(str::to_string))
             .filter(|k| k.starts_with("sk-ant-") && k.len() >= 20)

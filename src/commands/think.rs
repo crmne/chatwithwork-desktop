@@ -39,6 +39,19 @@ const FINISHED_KEPT: usize = 16;
 #[derive(Clone, Default)]
 pub struct Thinks {
     inner: Arc<Mutex<HashMap<String, Arc<Mutex<Think>>>>>,
+    /// Steps being started: counted with the running ones, so two at once
+    /// can't both take the last place.
+    starting: Arc<Mutex<usize>>,
+}
+
+/// A place taken among the steps this computer runs at once, given back
+/// when the step is started or wasn't.
+struct Reservation(Arc<Mutex<usize>>);
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        *lock(&self.0) -= 1;
+    }
 }
 
 struct Think {
@@ -62,6 +75,17 @@ impl Thinks {
     fn running(&self) -> usize {
         let thinks: Vec<_> = lock(&self.inner).values().cloned().collect();
         thinks.iter().filter(|t| lock(t).ended.is_none()).count()
+    }
+
+    /// A place for one more step, unless `most` already run or start.
+    fn reserve(&self, most: usize) -> Result<Reservation, usize> {
+        let mut starting = lock(&self.starting);
+        let taken = self.running() + *starting;
+        if most > 0 && taken >= most {
+            return Err(taken);
+        }
+        *starting += 1;
+        Ok(Reservation(self.starting.clone()))
     }
 
     fn get(&self, id: &str) -> Result<Arc<Mutex<Think>>, RunError> {
@@ -106,19 +130,52 @@ pub fn sandbox() -> Result<Sandbox, String> {
         Ok(Sandbox::Landlock) => Err("this computer can't give a step the internet safely: \
              Bubblewrap can't create a sandbox here"
             .into()),
+        #[cfg(target_os = "linux")]
+        Ok(Sandbox::Bubblewrap) if !super::plan::own_network_available() => Err(
+            "this computer can't give a step its own network: slirp4netns, util-linux or \
+                 iptables is missing, or unprivileged namespaces are refused"
+                .into(),
+        ),
         Ok(sandbox) => Ok(sandbox),
         Err(e) => Err(e.message),
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A stand-in for `cww` in tests, where this program is the test binary.
+    pub(crate) static TEST_SHIM: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The `cww` that serves a step's tools: this program.
 fn shim_program() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(shim) = TEST_SHIM.with(|s| s.borrow().clone()) {
+        return Some(shim);
+    }
     #[cfg(test)]
     if let Ok(program) = std::env::var("CWW_TEST_CWW") {
         return Some(PathBuf::from(program));
     }
-    let exe = std::env::current_exe().ok()?;
-    crate::roots::canonical(&exe).ok()
+    let exe = crate::roots::canonical(&std::env::current_exe().ok()?).ok()?;
+    // On Windows the daemon is `cww-agent.exe`, which has no commands of
+    // its own: `cww.exe` ships beside it.
+    if exe.file_stem().is_some_and(|stem| stem == "cww-agent") {
+        let cww = exe.with_file_name(format!("cww{}", std::env::consts::EXE_SUFFIX));
+        return cww.is_file().then_some(cww);
+    }
+    Some(exe)
+}
+
+/// Remove the folders of steps a killed supervisor or daemon left behind.
+/// Only where steps start, and before any does.
+pub fn sweep(paths: &Paths) {
+    let Ok(entries) = std::fs::read_dir(paths.data_dir.join("thinking")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        remove_folder(&entry.path());
+    }
 }
 
 /// Start a step as `config` allows it, checked here, and answer its ID.
@@ -146,6 +203,12 @@ pub fn start(
             ),
         ));
     }
+    if !plans::offered(config, agent) {
+        return Err(RunError::new(
+            "unavailable",
+            format!("{} isn't offered on this computer", plans::name(agent)),
+        ));
+    }
     if let Some(why) = agent.unavailable() {
         return Err(RunError::new("unavailable", why));
     }
@@ -171,28 +234,39 @@ pub fn start(
             ),
         ));
     }
+    // Where it really is, for a step's Codex home to take the sign-in from.
+    let sign_in = (agent == Agent::Codex).then(|| login.dir.clone()).flatten();
     let shim =
         shim_program().ok_or_else(|| RunError::new("unavailable", "couldn't find this program"))?;
-    let most = config.limits.commands_running;
-    let running = runs.thinks.running();
-    if most > 0 && running >= most {
-        return Err(RunError::new(
-            "busy",
-            format!(
-                "{running} steps are already thinking on this computer, as many as it runs at once"
-            ),
-        ));
-    }
+    let reservation = runs
+        .thinks
+        .reserve(config.limits.commands_running)
+        .map_err(|running| {
+            RunError::new(
+                "busy",
+                format!(
+                    "{running} steps are already thinking on this computer, as many as it runs \
+                     at once"
+                ),
+            )
+        })?;
     let id = new_id();
     let folder = make_folder(paths, &id)
         .map_err(|e| RunError::new("unavailable", format!("couldn't make its folder: {e}")))?;
     let started = (|| {
-        plans::write_files(&folder, ask, agent, &shim)
+        plans::write_files(&folder, ask, agent, &shim, sign_in.as_deref())
             .map_err(|e| RunError::new("unavailable", format!("couldn't write its files: {e}")))?;
         let mut limits = Limits::from_config(&config.limits);
         limits.timeout_seconds = plans::STEP_SECONDS;
+        // Windows grants folders, so `cww.exe`'s own, unless that's too
+        // broad or holds something shared.
         let shim_read = if cfg!(windows) {
-            shim.parent().map(Path::to_path_buf).unwrap_or(shim.clone())
+            crate::coding::grant(&shim, config, paths).ok_or_else(|| {
+                RunError::new(
+                    "unavailable",
+                    "the folder this program is in holds too much to share with a step",
+                )
+            })?
         } else {
             shim.clone()
         };
@@ -213,6 +287,7 @@ pub fn start(
                 agents: vec![agent_run],
                 tools: None,
                 read: vec![shim_read],
+                checkouts: Vec::new(),
             },
             env: Default::default(),
             cgroup: None,
@@ -238,9 +313,25 @@ pub fn start(
             ended_at: None,
         }));
         lock(&runs.thinks.inner).insert(id.clone(), think.clone());
-        let removing = folder.clone();
-        run::spawn(plan, cell, move |_| remove_folder(&removing));
-        watch(think);
+        // Counted as running from here.
+        drop(reservation);
+        if let Err(e) = watch(think) {
+            lock(&cell).stop = true;
+            lock(&runs.thinks.inner).remove(&id);
+            return Err(RunError::new(
+                "unavailable",
+                format!("couldn't follow the step: {}", e.kind()),
+            ));
+        }
+        let (removing, returning) = (folder.clone(), sign_in.clone());
+        run::spawn(plan, cell, move |_| {
+            if let Some(returning) = &returning
+                && let Err(e) = plans::return_codex_sign_in(&removing, returning)
+            {
+                tracing::warn!(error = %e.kind(), "a step's refreshed sign-in wasn't kept");
+            }
+            remove_folder(&removing);
+        });
         Ok(())
     })();
     if let Err(e) = started {
@@ -282,8 +373,8 @@ fn remove_folder(folder: &Path) {
 
 /// Read the step's output as it comes, stop it once it has its answer, and
 /// note how it ended.
-fn watch(think: Arc<Mutex<Think>>) {
-    let spawned = std::thread::Builder::new()
+fn watch(think: Arc<Mutex<Think>>) -> std::io::Result<()> {
+    std::thread::Builder::new()
         .name("cww-think".into())
         .spawn(move || {
             loop {
@@ -317,10 +408,8 @@ fn watch(think: Arc<Mutex<Think>>) {
                     return;
                 }
             }
-        });
-    if spawned.is_err() {
-        tracing::warn!("couldn't follow a thinking step");
-    }
+        })
+        .map(|_| ())
 }
 
 impl Think {
@@ -389,11 +478,7 @@ pub fn status(runs: &Runs, id: &str, from: u64) -> Result<Value, RunError> {
     if think.raw {
         let out = lock(&think.out);
         let start = usize::try_from(from).unwrap_or(usize::MAX).min(out.len());
-        let mut end = (start + RAW_CHUNK).min(out.len());
-        // Never in the middle of a character, unless that's all there is.
-        while end > start && end < out.len() && std::str::from_utf8(&out[start..end]).is_err() {
-            end -= 1;
-        }
+        let end = raw_end(&out, start, RAW_CHUNK);
         let chunk = String::from_utf8_lossy(&out[start..end]).into_owned();
         let all = done && end >= out.len();
         let mut value = json!({ "raw": chunk, "next": end, "done": all });
@@ -424,6 +509,25 @@ pub fn status(runs: &Runs, id: &str, from: u64) -> Result<Value, RunError> {
     Ok(value)
 }
 
+/// Where a chunk of at most `chunk` raw bytes from `start` ends: before a
+/// character cut at the end of the chunk, and always past `start`, whatever
+/// the bytes are (a character cut at the beginning, invalid bytes).
+fn raw_end(out: &[u8], start: usize, chunk: usize) -> usize {
+    let end = (start + chunk).min(out.len());
+    if end < out.len() {
+        // A character is at most 4 bytes, so only the last 3 can be cut.
+        for back in (1..=3).take_while(|back| end > start + back) {
+            if let Err(e) = std::str::from_utf8(&out[end - back..end])
+                && e.valid_up_to() == 0
+                && e.error_len().is_none()
+            {
+                return end - back;
+            }
+        }
+    }
+    end
+}
+
 /// Stop a step at once (the server cancelled it).
 pub fn stop(runs: &Runs, id: &str) -> Result<Value, RunError> {
     let think = runs.thinks.get(id)?;
@@ -431,4 +535,21 @@ pub fn stop(runs: &Runs, id: &str) -> Result<Value, RunError> {
     think.cancelled = true;
     lock(&think.cell).stop = true;
     Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use super::raw_end;
+
+    #[test]
+    fn a_raw_chunk_moves_past_cut_and_invalid_bytes() {
+        // Stops before a character the chunk would cut.
+        let text = "aé".as_bytes();
+        assert_eq!(raw_end(text, 0, 2), 1);
+        // Starting in the middle of a character, or at invalid bytes, it
+        // still moves on: a stalled `next` would never end.
+        let bad = [0xa9, 0xff, b'x', b'y'];
+        assert!(raw_end(&bad, 0, 2) > 0);
+        assert_eq!(raw_end(&bad, 0, 10), bad.len());
+    }
 }

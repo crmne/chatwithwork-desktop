@@ -79,6 +79,10 @@ pub struct PlansConfig {
     pub codex: PlanYes,
     #[serde(skip_serializing_if = "PlanYes::is_default")]
     pub claude_code: PlanYes,
+    /// Offer Claude Code as a plan at all: off, and set only by hand here
+    /// (docs/own-plans.md, Claude).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub offer_claude: bool,
 }
 
 impl PlansConfig {
