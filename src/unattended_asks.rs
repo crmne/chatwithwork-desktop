@@ -37,6 +37,11 @@ pub enum AskKind {
     Unattended,
     /// Its runs there use this computer's Claude Code sign-in.
     ClaudeCode,
+    /// Chat with Work may think with an agent's own sign-in here, for this
+    /// computer's owner's own chats or for a bot (`ask_plan`,
+    /// docs/own-plans.md). Its `root` is the agent (`codex`,
+    /// `claude_code`), and its `bot` empty for the owner's own chats.
+    Plan,
 }
 
 impl AskKind {
@@ -44,6 +49,7 @@ impl AskKind {
         match self {
             Self::Unattended => "unattended",
             Self::ClaudeCode => "claude_code",
+            Self::Plan => "plan",
         }
     }
 }
@@ -71,6 +77,7 @@ impl Ask {
         match self.kind {
             AskKind::Unattended => format!("unattended:{}:{}", self.root, self.bot),
             AskKind::ClaudeCode => format!("claude_code:{}:{}", self.root, self.bot),
+            AskKind::Plan => format!("plan:{}:{}", self.root, self.bot),
         }
     }
 
@@ -309,6 +316,18 @@ impl Asks {
             .iter()
             .filter(|ask| ask.expires_at > now && open(config, ask))
             .filter_map(|ask| {
+                if ask.kind == AskKind::Plan {
+                    let agent = crate::plans::agent(&ask.root)?;
+                    return Some(AskView {
+                        root: ask.root.clone(),
+                        folder: crate::plans::name(agent).into(),
+                        bot: ask.bot.clone(),
+                        kind: ask.kind,
+                        name: crate::plans::bot_name(config, &ask.bot),
+                        asked_at: rfc3339(ask.asked_at),
+                        expires_at: rfc3339(ask.expires_at),
+                    });
+                }
                 let root = config.roots.iter().find(|r| r.id == ask.root)?;
                 let loan = root.loan(&ask.bot)?;
                 Some(AskView {
@@ -340,6 +359,12 @@ impl Asks {
 /// the folder is lent to the bot, allows commands, and its loan doesn't
 /// give what it asks for yet.
 pub fn open(config: &Config, ask: &Ask) -> bool {
+    if ask.kind == AskKind::Plan {
+        let bot = (!ask.bot.is_empty()).then_some(ask.bot.as_str());
+        return ask.pairing == pairing(config)
+            && crate::plans::agent(&ask.root)
+                .is_some_and(|agent| !crate::plans::allowed(config, agent, bot));
+    }
     ask.pairing == pairing(config)
         && config
             .roots
@@ -350,6 +375,7 @@ pub fn open(config: &Config, ask: &Ask) -> bool {
                     && root.loan(&ask.bot).is_some_and(|loan| match ask.kind {
                         AskKind::Unattended => !loan.unattended,
                         AskKind::ClaudeCode => !loan.claude_code,
+                        AskKind::Plan => false,
                     })
             })
 }
@@ -358,6 +384,11 @@ pub fn open(config: &Config, ask: &Ask) -> bool {
 /// and the folder, never the server's words.
 pub fn question(ask: &AskView) -> String {
     match ask.kind {
+        AskKind::Plan => {
+            let agent = crate::plans::agent(&ask.root).unwrap_or(crate::coding::Agent::Codex);
+            let bot = (!ask.bot.is_empty()).then_some(ask.bot.as_str());
+            crate::plans::question(agent, bot, &ask.name)
+        }
         AskKind::Unattended => format!(
             "{} asks to run commands in {} without asking each time. They still run in the \
              folder's sandbox and are recorded. Allow?",
@@ -382,6 +413,7 @@ pub fn question(ask: &AskView) -> String {
 /// The dialog's title for a request.
 pub fn title(kind: AskKind) -> &'static str {
     match kind {
+        AskKind::Plan => "Use your plan",
         AskKind::Unattended => "Allow unattended commands",
         AskKind::ClaudeCode => "Allow Claude Code",
     }
@@ -389,7 +421,9 @@ pub fn title(kind: AskKind) -> &'static str {
 
 /// The loan's name for the bot, or its number when it has none.
 pub fn bot_name(ask: &AskView) -> String {
-    if ask.name.trim().is_empty() {
+    if ask.kind == AskKind::Plan && ask.bot.is_empty() {
+        "Chat with Work".into()
+    } else if ask.name.trim().is_empty() {
         format!("Bot {}", ask.bot)
     } else {
         ask.name.clone()

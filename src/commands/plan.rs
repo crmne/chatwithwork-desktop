@@ -162,6 +162,11 @@ pub struct Plan {
     /// On Linux, the cgroup that holds it to its memory limit, made by its
     /// thread before it starts (`cgroup.rs`). None: no memory limit.
     pub cgroup: Option<PathBuf>,
+    /// The internet only: never this computer's own services, its own
+    /// addresses, its containers' networks or the local network, where the
+    /// sandbox can tell them apart (Bubblewrap). A thinking step's
+    /// (`think.rs`), whose agent only needs its provider.
+    pub internet_only: bool,
 }
 
 /// Check `request` against `config`: the folder allows commands, the
@@ -233,6 +238,7 @@ pub fn plan(config: &Config, paths: &Paths, request: &Request, id: &str) -> Resu
         coding: Default::default(),
         env: Default::default(),
         cgroup: None,
+        internet_only: false,
     })
 }
 
@@ -289,7 +295,7 @@ impl Networks {
 /// the internet fails and says why, as before. Asked of MXC, at most once a
 /// minute.
 #[cfg(target_os = "linux")]
-fn own_network_available() -> bool {
+pub(super) fn own_network_available() -> bool {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     static KNOWN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
@@ -428,6 +434,36 @@ const TOOLCHAINS: &[Toolchain] = &[
 /// in the mxc gem). Only the sockets: the stub's `resolv.conf` beside them
 /// stays, so MXC can point it at slirp's forwarder, where the firewall
 /// refuses the lookup and logs the name it asked for.
+/// The local network's addresses, refused to a run that gets only the
+/// internet ([`Plan::internet_only`]). 10.0.0.0/8 is listed around slirp's
+/// own `10.0.2.0/24`, whose name server (`10.0.2.3`) looks names up on the
+/// internet; its gateway to this computer (`10.0.2.2`) is refused.
+const PRIVATE_RANGES: &[&str] = &[
+    "10.0.0.0/23",
+    "10.0.2.2/32",
+    "10.0.3.0/24",
+    "10.0.4.0/22",
+    "10.0.8.0/21",
+    "10.0.16.0/20",
+    "10.0.32.0/19",
+    "10.0.64.0/18",
+    "10.0.128.0/17",
+    "10.1.0.0/16",
+    "10.2.0.0/15",
+    "10.4.0.0/14",
+    "10.8.0.0/13",
+    "10.16.0.0/12",
+    "10.32.0.0/11",
+    "10.64.0.0/10",
+    "10.128.0.0/9",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    // Benchmarking addresses, which some home and VPN networks use.
+    "198.18.0.0/15",
+];
+
 const RESOLVER_SOCKETS: &[&str] = &[
     "/run/systemd/resolve/io.systemd.Resolve",
     "/run/systemd/resolve/io.systemd.Resolve.Monitor",
@@ -576,6 +612,9 @@ impl Plan {
             )
             .collect();
         let rules = sandbox == Sandbox::Bubblewrap;
+        if self.internet_only {
+            return self.internet_only_json(level, rules, this_computer);
+        }
         if level != Level::None {
             ports.extend(&self.networks.loopback);
             if rules && level == Level::Local && !this_computer.is_empty() {
@@ -663,6 +702,34 @@ impl Plan {
             }
             egress["blocked"] = "reject".into();
             if let (true, Some(log)) = (rules, self.networks.log.as_ref()) {
+                egress["blockedLog"] = display(log).into();
+            }
+        }
+        json!({ "egress": egress })
+    }
+
+    /// The `network` section of a run that gets the internet and nothing
+    /// of this computer or its network: no loopback ports, and on
+    /// Bubblewrap every address of this computer's, its containers'
+    /// networks and the private ranges refused, slirp's name server aside
+    /// (`10.0.2.3`, which looks names up on the internet). Seatbelt can't
+    /// tell addresses apart, so there it's the internet without this
+    /// computer's loopback ports.
+    fn internet_only_json(
+        &self,
+        level: crate::reach::Level,
+        rules: bool,
+        this_computer: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        if level == crate::reach::Level::None {
+            return json!({ "egress": { "default": "deny" } });
+        }
+        let mut egress = json!({ "default": "allow", "blocked": "reject" });
+        if rules {
+            let mut deny = this_computer;
+            deny.extend(PRIVATE_RANGES.iter().map(|cidr| json!({ "cidr": cidr })));
+            egress["deny"] = json!([{ "to": deny }]);
+            if let Some(log) = self.networks.log.as_ref() {
                 egress["blockedLog"] = display(log).into();
             }
         }
@@ -828,6 +895,7 @@ impl Plan {
         // `installs/claude/latest`) given as one. An agent's is only what
         // `coding::grant` allowed: its own folder, or the program.
         let mut dirs: Vec<PathBuf> = self.coding.mirrors.iter().map(|(m, _)| m.clone()).collect();
+        dirs.extend(self.coding.read.iter().cloned());
         for run in &self.coding.agents {
             dirs.push(run.read.clone());
             dirs.extend(run.entry.clone());

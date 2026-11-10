@@ -267,7 +267,11 @@ impl Desktop {
                         asked_at: String::new(),
                         expires_at: String::new(),
                     };
-                    let claude_code = ask.kind == cww::unattended_asks::AskKind::ClaudeCode;
+                    let claude_code = matches!(
+                        ask.kind,
+                        cww::unattended_asks::AskKind::ClaudeCode
+                            | cww::unattended_asks::AskKind::Plan
+                    );
                     let question = crate::computer::Question {
                         title: cww::unattended_asks::title(ask.kind).into(),
                         message: cww::unattended_asks::question(&view),

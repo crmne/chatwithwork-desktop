@@ -62,6 +62,50 @@ pub struct Config {
     /// the lists themselves are never in this file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub folder_env: Vec<String>,
+    /// Which chats may think with a coding agent's own sign-in on this
+    /// computer, its owner's own chats and bots by ID (docs/own-plans.md).
+    /// Only `cww plans`, this file and the control channel change it, never
+    /// the server.
+    #[serde(skip_serializing_if = "PlansConfig::is_default")]
+    pub plans: PlansConfig,
+}
+
+/// The yes for each agent a chat may think with (docs/own-plans.md):
+/// `[plans.codex]` and `[plans.claude_code]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlansConfig {
+    #[serde(skip_serializing_if = "PlanYes::is_default")]
+    pub codex: PlanYes,
+    #[serde(skip_serializing_if = "PlanYes::is_default")]
+    pub claude_code: PlanYes,
+    /// Offer Claude Code as a plan at all: off, and set only by hand here
+    /// (docs/own-plans.md, Claude).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub offer_claude: bool,
+}
+
+impl PlansConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Who may think with one agent's sign-in: this computer's owner's own
+/// chats (`chats`), and bots by their Chat with Work ID (`bots`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlanYes {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub chats: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bots: Vec<String>,
+}
+
+impl PlanYes {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Coding bots' setup on this computer (docs/coding-computers.md).

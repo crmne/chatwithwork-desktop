@@ -82,7 +82,7 @@ At the end it prints what Chat with Work will see: "NUC: Claude Code ready for I
 
 ## Claude Code's sign-in
 
-**Where it lives.** Where Claude Code itself keeps it, for whoever runs `claude` on this computer: Desktop never stores, copies or asks for it. Claude Code keeps its account and preferences in `~/.claude.json` and everything else in `~/.claude`; its tokens are in `~/.claude/.credentials.json` (0600) on Linux and Windows, and in the login keychain (`Claude Code-credentials`) on macOS. Desktop looks only in those standard places, in the real home folder: never a folder `CLAUDE_CONFIG_DIR` or an account switcher points at. `config.toml` records only which program `claude` is, and per loan whether its runs use the sign-in:
+**Where it lives.** Where Claude Code itself keeps it, for whoever runs `claude` on this computer: Desktop never stores, copies or asks for it. Claude Code keeps its account and preferences in `~/.claude.json` and everything else in `~/.claude`; its tokens are in `~/.claude/.credentials.json` (0600) on Linux and Windows, and in the login keychain (`Claude Code-credentials`) on macOS. Signed in with an Anthropic Console account instead, it keeps that key in `~/.claude.json` (`primaryApiKey`): that counts as signed in, billed by use (`api_key`), and the key is taken out of what a run prints like a token. Desktop looks only in those standard places, in the real home folder: never a folder `CLAUDE_CONFIG_DIR` or an account switcher points at. `config.toml` records only which program `claude` is, and per loan whether its runs use the sign-in:
 
 ```toml
 [coding]

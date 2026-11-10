@@ -74,6 +74,15 @@ enum Command {
         #[command(subcommand)]
         command: CodingCommand,
     },
+    /// Let Chat with Work think with your own ChatGPT (Codex) or Claude
+    /// sign-in on this computer, for your chats or a bot (docs/own-plans.md).
+    Plans {
+        #[command(subcommand)]
+        command: Option<PlansCommand>,
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage the printers Chat with Work may use.
     Printers {
         #[command(subcommand)]
@@ -462,6 +471,21 @@ enum PrintersCommand {
 }
 
 #[derive(Subcommand)]
+enum PlansCommand {
+    /// Let your chats (or, with --bot, a bot) think with this agent's
+    /// sign-in here, or stop (--off).
+    Allow {
+        /// codex or claude.
+        agent: String,
+        /// The bot, by its ID in Chat with Work.
+        #[arg(long)]
+        bot: Option<String>,
+        #[arg(long)]
+        off: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CodingCommand {
     /// Set this computer up for a coding bot, one step at a time. Asks
     /// before each thing it allows or runs; run again, it skips what's done.
@@ -723,6 +747,34 @@ fn main() {
     // `cww status | head` closes the pipe early: end quietly, never a
     // crash report (crash_reports::install keeps this hook first).
     crash_reports::exit_quietly_on_broken_pipe();
+    // Started by a thinking step's agent, in its sandbox, as the MCP server
+    // of Chat with Work's tools (docs/own-plans.md): nothing else runs.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "plan-tools") {
+        let Some(file) = args.get(2) else {
+            eprintln!("usage: cww plan-tools <tools.json>");
+            std::process::exit(2);
+        };
+        if let Err(e) = cww::plans::shim::serve(std::path::Path::new(file)) {
+            eprintln!("error: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    // Started by a thinking step, in its sandbox, to drive `codex app-server`
+    // for that one step (docs/own-plans.md).
+    if args.get(1).is_some_and(|a| a == "plan-codex") {
+        let Some(dir) = args.get(2) else {
+            eprintln!("usage: cww plan-codex <step folder> [model]");
+            std::process::exit(2);
+        };
+        let model = args.get(3).and_then(|m| m.to_str());
+        if let Err(e) = cww::plans::codex_server::serve(std::path::Path::new(dir), model) {
+            eprintln!("error: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // Started by the browser as the extension's native messaging host.
     cww::browsing::host_if_invoked();
     if let Err(e) = run(Cli::parse()) {
@@ -861,6 +913,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Roots { command } => roots(&paths, command)?,
         Command::Coding { command } => coding(&paths, command)?,
+        Command::Plans { command, json } => plans(&paths, command, json)?,
         Command::Printers { command } => {
             printers(&paths, command.unwrap_or(PrintersCommand::List))?
         }
@@ -1786,6 +1839,107 @@ fn status(paths: &Paths, json: bool) -> Result<()> {
 }
 
 /// The agent a `--agent` names: Claude Code when it names none.
+/// `cww plans`: what this computer has for thinking with an agent's own
+/// sign-in, and the yes for each.
+fn plans(paths: &Paths, command: Option<PlansCommand>, json: bool) -> Result<()> {
+    let Some(PlansCommand::Allow { agent, bot, off }) = command else {
+        let config = Config::load(paths)?;
+        let looks = cww::plans::look(&config, paths, None, cww::commands::think::sandbox().err());
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "plans": looks,
+                    "bots": {
+                        "codex": config.plans.codex.bots,
+                        "claude_code": config.plans.claude_code.bots,
+                    },
+                }))?
+            );
+            return Ok(());
+        }
+        for look in looks {
+            let agent = cww::plans::agent(&look.agent).expect("a plan's agent");
+            let state = match (look.installed, look.signed_in) {
+                (false, _) => "not installed".to_string(),
+                (true, false) => format!("not signed in: {}", agent.sign_in_hint()),
+                (true, true) => match look.billing {
+                    cww::coding::Billing::Plan => "signed in, your plan pays".into(),
+                    cww::coding::Billing::ApiKey => "signed in with an API key".into(),
+                    cww::coding::Billing::Unknown => "signed in".into(),
+                },
+            };
+            let bots = match agent {
+                cww::coding::Agent::Codex => &config.plans.codex.bots,
+                _ => &config.plans.claude_code.bots,
+            };
+            println!(
+                "{} ({} plan): {state}",
+                look.name,
+                cww::plans::plan_name(agent)
+            );
+            if let Some(why) = &look.unavailable {
+                println!("  can't think here: {why}");
+            }
+            println!(
+                "  your chats: {}",
+                if look.chats { "allowed" } else { "not allowed" }
+            );
+            if !bots.is_empty() {
+                println!("  bots: {}", bots.join(", "));
+            }
+        }
+        return Ok(());
+    };
+    let which = cww::plans::agent(&agent)
+        .ok_or_else(|| anyhow::anyhow!("{agent:?} isn't codex or claude"))?;
+    if let Some(bot) = &bot
+        && !cww::plans::valid_bot(bot)
+    {
+        anyhow::bail!("{bot:?} isn't a bot's ID");
+    }
+    if !off && !cww::plans::offered(&Config::load(paths)?, which) {
+        anyhow::bail!("{} isn't offered on this computer", cww::plans::name(which));
+    }
+    let whom = cww::plans::for_whom(bot.as_deref());
+    let request = ControlRequest::PlansAllow {
+        agent: which.key().into(),
+        bot: bot.clone(),
+        allow: !off,
+    };
+    if control::request(&paths.socket_path(), request)?.is_none() {
+        // No daemon: the file itself, audited here as the daemon would.
+        let mut config = Config::load(paths)?;
+        if cww::plans::set(&mut config, which, bot.as_deref(), !off) {
+            config.save(paths)?;
+            let mut entry = audit::AuditEntry::event(if off {
+                "plan_withdrawn"
+            } else {
+                "plan_allowed"
+            });
+            entry.detail = Some(format!("{} for {whom}", which.key()));
+            audit::AuditLog::open(&paths.audit_file())?.append(&entry);
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "agent": which.key(), "bot": bot, "allowed": !off })
+        );
+        return Ok(());
+    }
+    let who = match &bot {
+        Some(bot) => format!("Bot {bot}"),
+        None => "Your chats".into(),
+    };
+    println!(
+        "{who} {} use your {} plan on this computer.",
+        if off { "may not" } else { "may" },
+        cww::plans::plan_name(which)
+    );
+    Ok(())
+}
+
 fn coding_agent(name: Option<&str>) -> anyhow::Result<cww::coding::Agent> {
     use cww::coding::Agent;
     match name {
@@ -1814,6 +1968,30 @@ fn describe_ask(ask: &Value) -> String {
     let name = Some(str(&ask["name"]))
         .filter(|n| !n.trim().is_empty())
         .map_or_else(|| format!("Bot {bot}"), str::to_string);
+    if ask["kind"] == "plan" {
+        let flag = if bot.is_empty() {
+            String::new()
+        } else {
+            format!(" --bot {bot}")
+        };
+        let agent = if root == "claude_code" {
+            "claude"
+        } else {
+            root
+        };
+        let whom = if bot.is_empty() {
+            "your chats".to_string()
+        } else {
+            name.clone()
+        };
+        return format!(
+            "Chat with Work asks to use your {} sign-in on this computer for {whom}; the request \
+             waits until {}. `cww plans allow {agent}{flag}` allows it, `cww plans allow \
+             {agent}{flag} --off` doesn't.",
+            str(&ask["folder"]),
+            str(&ask["expires_at"])
+        );
+    }
     if ask["kind"] == "claude_code" {
         return format!(
             "{name} asks to run Claude Code in {} with this computer's Claude Code sign-in; the \

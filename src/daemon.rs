@@ -435,6 +435,7 @@ fn supervise_worker(paths: &Paths, options: &Foreground) -> Result<()> {
         let parent_shutdown = CancellationToken::new();
         let profiles = organizations::spawn(paths.clone(), helper.clone(), parent_shutdown.child_token());
         let mut notifications = crate::notification_delivery::spawn(helper, parent_shutdown.child_token());
+        crate::commands::think::sweep(paths);
         loop {
             // Each worker's commands, stopped when it ends.
             #[cfg(unix)]
@@ -717,6 +718,7 @@ impl Daemon {
             config.limits.max_message_bytes,
         )
         .with_commands(command_tools(&config, &self.runner, &self.once))
+        .with_runner(self.runner.clone())
         .with_asks(Arc::clone(&self.asks))
         .with_unattended_grants(self.unattended_grants.clone())
         .with_printing(crate::printing::tools::PrintTools {
@@ -818,6 +820,22 @@ impl Daemon {
                     continue;
                 };
                 let claude_code = ask.kind == crate::unattended_asks::AskKind::ClaudeCode;
+                if ask.kind == crate::unattended_asks::AskKind::Plan {
+                    let body = format!(
+                        "{} Open Chat with Work Desktop to answer.",
+                        crate::unattended_asks::question(view)
+                    );
+                    match self
+                        .notifications
+                        .notice(&ask.notice_id(), "Use your plan?", &body)
+                    {
+                        Ok(()) => {
+                            told.insert(ask);
+                        }
+                        Err(e) => tracing::warn!("couldn't show a request: {e:#}"),
+                    }
+                    continue;
+                }
                 let body = format!(
                     "{} asks to {} {}. Open Chat with Work Desktop to answer, or run `cww roots \
                      requests`.",
@@ -871,6 +889,115 @@ impl Daemon {
         json!(self.asks.list(&config))
     }
 
+    /// The person's answer, on this computer, to a request to think with an
+    /// agent's own sign-in (`ask_plan`): allowing does what `plans_allow`
+    /// does.
+    async fn answer_plan_ask(
+        &self,
+        which: String,
+        bot: String,
+        asked_at: Option<String>,
+        allow: bool,
+    ) -> Result<Value> {
+        use crate::unattended_asks::AskKind;
+        let agent = crate::plans::agent(&which)
+            .with_context(|| format!("{which:?} isn't codex or claude_code"))?;
+        let ask = {
+            let config = self.config.lock().await.clone();
+            let (root, asker) = (agent.key().to_string(), bot.clone());
+            self.with_asks(move |asks| {
+                asks.take(&root, &asker, AskKind::Plan, asked_at.as_deref(), &config)
+            })
+            .await
+        }
+        .with_context(|| "no request to use that plan is waiting".to_string())?;
+        let _ = self.notifications.withdraw_notice(&ask.notice_id());
+        let whom = (!bot.is_empty()).then_some(bot);
+        if allow {
+            let allowed = self.plans_allow(agent, whom.clone(), true).await;
+            if allowed.is_err() {
+                // Still waiting, so the person can answer again.
+                let (root, asker) = (agent.key().to_string(), whom.unwrap_or_default());
+                let _ = self
+                    .with_asks(move |asks| asks.ask(&root, &asker, AskKind::Plan))
+                    .await;
+                self.changes.bump();
+            }
+            return allowed;
+        }
+        let mut entry = AuditEntry::event("plan_declined");
+        entry.detail = Some(format!(
+            "{} for {}",
+            agent.key(),
+            crate::plans::for_whom(whom.as_deref())
+        ));
+        self.audit.append(&entry);
+        self.changes.bump();
+        Ok(json!({ "agent": agent.key(), "allowed": false }))
+    }
+
+    /// Let a chat think with an agent's own sign-in, or stop: this
+    /// computer's owner's own chats (`bot` is `None`), or a bot's. Audited.
+    async fn plans_allow(
+        &self,
+        agent: crate::coding::Agent,
+        bot: Option<String>,
+        allow: bool,
+    ) -> Result<Value> {
+        if let Some(bot) = &bot
+            && !crate::plans::valid_bot(bot)
+        {
+            anyhow::bail!("{bot:?} isn't a bot's ID");
+        }
+        if allow && !crate::plans::offered(&*self.config.lock().await, agent) {
+            anyhow::bail!(
+                "{} isn't offered on this computer",
+                crate::plans::name(agent)
+            );
+        }
+        let whom = bot.clone();
+        let changed = self
+            .edit_config(move |config, _| {
+                Ok(crate::plans::set(config, agent, whom.as_deref(), allow))
+            })
+            .await?;
+        if !allow {
+            // A request waiting for this one is answered by it.
+            let config = self.config.lock().await.clone();
+            let (root, asker) = (agent.key().to_string(), bot.clone().unwrap_or_default());
+            let taken = self
+                .with_asks(move |asks| {
+                    asks.take(
+                        &root,
+                        &asker,
+                        crate::unattended_asks::AskKind::Plan,
+                        None,
+                        &config,
+                    )
+                })
+                .await;
+            if let Some(ask) = taken {
+                let _ = self.notifications.withdraw_notice(&ask.notice_id());
+            }
+        }
+        if changed {
+            let mut entry = AuditEntry::event(if allow {
+                "plan_allowed"
+            } else {
+                "plan_withdrawn"
+            });
+            entry.detail = Some(format!(
+                "{} for {}",
+                agent.key(),
+                crate::plans::for_whom(bot.as_deref())
+            ));
+            self.audit.append(&entry);
+            self.reload().await?;
+        }
+        self.changes.bump();
+        Ok(json!({ "agent": agent.key(), "bot": bot, "allowed": allow }))
+    }
+
     /// The person's answer to a bot's request, from this computer: allowing
     /// does what `roots_bot` with `unattended: true` does.
     async fn answer_ask(
@@ -882,6 +1009,9 @@ impl Daemon {
         allow: bool,
     ) -> Result<Value> {
         use crate::unattended_asks::AskKind;
+        if kind == AskKind::Plan {
+            return self.answer_plan_ask(which, bot, asked_at, allow).await;
+        }
         let (root, label) = {
             let config = self.config.lock().await;
             // An ID first: the app sends one, and a label can be another
@@ -910,6 +1040,7 @@ impl Daemon {
                         .await
                 }
                 AskKind::ClaudeCode => self.give_claude_code(root, bot, ask.clone()).await,
+                AskKind::Plan => unreachable!("answered above"),
             };
             return match answered {
                 Ok(answer) => {
@@ -932,6 +1063,7 @@ impl Daemon {
         let mut entry = AuditEntry::event(match kind {
             AskKind::Unattended => "root_bot_unattended_declined",
             AskKind::ClaudeCode => "root_bot_claude_code_declined",
+            AskKind::Plan => "plan_declined",
         });
         entry.detail = Some(format!("{root} ({label}) for bot {bot}"));
         self.audit.append(&entry);
@@ -2256,6 +2388,8 @@ impl ControlHandler for Daemon {
                     | ControlRequest::RootsBot { .. }
                     | ControlRequest::CodingAllow { .. }
                     | ControlRequest::CodingLook { .. }
+                    | ControlRequest::PlansAllow { .. }
+                    | ControlRequest::Plans { .. }
                     | ControlRequest::Printers
                     | ControlRequest::PrintersAdd { .. }
                     | ControlRequest::PrintersRemove { .. }
@@ -2421,6 +2555,15 @@ impl ControlHandler for Daemon {
                 kind,
                 asked_at,
             } => self.answer_ask(root, bot, kind, asked_at, allow).await,
+            ControlRequest::PlansAllow { agent, bot, allow } => {
+                let agent = crate::plans::agent(&agent)
+                    .with_context(|| format!("{agent:?} isn't codex or claude"))?;
+                self.plans_allow(agent, bot, allow).await
+            }
+            ControlRequest::Plans { bot } => {
+                let plans = self.runner.plans(bot).await.map_err(command_refusal)?;
+                Ok(json!({ "plans": plans }))
+            }
             ControlRequest::RootsReadBudget { root, read_budget } => {
                 self.set_read_budget(root, read_budget).await
             }

@@ -227,6 +227,23 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asked_at: Option<String>,
     },
+    /// Let Chat with Work think with an agent's own sign-in on this computer
+    /// (docs/own-plans.md), or stop (`allow: false`): for this computer's
+    /// owner's own chats, or with `bot` for that bot. `agent` is `codex` or
+    /// `claude_code` (`claude` too). Audited `plan_allowed` or
+    /// `plan_withdrawn`. Only a same-user client reaches it, never the server.
+    PlansAllow {
+        agent: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot: Option<String>,
+        allow: bool,
+    },
+    /// What this computer has for that: each agent installed and signed in,
+    /// who pays, and what its owner allowed (for `bot` too, with one).
+    Plans {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot: Option<String>,
+    },
     /// Give a shared folder a read budget of its own: characters a chat
     /// may read from it per rolling hour (all chats together twice that),
     /// or `null` for the budget every folder shares.

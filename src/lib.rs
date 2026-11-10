@@ -30,6 +30,7 @@ pub mod notification_presence;
 pub mod notifications;
 pub mod paths;
 pub mod people;
+pub mod plans;
 pub mod policy;
 pub mod printing;
 pub mod projects;

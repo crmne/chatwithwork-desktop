@@ -29,6 +29,7 @@ mod plan;
 mod run;
 #[cfg(test)]
 mod tests;
+pub mod think;
 pub mod tools;
 pub mod windows;
 
@@ -301,6 +302,8 @@ struct Cell {
     /// Its folder's network when it started: narrowing it stops the run,
     /// whose sandbox can't be narrowed while it runs.
     started_with: (crate::reach::Level, Vec<std::net::SocketAddrV4>),
+    /// A thinking step's whole standard output, as kept (`think.rs`).
+    tap: Option<Arc<Mutex<Vec<u8>>>>,
 }
 
 impl Cell {
@@ -341,6 +344,7 @@ impl Cell {
                 crate::reach::Level::of(plan.local_services, plan.network),
                 plan.reach.clone(),
             ),
+            tap: None,
         }
     }
 
@@ -454,6 +458,13 @@ impl Cell {
         };
         tail.extend(bytes);
         *total += bytes.len() as u64;
+        if stream == Stream::Out
+            && let Some(tap) = &self.tap
+        {
+            let mut tap = lock(tap);
+            let room = think::MAX_OUTPUT.saturating_sub(tap.len());
+            tap.extend_from_slice(&bytes[..bytes.len().min(room)]);
+        }
         if tail.len() > self.tail_bytes {
             let drop = tail.len() - self.tail_bytes;
             tail.drain(..drop);
@@ -586,6 +597,8 @@ pub struct Runs {
     starting: Arc<Mutex<usize>>,
     /// Repositories bots' first runs are preparing (`crate::coding::prepare`).
     preparations: crate::coding::prepare::Preparations,
+    /// Thinking steps (`think.rs`), kept apart from the commands.
+    thinks: think::Thinks,
     paths: Paths,
 }
 
@@ -615,6 +628,7 @@ impl Runs {
             })),
             starting: Arc::new(Mutex::new(0)),
             preparations: Default::default(),
+            thinks: Default::default(),
             paths,
         }
     }
@@ -758,6 +772,7 @@ impl Runs {
     /// Stop every run (the worker restarted, or the daemon stops).
     pub fn stop_all(&self) {
         self.preparations.stop_all();
+        self.thinks.stop_all();
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             lock(&cell).stop = true;
@@ -769,6 +784,9 @@ impl Runs {
     /// be narrowed while it runs), and all of them while the computer is
     /// paused.
     pub fn stop_outside(&self, config: &Config) {
+        if config.paused {
+            self.thinks.stop_all();
+        }
         let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
         for cell in cells {
             let mut cell = lock(&cell);
@@ -836,6 +854,9 @@ pub fn valid_id(id: &str) -> bool {
 
 /// Where this process's commands run: here (an unconfined daemon), through
 /// the supervisor (the confined worker), or nowhere.
+// One per daemon, and cloned only to hand it out: its size doesn't matter,
+// and on Windows, which has no supervisor, `Local` is all it holds.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Runner {
     Local(Runs),
@@ -851,6 +872,7 @@ impl Runner {
     /// checked against the config on disk as the supervisor would, each in
     /// a sandbox of its own all the same.
     pub fn local(paths: &Paths) -> Self {
+        think::sweep(paths);
         Self::Local(Runs::new(paths.clone()))
     }
 
@@ -900,6 +922,41 @@ impl Runner {
             self.call(channel_call::Call::CodingLook { repository })
                 .await?,
         )
+    }
+
+    /// What this computer has for thinking with an agent's own sign-in
+    /// (`plans`, docs/own-plans.md), for `bot` if a bot asks.
+    pub async fn plans(
+        &self,
+        bot: Option<String>,
+    ) -> Result<Vec<crate::plans::PlanLook>, RunError> {
+        parse(self.call(channel_call::Call::Plans { bot }).await?)
+    }
+
+    /// Start a thinking step, checked there against the config on disk, and
+    /// answer its ID.
+    pub async fn think(&self, ask: crate::plans::ThinkAsk) -> Result<String, RunError> {
+        let answer = self.call(channel_call::Call::Think { ask }).await?;
+        answer["id"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| RunError::new("unavailable", "no step started"))
+    }
+
+    /// How a thinking step stands (`think::status`).
+    pub async fn think_status(&self, id: &str, from: u64) -> Result<serde_json::Value, RunError> {
+        self.call(channel_call::Call::ThinkStatus {
+            id: id.into(),
+            from,
+        })
+        .await
+    }
+
+    /// Stop a thinking step at once.
+    pub async fn think_stop(&self, id: &str) -> Result<(), RunError> {
+        self.call(channel_call::Call::ThinkStop { id: id.into() })
+            .await
+            .map(|_| ())
     }
 
     pub async fn status(&self, run: &str) -> Result<Status, RunError> {

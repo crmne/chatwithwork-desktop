@@ -325,6 +325,53 @@ In the same way a bot's chat can ask to run Claude Code with the computer's own 
 
 Each folder still allows only what it allows anyone: changes where changes are allowed, commands where commands are allowed. Calls without `com.chatwithwork/botId` are a person's, as before. The audit log's entries for a bot's calls say `for bot <id>`. Lending a folder, stopping, and changing whether its commands run unattended write `root_bot_lent` and `root_bot_withdrawn` entries. Stopping commands in a folder, or making it read-only, ends every loan's unattended commands there.
 
+### 7.2.2 Thinking with a person's own plan
+
+From 0.17.0 a chat or bot can use the ChatGPT plan (Codex) of the person whose computer this is as its model ([docs/own-plans.md](docs/own-plans.md)). These requests go to OpenAI, outside the EU, under the person's own account. The agent is only the model: Chat with Work keeps running every tool. Claude Code's path exists but is offered to nobody: `plans` doesn't list it, and `ask_plan`, `plans_allow` and `think` refuse it (`unavailable`), unless `[plans] offer_claude = true` was set by hand on the computer. Three tools, never in `tools/list`, called by the server by name; each takes the bot's ID in `_meta` when a bot's chat calls it, and is otherwise for the computer's owner's own chats. An older daemon answers `-32602` unknown tool.
+
+**`plans`**, `{}`: what this computer has for each agent, and what its owner allowed:
+
+```json
+{ "plans": [
+  { "agent": "codex", "name": "Codex", "installed": true, "signed_in": true, "billing": "plan",
+    "chats": true, "bot": false, "unavailable": null } ] }
+```
+
+`billing` is `plan`, `api_key` or `unknown`, from the sign-in. `chats` is the owner's yes for their own chats; `bot` the yes for the bot in `_meta`, `null` without one. `unavailable` says why steps can't run here (no sandbox that can give the internet safely, or Codex on macOS), else `null`. Never a path, a version or a token.
+
+**`ask_plan`**, `{"agent": "codex"}`: asks the person on this computer, and only asks, as `ask_unattended` does. It answers `{"status": "asked"}` (also when the same request already waits) or `{"status": "already"}`, and refuses as `ask_unattended` does (`rate_limited`, `internal`). The app's dialog is named from this computer's own data, never the server's words ("Let Chat with Work use your ChatGPT plan for your chats?", "...for Issue fixer?", saying that what the person asks, the chat so far and what tools read for them go to OpenAI, outside the EU, under their own account, Allow or Deny); `cww plans allow`, and the control API's `plans_allow` or `roots_unattended_answer` with `"kind": "plan"` (CONTROL.md), answer it too. The audit log records `plan_asked`, then `plan_allowed` or `plan_declined`.
+
+**`think`**: one step.
+
+```json
+{ "agent": "codex",
+  "instructions": "<system prompt>",
+  "transcript": "<the conversation so far, as text>",
+  "tools": [{ "name": "gmail_search", "description": "...", "input_schema": { "type": "object" } }],
+  "model": null | "<a model's name the agent accepts>",
+  "output": "events" | "raw" }
+```
+
+`_meta` carries the chat ID, the bot's ID for a bot's chat, and a `progressToken`. A tool's `name` is 1 to 64 letters, digits, `_` or `-`, each its own; `input_schema` is an object; at most 256 tools. `model` is letters, digits and `.` `_` `-` `:` `/` `[` `]`, at most 100. `transcript` can't be empty. Nothing of it reaches a command line: the computer writes it to files in the step's own folder and builds the agent's command line itself.
+
+Refusals are tool errors (section 9): `not_allowed` (the computer's owner didn't allow that agent for their own chats, or for that bot), `not_installed`, `not_signed_in`, `unavailable` (no sandbox for it here), `busy` (as many steps think at once as the computer runs commands at once, `[limits] commands_running`), `paused`, `invalid_argument`, and `failed` with a short reason when the agent ended without an answer: the agent's own error ("Codex said: ..."), its exit, or the 10 minutes a step may take. Never what it was told or answered.
+
+While it runs, `notifications/progress` carries the answer's text: `message` the new text since the last report, at most 200 characters (a longer piece goes in several reports, in order), and `progress` the characters of answer text so far, rising. Only the answer's text: never reasoning, never a call's arguments. The result:
+
+```json
+{ "text": "<all the answer's text this step>",
+  "tool_calls": [{ "id": "toolu_01...", "name": "gmail_search", "arguments": { "query": "budget" } }],
+  "stop": "tool_use" | "end_turn",
+  "usage": { "input_tokens": 1234, "output_tokens": 56, "cached_tokens": 1000 } | null,
+  "model": "claude-sonnet-5-5" | null }
+```
+
+`name` is Chat with Work's own name for the tool, without the agent's prefix (`mcp__cww__` for Claude Code, the `cww` server for Codex). `id` is the agent's call ID (Claude Code's), or for Codex the step's ID and Codex's item, unique to the step. Several calls the model made together all come back. `stop` is `tool_use` when there are calls, which the agent was stopped at: the server runs them and sends the next step with their results in the transcript, as a fresh process every time. `usage` counts every input token, those read from the cache included (`cached_tokens`), and is `null` when the agent was stopped before it said (Codex, at a call). `model` is the model the agent reported, or for Codex the one the step named.
+
+With `"output": "raw"` the step's events come back unparsed, for a server that reads them itself: each progress `message` is the next piece of the agent's standard output as it printed it, its tokens taken out, `progress` the characters sent so far, and the agent runs until it ends, its 10 minutes pass, or the server cancels the call. The result is then `{"exit": <code> | null, "stopped": true | false}`.
+
+A step must end within 10 minutes. `notifications/cancelled` for its request stops the agent at once. The audit log records `think` with the agent, the chat, the bot, how it ended, the number of calls and the sizes, never the instructions, the transcript, the text or the arguments.
+
 ### 7.3 Methods
 
 | Method | Answer |
@@ -332,7 +379,7 @@ Each folder still allows only what it allows anyone: changes where changes are a
 | `server/discover` | `supportedVersions`, `capabilities: {"tools":{}}`, and `_meta["io.modelcontextprotocol/serverInfo"] = {"name":"cww","version":…}`. |
 | `initialize` | Legacy handshake (7.1). `serverInfo.name` is `cww`, and the result carries instructions. |
 | `tools/list` | The seven read-only tools (section 8), then the change tools while a shared folder allows changes (section 8.7), the command tools while one allows commands (8.15), and the printing tools while a printer is allowed (8.21), the browser tools while the person turned the browser on (8.16), in one page. The list only changes when the user turns changes, commands, printers or the browser on or off, and the daemon then reconnects, so a server that lists tools on each new connection is always current. |
-| `tools/call` | See section 8, and `ask_unattended`, `ask_claude_code`, `allow_unattended`, `prepare_repository` and `prepare_status` (7.2.1), which a bot's chat calls by name though they're never listed. |
+| `tools/call` | See section 8, and `ask_unattended`, `ask_claude_code`, `allow_unattended`, `prepare_repository` and `prepare_status` (7.2.1), which a bot's chat calls by name though they're never listed, and `plans`, `ask_plan` and `think` (7.2.2), which any chat may call by name. |
 | `notifications/initialized`, `notifications/cancelled` | Accepted. Cancelling abandons a call in progress. |
 | `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, anything else | `-32601` method not found. |
 
@@ -856,6 +903,7 @@ It answers `{ "printer", "label", "job", "state", "pages", "copies", "already" }
 | `not_lent` | A bot's call (7.2.1) named a folder not lent to that bot, followed a command outside them, or searched with nothing lent to it, or used a browser not lent to it; or `ask_unattended` without a bot's ID. |
 | `needs_approval` | A bot's unattended `run` (7.2.1) in a folder whose loan wants a person to approve each command. |
 | `browser_unavailable`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `no_tab`, `sensitive_field`, `would_submit`, `page_error` | The browser tools' refusals and failures (8.16). A browser action while the person allows only reading is `not_writable`. |
+| `not_allowed`, `not_installed`, `not_signed_in`, `unavailable`, `failed` | A thinking step's refusals and failures (7.2.2). `not_allowed` is logged as a refusal. |
 | `internal` | Unexpected failure. |
 
 Change errors are sentences, for example `not_writable: Changes aren't allowed in the shared folder “Work docs”. The person can turn on Allow changes for it in Chat with Work Desktop on their computer.` or `trash_unavailable: The system trash can't take this item, so nothing was changed. cww never deletes a file for good.` `not_writable`, `not_changeable`, `denied`, `invalid_path`, `unknown_root`, `outside_root`, `rate_limited`, `busy`, `paused`, `not_lent`, `needs_approval`, `browser_stopped`, `site_not_allowed`, `not_in_group`, `sensitive_field` and `would_submit` are logged as refusals, the others as errors.

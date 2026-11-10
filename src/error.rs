@@ -68,6 +68,17 @@ pub enum ErrorCode {
     /// The system's printing can't take a job: no CUPS, a printer that's
     /// gone or stopped.
     PrinterUnavailable,
+    /// A thinking step (`think`, docs/own-plans.md) the computer's owner
+    /// didn't allow for that chat or bot.
+    NotAllowed,
+    /// The agent a thinking step names isn't on this computer.
+    NotInstalled,
+    /// The agent is here but not signed in.
+    NotSignedIn,
+    /// This computer can't run it: no sandbox, or not for this agent here.
+    Unavailable,
+    /// The agent ended without an answer.
+    Failed,
     Internal,
 }
 
@@ -103,6 +114,11 @@ impl ErrorCode {
             Self::SensitiveField => "sensitive_field",
             Self::WouldSubmit => "would_submit",
             Self::PageError => "page_error",
+            Self::NotAllowed => "not_allowed",
+            Self::NotInstalled => "not_installed",
+            Self::NotSignedIn => "not_signed_in",
+            Self::Unavailable => "unavailable",
+            Self::Failed => "failed",
             Self::Internal => "internal",
         }
     }
@@ -122,6 +138,7 @@ impl ErrorCode {
                 | Self::NotWritable
                 | Self::NotChangeable
                 | Self::NotLent
+                | Self::NotAllowed
                 | Self::NeedsApproval
                 | Self::BrowserStopped
                 | Self::SiteNotAllowed
