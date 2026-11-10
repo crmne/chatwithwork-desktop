@@ -192,6 +192,12 @@ pub fn start(
             "this computer is paused; resume it to think here",
         ));
     }
+    if !plans::offered(config, agent) {
+        return Err(RunError::new(
+            "unavailable",
+            format!("{} isn't offered on this computer", plans::name(agent)),
+        ));
+    }
     let whom = plans::for_whom(ask.bot.as_deref());
     if !plans::allowed(config, agent, ask.bot.as_deref()) {
         return Err(RunError::new(
@@ -201,12 +207,6 @@ pub fn start(
                  Chat with Work Desktop, or with `cww plans allow`",
                 plans::plan_name(agent)
             ),
-        ));
-    }
-    if !plans::offered(config, agent) {
-        return Err(RunError::new(
-            "unavailable",
-            format!("{} isn't offered on this computer", plans::name(agent)),
         ));
     }
     if let Some(why) = agent.unavailable() {

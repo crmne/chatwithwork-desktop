@@ -2489,6 +2489,11 @@ exec sleep 60
         text, "args-ok [codex-token] Be brief / User: budget? / no-ssh",
         "{status}"
     );
+    // Its folder goes once the run has ended, a moment after `done`.
+    let gone = Instant::now();
+    while folder.exists() && gone.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(!folder.exists(), "its folder is removed");
     // A step that ended is read again the same way.
     assert_eq!(think::status(&fx.runs, &id, 0).unwrap()["result"], *result);
