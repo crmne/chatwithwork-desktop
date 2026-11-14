@@ -367,9 +367,9 @@ A Chat with Work bot (an assistant your organization sets up to work by itself, 
 
 For a coding bot (one that runs Claude Code, Codex, OpenCode, Gemini CLI or pi and your tests, like the Issue fixer), there's nothing to type: have the agent installed and signed in the normal way, press **Set up** on its card, and the app shows what it checked and asks once. Allow lends it a new folder, with this computer's own sign-in for that agent. The first run on each repository of that owner then copies it from a mirror only Desktop fetches, installs its toolchain, and runs its tests in the sandbox, by itself. For scripts and servers, `cww coding setup --bot "Issue fixer"` does the same in one guided step, picking the bot by name. See [docs/coding-computers.md](docs/coding-computers.md).
 
-### Thinking with your own ChatGPT or Claude plan
+### Thinking with your own ChatGPT plan (not offered yet)
 
-A chat or bot can use your own ChatGPT plan (Codex) or Claude plan (Claude Code), signed in on this computer, as its model: the agent only thinks, in a sandbox with no files of yours and no tools but Chat with Work's, which keep running on the server. Chat with Work can only ask; you allow it here, for your chats or a bot, with `cww plans allow codex` or in the app's dialog. See [docs/own-plans.md](docs/own-plans.md).
+A chat or bot will be able to use your own ChatGPT plan (Codex), signed in on this computer, as its model: the agent only thinks, in a sandbox with no files of yours and no tools but Chat with Work's, which keep running on the server. Chat with Work can only ask; you allow it here, for your chats or a bot, with `cww plans allow codex` or in the app's dialog. It hasn't been tried on a real ChatGPT sign-in yet, so it's offered to nobody unless `[plans] offer_codex = true` is set by hand in `config.toml`. See [docs/own-plans.md](docs/own-plans.md).
 
 ### Your browser
 

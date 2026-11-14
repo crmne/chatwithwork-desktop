@@ -2443,6 +2443,12 @@ exec sleep 60
         model: None,
         raw: false,
     };
+    // Not offered on this computer: nothing starts, whatever it allowed.
+    crate::plans::set(&mut fx.config, crate::coding::Agent::Codex, None, true);
+    let refused = think::start(&fx.runs, &fx.config, &paths, &ask(None)).unwrap_err();
+    assert_eq!(refused.code, "unavailable");
+    crate::plans::set(&mut fx.config, crate::coding::Agent::Codex, None, false);
+    fx.config.plans.offer_codex = true;
     // Nobody said yes yet: nothing starts.
     let refused = think::start(&fx.runs, &fx.config, &paths, &ask(None)).unwrap_err();
     assert_eq!(refused.code, "not_allowed");
@@ -2556,6 +2562,7 @@ fn real_agent_thinks_from_the_sandbox() {
     if let Ok(program) = std::env::var("CWW_TEST_PROGRAM") {
         crate::coding::setup::record_program(&mut fx.config.coding, agent, PathBuf::from(program));
     }
+    fx.config.plans.offer_codex = true;
     fx.config.plans.offer_claude = true;
     crate::plans::set(&mut fx.config, agent, None, true);
     let model = std::env::var("CWW_TEST_MODEL").ok();

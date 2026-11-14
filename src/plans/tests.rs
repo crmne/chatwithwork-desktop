@@ -34,6 +34,8 @@ fn feed(agent: Agent, name: &str) -> (Box<dyn parse::Events>, Option<usize>) {
 fn the_yes_is_read_from_the_config_file() {
     let config: Config = toml::from_str(
         r#"
+[plans]
+offer_codex = true
 [plans.codex]
 chats = true
 bots = ["42"]
@@ -507,9 +509,22 @@ fn a_steps_codex_home_holds_only_the_sign_in_and_gives_a_new_one_back() {
 }
 
 #[test]
+fn chatgpt_is_offered_to_nobody_until_set_by_hand() {
+    let mut config = Config::default();
+    assert!(!offered(&config, Agent::Codex));
+    // A yes on its own doesn't reach it.
+    set(&mut config, Agent::Codex, None, true);
+    set(&mut config, Agent::Codex, Some("42"), true);
+    assert!(!allowed(&config, Agent::Codex, None));
+    assert!(!allowed(&config, Agent::Codex, Some("42")));
+    config.plans.offer_codex = true;
+    assert!(allowed(&config, Agent::Codex, None));
+    assert!(allowed(&config, Agent::Codex, Some("42")));
+}
+
+#[test]
 fn claude_is_offered_to_nobody_until_set_by_hand() {
     let mut config = Config::default();
-    assert!(offered(&config, Agent::Codex));
     assert!(!offered(&config, Agent::ClaudeCode));
     // A yes on its own doesn't reach it.
     set(&mut config, Agent::ClaudeCode, None, true);

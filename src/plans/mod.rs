@@ -66,11 +66,16 @@ pub fn plan_name(agent: Agent) -> &'static str {
     }
 }
 
-/// Whether this computer offers `agent` to chats at all. ChatGPT, through
-/// Codex; Claude Code's path stays, but it's offered to nobody unless
-/// `[plans] offer_claude = true` is set by hand (docs/own-plans.md).
+/// Whether this computer offers `agent` to chats at all. Both paths stay,
+/// but each is offered to nobody unless set by hand: ChatGPT, through Codex,
+/// with `[plans] offer_codex = true`, and Claude Code with `[plans]
+/// offer_claude = true` (docs/own-plans.md).
 pub fn offered(config: &Config, agent: Agent) -> bool {
-    agent != Agent::ClaudeCode || config.plans.offer_claude
+    match agent {
+        Agent::Codex => config.plans.offer_codex,
+        Agent::ClaudeCode => config.plans.offer_claude,
+        _ => false,
+    }
 }
 
 fn yes(config: &Config, agent: Agent) -> &PlanYes {

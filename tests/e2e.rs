@@ -6713,7 +6713,13 @@ async fn a_chat_thinks_with_a_plan_only_once_this_computer_said_yes() {
         );
     }
     let plans = s.call("plans", json!({})).await;
-    let claude = &plans["structuredContent"]["plans"][1];
+    // ChatGPT isn't offered unless `[plans] offer_codex` was set by hand.
+    let listed = plans["structuredContent"]["plans"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{plans}");
+    let claude = &listed[0];
+    let refused = s.call("ask_plan", json!({ "agent": "codex" })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused.to_string().contains("isn't offered"), "{refused}");
     assert_eq!(claude["agent"], "claude_code", "{plans}");
     assert_eq!(claude["name"], "Claude");
     assert_eq!(claude["installed"], true, "{plans}");

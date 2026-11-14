@@ -6,6 +6,8 @@ A Chat with Work chat or bot can use the ChatGPT plan (through Codex) of the per
 
 Status: Codex, on Linux (Bubblewrap). macOS and Windows are written but not usable or tried yet ([Testing](#testing)). It has never been tried on a real ChatGPT subscription, only with API keys.
 
+**ChatGPT is offered to nobody until it has been.** As for Claude below, `plans` doesn't list it and `ask_plan`, `plans allow` and `think` refuse it (`unavailable`) unless `[plans] offer_codex = true` is set by hand in `config.toml`, which nothing in the app or on the server can do. A yes already in `[plans.codex]` does nothing without it.
+
 **Claude is offered to nobody for now.** Its code path stays, tested through the same steps, but `plans` doesn't list it and `ask_plan`, `plans allow` and `think` refuse it unless `[plans] offer_claude = true` is set by hand in `config.toml`, which nothing in the app or on the server can do.
 
 ## What runs
@@ -46,6 +48,8 @@ Captured streams from both are in `tests/fixtures/plans/`, and the parsers are b
 Only the person on this computer says which chats may think with which sign-in, in `config.toml`:
 
 ```toml
+[plans]
+offer_codex = true  # set by hand while ChatGPT is offered to nobody (Status, above)
 [plans.codex]
 chats = true      # this computer's owner's own chats may think with Codex's sign-in
 bots = ["42"]     # and these bots, by their ID in Chat with Work

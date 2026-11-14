@@ -79,6 +79,11 @@ pub struct PlansConfig {
     pub codex: PlanYes,
     #[serde(skip_serializing_if = "PlanYes::is_default")]
     pub claude_code: PlanYes,
+    /// Offer ChatGPT, through Codex, as a plan at all: off until it has run
+    /// on a real ChatGPT sign-in, and set only by hand here
+    /// (docs/own-plans.md, Status).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub offer_codex: bool,
     /// Offer Claude Code as a plan at all: off, and set only by hand here
     /// (docs/own-plans.md, Claude).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
