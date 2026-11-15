@@ -357,13 +357,16 @@ impl Asks {
 /// Whether a request still has something to answer: it came through the
 /// pairing `config` names (another server's bot can have the same number),
 /// the folder is lent to the bot, allows commands, and its loan doesn't
-/// give what it asks for yet.
+/// give what it asks for yet. A request for a plan is open only while
+/// that plan is offered, so one saved before `offer_codex` went off is
+/// dropped rather than shown.
 pub fn open(config: &Config, ask: &Ask) -> bool {
     if ask.kind == AskKind::Plan {
         let bot = (!ask.bot.is_empty()).then_some(ask.bot.as_str());
         return ask.pairing == pairing(config)
-            && crate::plans::agent(&ask.root)
-                .is_some_and(|agent| !crate::plans::allowed(config, agent, bot));
+            && crate::plans::agent(&ask.root).is_some_and(|agent| {
+                crate::plans::offered(config, agent) && !crate::plans::allowed(config, agent, bot)
+            });
     }
     ask.pairing == pairing(config)
         && config
@@ -600,6 +603,27 @@ mod tests {
         asks.restore(ask);
         assert_eq!(asks.pending().len(), 1, "put back when the answer failed");
         assert_eq!(asks.clear(String::new()).len(), 1);
+        assert!(asks.pending().is_empty());
+    }
+
+    /// A request for a plan saved while it was offered isn't shown once
+    /// the plan is off, and is dropped as stale.
+    #[test]
+    fn a_request_for_a_plan_that_is_off_is_dropped() {
+        let asks = Asks::in_memory();
+        assert_eq!(
+            asks.ask("codex", "42", AskKind::Plan).unwrap(),
+            Asked::Queued
+        );
+        let mut offered = Config::default();
+        offered.plans.offer_codex = true;
+        assert_eq!(asks.list(&offered).len(), 1);
+        assert!(asks.list(&Config::default()).is_empty());
+        assert!(
+            asks.take("codex", "42", AskKind::Plan, None, &Config::default())
+                .is_none()
+        );
+        assert_eq!(asks.prune(&Config::default()).len(), 1);
         assert!(asks.pending().is_empty());
     }
 
