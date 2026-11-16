@@ -298,6 +298,69 @@ cp "$TEST_RELEASE/$name" "$output"
         result = run("sh", str(ROOT / "packaging/install.sh"), env=env)
         return result, install, data
 
+    def obs_submit(self, *args, osc_fails=None):
+        """Run packaging/obs/submit.sh against stand-ins for the COPR script, osc and op-cache."""
+        root = self.work / "obs-root"
+        sources = root / "dist/copr/SOURCES"
+        executable(root / "packaging/copr/submit.sh", f"""#!/bin/sh
+set -e
+mkdir -p "{sources}" "{root}/dist/copr/SPECS"
+echo "spec $1" > "{root}/dist/copr/SPECS/chatwithwork-desktop.spec"
+for arch in x86_64 aarch64; do echo "$arch $1" > "{sources}/cww-app-v$1-$arch-unknown-linux-gnu.tar.gz"; done
+""")
+        log = self.work / "osc.log"
+        executable(self.bin / "osc", f"""#!/bin/sh
+echo "$* config=$OSC_CONFIG" >> "{log}"
+grep -q "^cookiejar = $(dirname "$OSC_CONFIG")/cookiejar$" "$OSC_CONFIG" || {{ echo "shared cookie jar" >&2; exit 1; }}
+[ "$1" = "{osc_fails}" ] && {{ echo "401 Unauthorized" >&2; exit 1; }}
+case "$1" in
+  checkout)
+    mkdir -p "$3"
+    echo "spec 0.13.1" > "$3/chatwithwork-desktop.spec"
+    for arch in x86_64 aarch64; do echo old > "$3/cww-app-v0.13.1-$arch-unknown-linux-gnu.tar.gz"; done ;;
+  status) ls ;;
+esac
+""")
+        executable(self.bin / "op-cache", "#!/bin/sh\necho secret-$(basename \"$2\")\n")
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "OBS_ROOT": str(root)}
+        for name in ("OBS_USERNAME", "OBS_PASSWORD", "OBS_PROJECT", "OBS_APIURL"):
+            env.pop(name, None)
+        result = run(str(ROOT / "packaging/obs/submit.sh"), *args, env=env)
+        calls = log.read_text().splitlines() if log.exists() else []
+        return result, root / "dist/obs/chatwithwork-desktop", calls
+
+    def test_obs_submit_stages_the_release_in_place_of_the_previous_one(self):
+        result, work, calls = self.obs_submit("v0.16.2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in work.iterdir()), [
+            "chatwithwork-desktop.spec",
+            "cww-app-v0.16.2-aarch64-unknown-linux-gnu.tar.gz",
+            "cww-app-v0.16.2-x86_64-unknown-linux-gnu.tar.gz",
+        ])
+        self.assertEqual((work / "chatwithwork-desktop.spec").read_text(), "spec 0.16.2\n")
+        self.assertEqual([c.split()[0] for c in calls], ["checkout", "addremove", "status"])
+        self.assertNotIn("secret", result.stdout + result.stderr)
+        config = Path(calls[0].split("config=")[1])
+        self.assertFalse(config.parent.exists(), "the login outlived the run")
+
+    def test_obs_submit_commits_only_when_asked(self):
+        result, _, calls = self.obs_submit("0.16.2", "--submit")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1].split(" config=")[0], "commit -m Update to 0.16.2")
+
+    def test_obs_submit_stops_and_says_why_when_checkout_fails(self):
+        result, work, calls = self.obs_submit("0.16.2", "--submit", osc_fails="checkout")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("401 Unauthorized", result.stderr)
+        self.assertIn("couldn't check out home:plenty/chatwithwork-desktop", result.stderr)
+        self.assertEqual([c.split()[0] for c in calls], ["checkout"])
+        self.assertFalse(work.exists())
+
+    def test_obs_submit_refuses_unknown_arguments(self):
+        result, _, calls = self.obs_submit("0.16.2", "--sumbit")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(calls, [])
+
     def test_arch_git_version_ignores_newer_browser_release_tags(self):
         tree = self.work / "chatwithwork-desktop-git"
         tree.mkdir()
