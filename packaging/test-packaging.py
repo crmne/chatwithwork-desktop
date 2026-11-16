@@ -323,8 +323,8 @@ esac
 """)
         executable(self.bin / "op-cache", "#!/bin/sh\necho secret-$(basename \"$2\")\n")
         env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "OBS_ROOT": str(root)}
-        env.pop("OBS_USERNAME", None)
-        env.pop("OBS_PASSWORD", None)
+        for name in ("OBS_USERNAME", "OBS_PASSWORD", "OBS_PROJECT", "OBS_APIURL"):
+            env.pop(name, None)
         result = run(str(ROOT / "packaging/obs/submit.sh"), *args, env=env)
         calls = log.read_text().splitlines() if log.exists() else []
         return result, root / "dist/obs/chatwithwork-desktop", calls
