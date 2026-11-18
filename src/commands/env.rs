@@ -485,7 +485,34 @@ fn store(config: &Config, paths: &Paths) -> SecretStore {
 
 /// Folder `root`'s list as stored, if it has one.
 pub fn stored(config: &Config, paths: &Paths, root: &str) -> anyhow::Result<Option<String>> {
-    store(config, paths).get(&entry(paths, root))
+    store(config, paths)
+        .get(&entry(paths, root))?
+        .map(|kept| unpacked(&kept))
+        .transpose()
+}
+
+/// A list as the store keeps it: on one line, `%` then the text with line
+/// breaks, other control characters, spaces, `%` and `\` percent-encoded.
+/// GNOME Keyring's unencrypted keyring file keeps a secret only to its
+/// first line break, and reads `\n` and `\\` in it back as escapes, which
+/// kept only a list's first variable.
+fn packed(text: &str) -> String {
+    const ENCODED: &percent_encoding::AsciiSet =
+        &percent_encoding::CONTROLS.add(b' ').add(b'%').add(b'\\');
+    format!("%{}", percent_encoding::utf8_percent_encode(text, ENCODED))
+}
+
+/// A list from the store: packed, or, saved before lists were packed, the
+/// text itself, which never starts with `%` (a list's first character is
+/// a name's, a space, a `#` or a line break).
+fn unpacked(kept: &str) -> anyhow::Result<String> {
+    match kept.strip_prefix('%') {
+        Some(packed) => percent_encoding::percent_decode_str(packed)
+            .decode_utf8()
+            .map(String::from)
+            .map_err(|_| anyhow::anyhow!("a folder's environment is damaged")),
+        None => Ok(kept.to_string()),
+    }
 }
 
 fn errors_text(errors: &[LineError]) -> String {
@@ -513,7 +540,7 @@ pub fn save(
     let store = store(config, paths);
     let name = entry(paths, root);
     let before = store.get(&name)?;
-    store.set(&name, text)?;
+    store.set(&name, &packed(text))?;
     let noted = config.folder_env.iter().any(|id| id == root);
     if !noted {
         config.folder_env.push(root.to_string());
@@ -859,6 +886,44 @@ mod tests {
             stored(&config, &paths, "app").unwrap().as_deref(),
             Some("A=1")
         );
+    }
+
+    #[test]
+    fn every_line_survives_a_store_that_keeps_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::under(dir.path());
+        paths.ensure().unwrap();
+        let mut config = Config {
+            secret_store: Some("file".into()),
+            ..Default::default()
+        };
+        let list = "MBX_CACHE_DIR=/mnt/cache\nSECOND=\"two\nlines\"\nTHIRD='a\\b'\n";
+        save(&mut config, &paths, "app", list).unwrap();
+        // What GNOME Keyring's unencrypted keyring file does to a secret
+        // when it reads it back: only its first line, escapes read.
+        let file = SecretStore::File(paths.secrets_file());
+        let name = entry(&paths, "app");
+        let kept = file.get(&name).unwrap().unwrap();
+        let reloaded = kept
+            .split('\n')
+            .next()
+            .unwrap()
+            .replace("\\n", "\n")
+            .replace("\\\\", "\\");
+        file.set(&name, &reloaded).unwrap();
+        assert_eq!(
+            stored(&config, &paths, "app").unwrap().as_deref(),
+            Some(list)
+        );
+        let names: Vec<String> = for_run(&config, &paths, "app")
+            .unwrap()
+            .into_iter()
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(names, ["MBX_CACHE_DIR", "SECOND", "THIRD"]);
+        // A list saved before lists were kept on one line still reads.
+        file.set(&name, "A=1\nB=2").unwrap();
+        assert_eq!(for_run(&config, &paths, "app").unwrap().len(), 2);
     }
 
     #[test]

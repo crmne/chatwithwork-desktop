@@ -348,6 +348,22 @@ impl Cell {
         }
     }
 
+    /// Whether `config` lets this run go on: the computer not paused, and
+    /// its folder still allowing commands with at least the network it
+    /// started with. What a prune stops runs by, and a run made ready
+    /// while one came is checked by.
+    fn allowed_by(&self, config: &Config) -> bool {
+        let (level, reach) = &self.started_with;
+        !config.paused
+            && config.roots.iter().any(|r| {
+                r.id == self.root
+                    && r.runs_commands()
+                    && r.network_level().rank() >= level.rank()
+                    && (r.network_level() == crate::reach::Level::Internet
+                        || reach.iter().all(|a| r.reach.contains(&a.to_string())))
+            })
+    }
+
     /// Follow what `plan`'s sandbox blocks, once its networks are known.
     fn watch_blocked(&mut self, plan: &Plan, sandbox: Sandbox) {
         self.access = Some(plan.network_access(sandbox));
@@ -616,6 +632,12 @@ struct Inner {
     /// Finished runs, oldest first.
     finished: VecDeque<String>,
     limits: Limits,
+    /// Counts the prunes and stops of every run, each counted under this
+    /// lock as it looks at the runs: a run made ready while one came is
+    /// checked again before it's added, so none starts unseen by it.
+    stops: u64,
+    /// `stops` as the latest stop of every run left it.
+    stopped_all: u64,
 }
 
 impl Runs {
@@ -625,6 +647,8 @@ impl Runs {
                 runs: HashMap::new(),
                 finished: VecDeque::new(),
                 limits: Limits::from_config(&crate::config::Limits::default()),
+                stops: 0,
+                stopped_all: 0,
             })),
             starting: Arc::new(Mutex::new(0)),
             preparations: Default::default(),
@@ -636,6 +660,21 @@ impl Runs {
     /// Start `request` as `config` allows it, checked here, and return its
     /// status at once.
     pub fn start(&self, config: &Config, request: &Request) -> Result<Status, RunError> {
+        self.start_with(|| Ok(config.clone()), request)
+    }
+
+    /// Start `request` as the settings `settings` reads allow it, checked
+    /// here, and return its status at once. Once it's made ready, which
+    /// can be slow, it's checked again against the settings as they are
+    /// then, before it's added, by the same rule a prune stops runs by; and
+    /// a stop of every run that came meanwhile refuses it.
+    pub fn start_with(
+        &self,
+        settings: impl Fn() -> Result<Config, RunError>,
+        request: &Request,
+    ) -> Result<Status, RunError> {
+        let seen = lock(&self.inner).stops;
+        let config = &settings()?;
         if config.paused {
             return Err(RunError::new(
                 "paused",
@@ -699,6 +738,28 @@ impl Runs {
         )));
         {
             let mut inner = lock(&self.inner);
+            if inner.stopped_all > seen {
+                return Err(RunError::new(
+                    "unavailable",
+                    "this computer stopped every command while this one was getting ready",
+                ));
+            }
+            // Read again whether or not a prune came: the supervisor answers
+            // one call at a time, so a pause saved while this run waited on
+            // the keychain has its prune queued behind this start, unseen.
+            let now = settings()?;
+            if now.paused {
+                return Err(RunError::new(
+                    "paused",
+                    "this computer is paused; resume it to run commands",
+                ));
+            }
+            if !lock(&cell).allowed_by(&now) {
+                return Err(RunError::new(
+                    "not_allowed",
+                    "this folder stopped allowing this command while it was getting ready",
+                ));
+            }
             inner.limits = plan.limits;
             inner.runs.insert(id.clone(), cell.clone());
         }
@@ -773,7 +834,12 @@ impl Runs {
     pub fn stop_all(&self) {
         self.preparations.stop_all();
         self.thinks.stop_all();
-        let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
+        let cells: Vec<_> = {
+            let mut inner = lock(&self.inner);
+            inner.stops += 1;
+            inner.stopped_all = inner.stops;
+            inner.runs.values().cloned().collect()
+        };
         for cell in cells {
             lock(&cell).stop = true;
         }
@@ -787,19 +853,14 @@ impl Runs {
         if config.paused {
             self.thinks.stop_all();
         }
-        let cells: Vec<_> = lock(&self.inner).runs.values().cloned().collect();
+        let cells: Vec<_> = {
+            let mut inner = lock(&self.inner);
+            inner.stops += 1;
+            inner.runs.values().cloned().collect()
+        };
         for cell in cells {
             let mut cell = lock(&cell);
-            let (level, reach) = &cell.started_with;
-            let allowed = !config.paused
-                && config.roots.iter().any(|r| {
-                    r.id == cell.root
-                        && r.runs_commands()
-                        && r.network_level().rank() >= level.rank()
-                        && (r.network_level() == crate::reach::Level::Internet
-                            || reach.iter().all(|a| r.reach.contains(&a.to_string())))
-                });
-            if cell.state == State::Running && !allowed {
+            if cell.state == State::Running && !cell.allowed_by(config) {
                 cell.stop = true;
             }
         }

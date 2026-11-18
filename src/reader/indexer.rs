@@ -9,6 +9,12 @@
 //! they touched are rescanned. A full rescan of a root happens at start,
 //! after a config change, and when the OS says events were lost.
 //!
+//! A root's first full pass is noted beside the index when it ends
+//! ([`Passes`]). A daemon that starts again (allowing changes in a folder
+//! restarts it under a new sandbox) shows a noted root ready at once, with
+//! its count, and checks it quietly, as a rescan after a config change
+//! does; a root whose first pass never ended is indexed from the start.
+//!
 //! Only the directories the index walks are watched, within a limit that
 //! leaves the system's pool of watches to other programs (see
 //! [`super::watch`]). A folder with directories left unwatched (or every
@@ -17,14 +23,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::extract::{self, format_for, read_capped};
 use super::index::{MAX_BODY_CHARS, SearchIndex};
@@ -116,30 +122,26 @@ pub struct Indexer {
 
 impl Indexer {
     pub fn start(path: PathBuf, settings: IndexerSettings, changes: Changes) -> Self {
-        Self::start_with(settings, changes, move || SearchIndex::open(&path))
+        let passes = Passes::in_dir(&path);
+        Self::start_with(settings, changes, passes, move || SearchIndex::open(&path))
     }
 
     fn start_with(
         settings: IndexerSettings,
         changes: Changes,
+        passes: Passes,
         open: impl FnOnce() -> anyhow::Result<SearchIndex> + Send + 'static,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (done, finished) = mpsc::channel();
+        // Read now, before the index opens, which can take a while: a root
+        // indexed in full before shows ready from the start.
+        let noted = passes.load();
         let status: StatusMap = Arc::new(Mutex::new(
             settings
                 .roots
                 .iter()
-                .map(|root| {
-                    (
-                        root.id.clone(),
-                        RootIndexStatus {
-                            state: IndexState::Pending,
-                            files: 0,
-                            last_error: None,
-                        },
-                    )
-                })
+                .map(|root| (root.id.clone(), first_status(&noted, root)))
                 .collect(),
         ));
         let stopped = CancellationToken::new();
@@ -162,10 +164,19 @@ impl Indexer {
                 // Opening a large persisted index must not delay control/status.
                 match open() {
                     Ok(index) if !worker_stop.is_cancelled() => {
+                        // Opening may have rebuilt the index, and its notes
+                        // with it: a root shown ready on them starts over.
+                        let noted = passes.load();
+                        for (id, status) in worker_status.lock().expect("status lock").iter_mut() {
+                            if status.state == IndexState::Ready && !noted.contains_key(id) {
+                                *status = RootIndexStatus::pending();
+                            }
+                        }
                         let index = Arc::new(index);
                         let _ = worker_index.set(Arc::clone(&index));
                         Worker {
                             index,
+                            passes,
                             status: worker_status,
                             changes,
                             tx: worker_tx,
@@ -281,6 +292,8 @@ struct Burst {
 
 struct Worker {
     index: Arc<SearchIndex>,
+    /// The roots whose first full pass ended, noted beside the index.
+    passes: Passes,
     status: StatusMap,
     changes: Changes,
     tx: mpsc::Sender<Command>,
@@ -505,14 +518,23 @@ impl Worker {
             return;
         }
         {
+            let mut noted = self.passes.load();
+            let before = noted.len();
+            noted.retain(|id, pass| {
+                self.settings
+                    .roots
+                    .iter()
+                    .any(|r| &r.id == id && r.path == pass.path)
+            });
+            if noted.len() != before {
+                self.passes.save(&noted);
+            }
             let mut status = self.status.lock().expect("status lock");
             status.retain(|id, _| self.settings.roots.iter().any(|r| &r.id == id));
             for root in &self.settings.roots {
-                status.entry(root.id.clone()).or_insert(RootIndexStatus {
-                    state: IndexState::Pending,
-                    files: 0,
-                    last_error: None,
-                });
+                status
+                    .entry(root.id.clone())
+                    .or_insert_with(|| first_status(&noted, root));
             }
         }
         self.changes.bump();
@@ -631,6 +653,7 @@ impl Worker {
 
     /// Bring the index for one root (or part of it) in line with the disk.
     fn scan(&self, root: &RootHandle, scope: Option<Scope>) {
+        let whole = scope.is_none();
         if self.scan.is_cancelled() {
             return;
         }
@@ -741,11 +764,89 @@ impl Worker {
         match self.index.commit() {
             Ok(()) => {
                 let files = self.index.root_count(&root.id);
+                // Only a whole pass, or one of a root indexed in full
+                // before, leaves it indexed in full.
+                if whole || !first {
+                    self.passes.note(root, files);
+                }
                 self.set_status(&root.id, IndexState::Ready, Some(files), None);
             }
             Err(e) => self.set_status(&root.id, IndexState::Error, None, Some(e.to_string())),
         }
         release_memory();
+    }
+}
+
+impl RootIndexStatus {
+    fn pending() -> Self {
+        Self {
+            state: IndexState::Pending,
+            files: 0,
+            last_error: None,
+        }
+    }
+}
+
+/// How a root starts: ready with its count when its first full pass
+/// ended before, at the same path, otherwise waiting for one.
+fn first_status(noted: &HashMap<String, Pass>, root: &RootHandle) -> RootIndexStatus {
+    match noted.get(&root.id) {
+        Some(pass) if pass.path == root.path => RootIndexStatus {
+            state: IndexState::Ready,
+            files: pass.files,
+            last_error: None,
+        },
+        _ => RootIndexStatus::pending(),
+    }
+}
+
+/// The roots whose first full pass ended, by ID: a small file beside the
+/// index, gone with it when the index is rebuilt.
+#[derive(Clone)]
+struct Passes(Option<PathBuf>);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Pass {
+    /// The root's path then: a root of that ID elsewhere starts over.
+    path: PathBuf,
+    /// Its files at the end of its latest pass.
+    files: u64,
+}
+
+impl Passes {
+    fn in_dir(dir: &Path) -> Self {
+        Self(Some(dir.join("cww-indexed-roots.json")))
+    }
+
+    fn load(&self) -> HashMap<String, Pass> {
+        self.0
+            .as_ref()
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, noted: &HashMap<String, Pass>) {
+        let Some(file) = &self.0 else { return };
+        let saved = serde_json::to_vec(noted)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| crate::paths::write_private_file(file, &bytes));
+        if let Err(e) = saved {
+            tracing::warn!("couldn't note which folders are indexed: {e:#}");
+        }
+    }
+
+    /// `root` is indexed in full, with `files` files.
+    fn note(&self, root: &RootHandle, files: u64) {
+        let mut noted = self.load();
+        let pass = Pass {
+            path: root.path.clone(),
+            files,
+        };
+        if noted.get(&root.id) != Some(&pass) {
+            noted.insert(root.id.clone(), pass);
+            self.save(&noted);
+        }
     }
 }
 
@@ -839,11 +940,16 @@ mod tests {
         let path = tmp.path().join("index");
         let (entered, waiting) = mpsc::channel();
         let (release, gate) = mpsc::channel();
-        let indexer = Indexer::start_with(settings(&root), Changes::default(), move || {
-            entered.send(()).unwrap();
-            gate.recv().unwrap();
-            SearchIndex::open(&path)
-        });
+        let indexer = Indexer::start_with(
+            settings(&root),
+            Changes::default(),
+            Passes(None),
+            move || {
+                entered.send(()).unwrap();
+                gate.recv().unwrap();
+                SearchIndex::open(&path)
+            },
+        );
         waiting.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(indexer.status()["docs"].state, IndexState::Pending);
         assert!(
@@ -859,17 +965,94 @@ mod tests {
     }
 
     #[test]
+    fn a_restart_shows_a_folder_indexed_before_as_ready_and_checks_it_quietly() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A folder is kept by its canonical path, as `cww roots add` saves
+        // it; macOS's temporary directory isn't one (/var links to
+        // /private/var), and a root reached through a link reads nothing.
+        let base = crate::roots::canonical(tmp.path()).unwrap();
+        let root = base.join("docs");
+        std::fs::create_dir(&root).unwrap();
+        for i in 0..3 {
+            std::fs::write(root.join(format!("note-{i}.txt")), "hello").unwrap();
+        }
+        let dir = base.join("index");
+        let indexed = |indexer: &Indexer, files: u64| {
+            indexer
+                .status()
+                .get("docs")
+                .is_some_and(|s| s.state == IndexState::Ready && s.files == files)
+        };
+        let first = Indexer::start(dir.clone(), settings(&root), Changes::default());
+        until(|| indexed(&first, 3));
+        drop(first);
+
+        // The next daemon: before its index has even opened, the folder is
+        // ready with what it had, never indexing from zero again.
+        std::fs::write(root.join("note-3.txt"), "hello").unwrap();
+        let (release, gate) = mpsc::channel::<()>();
+        let open = dir.clone();
+        let next = Indexer::start_with(
+            settings(&root),
+            Changes::default(),
+            Passes::in_dir(&dir),
+            move || {
+                gate.recv().unwrap();
+                SearchIndex::open(&open)
+            },
+        );
+        assert!(indexed(&next, 3), "{:?}", next.status());
+        release.send(()).unwrap();
+        until(|| indexed(&next, 4));
+        drop(next);
+
+        // At another path, the same ID is a new folder.
+        let other = base.join("other");
+        std::fs::create_dir(&other).unwrap();
+        let moved = Indexer::start(dir.clone(), settings(&other), Changes::default());
+        assert_eq!(moved.status()["docs"].state, IndexState::Pending);
+        drop(moved);
+
+        // A pass cut short leaves files in the index but no note: shown
+        // as indexing, never as ready.
+        let cut = base.join("cut");
+        let index = SearchIndex::open(&cut).unwrap();
+        index.upsert("docs", "note-0.txt", "hello", 1, 5).unwrap();
+        index.commit().unwrap();
+        drop(index);
+        let (release, gate) = mpsc::channel::<()>();
+        let open = cut.clone();
+        let resumed = Indexer::start_with(
+            settings(&root),
+            Changes::default(),
+            Passes::in_dir(&cut),
+            move || {
+                gate.recv().unwrap();
+                SearchIndex::open(&open)
+            },
+        );
+        assert_eq!(resumed.status()["docs"].state, IndexState::Pending);
+        release.send(()).unwrap();
+        until(|| indexed(&resumed, 4));
+    }
+
+    #[test]
     fn shutdown_does_not_wait_indefinitely_for_a_synchronous_open() {
         let tmp = tempfile::tempdir().unwrap();
         let (entered, waiting) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let (ended, end) = mpsc::channel();
-        let indexer = Indexer::start_with(settings(tmp.path()), Changes::default(), move || {
-            entered.send(()).unwrap();
-            gate.recv().unwrap();
-            ended.send(()).unwrap();
-            anyhow::bail!("synthetic unavailable index")
-        });
+        let indexer = Indexer::start_with(
+            settings(tmp.path()),
+            Changes::default(),
+            Passes(None),
+            move || {
+                entered.send(()).unwrap();
+                gate.recv().unwrap();
+                ended.send(()).unwrap();
+                anyhow::bail!("synthetic unavailable index")
+            },
+        );
         waiting.recv_timeout(Duration::from_secs(2)).unwrap();
         let start = Instant::now();
         drop(indexer);
@@ -897,7 +1080,12 @@ mod tests {
                 .unwrap();
         }
         index.commit().unwrap();
-        let indexer = Indexer::start_with(settings(&root), Changes::default(), move || Ok(index));
+        let indexer = Indexer::start_with(
+            settings(&root),
+            Changes::default(),
+            Passes(None),
+            move || Ok(index),
+        );
         until(|| {
             indexer
                 .status()

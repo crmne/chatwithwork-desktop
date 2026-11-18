@@ -672,6 +672,60 @@ fn a_paused_computer_runs_nothing_and_stops_what_runs() {
     assert_eq!(wait(&fx.runs, &running.id).status.state, "stopped");
 }
 
+/// Start a run whose settings are read as `before`, with `then` (a pause
+/// or narrowing pruned, or every run stopped) coming after that read and
+/// before the run is added; the settings read `after` from then on.
+fn start_across(
+    fx: &Fixture,
+    before: &Config,
+    then: impl Fn(&Runs),
+    after: &Config,
+) -> Result<Status, RunError> {
+    let reads = std::cell::Cell::new(0);
+    fx.runs.start_with(
+        || {
+            reads.set(reads.get() + 1);
+            if reads.get() == 1 {
+                then(&fx.runs);
+                Ok(before.clone())
+            } else {
+                Ok(after.clone())
+            }
+        },
+        &request("true"),
+    )
+}
+
+#[test]
+fn a_run_made_ready_across_a_pause_or_a_stop_never_starts() {
+    let fx = fixture(true);
+    let mut paused = fx.config.clone();
+    paused.paused = true;
+    let pause = |runs: &Runs| runs.stop_outside(&paused);
+    let refused = start_across(&fx, &fx.config, pause, &paused).unwrap_err();
+    assert_eq!(refused.code, "paused");
+    // Saved, its prune not made yet: the supervisor answers one call at a
+    // time, so a prune waits behind the start it should have stopped.
+    let refused = start_across(&fx, &fx.config, |_| {}, &paused).unwrap_err();
+    assert_eq!(refused.code, "paused");
+
+    let mut off = fx.config.clone();
+    off.roots[0].commands = false;
+    let turn_off = |runs: &Runs| runs.stop_outside(&off);
+    let refused = start_across(&fx, &fx.config, turn_off, &off).unwrap_err();
+    assert_eq!(refused.code, "not_allowed");
+
+    let revoke = |runs: &Runs| runs.stop_all();
+    let refused = start_across(&fx, &fx.config, revoke, &fx.config).unwrap_err();
+    assert_eq!(refused.code, "unavailable");
+    assert!(fx.runs.list().is_empty());
+
+    // A prune that leaves the folder as it was lets the run start.
+    let prune = |runs: &Runs| runs.stop_outside(&fx.config);
+    let started = start_across(&fx, &fx.config, prune, &fx.config).unwrap();
+    wait(&fx.runs, &started.id);
+}
+
 #[test]
 fn the_list_says_what_runs_where_running_first() {
     if !sandbox_works() {

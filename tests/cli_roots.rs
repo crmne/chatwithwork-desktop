@@ -62,9 +62,18 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
 
+    // Stopped as a service is, with SIGTERM: the supervisor stops its
+    // worker and waits for it. A SIGKILL would leave the worker running.
     struct Agent(std::process::Child);
     impl Drop for Agent {
         fn drop(&mut self) {
+            if let Some(pid) = rustix::process::Pid::from_raw(self.0.id() as i32) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let _ = self.0.kill();
             let _ = self.0.wait();
         }

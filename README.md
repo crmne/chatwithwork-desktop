@@ -461,7 +461,7 @@ Run `cww reload` after editing the file. The `cww roots` commands reload the dae
 | `~/.config/cww/` | `config.toml`, `dictation.json`, and `secrets.json` if no keychain is available |
 | `~/.local/share/cww/speech-models/` | Whisper models for local dictation, downloaded on first use and verified before use (`0700`, files `0600`), removable in General settings |
 | `~/.local/share/cww/ocr-languages/` | OCR languages added in the scan window on Linux (`<code>.traineddata`), verified before they are kept (`0700`, files `0600`) |
-| `~/.local/share/cww/index/` | The search index (`0700`) |
+| `~/.local/share/cww/index/` | The search index (`0700`), with `cww-indexed-roots.json`, the folders whose first pass ended (their IDs, paths and counts) |
 | `~/.local/share/cww/chat-assets/` | The logos and file-type icons the desktop app's chats show, as the paired server sent them, kept so each is fetched once (`0700`, files `0600`) |
 | `~/.local/state/cww/audit.jsonl` | The audit log (`0600`, rotated at 10 MB, never uploaded) |
 | `~/.local/state/cww/crash-reports.json` | When crash reports were sent in the last hour, for their limits (`0600`; only with crash reports on) |

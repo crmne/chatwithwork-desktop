@@ -153,9 +153,10 @@ fn watches_stay_bounded_on_a_big_code_tree() {
     drop(indexer);
     settle_at(0);
 
-    // And never more than the limit, with the rest left to rescans.
+    // And never more than the limit, with the rest left to rescans. Indexed
+    // in full already, the folder is ready before its watches are set up.
     let indexer = Indexer::start(index, settings(&base, 100), Changes::default());
     wait_ready(&indexer);
-    assert_eq!(inotify_watches(), 100);
+    settle_at(100);
     drop(indexer);
 }
