@@ -188,7 +188,7 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // background tabs can suspend. Never retry after dispatching a press.
 async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
   const deadline = Date.now() + 4_000;
-  const alignments = [null, "end", "center", "start"];
+  const alignments = [null, "center", "end", "start"];
   let reason = "that element isn't visible on the page";
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     allowedChanges(policy);
@@ -231,7 +231,43 @@ async function point(t: Target, policy: Policy): Promise<Point & { surface: numb
     }
     await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
   }
-  throw new ToolError("page_error", reason);
+  throw new ToolError("page_error", `Nothing was clicked. ${reason}`);
+}
+
+// Before the bundled engine clicks: scroll the control, or one of its
+// labels, to where a click would actually reach it, clear of fixed and
+// sticky layers (a banner along the bottom of the window can cover a form's
+// last button), trying the middle of the window too. A control still
+// covered when `until` comes is refused here, before anything is sent, so
+// the answer is certain and names what covers it; the engine's own retries
+// would only end in an uncertain timeout. A control that isn't ready for
+// another reason (hidden, disabled, moving) is left to the engine's waits.
+export async function clearOfOverlays(t: Target, policy: Policy, surfaces: number[], until: number): Promise<void> {
+  const alignments = [null, "center", "end", "start"];
+  let covered: string | null = null;
+  for (let attempt = 0; Date.now() < until; attempt++) {
+    let ready = false;
+    for (const surface of surfaces) {
+      allowedChanges(policy);
+      await still(t.tabId, policy);
+      const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
+      if (state.reason) continue;
+      const alignment = alignments[attempt % alignments.length];
+      if (alignment) await callOn(t.tabId, surface, SCROLL_TARGET, [alignment]);
+      else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: surface }).catch(() => {});
+      const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: surface })
+        .then((answer) => answer.quads, () => []);
+      const location = visiblePoint(quads, state.width, state.height);
+      if (!location) continue;
+      ready = true;
+      const obstruction = await surfaceObstruction(t, surface, location);
+      if (!obstruction) return;
+      covered = obstruction;
+    }
+    if (!ready) return;
+    await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
+  }
+  if (covered) throw new ToolError("page_error", `Nothing was clicked. ${covered}`);
 }
 
 const open: Method = async (params, policy) => {

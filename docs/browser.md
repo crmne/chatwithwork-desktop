@@ -133,11 +133,14 @@ Click checks adapt Playwright's actionability machinery from Playwriter's
 engine. They clip content quads to the visible viewport and walk the document
 and each shadow root, including closed roots, slotted labels and
 `display: contents`. They wait up to four seconds for the control to become
-visible, enabled and stable, trying different scroll alignments for sticky
-headers. Geometry is sampled with bounded timers because background tabs can
-suspend animation frames. Previews perform these checks too; a blocked control
-returns the obstruction's tag and short ARIA label, never its markup or field
-values. Subframe clicks fail closed rather than mixing document coordinates.
+visible, enabled and stable, trying different scroll alignments (the middle
+of the window second) for sticky headers and fixed banners. Geometry is
+sampled with bounded timers because background tabs can suspend animation
+frames. Previews perform these checks too; a blocked control fails with
+"Nothing was clicked" and the obstruction's tag and short ARIA label, plus the
+fixed or sticky layer it belongs to and where that sits ("a fixed `<div>`
+along the bottom of the window"), never its markup, text or field values.
+Subframe clicks fail closed rather than mixing document coordinates.
 
 After hovering, the extension rechecks the hit target and installs a trusted
 pointer-event guard against a layout change at dispatch. It never force-clicks
@@ -177,6 +180,14 @@ described above; a failed or possibly dispatched full-engine action never falls
 back to another implementation. Preview input is suppressed in transport,
 including hover, while upstream actionability checks still run. Background
 operations do not activate the tab or change the page clock.
+
+Before the engine starts a click, the extension runs the overlay part of the
+checks above for up to four seconds: it scrolls the control, or one of its
+labels, until a click at its point would reach it, clear of fixed and sticky
+layers. One still covered is refused then, before any input, with the same
+certain "Nothing was clicked" error naming what covers it. The engine's own
+retries would only have ended in the uncertain "did not finish" answer. A
+control that is hidden, disabled or moving is left to the engine's own waits.
 
 See the [helper contract and test coverage](../browser/engine/README.md) for
 reference binding, cancellation, runtime support and complete license provenance.
