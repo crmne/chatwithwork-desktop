@@ -326,6 +326,8 @@ async function clickableElements(tabId: number): Promise<Set<number>> {
     const name = tag(i);
     const a = attrs(i);
     const role = (a.role ?? "").trim().toLowerCase();
+    // A hidden input is no control anyone clicks; it doesn't hide its clickable wrapper.
+    if (name === "input" && (a.type ?? "").trim().toLowerCase() === "hidden") continue;
     control[i] = CONTROL_TAGS.has(name) || (name === "a" && a.href !== undefined) || CONTROL_ROLES.has(role) ||
       (a.contenteditable !== undefined && a.contenteditable !== "false");
   }

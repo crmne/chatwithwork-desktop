@@ -108,7 +108,7 @@ const FORM_OF = `function () {
 }`;
 
 const SHOWN_TEXT = `function () {
-  return String(this.innerText ?? this.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 200);
+  return String(this.innerText ?? this.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 100000);
 }`;
 
 // The element a call names, with what the extension needs to judge it.
@@ -125,7 +125,8 @@ export async function target(params: Params, policy: Policy): Promise<Target> {
   const facts = await elementFacts(tabId, backendNodeId, String(node?.role?.value ?? ""), String(node?.name?.value ?? ""));
   facts.form = await callOn<{ method: string } | null>(tabId, backendNodeId, FORM_OF).catch(() => null);
   // A control the page drew without a role has no accessible name of its
-  // own; its text is what the reader showed, and what the checks judge.
+  // own; its text is what the reader showed, and what the checks judge, in
+  // full (only what's shown back is shortened).
   if (!facts.name.trim() && plainClickable(facts)) {
     facts.name = await callOn<string>(tabId, backendNodeId, SHOWN_TEXT).catch(() => "");
   }

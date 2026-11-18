@@ -33,9 +33,16 @@ document.getElementById("add").addEventListener("click", () => log.textContent =
 document.getElementById("more").addEventListener("click", () => log.textContent = "More");
 </script>`;
 
+// Review findings on #227: a clickable that only wraps a hidden input, and a
+// long unnamed control whose action word comes after its first 200 characters.
+const EXTRA = `<!doctype html><title>More rows</title>
+<div class="row" id="hidden-row"><span id="hidden-remove" style="cursor:pointer" onclick="this.parentNode.remove()">×<input type="hidden" name="row" value="4"></span></div>
+<span id="long" style="cursor:pointer" onclick="log.textContent='Long clicked'">${"More ".repeat(41)}Delete</span>
+<p id="log">Nothing yet</p>`;
+
 let setup: Setup, origin: string, server: { close(): void };
 test.beforeAll(async () => {
-  ({ origin, server } = await serve({ "/": FORM }));
+  ({ origin, server } = await serve({ "/": FORM, "/extra": EXTRA }));
   setup = await launch([origin]);
   await setup.daemon.attached();
   setup.daemon.setPolicy({ changes: true });
@@ -112,5 +119,28 @@ for (const engine of [false, true]) {
     const close = refOf(lines.find((line) => line.includes('clickable "X"')))!;
     expect((await run("click", { tab, ref: close })).error).toBeUndefined();
     await expect(page.locator("#banner")).toHaveCount(0);
+  });
+}
+
+test("a clickable that only wraps a hidden input still gets a ref (#227)", async () => {
+  const opened = await setup.daemon.call("open", { url: `${origin}/extra` });
+  const read = await setup.daemon.call("read", { tab: opened.result.tab });
+  expect(read.result.text).toMatch(/- clickable "×" \[ref=e\d+\]/);
+});
+
+for (const engine of [false, true]) {
+  test(`a long unnamed control is judged by all of its text with ${engine ? "the bundled engine" : "the extension's own engine"} (#227)`, async () => {
+    const opened = await setup.daemon.call("open", { url: `${origin}/extra` });
+    const tab = opened.result.tab;
+    const page = setup.context.pages().find((p) => p.url() === `${origin}/extra`)!;
+    const read = await setup.daemon.call("read", { tab });
+    const ref = /\[ref=(e\d+)\]/.exec(read.result.text.split("\n").find((line: string) => line.includes("More More")) ?? "")?.[1];
+    expect(ref).toBeTruthy();
+    const params = { tab, ref, submits: false };
+    const clicked = engine ? await engineAction(setup, "click", params) : await setup.daemon.call("click", params);
+    expect(clicked.error?.code).toBe("would_submit");
+    // Refused by the check before the click, not left to the page guard.
+    if (engine) expect(clicked.methods).toBeUndefined();
+    await expect(page.locator("#log")).toHaveText("Nothing yet");
   });
 }

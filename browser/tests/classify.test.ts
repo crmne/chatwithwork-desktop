@@ -68,3 +68,9 @@ test("the classification in the page is the same one", () => {
     assert.equal(classify(facts).submits, submitReason(facts), JSON.stringify(facts));
   }
 });
+
+test("each name is judged on its own, so repeated glyphs stay glyphs (#227)", () => {
+  assert.ok(submitReason({ tag: "span", attrs: { "aria-label": "X" }, role: "image", name: "X" }));
+  assert.ok(submitReason({ tag: "span", attrs: { title: "×", "aria-label": "×" }, role: "generic", name: "×" }));
+  assert.equal(submitReason({ tag: "span", attrs: { title: "Show details" }, role: "generic", name: "×" }), null);
+});

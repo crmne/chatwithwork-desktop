@@ -11,7 +11,7 @@ function install(this: Element, surface: Element, key: string, action: string, s
     if (!event.isTrusted) return;
     const attrs = Object.fromEntries(Array.from(control.attributes, a => [a.name, a.value]));
     const form = (control as HTMLInputElement).form ?? control.closest("form");
-    const facts = { tag: control.localName, attrs, role: attrs.role ?? "", name: [attrs["aria-label"], ...(Array.from((control as HTMLInputElement).labels ?? [], l => l.textContent)), control.textContent].join(" "), form: form ? { method: form.getAttribute("method") || "get" } : null };
+    const facts = { tag: control.localName, attrs, role: attrs.role ?? "", name: Array.from((control as HTMLInputElement).labels ?? [], l => l.textContent ?? "").join(" ") || (control.textContent ?? ""), form: form ? { method: form.getAttribute("method") || "get" } : null };
     const classification = classify(facts);
     if (!control.isConnected || !surface.isConnected) blocked = "the requested control was removed";
     if (action === "type" && classification.sensitive) blocked = "the requested field became protected";

@@ -144,7 +144,9 @@ export function submitReason(el: ElementFacts): string | null {
     el.attrs.role === "button" ||
     plain;
   if (isButton && ACTION_RE.test(label)) return `it's named “${short(label)}”`;
-  if (plain && !MEANINGFUL.test(label)) return "it has no name that says what it does";
+  // Each name on its own: "X" as both label and text is still only "X".
+  const names = [el.name, el.attrs.value, el.attrs["aria-label"], el.attrs.title];
+  if (plain && !names.some((name) => name && MEANINGFUL.test(name))) return "it has no name that says what it does";
   return null;
 }
 
