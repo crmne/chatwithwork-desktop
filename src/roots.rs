@@ -823,7 +823,17 @@ mod tests {
         .save(&paths)
         .unwrap();
         let order = ChangeOrder::default();
-        let commands = |on: bool| move |config: &mut Config| set_commands(config, "app", on, false);
+        // The folder's own switch, set directly: `set_commands` turning it
+        // on also asks this computer's sandbox, which a Windows runner
+        // older than 24H2 refuses, and the order doesn't depend on it.
+        let switch = |which: &'static str, on: bool| {
+            move |config: &mut Config| {
+                let index = find_root(config, which)?;
+                config.roots[index].commands = on;
+                Ok(())
+            }
+        };
+        let commands = |on: bool| switch("app", on);
         let runs = || Config::load(&paths).unwrap().roots[0].runs_commands();
 
         let app = Some("app");
@@ -855,9 +865,7 @@ mod tests {
         let app_on = order.ticket();
         let docs_on = order.ticket();
         order
-            .edit(&paths, order.ticket(), Some("docs"), |config| {
-                set_commands(config, "docs", false, false)
-            })
+            .edit(&paths, order.ticket(), Some("docs"), switch("docs", false))
             .unwrap();
         order
             .edit(&paths, order.ticket(), None, |config| {
@@ -867,8 +875,8 @@ mod tests {
             .unwrap();
         order.edit(&paths, app_on, app, commands(true)).unwrap();
         assert!(runs());
-        let docs = |config: &mut Config| set_commands(config, "docs", true, false);
-        assert!(order.edit(&paths, docs_on, Some("docs"), docs).is_err());
+        let refused = order.edit(&paths, docs_on, Some("docs"), switch("docs", true));
+        assert!(refused.unwrap_err().downcast_ref::<Stale>().is_some());
         assert!(!Config::load(&paths).unwrap().roots[1].runs_commands());
     }
 
