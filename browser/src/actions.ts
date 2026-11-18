@@ -114,7 +114,8 @@ const read: Method = async (params, policy) => {
   const tabId = tab.id!;
   const document = await documentIdentity(tabId);
   const { nodes, sensitive } = await sensitiveFields(tabId);
-  const text = snapshotText(nodes, { sensitive });
+  const clickable = await clickableElements(tabId);
+  const text = snapshotText(nodes, { sensitive, clickable });
   const now = await still(tabId, policy);
   const current = await documentIdentity(tabId);
   if (!sameDocument(document, current)) throw new ToolError("page_error", "the page changed while reading; read it again");
@@ -251,6 +252,111 @@ async function sensitiveFields(tabId: number): Promise<{ nodes: AXNode[]; sensit
     if (!facts || isSensitiveField(facts)) sensitive.add(node.backendDOMNodeId);
   }
   return { nodes, sensitive };
+}
+
+interface DomSnapshot {
+  strings: string[];
+  documents: {
+    nodes: {
+      parentIndex?: number[];
+      nodeType?: number[];
+      nodeName?: number[];
+      backendNodeId?: number[];
+      attributes?: number[][];
+      isClickable?: { index: number[] };
+    };
+    layout: { nodeIndex: number[]; styles: number[][]; bounds: number[][] };
+  }[];
+}
+
+// Interactive by what they are, so the accessibility tree already offers them.
+const CONTROL_TAGS = new Set([
+  "button", "input", "select", "textarea", "option", "label", "summary", "details", "iframe", "frame",
+  "video", "audio", "embed", "object",
+]);
+const CONTROL_ROLES = new Set([
+  "button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "radio", "switch", "tab",
+  "option", "treeitem", "textbox", "searchbox", "combobox", "listbox", "slider", "spinbutton", "scrollbar",
+]);
+const NEVER_CLICKABLE = new Set(["html", "body", "head", "script", "style", "template", "noscript"]);
+const CLICKABLE_LIMIT = 2_000;
+
+// Elements in the page's own document that are evidently clickable though
+// unlabelled: the browser knows of a click handler on them (or `onclick`),
+// they take focus (`tabindex`), or they start a `cursor: pointer` region.
+// Controls, what's inside one, and wrappers around one are left to the
+// accessibility tree. Read from a DOM snapshot: no page script runs and
+// nothing on the page changes. A page this can't read gets no extra refs.
+async function clickableElements(tabId: number): Promise<Set<number>> {
+  const found = new Set<number>();
+  const snapshot = await send<DomSnapshot>(tabId, "DOMSnapshot.captureSnapshot", {
+    computedStyles: ["cursor", "visibility"],
+  }).catch((error) => {
+    if (error instanceof ToolError && error.code === "browser_stopped") throw error;
+    return undefined;
+  });
+  const doc = snapshot?.documents[0];
+  if (!snapshot || !doc) return found;
+  const { strings } = snapshot;
+  const nodes = doc.nodes;
+  const parents = nodes.parentIndex ?? [];
+  const count = parents.length;
+  const tag = (i: number) => (strings[nodes.nodeName?.[i] ?? -1] ?? "").toLowerCase();
+  const attrs = (i: number) => {
+    const list = nodes.attributes?.[i] ?? [];
+    const out: Record<string, string> = {};
+    for (let a = 0; a + 1 < list.length; a += 2) out[(strings[list[a]] ?? "").toLowerCase()] = strings[list[a + 1]] ?? "";
+    return out;
+  };
+  const layout = new Map<number, number>();
+  doc.layout.nodeIndex.forEach((node, index) => layout.set(node, index));
+  const style = (i: number, which: number) => {
+    const index = layout.get(i);
+    return index === undefined ? "" : strings[doc.layout.styles[index]?.[which] ?? -1] ?? "";
+  };
+  // The nearest element above, through shadow roots to their hosts.
+  const parentElement = (i: number) => {
+    let p = parents[i] ?? -1;
+    while (p >= 0 && nodes.nodeType?.[p] !== 1) p = parents[p] ?? -1;
+    return p;
+  };
+  const control = new Array<boolean>(count).fill(false);
+  for (let i = 0; i < count; i++) {
+    if (nodes.nodeType?.[i] !== 1) continue;
+    const name = tag(i);
+    const a = attrs(i);
+    const role = (a.role ?? "").trim().toLowerCase();
+    control[i] = CONTROL_TAGS.has(name) || (name === "a" && a.href !== undefined) || CONTROL_ROLES.has(role) ||
+      (a.contenteditable !== undefined && a.contenteditable !== "false");
+  }
+  // Inside a control, or around one.
+  const insideControl = new Array<boolean>(count).fill(false);
+  const aroundControl = new Array<boolean>(count).fill(false);
+  for (let i = 0; i < count; i++) {
+    if (nodes.nodeType?.[i] !== 1) continue;
+    for (let p = parentElement(i); p >= 0; p = parentElement(p)) {
+      if (control[p]) { insideControl[i] = true; break; }
+    }
+    if (control[i]) for (let p = parentElement(i); p >= 0 && !aroundControl[p]; p = parentElement(p)) aroundControl[p] = true;
+  }
+  const clickHandler = new Set(nodes.isClickable?.index ?? []);
+  for (let i = 0; i < count && found.size < CLICKABLE_LIMIT; i++) {
+    if (nodes.nodeType?.[i] !== 1 || control[i] || insideControl[i] || aroundControl[i]) continue;
+    const name = tag(i);
+    if (NEVER_CLICKABLE.has(name)) continue;
+    const index = layout.get(i);
+    const bounds = index === undefined ? undefined : doc.layout.bounds[index];
+    if (!bounds || !(bounds[2] > 0 && bounds[3] > 0) || style(i, 1) !== "visible") continue;
+    const a = attrs(i);
+    const pointer = style(i, 0) === "pointer";
+    const parent = parentElement(i);
+    const startsPointer = pointer && (parent < 0 || style(parent, 0) !== "pointer");
+    if (clickHandler.has(i) || a.onclick !== undefined || a.tabindex !== undefined || startsPointer) {
+      const backend = nodes.backendNodeId?.[i];
+      if (backend !== undefined) found.add(backend);
+    }
+  }
+  return found;
 }
 
 const BLUR = `function (on) {

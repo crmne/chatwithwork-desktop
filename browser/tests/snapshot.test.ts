@@ -41,3 +41,27 @@ test("pages by Unicode scalar values", () => {
   assert.deepEqual(result, { text: "😀b", offset: 1, next_offset: 3, total_chars: 5 });
   assert.equal(page("abc", 0, 10).next_offset, null);
 });
+
+test("unlabelled clickable elements get a ref, named by their text or what's beside them (#225)", () => {
+  const tree: AXNode[] = [
+    { nodeId: "1", role: { value: "RootWebArea" }, childIds: ["2", "5", "8", "10"] },
+    { nodeId: "2", parentId: "1", role: { value: "generic" }, childIds: ["3"] },
+    { nodeId: "3", parentId: "2", role: { value: "StaticText" }, name: { value: "Row 3" } },
+    { nodeId: "5", parentId: "1", role: { value: "generic" }, childIds: ["6"], backendDOMNodeId: 50 },
+    { nodeId: "6", parentId: "5", role: { value: "StaticText" }, name: { value: "×" } },
+    { nodeId: "8", parentId: "1", ignored: true, role: { value: "generic" }, backendDOMNodeId: 80, name: { value: "" } },
+    { nodeId: "10", parentId: "1", role: { value: "generic" }, name: { value: "Close banner" }, childIds: ["11"], backendDOMNodeId: 100 },
+    { nodeId: "11", parentId: "10", role: { value: "StaticText" }, name: { value: "X" } },
+  ];
+  assert.equal(
+    snapshotText(tree, { clickable: new Set([50, 80, 100]) }),
+    [
+      "- text: Row 3",
+      '- clickable "×" [ref=e50] [near="Row 3"]',
+      '- clickable [ref=e80] [near="Row 3"]',
+      '- clickable "Close banner" [ref=e100]: X',
+    ].join("\n"),
+  );
+  // Without the page's clickables, the same tree reads as before.
+  assert.equal(snapshotText(tree), "- text: Row 3 × X");
+});

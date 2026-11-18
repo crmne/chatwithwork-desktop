@@ -18,7 +18,7 @@ import {
   type Policy,
 } from "./actions.js";
 import { callOn, cleanUp, evaluateInContext, isolatedContext, relatedNode, send } from "./cdp.js";
-import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
+import { isSensitiveField, plainClickable, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
@@ -107,6 +107,10 @@ const FORM_OF = `function () {
   return form ? { method: (form.getAttribute("method") || "get").toLowerCase() } : null;
 }`;
 
+const SHOWN_TEXT = `function () {
+  return String(this.innerText ?? this.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 200);
+}`;
+
 // The element a call names, with what the extension needs to judge it.
 export async function target(params: Params, policy: Policy): Promise<Target> {
   const backendNodeId = refId(params.ref);
@@ -120,6 +124,11 @@ export async function target(params: Params, policy: Policy): Promise<Target> {
   const node = ax.nodes.find((n) => n.backendDOMNodeId === backendNodeId) ?? ax.nodes[0];
   const facts = await elementFacts(tabId, backendNodeId, String(node?.role?.value ?? ""), String(node?.name?.value ?? ""));
   facts.form = await callOn<{ method: string } | null>(tabId, backendNodeId, FORM_OF).catch(() => null);
+  // A control the page drew without a role has no accessible name of its
+  // own; its text is what the reader showed, and what the checks judge.
+  if (!facts.name.trim() && plainClickable(facts)) {
+    facts.name = await callOn<string>(tabId, backendNodeId, SHOWN_TEXT).catch(() => "");
+  }
   return { tabId, backendNodeId, facts };
 }
 
