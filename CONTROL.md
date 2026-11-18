@@ -109,7 +109,7 @@ There is no authentication beyond this: any process running as the user can driv
 - `server` and `device_id` are `null` until the computer is paired.
 - `proxy` is the HTTP proxy the daemon reaches the server through, or `null` for a direct connection (or when the setting is invalid; `connection.last_error` says why). `url` never contains the password, which is replaced by `***`. `source` is `config` or the environment variable it came from, such as `HTTPS_PROXY`.
 - `sandbox.kind` is `landlock`, `seatbelt` or `none`; `sandbox.state` is `enforced`, `partial` (an older kernel enforces some of the rules), `off` or `unavailable`, with a `detail` when it isn't enforced.
-- `roots[].index` is `pending`, `indexing`, `ready`, `error` or `disabled`. During the first pass, `indexed_files` counts files seen so far. `available` is false when the folder is missing, for example on an unmounted drive.
+- `roots[].index` is `pending`, `indexing`, `ready`, `error` or `disabled`. During the first pass, `indexed_files` counts files seen so far. A folder whose first pass ended before, at the same path, is `ready` with its count from the moment the daemon starts again (allowing changes in a folder restarts it under a new sandbox), while the daemon checks it quietly for what changed meanwhile; a pass cut short is never counted, and the folder is indexed from the start. `available` is false when the folder is missing, for example on an unmounted drive.
 - `local_path` is the absolute path. It is shown to the local user only and never sent to Chat with Work.
 - `writable` is true when the user allowed changes in the folder (see `roots_writable`).
 - `bots` lists the Chat with Work bots the folder is shared with (see `roots_bot`), empty when none.
