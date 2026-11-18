@@ -147,6 +147,9 @@ export async function capture(
   let data = "";
   let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / Math.max(1, view.clientWidth));
   let quality = 70;
+  // What this screenshot blurs carries its own token, so a stalled earlier
+  // screenshot's late cleanup leaves this one's blur alone.
+  const token = crypto.randomUUID();
   // Each field blurred by its node, so those in shadow roots, which a
   // document query doesn't reach, are unblurred after too.
   const blurred: number[] = [];
@@ -154,12 +157,12 @@ export async function capture(
     // Nothing is captured unless every field browser_read hides is blurred:
     // a field that can't be found or blurred refuses the screenshot.
     try {
-      await prepareForCapture(tabId, SENSITIVE_PATTERNS);
+      await prepareForCapture(tabId, SENSITIVE_PATTERNS, token);
       // Also every field browser_read hides, found the same way, including
       // those named only by a label and those in shadow roots.
       const { sensitive } = await sensitiveFields(tabId);
       for (const backendNodeId of sensitive) {
-        await callOn(tabId, backendNodeId, BLUR, [true]);
+        await callOn(tabId, backendNodeId, BLUR, [true, token]);
         blurred.push(backendNodeId);
       }
     } catch (error) {
@@ -185,9 +188,9 @@ export async function capture(
     // Put the fields back even if Stop was pressed meanwhile.
     await cleanUp(tabId, async (options) => {
       for (const backendNodeId of blurred) {
-        await callOn(tabId, backendNodeId, BLUR, [false], [], options).catch(() => {});
+        await callOn(tabId, backendNodeId, BLUR, [false, token], [], options).catch(() => {});
       }
-      await afterCapture(tabId, SENSITIVE_PATTERNS, options);
+      await afterCapture(tabId, SENSITIVE_PATTERNS, token, options);
     });
   }
   if (data.length > maxBytes) {
@@ -361,13 +364,20 @@ async function clickableElements(tabId: number): Promise<Set<number>> {
   return found;
 }
 
-const BLUR = `function (on) {
+// One field's blur, marked with the capture's token like blurSensitive's.
+const BLUR = `function (on, token) {
+  const ATTR = "data-chat-with-work-blur";
+  const others = (this.getAttribute(ATTR) ?? "").split(/\\s+/).filter((t) => t && t !== token);
   if (on) {
-    this.setAttribute("data-chat-with-work-blur", "");
+    this.setAttribute(ATTR, [...others, token].join(" "));
     this.style.setProperty("filter", "blur(8px)", "important");
-  } else if (this.hasAttribute("data-chat-with-work-blur")) {
-    this.removeAttribute("data-chat-with-work-blur");
-    this.style.removeProperty("filter");
+  } else if (this.hasAttribute(ATTR)) {
+    if (others.length) {
+      this.setAttribute(ATTR, others.join(" "));
+    } else {
+      this.removeAttribute(ATTR);
+      this.style.removeProperty("filter");
+    }
   }
 }`;
 

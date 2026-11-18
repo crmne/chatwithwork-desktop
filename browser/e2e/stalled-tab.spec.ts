@@ -132,3 +132,40 @@ test("a click guard's cleanup that waits for a stalled tab doesn't attach again 
   expect(await inWorker(setup.context, () => (globalThis as any).stallSpy.attachesAfterStop)).toBe(0);
   expect(await attachedTo(tab)).toBe(false);
 });
+
+test("a stalled screenshot's late cleanup leaves a later screenshot's blur on (#227)", async () => {
+  test.setTimeout(90_000);
+  const tab = await openTab();
+  expect((await setup.daemon.call("read", { tab })).error).toBeUndefined();
+  // The first capture never answers. The tab's "are you there" check is held
+  // back until the second capture is under way, so the first screenshot's
+  // cleanup runs in the middle of the second.
+  await inWorker(setup.context, (id) => {
+    const spy: any = { attach: chrome.debugger.attach.bind(chrome.debugger), sendCommand: chrome.debugger.sendCommand.bind(chrome.debugger), captures: 0, release: false };
+    (globalThis as any).stallSpy = spy;
+    chrome.debugger.sendCommand = (async (target: any, method: string, params?: any) => {
+      if (target.tabId === id && method === "Runtime.evaluate" && params?.expression === "0" && !spy.release) throw new Error("held");
+      if (target.tabId === id && method === "Page.captureScreenshot") {
+        if (++spy.captures === 1) return new Promise(() => {});
+        if (spy.captures === 2) {
+          spy.release = true;
+          await new Promise((done) => setTimeout(done, 5_000));
+          const seen = await spy.sendCommand(target, "Runtime.evaluate", { expression: "document.getElementById('pw').style.filter", returnByValue: true });
+          spy.filterAtCapture = seen.result.value;
+        }
+      }
+      return spy.sendCommand(target, method, params);
+    }) as typeof chrome.debugger.sendCommand;
+  }, tab);
+  const first = await setup.daemon.call("screenshot", { tab });
+  expect(first.error?.message).toContain("isn't responding");
+  // Past the few seconds a stalled tab fails at once.
+  await new Promise((done) => setTimeout(done, 6_000));
+  const second = await setup.daemon.call("screenshot", { tab });
+  expect(second.error).toBeUndefined();
+  expect(await inWorker(setup.context, () => (globalThis as any).stallSpy.filterAtCapture)).toContain("blur");
+  // And both cleanups together leave nothing behind.
+  const page = setup.context.pages().find((p) => p.url() === `${origin}/`)!;
+  await expect.poll(() => page.locator("#pw").evaluate((el) => (el as HTMLElement).style.filter)).toBe("");
+  expect(await page.locator("[data-chat-with-work-blur], [data-chat-with-work-capture]").count()).toBe(0);
+});
