@@ -63,13 +63,55 @@ export async function halt(on: boolean, beforeDetach?: () => Promise<void>): Pro
 
 // Run `work` with cleanup calls allowed, and, if Stop was pressed
 // meanwhile, detach again once it's done.
+// If the tab isn't answering, the cleanup can't reach it now, so it runs
+// again once the tab answers (cleanups only take back what a tool put on
+// the page, such as a screenshot's blur, so running one twice is harmless).
 export async function cleanUp(tabId: number, work: (options: SendOptions) => Promise<void>): Promise<void> {
   try {
     await work({ cleanup: true });
   } finally {
+    if (responsiveness.verdict(tabId) !== "send") deferCleanup(tabId, work);
     if (halted) await detach(tabId);
   }
 }
+
+const RETRY_EVERY_MS = 2_000;
+const RETRY_FOR_MS = 120_000;
+const deferred = new Map<number, { works: ((options: SendOptions) => Promise<void>)[]; timer?: ReturnType<typeof setTimeout>; until: number }>();
+
+function deferCleanup(tabId: number, work: (options: SendOptions) => Promise<void>): void {
+  const entry = deferred.get(tabId) ?? { works: [], until: 0 };
+  if (!entry.works.includes(work) && entry.works.length < 20) entry.works.push(work);
+  entry.until = Date.now() + RETRY_FOR_MS;
+  deferred.set(tabId, entry);
+  if (!entry.timer) entry.timer = setTimeout(() => void retryCleanup(tabId), RETRY_EVERY_MS);
+}
+
+// Check, briefly, whether the tab answers; when it does, run what it owes.
+async function retryCleanup(tabId: number): Promise<void> {
+  const entry = deferred.get(tabId);
+  if (!entry) return;
+  entry.timer = undefined;
+  let answered = false;
+  try {
+    await send(tabId, "Runtime.evaluate", { expression: "0", returnByValue: true }, { cleanup: true });
+    answered = true;
+  } catch {
+    // Still not answering, or gone.
+  }
+  if (answered) {
+    deferred.delete(tabId);
+    await cleanUp(tabId, async (options) => {
+      for (const work of entry.works) await work(options).catch(() => {});
+    });
+    return;
+  }
+  if (halted) await detach(tabId);
+  if (Date.now() < entry.until && !closedTabs.has(tabId)) entry.timer = setTimeout(() => void retryCleanup(tabId), RETRY_EVERY_MS);
+  else deferred.delete(tabId);
+}
+
+const closedTabs = new Set<number>();
 
 export function isAttached(tabId: number): boolean {
   return sessions.has(tabId);
@@ -79,8 +121,13 @@ async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
   if (options.existingOnly && !sessions.has(tabId)) throw new ToolError("unavailable", "the browser attachment ended");
   if (halted && !options.cleanup) throw browserStopped();
   if (sessions.has(tabId)) return;
+  // A tab that just stalled fails at once, even while its attachment is
+  // still pending, instead of being waited on again.
+  if (responsiveness.verdict(tabId) === "fail") throw new ToolError("timeout", NOT_RESPONDING);
   const pending = attaching.get(tabId);
   if (pending) return within(pending, ATTACH_TIMEOUT_MS, NOT_RESPONDING);
+  // Whether every caller stopped waiting, so nobody will check Stop after it.
+  let abandoned = false;
   const work = (async () => {
     try {
       await chrome.debugger.attach({ tabId }, "1.3");
@@ -94,7 +141,15 @@ async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
       }
       throw new ToolError("unavailable", `can't use this tab: ${message}`);
     }
+    // Stop wins over an attachment that completed after it, whether or not
+    // anyone still waits for it. Only a cleanup still waiting may use it.
+    if (halted && (abandoned || !options.cleanup)) {
+      await chrome.debugger.detach({ tabId }).catch(() => {});
+      throw browserStopped();
+    }
     sessions.set(tabId, {});
+    // An attachment nobody waits for any more still detaches when idle.
+    touch(tabId);
     const target = { tabId };
     // Answer dialogs so a page can't hang the agent, and behave as if
     // focused while in the background.
@@ -102,13 +157,17 @@ async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
     await chrome.debugger
       .sendCommand(target, "Emulation.setFocusEmulationEnabled", { enabled: true })
       .catch(() => {});
+    if (halted && (abandoned || !options.cleanup)) await detach(tabId);
   })();
   attaching.set(tabId, work);
   void work.catch(() => {}).finally(() => attaching.delete(tabId));
   try {
     await within(work, ATTACH_TIMEOUT_MS, NOT_RESPONDING);
   } catch (error) {
-    if (error instanceof ToolError && error.code === "timeout") responsiveness.stalled(tabId);
+    if (error instanceof ToolError && error.code === "timeout") {
+      abandoned = true;
+      responsiveness.stalled(tabId);
+    }
     throw error;
   }
   // Stopped while attaching: let go at once.
@@ -151,6 +210,7 @@ export async function send<T = any>(
   options: SendOptions = {},
 ): Promise<T> {
   if (halted && !options.cleanup) throw browserStopped();
+  if (responsiveness.verdict(tabId) === "fail") throw new ToolError("timeout", NOT_RESPONDING);
   await attach(tabId, options);
   touch(tabId);
   await responding(tabId);
@@ -193,7 +253,14 @@ async function responding(tabId: number): Promise<void> {
   responsiveness.answered(tabId);
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => responsiveness.forget(tabId));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  responsiveness.forget(tabId);
+  const entry = deferred.get(tabId);
+  if (entry?.timer) clearTimeout(entry.timer);
+  deferred.delete(tabId);
+  closedTabs.add(tabId);
+  if (closedTabs.size > 1_000) closedTabs.clear();
+});
 
 // The dialog dismissed since the last call, once.
 export function takeDialog(tabId: number): string | undefined {
