@@ -27,6 +27,12 @@ test("the single browser toggle stops and resumes without losing registration or
   assert.deepEqual(browser.sites,["example.com"]);
 });
 
+test("Get extension opens the Chrome Web Store listing", async () => {
+  const {app} = fixture();
+  byText(render(app), "button", "Get extension").fire("click"); await flush();
+  assert.deepEqual(calls.at(-1), {command:"open_url",args:{url:"https://chromewebstore.google.com/detail/ehjfihpogoacjodjnanclodinjnnpmcp"}});
+});
+
 test("extension Stop is shown as off and is never silently resumed", () => {
   const {app} = fixture({extension:{browser:"Chrome",stopped:true}});
   const tree=render(app);const control=toggle(tree);
