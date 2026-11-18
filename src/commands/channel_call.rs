@@ -86,7 +86,7 @@ pub fn answer(runs: &Runs, paths: &Paths, call: Call) -> Result<serde_json::Valu
         Config::load(paths).map_err(|_| RunError::new("unavailable", "couldn't read the settings"))
     };
     let value = match call {
-        Call::Start { request } => to_value(runs.start(&config()?, &request)?),
+        Call::Start { request } => to_value(runs.start_with(config, &request)?),
         Call::Status { run } => {
             run_id(&run)?;
             to_value(runs.status(&run)?)

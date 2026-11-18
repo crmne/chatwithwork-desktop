@@ -901,9 +901,12 @@ impl Work {
         };
         let waited = Instant::now();
         let status = loop {
-            let config = self.config()?;
-            self.still_allowed(&config)?;
-            match self.runs.start(&config, &request) {
+            self.still_allowed(&self.config()?)?;
+            let settings = || {
+                self.config()
+                    .map_err(|message| RunError::new("unavailable", message))
+            };
+            match self.runs.start_with(settings, &request) {
                 Ok(status) => break status,
                 Err(e) if e.code == "busy" && waited.elapsed() < ROOM_WAIT => {
                     std::thread::sleep(Duration::from_secs(5));
