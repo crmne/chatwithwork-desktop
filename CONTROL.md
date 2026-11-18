@@ -186,6 +186,10 @@ stops its runtime and native notification session. Changes to the shared proxy
 restart the chat runtimes with the new setting. A missing or invalid grant list
 stops them until a valid list is available again.
 
+### The order of changes
+
+The requests that change this computer's settings are made one at a time, and a folder's changes keep the order the daemon received them in. One that would give a folder more than it has (changes, commands, a network, an address, a loan or more for a loan) and reaches its edit after a request about that folder received later was already made, even one that changed nothing, is refused with the code `stale` instead of being made after it, so a change that stalled (a client gives up after 30 seconds on Linux and macOS) can never undo a later one: an On sent before an Off never ends on. A change that gives less is always made, and requests about other folders, or a folder's name, never hold one back. A client that gets `stale` reads `status` and asks again.
+
 ### `roots_add`
 
 ```json

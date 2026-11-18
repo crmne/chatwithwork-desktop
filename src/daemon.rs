@@ -69,6 +69,9 @@ struct Daemon {
     /// Held while a request edits config.toml, so concurrent edits don't
     /// save over each other.
     config_edits: Mutex<()>,
+    /// The order the control requests editing shared folders were asked
+    /// in, which their edits keep (`crate::roots::ChangeOrder`).
+    change_order: Arc<crate::roots::ChangeOrder>,
     /// Held through a reload, from reading config.toml to applying it, so a
     /// reload that read an older config can't apply it over a newer one.
     reloads: Mutex<()>,
@@ -662,6 +665,7 @@ async fn run_with_notifications(
             shutdown.child_token(),
         ),
         config_edits: Mutex::new(()),
+        change_order: Arc::default(),
         reloads: Mutex::new(()),
         events,
         changes,
@@ -2091,14 +2095,31 @@ impl Daemon {
     /// Load config.toml, change it with `edit`, and save it, one request at
     /// a time: two requests editing at once would each save over the
     /// other's change.
+    ///
+    /// A control request's edit keeps the order it was asked in (its
+    /// [`ASKED`] ticket): one that would widen a shared folder that a
+    /// request asked after it already changed, or named, is refused
+    /// (`stale`). Any other edit counts as asked now, about no folder.
     async fn edit_config<T: Send + 'static>(
         &self,
         edit: impl FnOnce(&mut Config, &Paths) -> Result<T> + Send + 'static,
     ) -> Result<T> {
+        let (asked, folder) = ASKED
+            .try_with(Clone::clone)
+            .unwrap_or_else(|_| (self.change_order.ticket(), None));
         let _editing = self.config_edits.lock().await;
         let paths = self.paths.clone();
-        tokio::task::spawn_blocking(move || Config::edit(&paths, |config| edit(config, &paths)))
-            .await?
+        let order = Arc::clone(&self.change_order);
+        tokio::task::spawn_blocking(move || {
+            order.edit(&paths, asked, folder.as_deref(), |config| {
+                edit(config, &paths)
+            })
+        })
+        .await?
+        .map_err(|e| match e.downcast::<crate::roots::Stale>() {
+            Ok(stale) => Refusal::new("stale", stale.to_string()).into(),
+            Err(e) => e,
+        })
     }
 
     fn configure_browser(&self, config: &Config) {
@@ -2317,6 +2338,13 @@ fn proxy_info(config: &Config) -> Option<crate::proxy::ProxyInfo> {
         .map(|p| p.info())
 }
 
+tokio::task_local! {
+    /// When the control request being answered arrived, and the folder it
+    /// names, if any: its edits of config.toml keep that order
+    /// (`Daemon::edit_config`).
+    static ASKED: (crate::roots::Ticket, Option<String>);
+}
+
 impl ControlHandler for Daemon {
     fn events(&self) -> Option<broadcast::Receiver<ControlEvent>> {
         Some(self.events.subscribe())
@@ -2375,6 +2403,30 @@ impl ControlHandler for Daemon {
     }
 
     async fn handle(&self, request: ControlRequest) -> Result<Value> {
+        // Taken as it arrives, before anything it does can stall.
+        let asked = self.change_order.ticket();
+        let folder = match &request {
+            ControlRequest::RootsRemove { root }
+            | ControlRequest::RootsWritable { root, .. }
+            | ControlRequest::RootsCommands { root, .. }
+            | ControlRequest::RootsLocalServices { root, .. }
+            | ControlRequest::RootsReach { root, .. }
+            | ControlRequest::RootsReachAnswer { root, .. }
+            | ControlRequest::RootsBot { root, .. }
+            | ControlRequest::RootsUnattendedAnswer { root, .. } => Some(root.clone()),
+            ControlRequest::CodingAllow { root, folder, .. } => root
+                .clone()
+                .or_else(|| folder.as_ref().map(|f| f.to_string_lossy().into_owned())),
+            _ => None,
+        };
+        ASKED
+            .scope((asked, folder), self.answer_control(request))
+            .await
+    }
+}
+
+impl Daemon {
+    async fn answer_control(&self, request: ControlRequest) -> Result<Value> {
         if self.organization.is_some()
             && matches!(
                 request,

@@ -636,10 +636,241 @@ fn new_id(config: &Config, label: &str) -> String {
         .expect("an unused ID exists")
 }
 
+/// The order changes to shared folders were asked in, across the control
+/// socket's connections: the daemon takes a [`Ticket`] as each request
+/// arrives, and its settings' edits, one at a time, go through
+/// [`ChangeOrder::edit`]. A change that gives a folder more than it had,
+/// asked before another change to that folder that was already made (even
+/// one that changed nothing, such as an Off for a folder already off), is
+/// refused rather than made after it: one that stalled before its edit (a
+/// client gives up after 30 seconds) can't undo a later Off. A change that
+/// gives less is always made, and changes to other folders don't count.
+#[derive(Debug, Default)]
+pub struct ChangeOrder {
+    asked: std::sync::atomic::AtomicU64,
+    /// The latest ticket among the edits made to each folder, by ID.
+    made: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+}
+
+/// When a request was asked, among all the daemon got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Ticket(u64);
+
+/// A change that would widen a folder, refused because a change to it
+/// asked later was made first.
+#[derive(Debug)]
+pub struct Stale {
+    pub root: String,
+}
+
+impl std::fmt::Display for Stale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} changed after this was asked, so this wasn't made: look at it again",
+            self.root
+        )
+    }
+}
+
+impl std::error::Error for Stale {}
+
+impl ChangeOrder {
+    /// A ticket for a request arriving now, later than every one before.
+    pub fn ticket(&self) -> Ticket {
+        Ticket(
+            self.asked
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                .saturating_add(1),
+        )
+    }
+
+    /// [`Config::edit`] for a request asked at `asked`, naming `folder`
+    /// (an ID, path or label) if it's about one: the edit is made to a
+    /// copy, and saved unless it widens a folder that a change asked later
+    /// already changed ([`Stale`]). It then counts as a change, at `asked`,
+    /// to `folder` and every folder whose permissions it changed. The edits
+    /// must be made one at a time.
+    pub fn edit<T>(
+        &self,
+        paths: &Paths,
+        asked: Ticket,
+        folder: Option<&str>,
+        edit: impl FnOnce(&mut Config) -> Result<T>,
+    ) -> Result<T> {
+        Config::edit(paths, |config| self.apply(config, asked, folder, edit))
+    }
+
+    fn apply<T>(
+        &self,
+        config: &mut Config,
+        asked: Ticket,
+        folder: Option<&str>,
+        edit: impl FnOnce(&mut Config) -> Result<T>,
+    ) -> Result<T> {
+        let named = folder.and_then(|which| find(config, which).ok().map(|r| r.id.clone()));
+        let mut next = config.clone();
+        let edited = edit(&mut next)?;
+        let mut ids: Vec<&str> = config.roots.iter().map(|r| r.id.as_str()).collect();
+        ids.extend(next.roots.iter().map(|r| r.id.as_str()));
+        ids.sort_unstable();
+        ids.dedup();
+        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        let mut changed = Vec::new();
+        for id in ids {
+            let (before, after) = (config.root(id), next.root(id));
+            if permissions(before) == permissions(after) {
+                continue;
+            }
+            if let Some(after) = after
+                && widens(before, after)
+                && made.get(id).is_some_and(|&last| last > asked.0)
+            {
+                return Err(Stale {
+                    root: after.id.clone(),
+                }
+                .into());
+            }
+            changed.push(id.to_string());
+        }
+        for id in changed.into_iter().chain(named) {
+            let last = made.entry(id).or_default();
+            *last = (*last).max(asked.0);
+        }
+        drop(made);
+        *config = next;
+        Ok(edited)
+    }
+}
+
+/// What a folder lets Chat with Work do, less its name and read budget.
+fn permissions(root: Option<&Root>) -> Option<Root> {
+    root.map(|root| Root {
+        label: String::new(),
+        read_budget: None,
+        bots: root
+            .bots
+            .iter()
+            .map(|loan| BotLoan {
+                name: String::new(),
+                ..loan.clone()
+            })
+            .collect(),
+        ..root.clone()
+    })
+}
+
+/// Whether `after` lets Chat with Work do anything `before` didn't: a
+/// folder shared, changes, commands, a network, an address, a loan, or
+/// anything more a loan gives.
+fn widens(before: Option<&Root>, after: &Root) -> bool {
+    let Some(before) = before else {
+        return true;
+    };
+    let more = |was: bool, is: bool| is && !was;
+    let loan_widens = |loan: &BotLoan| match before.loan(&loan.id) {
+        None => true,
+        Some(was) => {
+            more(was.unattended, loan.unattended)
+                || more(was.claude_code, loan.claude_code)
+                || more(was.codex, loan.codex)
+                || more(was.opencode, loan.opencode)
+                || more(was.gemini, loan.gemini)
+                || more(was.pi, loan.pi)
+                || loan.owners.iter().any(|owner| !was.owners.contains(owner))
+        }
+    };
+    before.path != after.path
+        || more(before.follow_symlinks, after.follow_symlinks)
+        || more(before.writable, after.writable)
+        || more(before.commands, after.commands)
+        || more(before.network, after.network)
+        || more(before.local_services, after.local_services)
+        || after
+            .reach
+            .iter()
+            .any(|address| !before.reach.contains(address))
+        || after.bots.iter().any(loan_widens)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Limits;
+
+    #[test]
+    fn a_folder_change_asked_before_one_already_made_never_widens_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        paths.ensure().unwrap();
+        let folder = |id: &str| Root {
+            bots: Vec::new(),
+            id: id.into(),
+            label: id.into(),
+            path: dir.path().join(id),
+            follow_symlinks: false,
+            writable: true,
+            commands: false,
+            network: false,
+            local_services: true,
+            reach: Vec::new(),
+            read_budget: None,
+        };
+        Config {
+            roots: vec![folder("app"), folder("docs")],
+            ..Default::default()
+        }
+        .save(&paths)
+        .unwrap();
+        let order = ChangeOrder::default();
+        let commands = |on: bool| move |config: &mut Config| set_commands(config, "app", on, false);
+        let runs = || Config::load(&paths).unwrap().roots[0].runs_commands();
+
+        let app = Some("app");
+
+        // On is asked, stalls before its edit; Off is asked and made,
+        // though the folder is off already.
+        let on = order.ticket();
+        let off = order.ticket();
+        order.edit(&paths, off, app, commands(false)).unwrap();
+        let refused = order.edit(&paths, on, app, commands(true)).unwrap_err();
+        assert!(refused.downcast_ref::<Stale>().is_some(), "{refused:#}");
+        assert!(!runs());
+
+        // Asked again, after: made.
+        order
+            .edit(&paths, order.ticket(), app, commands(true))
+            .unwrap();
+        assert!(runs());
+
+        // A late change that gives less is still made.
+        let late_off = order.ticket();
+        order
+            .edit(&paths, order.ticket(), app, commands(true))
+            .unwrap();
+        order.edit(&paths, late_off, app, commands(false)).unwrap();
+        assert!(!runs());
+
+        // Changes to other folders, or a new name, hold none back.
+        let app_on = order.ticket();
+        let docs_on = order.ticket();
+        order
+            .edit(&paths, order.ticket(), Some("docs"), |config| {
+                set_commands(config, "docs", false, false)
+            })
+            .unwrap();
+        order
+            .edit(&paths, order.ticket(), None, |config| {
+                config.roots[0].label = "App".into();
+                Ok(())
+            })
+            .unwrap();
+        order.edit(&paths, app_on, app, commands(true)).unwrap();
+        assert!(runs());
+        let docs = |config: &mut Config| set_commands(config, "docs", true, false);
+        assert!(order.edit(&paths, docs_on, Some("docs"), docs).is_err());
+        assert!(!Config::load(&paths).unwrap().roots[1].runs_commands());
+    }
 
     #[test]
     fn ids_are_readable_and_unique() {
