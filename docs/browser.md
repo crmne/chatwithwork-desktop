@@ -1,6 +1,6 @@
 # Using the browser
 
-Status: **built: reading and acting, the desktop app's settings page and tray switch, and the server side; tested on Linux with Chromium. Not yet on the Chrome Web Store.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details are in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
+Status: **built: reading and acting, the desktop app's settings page and tray switch, and the server side; tested on Linux with Chromium. The extension is on the [Chrome Web Store](https://chromewebstore.google.com/detail/ehjfihpogoacjodjnanclodinjnnpmcp), where the desktop app's Get extension button leads.** Chat with Work can use the person's own Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi), with their sign-ins, through the Chat with Work browser extension and Chat with Work Desktop. The extension's source is [`browser/`](../browser); the wire details are in [PROTOCOL.md](../PROTOCOL.md) and [CONTROL.md](../CONTROL.md).
 
 ## Shape
 

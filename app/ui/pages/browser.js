@@ -4,7 +4,8 @@ import { agentMissing, append, button, call, control, group, h, notice, pageHead
 
 export const title = "Browser";
 export const icon = "browser";
-const EXTENSION_URL = "https://github.com/crmne/chatwithwork-desktop/tree/main/browser#readme";
+// The extension's Chrome Web Store listing, which every Chromium-family browser installs from.
+const EXTENSION_URL = "https://chromewebstore.google.com/detail/ehjfihpogoacjodjnanclodinjnnpmcp";
 const SITE = /^(https?:\/\/[^\s/?#]+\/?|[^\s/?#@:*\\]+\.[^\s/?#@:*\\]+|localhost)$/i;
 
 async function perform(app, action) {
