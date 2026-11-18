@@ -88,3 +88,12 @@ for (const engine of [false, true]) {
     await expect(page.locator("#saved")).toHaveText("Saved 1");
   });
 }
+
+test("a short engine budget still checks for the banner before any input (#227)", async () => {
+  const { tab, page, save } = await fixture("/end");
+  const begun = await setup.daemon.call("engine_begin", { action: "click", params: { tab, ref: save }, timeout_ms: 1_500 });
+  if (begun.result?.lease) await setup.daemon.call("engine_cancel", { lease: begun.result.lease });
+  expect(begun.error?.code).toBe("page_error");
+  expect(begun.error?.message).toContain("Nothing was clicked");
+  await expect(page.locator("#saved")).toHaveText("Saved 0");
+});

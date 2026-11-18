@@ -129,7 +129,7 @@ const begin: Method = async (params, policy) => {
       await current(op); await semantic(op);
       // A covered click is refused here, certainly and by name, before the
       // engine starts; otherwise its retries end in an uncertain timeout.
-      if (action === "click") await clearOfOverlays(t, policy, [t.backendNodeId, ...labels], Math.min(Date.now() + OVERLAY_WAIT_MS, deadline - 4_000));
+      if (action === "click") await clearOfOverlays(t, policy, [t.backendNodeId, ...labels], Date.now() + Math.min(OVERLAY_WAIT_MS, Math.max(0, (deadline - Date.now()) / 2)));
       await current(op);
     }
     catch (error) { await cancelEngine(); throw error; }

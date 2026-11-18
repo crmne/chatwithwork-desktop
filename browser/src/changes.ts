@@ -246,7 +246,8 @@ async function point(t: Target, policy: Policy): Promise<Point & { surface: numb
 export async function clearOfOverlays(t: Target, policy: Policy, surfaces: number[], until: number): Promise<void> {
   const alignments = [null, "center", "end", "start"];
   let covered: string | null = null;
-  for (let attempt = 0; Date.now() < until; attempt++) {
+  // At least one full check runs, however short the budget.
+  for (let attempt = 0; attempt === 0 || Date.now() < until; attempt++) {
     let ready = false;
     for (const surface of surfaces) {
       allowedChanges(policy);
