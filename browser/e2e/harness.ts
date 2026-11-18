@@ -3,7 +3,7 @@
 // with `browser_attach`, and the test sends the requests the daemon would.
 
 import { chromium, type BrowserContext } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer, type Server, type Socket } from "node:net";
@@ -229,4 +229,41 @@ export async function inWorker<T>(context: BrowserContext, fn: (arg: any) => Pro
   let worker = context.serviceWorkers().find((w) => w.url().includes(EXTENSION_ID));
   if (!worker) worker = await context.waitForEvent("serviceworker", { predicate: (w) => w.url().includes(EXTENSION_ID) });
   return worker.evaluate(fn as any, arg) as Promise<T>;
+}
+
+// One click, type or select through the real bundled engine helper, the way
+// the daemon drives it: begin, relay its commands and events, then finish.
+export async function engineAction(setup: Setup, action: string, params: Record<string, unknown>, beforeCommand?: (command: any) => Promise<void>): Promise<any> {
+  const start = await setup.daemon.call('engine_begin', { action, params });
+  if (start.error) return start;
+  const operation = start.result;
+  const child = spawn(process.execPath, [resolve('engine/entry.mjs')], { stdio: ['pipe','pipe','pipe'], env: { PATH: process.env.PATH } });
+  let buffer = '', eventIndex = setup.daemon.events.length;
+  child.stdin.on('error',()=>{});
+  const methods: string[] = [];
+  const inFlight = new Set<number>();
+  const drain = () => {
+    for (const event of setup.daemon.events.slice(eventIndex)) if (event.event === 'engine' && event.lease === operation.lease) child.stdin.write(JSON.stringify({type:'event',message:event.message})+'\n');
+    eventIndex = setup.daemon.events.length;
+  };
+  const timer = setInterval(drain, 5);
+  const result: any = await new Promise((done,reject)=>{
+    child.stdout.on('data',chunk=>{ buffer+=chunk; let newline; while((newline=buffer.indexOf('\n'))>=0) {
+      const message=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1);
+      if(message.type==='command') {
+        methods.push(message.command.method);inFlight.add(message.id);
+        void Promise.resolve(beforeCommand?.(message.command)).then(()=>setup.daemon.call('engine_command',{lease:operation.lease,command:message.command})).then(reply=>{
+          drain(); inFlight.delete(message.id); child.stdin.write(JSON.stringify({type:'reply',id:message.id,...(reply.error?{error:reply.error}:reply.result)})+'\n');
+        }).catch(reject);
+      } else if(message.type==='result' || message.type==='error') {
+        if(message.type==='result' && inFlight.size) reject(Error('helper completed before command acknowledgements'));
+        else done(message);
+      }
+    }});
+    child.once('error',reject); child.once('exit',code=>{if(code)reject(Error(`helper exited ${code}`))});
+    child.stdin.write(JSON.stringify({type:'call',operation})+'\n');
+  }).finally(()=>{clearInterval(timer);child.stdin.end();});
+  if(result.type==='error') { await setup.daemon.call('engine_cancel',{lease:operation.lease}); return {error:result.error, methods}; }
+  const finished = await setup.daemon.call('engine_finish',{lease:operation.lease,...result.result});
+  return {...finished,methods};
 }

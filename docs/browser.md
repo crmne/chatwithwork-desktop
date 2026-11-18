@@ -15,7 +15,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
   | Tool | Effect | Does |
   |---|---|---|
   | `browser_tabs` | read | The group's tabs: id, title, URL, whether its site is allowed |
-  | `browser_read` | read | A tab's accessible text (roles, names, values, `[ref=…]` for what can be clicked or typed in), never raw HTML; paged, at most 32,000 characters a page, counted against any hourly read limit set |
+  | `browser_read` | read | A tab's accessible text (roles, names, values, `[ref=…]` for what can be clicked or typed in, including `clickable` elements a page made clickable without a role or name), never raw HTML; paged, at most 32,000 characters a page, counted against any hourly read limit set |
   | `browser_screenshot` | read | A JPEG of the tab, cut to fit a tool result |
   | `browser_scroll` | read | Scroll a tab, or bring a `ref` into view |
   | `browser_wait` | read | Wait up to 15 seconds for text to appear, or for the page to settle |
@@ -91,8 +91,8 @@ All of it holds on the computer, whatever the server sends. The extension enforc
   CLI equivalents: `cww browser allow HOST_OR_ORIGIN` adds to the allowed list; `disallow` removes an allowed entry. `allow-all` selects All sites except; `allow-listed` returns to Only these sites. `block HOST_OR_ORIGIN` and `unblock HOST_OR_ORIGIN` edit the blocked list. None of these enables the browser, allows actions or resumes Stop. These are local settings; no server or remote web page can change them.
 
   Both the daemon and extension must support the new policy. The extension advertises `site_policy_version: 2`; with an older extension, configuring All sites or any blocked entry refuses every browser call until the extension is updated. Existing restricted configurations continue to work.
-- **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish). So a click that may send or buy something remains destructive, and asks with a screenshot while Ask before browser actions is on. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat or explicitly turned off browser prompts on the computer.
-- **Passwords and payments.** The extension never types into, and never reads, password fields, card fields (`autocomplete="cc-*"`, card number, expiry, security code) or one-time codes (`sensitive_field`). `browser_read` leaves their values out, and screenshots blur them: a screenshot is refused (`page_error`) unless every such field it finds is blurred.
+- **Submitting.** `browser_click` is destructive unless the call says `submits: false`, and the extension refuses such a call (`would_submit`) when the target submits a form, is a submit button, or is named like an action that buys, pays, sends, posts, publishes, deletes, removes, confirms, transfers or signs (in English, German, Italian, French and Spanish), or is a control the page drew without a role whose name doesn't say what it does (a bare `×` or an icon). So a click that may send or buy something remains destructive, and asks with a screenshot while Ask before browser actions is on. A plain link or a tab is a write. The name check is a heuristic: a site can still hide an action behind an innocent name, which is why writes ask too unless the person allowed them for the chat or explicitly turned off browser prompts on the computer.
+- **Passwords and payments.** The extension never types into, and never reads, password fields, card fields (`autocomplete="cc-*"`, card number, expiry, security code) or one-time codes (`sensitive_field`). `browser_read` leaves their values out, and screenshots blur them: a screenshot is refused (`page_error`) unless every such field it finds is blurred. Each screenshot marks its own blur, so the late cleanup of one whose tab stalled never takes off the blur a later screenshot still needs.
 - **Outside text.** What a page says is outside text for the taint rule: after a chat reads a page, browser changes ask again unless the owner explicitly turned off Ask before browser actions on this computer. That local choice applies to the owner’s ordinary turn and its delegated sub-agents; independent bots, agent chats and triggered runs keep their own rules. Browser changes never count as "writes to the computer’s own files", since they leave the computer.
 - **Downloads** go only into a shared folder that allows changes, through the same writer as file changes (no programs, the system's download mark, the size cap, any change limits set). A file is fetched only from an allowed address, with no redirect followed, not even within an allowed site, so the person's sign-in never goes anywhere unchecked. A download a page starts by itself while the extension acts on its tab (until it detaches, a minute after its last call) is cancelled and removed; the person's own downloads elsewhere are untouched.
 - **Visible.** While the agent acts on a tab, the tab shows a "Chat with Work is using this tab" bar, the group's title says so, and the extension's icon has a badge. Chrome also shows its own "started debugging this browser" bar while the debugger is attached; the extension detaches after a minute without a call, so the bar doesn't stay.
@@ -114,16 +114,33 @@ Tabs in the group can stay in the background while the person works elsewhere. W
 - **Tabs aren't discarded**: the extension marks its tabs `autoDiscardable: false`, so Memory Saver keeps them.
 - **The person is needed** for what only the person can do in front of the browser: file pickers (the extension never uploads), permission prompts (camera, microphone, notifications, location), passkeys and security keys, the password manager and autofill, payment sheets, print dialogs and extensions' own popups. A JavaScript `alert` or `confirm` in the group is answered by the extension (dismissed) and reported in the result.
 - Popups a group tab opens join the group.
+- **A page that stops responding** (a script stuck in a loop, often right after a click) fails the call that hit it with a clear `page_error` within the debugger's 15-second command limit, saying that what was already sent may or may not have taken effect. Later calls to that tab then fail at once for a few seconds, and after that each starts with a two-second check, so they answer well inside Chat with Work's wait instead of timing out one command at a time. Other tabs keep working, and `browser_close` closes the stuck tab. A cleanup that couldn't reach the stuck page, such as taking a screenshot's blur off its fields, runs again by itself once the page answers (checked every two seconds for two minutes); one tied to the attachment it was made in, such as a click guard, is dropped once that attachment ends, so it never attaches again after Stop. An attachment that completes after Stop detaches at once, whether or not a call still waits for it.
+
+Typing with `clear` (the default) into a rich-text editor focuses it, selects its contents, deletes them, then types, as a person replacing the text would. Typing over the selection instead gave the new text the old text's formatting, so replacing a bold line came out bold. Fields and text areas, which have no formatting, are filled as before. Line breaks in the text are typed as line breaks, never as Enter, which some editors take as Send.
+
+Some pages draw a control as a bare element with a click handler, such as a
+`×` that removes a row or closes a banner, with no role, name or tabindex. The
+reader finds these in a snapshot of the page's own document (a click handler
+the browser knows of, `onclick`, `tabindex`, or the start of a `cursor: pointer`
+region; not controls, what's inside them, or wrappers around them) and shows
+each as `- clickable "×" [ref=e52] [near="Row 3"]`: its text, title or label as
+its name, and, when that is only a glyph or nothing, the text just before it.
+Clicking one goes through every check any click does. Since its role says
+nothing, it is judged as a button: an action name makes it `would_submit`, and
+so does a name that is only a glyph, so it asks with a screenshot.
 
 Click checks adapt Playwright's actionability machinery from Playwriter's
 engine. They clip content quads to the visible viewport and walk the document
 and each shadow root, including closed roots, slotted labels and
 `display: contents`. They wait up to four seconds for the control to become
-visible, enabled and stable, trying different scroll alignments for sticky
-headers. Geometry is sampled with bounded timers because background tabs can
-suspend animation frames. Previews perform these checks too; a blocked control
-returns the obstruction's tag and short ARIA label, never its markup or field
-values. Subframe clicks fail closed rather than mixing document coordinates.
+visible, enabled and stable, trying different scroll alignments (the middle
+of the window second) for sticky headers and fixed banners. Geometry is
+sampled with bounded timers because background tabs can suspend animation
+frames. Previews perform these checks too; a blocked control fails with
+"Nothing was clicked" and the obstruction's tag and short ARIA label, plus the
+fixed or sticky layer it belongs to and where that sits ("a fixed `<div>`
+along the bottom of the window"), never its markup, text or field values.
+Subframe clicks fail closed rather than mixing document coordinates.
 
 After hovering, the extension rechecks the hit target and installs a trusted
 pointer-event guard against a layout change at dispatch. It never force-clicks
@@ -163,6 +180,14 @@ described above; a failed or possibly dispatched full-engine action never falls
 back to another implementation. Preview input is suppressed in transport,
 including hover, while upstream actionability checks still run. Background
 operations do not activate the tab or change the page clock.
+
+Before the engine starts a click, the extension runs the overlay part of the
+checks above for up to four seconds: it scrolls the control, or one of its
+labels, until a click at its point would reach it, clear of fixed and sticky
+layers. One still covered is refused then, before any input, with the same
+certain "Nothing was clicked" error naming what covers it. The engine's own
+retries would only have ended in the uncertain "did not finish" answer. A
+control that is hidden, disabled or moving is left to the engine's own waits.
 
 See the [helper contract and test coverage](../browser/engine/README.md) for
 reference binding, cancellation, runtime support and complete license provenance.

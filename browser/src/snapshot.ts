@@ -54,7 +54,15 @@ const INLINE_TEXT_LIMIT = 400;
 export interface SnapshotOptions {
   // Backend node IDs of fields whose value is never shown.
   sensitive?: ReadonlySet<number>;
+  // Backend node IDs of elements that are evidently clickable (a click
+  // handler, `cursor: pointer`, `tabindex`) though the accessibility tree
+  // gives them no control role, like a bare "×" that removes a row. They
+  // get a ref, shown as `clickable` when they have no role of their own.
+  clickable?: ReadonlySet<number>;
 }
+
+const MEANINGFUL = /[\p{L}\p{N}].*[\p{L}\p{N}]/u;
+const NEAR_LIMIT = 60;
 
 export function snapshotText(nodes: readonly AXNode[], options: SnapshotOptions = {}): string {
   const byId = new Map(nodes.map((n) => [n.nodeId, n]));
@@ -100,8 +108,15 @@ function visit(
     }
     return;
   }
-  if (node.ignored || TRANSPARENT.has(role) || role === "") {
+  const backend = node.backendDOMNodeId;
+  const clickable = backend !== undefined && options.clickable?.has(backend) === true;
+  const bare = node.ignored || TRANSPARENT.has(role) || role === "";
+  if (bare && !clickable) {
     for (const child of children) visit(child, depth, skipText, byId, lines, options, seen);
+    return;
+  }
+  if (bare) {
+    clickableLine(node, depth, skipText, byId, lines, options, seen);
     return;
   }
   const name = clean(String(node.name?.value ?? ""));
@@ -113,10 +128,9 @@ function visit(
     if (value === false || value === "false" || value === undefined || value === null) continue;
     line += value === true || value === "true" ? ` [${prop.name}]` : ` [${prop.name}=${String(value)}]`;
   }
-  const backend = node.backendDOMNodeId;
   const sensitive = backend !== undefined && options.sensitive?.has(backend) === true;
   const focusable = (node.properties ?? []).some((p) => p.name === "focusable" && p.value?.value === true);
-  if (backend !== undefined && (INTERACTIVE.has(role) || focusable)) {
+  if (backend !== undefined && (INTERACTIVE.has(role) || focusable || clickable)) {
     line += ` [ref=e${backend}]`;
   }
   if (sensitive) line += " [sensitive]";
@@ -139,6 +153,53 @@ function visit(
       lines[mark - 1] = `${line}: ${only.slice(prefix.length)}`;
     }
   }
+}
+
+// An element with no role of its own that can be clicked: one line, named
+// by its text, or, when that is only a glyph or nothing (an icon), also by
+// the text just before it, so "×" beside "Row 3" can be told apart.
+function clickableLine(
+  node: AXNode,
+  depth: number,
+  skipText: boolean,
+  byId: Map<string, AXNode>,
+  lines: string[],
+  options: SnapshotOptions,
+  seen: Set<string>,
+): void {
+  const before = lines.length;
+  lines.push("");
+  for (const child of node.childIds ?? []) visit(child, depth + 1, skipText, byId, lines, options, seen);
+  let name = clean(String(node.name?.value ?? ""));
+  const textPrefix = `${indent(depth + 1)}- text: `;
+  let inline = "";
+  if (lines.length === before + 2 && lines[before + 1].startsWith(textPrefix)) {
+    const only = lines[before + 1].slice(textPrefix.length);
+    if (!name) name = only;
+    else if (only !== name && only.length <= INLINE_TEXT_LIMIT) inline = `: ${only}`;
+    if (only === name || inline) lines.splice(before + 1, 1);
+  }
+  let line = `${indent(depth)}- clickable`;
+  if (name) line += ` "${cut(name, NAME_LIMIT).replace(/"/g, "'")}"`;
+  line += ` [ref=e${node.backendDOMNodeId}]`;
+  if (!MEANINGFUL.test(name)) {
+    const near = textBefore(lines, before);
+    if (near) line += ` [near="${cut(near, NEAR_LIMIT).replace(/"/g, "'")}"]`;
+  }
+  lines[before] = line + inline;
+}
+
+// The nearest text shown before line `index`: a quoted name or a line's
+// text, whichever comes last.
+function textBefore(lines: string[], index: number): string {
+  for (let i = index - 1; i >= 0 && i >= index - 12; i--) {
+    const line = lines[i];
+    const value = /^\s*- [^":\[]*(?: "[^"]*")?(?: \[[^\]]*\])*: (.+)$/.exec(line)?.[1];
+    const quoted = /- [^"\[]*"([^"]*)"/.exec(line)?.[1];
+    const text = value && !value.startsWith("(hidden)") && !line.includes("[sensitive]") ? value : quoted;
+    if (text && MEANINGFUL.test(text)) return text;
+  }
+  return "";
 }
 
 function roleName(role: string): string {

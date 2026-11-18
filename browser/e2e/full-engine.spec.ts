@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { inWorker, launch, serve, type Setup } from "./harness.js";
+import { engineAction, inWorker, launch, serve, type Setup } from "./harness.js";
 
 const HTML = `<!doctype html><title>Full engine fixture</title><style>body{margin:24px;font:16px sans-serif}button,input,select{margin:12px;padding:12px}label{display:block;padding:20px;background:#eee;width:240px}#radio,#check{position:absolute;opacity:0;width:20px;height:20px}a{display:block;padding:15px}#contents{display:contents}</style>
 <button type="button" id="button">Continue</button><a id="contents" href="#contents"><span>Contents link</span></a>
@@ -26,40 +24,7 @@ async function fixture() {
   const ref = (name: string) => { const line = read.result.text.split('\n').find((line: string)=>line.includes(`"${name}"`)); const value = /\[ref=(e\d+)\]/.exec(line ?? '')?.[1]; expect(value, name).toBeTruthy(); return value!; };
   return { tab, page, ref };
 }
-async function action(action: string, params: Record<string,unknown>, beforeCommand?: (command: any) => Promise<void>) {
-  const start = await setup.daemon.call('engine_begin', { action, params });
-  if (start.error) return start;
-  const operation = start.result;
-  const child = spawn(process.execPath, [resolve('engine/entry.mjs')], { stdio: ['pipe','pipe','pipe'], env: { PATH: process.env.PATH } });
-  let buffer = '', eventIndex = setup.daemon.events.length;
-  child.stdin.on('error',()=>{});
-  const methods: string[] = [];
-  const inFlight = new Set<number>();
-  const drain = () => {
-    for (const event of setup.daemon.events.slice(eventIndex)) if (event.event === 'engine' && event.lease === operation.lease) child.stdin.write(JSON.stringify({type:'event',message:event.message})+'\n');
-    eventIndex = setup.daemon.events.length;
-  };
-  const timer = setInterval(drain, 5);
-  const result: any = await new Promise((done,reject)=>{
-    child.stdout.on('data',chunk=>{ buffer+=chunk; let newline; while((newline=buffer.indexOf('\n'))>=0) {
-      const message=JSON.parse(buffer.slice(0,newline));buffer=buffer.slice(newline+1);
-      if(message.type==='command') {
-        methods.push(message.command.method);inFlight.add(message.id);
-        void Promise.resolve(beforeCommand?.(message.command)).then(()=>setup.daemon.call('engine_command',{lease:operation.lease,command:message.command})).then(reply=>{
-          drain(); inFlight.delete(message.id); child.stdin.write(JSON.stringify({type:'reply',id:message.id,...(reply.error?{error:reply.error}:reply.result)})+'\n');
-        }).catch(reject);
-      } else if(message.type==='result' || message.type==='error') {
-        if(message.type==='result' && inFlight.size) reject(Error('helper completed before command acknowledgements'));
-        else done(message);
-      }
-    }});
-    child.once('error',reject); child.once('exit',code=>{if(code)reject(Error(`helper exited ${code}`))});
-    child.stdin.write(JSON.stringify({type:'call',operation})+'\n');
-  }).finally(()=>{clearInterval(timer);child.stdin.end();});
-  if(result.type==='error') { await setup.daemon.call('engine_cancel',{lease:operation.lease}); return {error:result.error, methods}; }
-  const finished = await setup.daemon.call('engine_finish',{lease:operation.lease,...result.result});
-  return {...finished,methods};
-}
+const action = (name: string, params: Record<string,unknown>, beforeCommand?: (command: any) => Promise<void>) => engineAction(setup, name, params, beforeCommand);
 
 for(const name of ['Continue','Contents link','Shadow action','Slotted action']) test(`full engine clicks ${name} without focusing the tab`,async()=>{
  const {tab,page,ref}=await fixture();

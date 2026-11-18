@@ -99,7 +99,17 @@ export async function execute(operation, wire, signal) {
           await run(progress => handle.waitForElementState(progress, 'visible'));
           await run(progress => handle.waitForElementState(progress, 'editable'));
           if (!trial) {
-            if (params.clear !== false) await run(progress => handle.fill(progress, params.text, {}));
+            const rich = await handle.evaluateExpression(`node => node.isContentEditable && !(node instanceof HTMLInputElement) && !(node instanceof HTMLTextAreaElement)`, { isFunction: true });
+            if (params.clear !== false && rich) {
+              // Upstream fill selects before focusing; an editor that restores
+              // its own caret on focus then typed at the start and kept the old
+              // text. Typing over a selection also takes its formatting. Focus,
+              // select, delete, then type, as a person replacing the text would.
+              await run(progress => handle.focus(progress));
+              await handle.evaluateExpression(`node => { const range = node.ownerDocument.createRange(); range.selectNodeContents(node); const selection = node.ownerDocument.getSelection(); selection.removeAllRanges(); selection.addRange(range); }`, { isFunction: true });
+              await run(progress => page.keyboard.press(progress, 'Delete', {}));
+              if (params.text) await run(progress => page.keyboard.insertText(progress, params.text));
+            } else if (params.clear !== false) await run(progress => handle.fill(progress, params.text, {}));
             else {
               await run(progress => handle.press(progress, process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End', {}));
               await run(progress => page.keyboard.insertText(progress, params.text));

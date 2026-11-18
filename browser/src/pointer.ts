@@ -72,10 +72,25 @@ function hitTarget(target: Element, point: Point, control: Element = target): st
   const tag = hit?.localName ?? "viewport";
   const role = hit?.getAttribute("role")?.slice(0, 40);
   const label = hit?.getAttribute("aria-label")?.replace(/\s+/g, " ").slice(0, 120);
+  // A fixed or sticky layer the hit belongs to (a cookie banner, a bar along
+  // the bottom, a sticky header): where it sits, and its own role and label.
+  let layer = "";
+  for (let element: Element | null | undefined = hit; element; element = parent(element)) {
+    const position = getComputedStyle(element).position;
+    if (position !== "fixed" && position !== "sticky") continue;
+    const box = element.getBoundingClientRect();
+    const where = box.top <= 1 && box.bottom < innerHeight * 0.6 ? "along the top of the window"
+      : box.bottom >= innerHeight - 1 && box.top > innerHeight * 0.4 ? "along the bottom of the window"
+      : "over the page";
+    const layerRole = element === hit ? undefined : element.getAttribute("role")?.slice(0, 40);
+    const layerLabel = element === hit ? undefined : element.getAttribute("aria-label")?.replace(/\s+/g, " ").slice(0, 120);
+    layer = `, part of a ${position} <${element.localName}>${layerRole ? ` role=${JSON.stringify(layerRole)}` : ""}${layerLabel ? ` name=${JSON.stringify(layerLabel)}` : ""} ${where}`;
+    break;
+  }
   // Usually a cookie or consent banner, a sticky header, or an element still
-  // off-screen: say how to clear it, so a model doesn't click the same spot
-  // again (one chat in production retried ten times).
-  return `Something is drawn over that element: scroll it into view or close the overlay, then read the page again and try again. It's covered by <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}`;
+  // off-screen: say what and how to clear it, so a model doesn't click the
+  // same spot again (one chat in production retried ten times).
+  return `Something is drawn over that element: it's covered by <${tag}>${role ? ` role=${JSON.stringify(role)}` : ""}${label ? ` name=${JSON.stringify(label)}` : ""}${layer}. Close or dismiss that (read the page for its close control) or ask the person, then read the page again and try again`;
 }
 
 export interface PointerState {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isSensitiveField, submitReason, type ElementFacts } from "../src/classify.js";
+import { CLASSIFY_IN_PAGE, isSensitiveField, submitReason, type ElementFacts } from "../src/classify.js";
 
 const el = (facts: Partial<ElementFacts>): ElementFacts => ({ tag: "input", attrs: {}, role: "textbox", name: "", ...facts });
 
@@ -40,4 +40,46 @@ test("navigation and toggles don't", () => {
   assert.equal(submitReason({ tag: "button", attrs: { type: "button" }, role: "button", name: "Show more" }), null);
   assert.equal(submitReason({ tag: "button", attrs: { type: "button" }, role: "button", name: "Bookmarks" }), null);
   assert.equal(submitReason({ tag: "div", attrs: {}, role: "tab", name: "Posts" }), null);
+});
+
+test("an unlabelled control the page made clickable is judged like a button (#225)", () => {
+  // A bare "×" or an icon says nothing about what it does: it may remove.
+  assert.ok(submitReason({ tag: "span", attrs: {}, role: "generic", name: "×" }));
+  assert.ok(submitReason({ tag: "div", attrs: { tabindex: "0" }, role: "generic", name: "" }));
+  assert.ok(submitReason({ tag: "a", attrs: {}, role: "generic", name: "✕" }));
+  // Its title, label or text names it like any button's.
+  assert.ok(submitReason({ tag: "div", attrs: {}, role: "generic", name: "X" }));
+  assert.ok(submitReason({ tag: "span", attrs: { title: "Remove row" }, role: "generic", name: "×" }));
+  assert.ok(submitReason({ tag: "div", attrs: {}, role: "generic", name: "Delete" }));
+  assert.equal(submitReason({ tag: "span", attrs: {}, role: "generic", name: "Show details" }), null);
+  // Controls that say what they are keep their rules.
+  assert.equal(submitReason({ tag: "button", attrs: { type: "button" }, role: "button", name: "×" }), null);
+  assert.equal(submitReason({ tag: "a", attrs: { href: "/x" }, role: "link", name: "›" }), null);
+});
+
+test("the classification in the page is the same one", () => {
+  const classify = new Function(`return ${CLASSIFY_IN_PAGE}`)() as (facts: ElementFacts) => { sensitive: boolean; submits: string | null };
+  for (const facts of <ElementFacts[]>[
+    { tag: "span", attrs: {}, role: "", name: " ×" },
+    { tag: "div", attrs: { title: "Remove row" }, role: "", name: "" },
+    { tag: "span", attrs: {}, role: "", name: "Show details" },
+    { tag: "button", attrs: { type: "button" }, role: "", name: "×" },
+  ]) {
+    assert.equal(classify(facts).submits, submitReason(facts), JSON.stringify(facts));
+  }
+});
+
+test("each name is judged on its own, so repeated glyphs stay glyphs (#227)", () => {
+  assert.ok(submitReason({ tag: "span", attrs: { "aria-label": "X" }, role: "image", name: "X" }));
+  assert.ok(submitReason({ tag: "span", attrs: { title: "×", "aria-label": "×" }, role: "generic", name: "×" }));
+  assert.equal(submitReason({ tag: "span", attrs: { title: "Show details" }, role: "generic", name: "×" }), null);
+});
+
+test("a control's own text counts beside its label, each judged on its own (#227)", () => {
+  const button = { tag: "button", attrs: { type: "button", "aria-label": "Details" }, role: "button", name: "Details" };
+  assert.equal(submitReason(button), null);
+  assert.ok(submitReason({ ...button, text: "Delete" }));
+  // A glyph shown beside a glyph label is still only a glyph.
+  assert.ok(submitReason({ tag: "span", attrs: {}, role: "generic", name: "×", text: "×" }));
+  assert.equal(submitReason({ tag: "span", attrs: {}, role: "generic", name: "Close banner", text: "×" }), null);
 });

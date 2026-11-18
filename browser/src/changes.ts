@@ -18,7 +18,7 @@ import {
   type Policy,
 } from "./actions.js";
 import { callOn, cleanUp, evaluateInContext, isolatedContext, relatedNode, send } from "./cdp.js";
-import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
+import { isSensitiveField, plainClickable, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
@@ -107,6 +107,10 @@ const FORM_OF = `function () {
   return form ? { method: (form.getAttribute("method") || "get").toLowerCase() } : null;
 }`;
 
+const SHOWN_TEXT = `function () {
+  return String(this.innerText ?? this.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 100000);
+}`;
+
 // The element a call names, with what the extension needs to judge it.
 export async function target(params: Params, policy: Policy): Promise<Target> {
   const backendNodeId = refId(params.ref);
@@ -120,6 +124,12 @@ export async function target(params: Params, policy: Policy): Promise<Target> {
   const node = ax.nodes.find((n) => n.backendDOMNodeId === backendNodeId) ?? ax.nodes[0];
   const facts = await elementFacts(tabId, backendNodeId, String(node?.role?.value ?? ""), String(node?.name?.value ?? ""));
   facts.form = await callOn<{ method: string } | null>(tabId, backendNodeId, FORM_OF).catch(() => null);
+  // A control the page drew without a role has no accessible name of its
+  // own; its text is what the reader showed, and what the checks judge, in
+  // full (only what's shown back is shortened).
+  if (!facts.name.trim() && plainClickable(facts)) {
+    facts.name = await callOn<string>(tabId, backendNodeId, SHOWN_TEXT).catch(() => "");
+  }
   return { tabId, backendNodeId, facts };
 }
 
@@ -179,7 +189,7 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // background tabs can suspend. Never retry after dispatching a press.
 async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
   const deadline = Date.now() + 4_000;
-  const alignments = [null, "end", "center", "start"];
+  const alignments = [null, "center", "end", "start"];
   let reason = "that element isn't visible on the page";
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     allowedChanges(policy);
@@ -222,7 +232,44 @@ async function point(t: Target, policy: Policy): Promise<Point & { surface: numb
     }
     await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
   }
-  throw new ToolError("page_error", reason);
+  throw new ToolError("page_error", `Nothing was clicked. ${reason}`);
+}
+
+// Before the bundled engine clicks: scroll the control, or one of its
+// labels, to where a click would actually reach it, clear of fixed and
+// sticky layers (a banner along the bottom of the window can cover a form's
+// last button), trying the middle of the window too. A control still
+// covered when `until` comes is refused here, before anything is sent, so
+// the answer is certain and names what covers it; the engine's own retries
+// would only end in an uncertain timeout. A control that isn't ready for
+// another reason (hidden, disabled, moving) is left to the engine's waits.
+export async function clearOfOverlays(t: Target, policy: Policy, surfaces: number[], until: number): Promise<void> {
+  const alignments = [null, "center", "end", "start"];
+  let covered: string | null = null;
+  // At least one full check runs, however short the budget.
+  for (let attempt = 0; attempt === 0 || Date.now() < until; attempt++) {
+    let ready = false;
+    for (const surface of surfaces) {
+      allowedChanges(policy);
+      await still(t.tabId, policy);
+      const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
+      if (state.reason) continue;
+      const alignment = alignments[attempt % alignments.length];
+      if (alignment) await callOn(t.tabId, surface, SCROLL_TARGET, [alignment]);
+      else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: surface }).catch(() => {});
+      const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: surface })
+        .then((answer) => answer.quads, () => []);
+      const location = visiblePoint(quads, state.width, state.height);
+      if (!location) continue;
+      ready = true;
+      const obstruction = await surfaceObstruction(t, surface, location);
+      if (!obstruction) return;
+      covered = obstruction;
+    }
+    if (!ready) return;
+    await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
+  }
+  if (covered) throw new ToolError("page_error", `Nothing was clicked. ${covered}`);
 }
 
 const open: Method = async (params, policy) => {
@@ -325,7 +372,7 @@ const click: Method = async (params, policy) => {
   } finally {
     await cleanUp(t.tabId, async (options) => {
       await evaluateInContext(t.tabId, contextId, guardStatus(key, true), { ...options, existingOnly: true }).catch(() => {});
-    });
+    }, { existingOnly: true });
   }
   return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
 };
@@ -419,12 +466,15 @@ const type: Method = async (params, policy) => {
   }
   await send(t.tabId, "DOM.focus", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, SELECT_CONTENTS, [clear]);
-  if (text.length > 0) {
-    await send(t.tabId, "Input.insertText", { text });
-  } else if (clear) {
+  // In a rich-text editor, text typed over a selection takes the selection's
+  // formatting, so replacing a bold line typed everything bold. Delete the
+  // old contents first, as a person replacing them would, then type.
+  const rich = t.facts.tag !== "input" && t.facts.tag !== "textarea";
+  if (clear && (rich || text.length === 0)) {
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
   }
+  if (text.length > 0) await send(t.tabId, "Input.insertText", { text });
   const started = Date.now();
   if (submit) {
     const enter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };

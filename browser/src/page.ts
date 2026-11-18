@@ -42,16 +42,32 @@ function hideIndicator(id: string, hidden: boolean): void {
 }
 
 // Blur fields the extension never shows, before a screenshot (`on`), and
-// take the blur off after (`!on`).
-function blurSensitive(on: boolean, autocomplete: string, words: string): number {
+// take the blur off after (`!on`). Each capture marks what it blurred with
+// its own token, so a late cleanup of one screenshot (one whose tab stalled)
+// never takes off a blur a later screenshot still needs. Returns how many
+// captures still hold the page.
+function blurSensitive(on: boolean, autocomplete: string, words: string, token: string): number {
   const ATTR = "data-chat-with-work-blur";
+  const CAPTURES = "data-chat-with-work-capture";
+  const root = document.documentElement;
+  const others = (el: Element, name: string) =>
+    (el.getAttribute(name) ?? "").split(/\s+/).filter((t) => t && t !== token);
   if (!on) {
     document.querySelectorAll(`[${ATTR}]`).forEach((el) => {
-      (el as HTMLElement).style.removeProperty("filter");
-      el.removeAttribute(ATTR);
+      const rest = others(el, ATTR);
+      if (rest.length) {
+        el.setAttribute(ATTR, rest.join(" "));
+      } else {
+        (el as HTMLElement).style.removeProperty("filter");
+        el.removeAttribute(ATTR);
+      }
     });
-    return 0;
+    const left = others(root, CAPTURES);
+    if (left.length) root.setAttribute(CAPTURES, left.join(" "));
+    else root.removeAttribute(CAPTURES);
+    return left.length;
   }
+  root.setAttribute(CAPTURES, [...others(root, CAPTURES), token].join(" "));
   const autocompleteRe = new RegExp(autocomplete);
   const wordsRe = new RegExp(words, "i");
   let count = 0;
@@ -71,7 +87,7 @@ function blurSensitive(on: boolean, autocomplete: string, words: string): number
       wordsRe.test(text);
     if (sensitive) {
       (el as HTMLElement).style.setProperty("filter", "blur(8px)", "important");
-      el.setAttribute(ATTR, "");
+      el.setAttribute(ATTR, [...others(el, ATTR), token].join(" "));
       count++;
     }
   });
@@ -100,20 +116,31 @@ export async function indicate(tabId: number): Promise<void> {
 }
 
 // Around a screenshot: the indicator and sensitive fields don't show in it.
-export async function prepareForCapture(tabId: number, patterns: { autocomplete: string; words: string }): Promise<void> {
-  await evaluate(tabId, call(hideIndicator, INDICATOR_ID, true)).catch(() => {});
-  await evaluate(tabId, call(blurSensitive, true, patterns.autocomplete, patterns.words));
+export async function prepareForCapture(
+  tabId: number,
+  patterns: { autocomplete: string; words: string },
+  token: string,
+): Promise<void> {
+  // Hiding the indicator and registering the capture are one evaluation, so
+  // an earlier capture's late cleanup can't see no capture and show it again
+  // in between.
+  const hide = call(hideIndicator, INDICATOR_ID, true);
+  const register = call(blurSensitive, true, patterns.autocomplete, patterns.words, token);
+  await evaluate(tabId, `(() => { ${hide}; return ${register}; })()`);
 }
 
 export async function afterCapture(
   tabId: number,
   patterns: { autocomplete: string; words: string },
+  token: string,
   options: SendOptions = {},
 ): Promise<void> {
-  await evaluate(tabId, call(blurSensitive, false, patterns.autocomplete, patterns.words), options).catch(() => {});
-  // After Stop the tab isn't being used any more, so it doesn't say so.
-  if (isHalted()) return;
-  await evaluate(tabId, call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab"), options).catch(() => {});
+  // After Stop the tab isn't being used any more, so it doesn't say so,
+  // nor while another screenshot is still being taken. Releasing and
+  // showing are one evaluation, so no capture can start in between.
+  const release = call(blurSensitive, false, patterns.autocomplete, patterns.words, token);
+  const show = isHalted() ? "" : `if (!left) ${call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab")};`;
+  await evaluate(tabId, `(() => { const left = ${release}; ${show} return left; })()`, options).catch(() => {});
 }
 
 export const pageScripts = { call };

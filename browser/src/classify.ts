@@ -11,6 +11,9 @@ export interface ElementFacts {
   // Its accessible role and name, as the browser computes them.
   role: string;
   name: string;
+  // The control's own text, when that's a name apart from `name` (the page
+  // guard, where a label or aria-label may differ from what the control shows).
+  text?: string;
   // The form it belongs to, if any.
   form?: { method: string } | null;
 }
@@ -95,6 +98,25 @@ function stemsRegex(stems: string[]): RegExp {
 
 const BUTTON_ROLES = new Set(["button", "menuitem"]);
 
+// Elements and roles that say what kind of control they are. Anything else
+// the reader offers to click (a `<span>` with a click handler, a `<div>`
+// with `cursor: pointer`, an `<a>` with no `href`) is a control the page
+// made clickable without saying what it does.
+const CONTROL_TAGS = new Set(["button", "input", "select", "textarea", "option", "label", "summary", "details"]);
+const CONTROL_ROLES = new Set([
+  "button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "radio", "switch", "tab",
+  "option", "treeitem", "textbox", "searchbox", "combobox", "listbox", "slider", "spinbutton",
+]);
+// A name with two letters or digits says something; "×", "X" or "⋮" alone doesn't.
+const MEANINGFUL = /[\p{L}\p{N}].*[\p{L}\p{N}]/u;
+
+export function plainClickable(el: ElementFacts): boolean {
+  if (el.tag === "a" && el.attrs.href !== undefined) return false;
+  if (CONTROL_TAGS.has(el.tag)) return false;
+  if (CONTROL_ROLES.has(el.role) || CONTROL_ROLES.has((el.attrs.role ?? "").trim().toLowerCase())) return false;
+  return el.attrs.contenteditable === undefined || el.attrs.contenteditable === "false";
+}
+
 // Why clicking this element may send, buy, post or delete something, or
 // null when it looks like plain navigation or a toggle.
 export function submitReason(el: ElementFacts): string | null {
@@ -108,19 +130,26 @@ export function submitReason(el: ElementFacts): string | null {
   const method = (el.attrs["data-method"] ?? el.attrs["data-turbo-method"] ?? "").toLowerCase();
   if (method && method !== "get") return `it sends a ${method.toUpperCase()} request`;
   if (el.attrs.formaction !== undefined) return "it submits a form";
-  const label = [el.name, el.attrs.value, el.attrs["aria-label"], el.attrs.title]
+  const label = [el.name, el.text, el.attrs.value, el.attrs["aria-label"], el.attrs.title]
     .filter(Boolean)
     .join(" ");
   const isLink = el.role === "link" || (el.tag === "a" && el.attrs.href !== undefined);
   if (isLink) {
     return LINK_RE.test(label) ? `it's named “${short(label)}”` : null;
   }
+  // A control the page drew without saying what it is counts as a button,
+  // and one named only by a glyph or nothing at all may do anything.
+  const plain = plainClickable(el);
   const isButton =
     BUTTON_ROLES.has(el.role) ||
     el.tag === "button" ||
     (el.tag === "input" && type === "button") ||
-    el.attrs.role === "button";
+    el.attrs.role === "button" ||
+    plain;
   if (isButton && ACTION_RE.test(label)) return `it's named “${short(label)}”`;
+  // Each name on its own: "X" as both label and text is still only "X".
+  const names = [el.name, el.text, el.attrs.value, el.attrs["aria-label"], el.attrs.title];
+  if (plain && !names.some((name) => name && MEANINGFUL.test(name))) return "it has no name that says what it does";
   return null;
 }
 
@@ -144,7 +173,11 @@ export const CLASSIFY_IN_PAGE = `(() => {
  const ACTION_RE = new RegExp(${JSON.stringify(ACTION_RE.source)}, 'iu');
  const LINK_RE = new RegExp(${JSON.stringify(LINK_RE.source)}, 'iu');
  const BUTTON_ROLES = new Set(${JSON.stringify([...BUTTON_ROLES])});
+ const CONTROL_TAGS = new Set(${JSON.stringify([...CONTROL_TAGS])});
+ const CONTROL_ROLES = new Set(${JSON.stringify([...CONTROL_ROLES])});
+ const MEANINGFUL = new RegExp(${JSON.stringify(MEANINGFUL.source)}, 'u');
  const short = ${short.toString()};
+ const plainClickable = ${plainClickable.toString()};
  const sensitive = ${isSensitiveField.toString()};
  const submits = ${submitReason.toString()};
  return facts => ({ sensitive: sensitive(facts), submits: submits(facts) });

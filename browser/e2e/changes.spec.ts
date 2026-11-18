@@ -118,7 +118,8 @@ test("clicks in a background tab, and refuses a click said not to submit that wo
   const covered = await setup.daemon.call("click", { tab, ref: hidden, submits: false });
   expect(covered.error?.code).toBe("page_error");
   expect(covered.error?.message).toContain("drawn over");
-  expect(covered.error?.message).toContain("scroll it into view or close the overlay, then read the page again and try again");
+  expect(covered.error?.message).toContain("Close or dismiss that (read the page for its close control) or ask the person, then read the page again and try again");
+  expect(covered.error?.message).toContain("Nothing was clicked");
 });
 
 test("chooses options and types, never into passwords", async () => {

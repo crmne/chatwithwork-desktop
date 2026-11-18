@@ -1,7 +1,7 @@
 // Private transport for the bundled, pinned engine. These are daemon methods,
 // never model tools. All browser authority still originates on this computer.
 import { about, integer, only, still, type Method, type Params, type Policy } from "./actions.js";
-import { allowedChanges, CHOOSE, described, dryRun, editable, flag, preview, settle, target, type Target } from "./changes.js";
+import { allowedChanges, CHOOSE, clearOfOverlays, described, dryRun, editable, flag, preview, settle, target, type Target } from "./changes.js";
 import { callOn, evaluate, isAttached, isHalted, relatedNode, send } from "./cdp.js";
 import { isSensitiveField, submitReason } from "./classify.js";
 import { documentIdentity, requireRef, sameDocument, type DocumentIdentity } from "./engine-refs.js";
@@ -31,6 +31,7 @@ const SESSION_METHODS = new Set([
   "Network.enable", "Log.enable", "Emulation.setFocusEmulationEnabled",
   "Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText",
 ]);
+const OVERLAY_WAIT_MS = 4_000;
 const NOOP = new Set(["Page.bringToFront", "Page.setFontFamilies", "Emulation.setEmulatedMedia", "Target.setAutoAttach"]);
 
 async function semantic(op: Operation): Promise<Target> {
@@ -124,7 +125,13 @@ const begin: Method = async (params, policy) => {
       dispatched: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
     if (generation !== admitted || isHalted() || policy.stopped) { clearTimeout(op.timer); fail("browser_stopped"); }
     active = op;
-    try { await current(op); await semantic(op); await current(op); }
+    try {
+      await current(op); await semantic(op);
+      // A covered click is refused here, certainly and by name, before the
+      // engine starts; otherwise its retries end in an uncertain timeout.
+      if (action === "click") await clearOfOverlays(t, policy, [t.backendNodeId, ...labels], Date.now() + Math.min(OVERLAY_WAIT_MS, Math.max(0, (deadline - Date.now()) / 2)));
+      await current(op);
+    }
     catch (error) { await cancelEngine(); throw error; }
     return { lease, timeout_ms: Math.max(1, op.deadline - Date.now()), tab: op.tab, session: op.session, action, params: input, document, targetInfo, backendNodeId: t.backendNodeId, labelBackendNodeIds: labels, facts: t.facts };
   } finally { acquiring = false; }
