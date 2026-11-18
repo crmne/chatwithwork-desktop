@@ -372,7 +372,7 @@ const click: Method = async (params, policy) => {
   } finally {
     await cleanUp(t.tabId, async (options) => {
       await evaluateInContext(t.tabId, contextId, guardStatus(key, true), { ...options, existingOnly: true }).catch(() => {});
-    });
+    }, { existingOnly: true });
   }
   return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
 };

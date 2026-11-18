@@ -97,3 +97,38 @@ test("a screenshot that times out still takes its blur off once the page answers
   await expect.poll(() => page.locator("#pw").evaluate((el) => (el as HTMLElement).style.filter), { timeout: 20_000 }).toBe("");
   expect(await page.locator("[data-chat-with-work-blur]").count()).toBe(0);
 });
+
+test("a click guard's cleanup that waits for a stalled tab doesn't attach again after Stop (#227)", async () => {
+  test.setTimeout(90_000);
+  const tab = await openTab();
+  const read = await setup.daemon.call("read", { tab });
+  expect(read.error).toBeUndefined();
+  const ref = /\[ref=(e\d+)\]/.exec(read.result.text.split("\n").find((line: string) => line.includes('textbox "Email"')) ?? "")?.[1];
+  expect(ref).toBeTruthy();
+  // The click's mouse events never answer, so its guard's cleanup waits for
+  // the tab; every attachment after Stop is counted.
+  await inWorker(setup.context, (id) => {
+    const spy = { attach: chrome.debugger.attach.bind(chrome.debugger), sendCommand: chrome.debugger.sendCommand.bind(chrome.debugger), attachesAfterStop: 0, stopped: false };
+    (globalThis as any).stallSpy = spy;
+    chrome.debugger.attach = (async (target: any, version: string) => {
+      if (target.tabId === id && spy.stopped) spy.attachesAfterStop++;
+      return spy.attach(target, version);
+    }) as typeof chrome.debugger.attach;
+    chrome.debugger.sendCommand = ((target: any, method: string, params?: any) => {
+      if (target.tabId === id && method === "Input.dispatchMouseEvent") return new Promise(() => {});
+      return spy.sendCommand(target, method, params);
+    }) as typeof chrome.debugger.sendCommand;
+  }, tab);
+  const click = await setup.daemon.call("click", { tab, ref, submits: false });
+  expect(click.error?.message).toContain("isn't responding");
+  await inWorker(setup.context, () => {
+    const spy = (globalThis as any).stallSpy;
+    spy.stopped = true;
+    chrome.debugger.sendCommand = spy.sendCommand;
+  });
+  setup.daemon.setPolicy({ stopped: true });
+  // Long enough for the tab to be checked again several times.
+  await new Promise((done) => setTimeout(done, 10_000));
+  expect(await inWorker(setup.context, () => (globalThis as any).stallSpy.attachesAfterStop)).toBe(0);
+  expect(await attachedTo(tab)).toBe(false);
+});

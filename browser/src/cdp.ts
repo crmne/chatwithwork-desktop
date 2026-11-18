@@ -66,22 +66,29 @@ export async function halt(on: boolean, beforeDetach?: () => Promise<void>): Pro
 // If the tab isn't answering, the cleanup can't reach it now, so it runs
 // again once the tab answers (cleanups only take back what a tool put on
 // the page, such as a screenshot's blur, so running one twice is harmless).
-export async function cleanUp(tabId: number, work: (options: SendOptions) => Promise<void>): Promise<void> {
+// `existingOnly` says the cleanup needs the attachment it was made in; once
+// that attachment ends it's dropped, and nothing attaches again for it.
+export async function cleanUp(
+  tabId: number,
+  work: (options: SendOptions) => Promise<void>,
+  policy: { existingOnly?: boolean } = {},
+): Promise<void> {
   try {
     await work({ cleanup: true });
   } finally {
-    if (responsiveness.verdict(tabId) !== "send") deferCleanup(tabId, work);
+    if (responsiveness.verdict(tabId) !== "send") deferCleanup(tabId, { work, existingOnly: policy.existingOnly === true });
     if (halted) await detach(tabId);
   }
 }
 
 const RETRY_EVERY_MS = 2_000;
 const RETRY_FOR_MS = 120_000;
-const deferred = new Map<number, { works: ((options: SendOptions) => Promise<void>)[]; timer?: ReturnType<typeof setTimeout>; until: number }>();
+interface Deferred { work: (options: SendOptions) => Promise<void>; existingOnly: boolean }
+const deferred = new Map<number, { works: Deferred[]; timer?: ReturnType<typeof setTimeout>; until: number }>();
 
-function deferCleanup(tabId: number, work: (options: SendOptions) => Promise<void>): void {
+function deferCleanup(tabId: number, item: Deferred): void {
   const entry = deferred.get(tabId) ?? { works: [], until: 0 };
-  if (!entry.works.includes(work) && entry.works.length < 20) entry.works.push(work);
+  if (!entry.works.some((queued) => queued.work === item.work) && entry.works.length < 20) entry.works.push(item);
   entry.until = Date.now() + RETRY_FOR_MS;
   deferred.set(tabId, entry);
   if (!entry.timer) entry.timer = setTimeout(() => void retryCleanup(tabId), RETRY_EVERY_MS);
@@ -92,18 +99,27 @@ async function retryCleanup(tabId: number): Promise<void> {
   const entry = deferred.get(tabId);
   if (!entry) return;
   entry.timer = undefined;
+  // Cleanups tied to an attachment that has ended (Stop, or the tab let go)
+  // have nothing left to clean, and must not attach again.
+  if (!sessions.has(tabId)) entry.works = entry.works.filter((item) => !item.existingOnly);
+  if (!entry.works.length) {
+    deferred.delete(tabId);
+    return;
+  }
+  // The check itself attaches only if some cleanup may.
+  const existingOnly = entry.works.every((item) => item.existingOnly);
   let answered = false;
   try {
-    await send(tabId, "Runtime.evaluate", { expression: "0", returnByValue: true }, { cleanup: true });
+    await send(tabId, "Runtime.evaluate", { expression: "0", returnByValue: true }, { cleanup: true, existingOnly });
     answered = true;
   } catch {
     // Still not answering, or gone.
   }
   if (answered) {
     deferred.delete(tabId);
-    await cleanUp(tabId, async (options) => {
-      for (const work of entry.works) await work(options).catch(() => {});
-    });
+    for (const item of entry.works) {
+      await cleanUp(tabId, item.work, { existingOnly: item.existingOnly }).catch(() => {});
+    }
     return;
   }
   if (halted) await detach(tabId);
