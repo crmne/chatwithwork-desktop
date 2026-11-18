@@ -1945,8 +1945,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-autostart"
-version = "0.17.0"
-source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
+version = "0.17.1"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.1#d5ae46d52f055ec8942765f64be4207c8c7c75bf"
 dependencies = [
  "fastframe-file",
  "log",
@@ -1977,8 +1977,8 @@ dependencies = [
 
 [[package]]
 name = "fastframe-file"
-version = "0.17.0"
-source = "git+https://github.com/crmne/fastframe?tag=v0.17.0#3617b1471763e3a36fed15d5da67c95e178173e9"
+version = "0.17.1"
+source = "git+https://github.com/crmne/fastframe?tag=v0.17.1#d5ae46d52f055ec8942765f64be4207c8c7c75bf"
 dependencies = [
  "log",
  "windows-sys 0.60.2",
