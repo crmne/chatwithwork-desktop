@@ -704,6 +704,10 @@ fn a_run_made_ready_across_a_pause_or_a_stop_never_starts() {
     let pause = |runs: &Runs| runs.stop_outside(&paused);
     let refused = start_across(&fx, &fx.config, pause, &paused).unwrap_err();
     assert_eq!(refused.code, "paused");
+    // Saved, its prune not made yet: the supervisor answers one call at a
+    // time, so a prune waits behind the start it should have stopped.
+    let refused = start_across(&fx, &fx.config, |_| {}, &paused).unwrap_err();
+    assert_eq!(refused.code, "paused");
 
     let mut off = fx.config.clone();
     off.roots[0].commands = false;

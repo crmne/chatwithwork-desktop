@@ -664,10 +664,10 @@ impl Runs {
     }
 
     /// Start `request` as the settings `settings` reads allow it, checked
-    /// here, and return its status at once. Should a prune or a stop of
-    /// every run come while it's made ready, which it wouldn't have seen,
-    /// the run is checked again against the settings as they are then,
-    /// before it's added: by the same rule a prune stops runs by.
+    /// here, and return its status at once. Once it's made ready, which
+    /// can be slow, it's checked again against the settings as they are
+    /// then, before it's added, by the same rule a prune stops runs by; and
+    /// a stop of every run that came meanwhile refuses it.
     pub fn start_with(
         &self,
         settings: impl Fn() -> Result<Config, RunError>,
@@ -738,26 +738,27 @@ impl Runs {
         )));
         {
             let mut inner = lock(&self.inner);
-            if inner.stops != seen {
-                if inner.stopped_all > seen {
-                    return Err(RunError::new(
-                        "unavailable",
-                        "this computer stopped every command while this one was getting ready",
-                    ));
-                }
-                let now = settings()?;
-                if now.paused {
-                    return Err(RunError::new(
-                        "paused",
-                        "this computer is paused; resume it to run commands",
-                    ));
-                }
-                if !lock(&cell).allowed_by(&now) {
-                    return Err(RunError::new(
-                        "not_allowed",
-                        "this folder stopped allowing this command while it was getting ready",
-                    ));
-                }
+            if inner.stopped_all > seen {
+                return Err(RunError::new(
+                    "unavailable",
+                    "this computer stopped every command while this one was getting ready",
+                ));
+            }
+            // Read again whether or not a prune came: the supervisor answers
+            // one call at a time, so a pause saved while this run waited on
+            // the keychain has its prune queued behind this start, unseen.
+            let now = settings()?;
+            if now.paused {
+                return Err(RunError::new(
+                    "paused",
+                    "this computer is paused; resume it to run commands",
+                ));
+            }
+            if !lock(&cell).allowed_by(&now) {
+                return Err(RunError::new(
+                    "not_allowed",
+                    "this folder stopped allowing this command while it was getting ready",
+                ));
             }
             inner.limits = plan.limits;
             inner.runs.insert(id.clone(), cell.clone());
