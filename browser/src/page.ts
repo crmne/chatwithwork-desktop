@@ -131,11 +131,12 @@ export async function afterCapture(
   token: string,
   options: SendOptions = {},
 ): Promise<void> {
-  const left = await evaluate<number>(tabId, call(blurSensitive, false, patterns.autocomplete, patterns.words, token), options).catch(() => 0);
   // After Stop the tab isn't being used any more, so it doesn't say so,
-  // nor while another screenshot is still being taken.
-  if (isHalted() || left) return;
-  await evaluate(tabId, call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab"), options).catch(() => {});
+  // nor while another screenshot is still being taken. Releasing and
+  // showing are one evaluation, so no capture can start in between.
+  const release = call(blurSensitive, false, patterns.autocomplete, patterns.words, token);
+  const show = isHalted() ? "" : `if (!left) ${call(showIndicator, INDICATOR_ID, "Chat with Work is using this tab")};`;
+  await evaluate(tabId, `(() => { const left = ${release}; ${show} return left; })()`, options).catch(() => {});
 }
 
 export const pageScripts = { call };

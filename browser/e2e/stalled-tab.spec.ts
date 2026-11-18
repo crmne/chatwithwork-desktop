@@ -169,3 +169,19 @@ test("a stalled screenshot's late cleanup leaves a later screenshot's blur on (#
   await expect.poll(() => page.locator("#pw").evaluate((el) => (el as HTMLElement).style.filter)).toBe("");
   expect(await page.locator("[data-chat-with-work-blur], [data-chat-with-work-capture]").count()).toBe(0);
 });
+
+test("a screenshot's cleanup shows the indicator only when no other capture holds the page (#227)", async () => {
+  const tab = await openTab();
+  const page = setup.context.pages().find((p) => p.url() === `${origin}/`)!;
+  expect((await setup.daemon.call("read", { tab })).error).toBeUndefined();
+  // Another capture holds the page while this screenshot is taken.
+  await page.evaluate(() => {
+    document.documentElement.setAttribute("data-chat-with-work-capture", "other");
+  });
+  expect((await setup.daemon.call("screenshot", { tab })).error).toBeUndefined();
+  expect(await page.locator("#chat-with-work-indicator").evaluate((el) => (el as HTMLElement).style.display)).toBe("none");
+  expect(await page.locator("html").getAttribute("data-chat-with-work-capture")).toBe("other");
+  await page.evaluate(() => document.documentElement.removeAttribute("data-chat-with-work-capture"));
+  expect((await setup.daemon.call("screenshot", { tab })).error).toBeUndefined();
+  expect(await page.locator("#chat-with-work-indicator").evaluate((el) => (el as HTMLElement).style.display)).toBe("");
+});
