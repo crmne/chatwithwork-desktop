@@ -4,9 +4,27 @@
 
 import { pageStartedDownload } from "./downloads.js";
 import { browserStopped, ToolError } from "./errors.js";
+import { NOT_RESPONDING, PROBE_TIMEOUT_MS, Responsiveness } from "./responsive.js";
 
 const IDLE_DETACH_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
+// A page stuck in a script can keep the debugger from attaching at all.
+const ATTACH_TIMEOUT_MS = 10_000;
+
+const responsiveness = new Responsiveness();
+
+// `work`, or a timeout error after `ms`. The work itself isn't cancelled.
+async function within<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ToolError("timeout", message)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 interface Session {
   idle?: ReturnType<typeof setTimeout>;
@@ -62,7 +80,7 @@ async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
   if (halted && !options.cleanup) throw browserStopped();
   if (sessions.has(tabId)) return;
   const pending = attaching.get(tabId);
-  if (pending) return pending;
+  if (pending) return within(pending, ATTACH_TIMEOUT_MS, NOT_RESPONDING);
   const work = (async () => {
     try {
       await chrome.debugger.attach({ tabId }, "1.3");
@@ -86,10 +104,12 @@ async function attach(tabId: number, options: SendOptions = {}): Promise<void> {
       .catch(() => {});
   })();
   attaching.set(tabId, work);
+  void work.catch(() => {}).finally(() => attaching.delete(tabId));
   try {
-    await work;
-  } finally {
-    attaching.delete(tabId);
+    await within(work, ATTACH_TIMEOUT_MS, NOT_RESPONDING);
+  } catch (error) {
+    if (error instanceof ToolError && error.code === "timeout") responsiveness.stalled(tabId);
+    throw error;
   }
   // Stopped while attaching: let go at once.
   if (halted && !options.cleanup) {
@@ -133,25 +153,47 @@ export async function send<T = any>(
   if (halted && !options.cleanup) throw browserStopped();
   await attach(tabId, options);
   touch(tabId);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new ToolError("timeout", `the page didn't answer ${method} in time`)),
-      COMMAND_TIMEOUT_MS,
-    );
-  });
+  await responding(tabId);
   try {
-    return (await Promise.race([
-      chrome.debugger.sendCommand({ tabId }, method, params),
-      timeout,
-    ])) as T;
+    return (await within(
+      chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>,
+      COMMAND_TIMEOUT_MS,
+      `the page didn't answer ${method} in time: ${NOT_RESPONDING}`,
+    ));
   } catch (error) {
-    if (error instanceof ToolError) throw error;
+    if (error instanceof ToolError) {
+      if (error.code === "timeout") responsiveness.stalled(tabId);
+      throw error;
+    }
     throw new ToolError("page_error", `${method}: ${String((error as Error)?.message ?? error)}`);
-  } finally {
-    clearTimeout(timer);
   }
 }
+
+// Before a command to a tab that stopped answering: fail at once right after
+// it stopped, and later check, briefly, whether it answers again. Without
+// this, every later call to a hung tab waited out the full timeout of each
+// of its commands and answered after Chat with Work had given up.
+async function responding(tabId: number): Promise<void> {
+  const verdict = responsiveness.verdict(tabId);
+  if (verdict === "send") return;
+  if (verdict === "fail") throw new ToolError("timeout", NOT_RESPONDING);
+  try {
+    await within(
+      chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "0", returnByValue: true }),
+      PROBE_TIMEOUT_MS,
+      NOT_RESPONDING,
+    );
+  } catch (error) {
+    if (error instanceof ToolError) {
+      responsiveness.stalled(tabId);
+      throw error;
+    }
+    // An answer, even an error, means the page is responding again.
+  }
+  responsiveness.answered(tabId);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => responsiveness.forget(tabId));
 
 // The dialog dismissed since the last call, once.
 export function takeDialog(tabId: number): string | undefined {

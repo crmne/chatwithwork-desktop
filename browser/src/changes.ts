@@ -419,12 +419,15 @@ const type: Method = async (params, policy) => {
   }
   await send(t.tabId, "DOM.focus", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, SELECT_CONTENTS, [clear]);
-  if (text.length > 0) {
-    await send(t.tabId, "Input.insertText", { text });
-  } else if (clear) {
+  // In a rich-text editor, text typed over a selection takes the selection's
+  // formatting, so replacing a bold line typed everything bold. Delete the
+  // old contents first, as a person replacing them would, then type.
+  const rich = t.facts.tag !== "input" && t.facts.tag !== "textarea";
+  if (clear && (rich || text.length === 0)) {
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
   }
+  if (text.length > 0) await send(t.tabId, "Input.insertText", { text });
   const started = Date.now();
   if (submit) {
     const enter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
