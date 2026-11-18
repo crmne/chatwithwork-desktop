@@ -1,4 +1,4 @@
-# ZIP dependency review, 16 October 2026 (updated 2 November 2026)
+# ZIP dependency review, 16 October 2026 (updated 18 November 2026)
 
 The direct ZIP reader uses registry `zip` 9.2.2. `calamine` 0.37 and
 `rust_xlsxwriter` 0.102 use zip 9 too, but the locked `docx-rs` 0.4.22
@@ -42,3 +42,15 @@ whose two headers disagree. This is an assessment of the current use, not
 an upstream patch; the lockfile still contains the affected version. Keep
 [the dependency alert](https://github.com/crmne/chatwithwork-desktop/security/dependabot/2)
 open until docx-rs adopts a patched release. No new audit exception was added.
+
+The 18 November dependency review moved the direct reader to zip 9.6.1 and
+checked the four advisories RustSec published for older releases:
+RUSTSEC-2026-0545 (AES entries returned without checking their
+authentication code), -0546 (`ZipArchive::extract` writing outside the
+destination through symlink targets), -0547 (legacy Shrink, Reduce and
+Implode decoders preallocating the declared size) and -0548
+(`ZipStreamReader` using local-header names). All four are in reading or
+extracting a supplied archive. The direct reader's zip 9.6.1 has their fixes.
+The zip 8 copy is still only docx-rs's writer, which creates fresh entries
+and reads nothing, so `deny.toml` ignores those four IDs for it under the
+same conditions as above. docx-rs 0.4.22 is still its latest release.
