@@ -74,3 +74,12 @@ test("each name is judged on its own, so repeated glyphs stay glyphs (#227)", ()
   assert.ok(submitReason({ tag: "span", attrs: { title: "×", "aria-label": "×" }, role: "generic", name: "×" }));
   assert.equal(submitReason({ tag: "span", attrs: { title: "Show details" }, role: "generic", name: "×" }), null);
 });
+
+test("a control's own text counts beside its label, each judged on its own (#227)", () => {
+  const button = { tag: "button", attrs: { type: "button", "aria-label": "Details" }, role: "button", name: "Details" };
+  assert.equal(submitReason(button), null);
+  assert.ok(submitReason({ ...button, text: "Delete" }));
+  // A glyph shown beside a glyph label is still only a glyph.
+  assert.ok(submitReason({ tag: "span", attrs: {}, role: "generic", name: "×", text: "×" }));
+  assert.equal(submitReason({ tag: "span", attrs: {}, role: "generic", name: "Close banner", text: "×" }), null);
+});

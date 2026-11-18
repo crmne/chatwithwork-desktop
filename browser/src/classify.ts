@@ -11,6 +11,9 @@ export interface ElementFacts {
   // Its accessible role and name, as the browser computes them.
   role: string;
   name: string;
+  // The control's own text, when that's a name apart from `name` (the page
+  // guard, where a label or aria-label may differ from what the control shows).
+  text?: string;
   // The form it belongs to, if any.
   form?: { method: string } | null;
 }
@@ -127,7 +130,7 @@ export function submitReason(el: ElementFacts): string | null {
   const method = (el.attrs["data-method"] ?? el.attrs["data-turbo-method"] ?? "").toLowerCase();
   if (method && method !== "get") return `it sends a ${method.toUpperCase()} request`;
   if (el.attrs.formaction !== undefined) return "it submits a form";
-  const label = [el.name, el.attrs.value, el.attrs["aria-label"], el.attrs.title]
+  const label = [el.name, el.text, el.attrs.value, el.attrs["aria-label"], el.attrs.title]
     .filter(Boolean)
     .join(" ");
   const isLink = el.role === "link" || (el.tag === "a" && el.attrs.href !== undefined);
@@ -145,7 +148,7 @@ export function submitReason(el: ElementFacts): string | null {
     plain;
   if (isButton && ACTION_RE.test(label)) return `it's named “${short(label)}”`;
   // Each name on its own: "X" as both label and text is still only "X".
-  const names = [el.name, el.attrs.value, el.attrs["aria-label"], el.attrs.title];
+  const names = [el.name, el.text, el.attrs.value, el.attrs["aria-label"], el.attrs.title];
   if (plain && !names.some((name) => name && MEANINGFUL.test(name))) return "it has no name that says what it does";
   return null;
 }

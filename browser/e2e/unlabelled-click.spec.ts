@@ -37,6 +37,7 @@ document.getElementById("more").addEventListener("click", () => log.textContent 
 // long unnamed control whose action word comes after its first 200 characters.
 const EXTRA = `<!doctype html><title>More rows</title>
 <div class="row" id="hidden-row"><span id="hidden-remove" style="cursor:pointer" onclick="this.parentNode.remove()">×<input type="hidden" name="row" value="4"></span></div>
+<label for="details">Details</label><button type="button" id="details" aria-label="Details" onclick="log.textContent='Deleted'">Delete</button>
 <span id="long" style="cursor:pointer" onclick="log.textContent='Long clicked'">${"More ".repeat(41)}Delete</span>
 <p id="log">Nothing yet</p>`;
 
@@ -144,3 +145,17 @@ for (const engine of [false, true]) {
     await expect(page.locator("#log")).toHaveText("Nothing yet");
   });
 }
+
+test("the page guard still judges a control's own text when a label names it otherwise (#227)", async () => {
+  const opened = await setup.daemon.call("open", { url: `${origin}/extra` });
+  const tab = opened.result.tab;
+  const page = setup.context.pages().find((p) => p.url() === `${origin}/extra`)!;
+  const read = await setup.daemon.call("read", { tab });
+  const ref = /\[ref=(e\d+)\]/.exec(read.result.text.split("\n").find((line: string) => line.includes('button "Details"')) ?? "")?.[1];
+  expect(ref).toBeTruthy();
+  // The check before the click sees only the accessible name, "Details";
+  // the guard at the click sees "Delete" and stops it.
+  const clicked = await engineAction(setup, "click", { tab, ref, submits: false });
+  expect(clicked.error?.message ?? "").toContain("submits a change");
+  await expect(page.locator("#log")).toHaveText("Nothing yet");
+});
