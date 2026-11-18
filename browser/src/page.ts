@@ -121,8 +121,12 @@ export async function prepareForCapture(
   patterns: { autocomplete: string; words: string },
   token: string,
 ): Promise<void> {
-  await evaluate(tabId, call(hideIndicator, INDICATOR_ID, true)).catch(() => {});
-  await evaluate(tabId, call(blurSensitive, true, patterns.autocomplete, patterns.words, token));
+  // Hiding the indicator and registering the capture are one evaluation, so
+  // an earlier capture's late cleanup can't see no capture and show it again
+  // in between.
+  const hide = call(hideIndicator, INDICATOR_ID, true);
+  const register = call(blurSensitive, true, patterns.autocomplete, patterns.words, token);
+  await evaluate(tabId, `(() => { ${hide}; return ${register}; })()`);
 }
 
 export async function afterCapture(

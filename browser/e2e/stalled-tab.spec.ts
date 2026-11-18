@@ -185,3 +185,41 @@ test("a screenshot's cleanup shows the indicator only when no other capture hold
   expect((await setup.daemon.call("screenshot", { tab })).error).toBeUndefined();
   expect(await page.locator("#chat-with-work-indicator").evaluate((el) => (el as HTMLElement).style.display)).toBe("");
 });
+
+test("a stalled screenshot's late cleanup can't show the indicator while the next one starts (#227)", async () => {
+  test.setTimeout(90_000);
+  const tab = await openTab();
+  expect((await setup.daemon.call("read", { tab })).error).toBeUndefined();
+  // The first capture never answers, and the tab's check is held back. When
+  // the second screenshot registers itself, the check is let through and the
+  // registration waits, so the first one's cleanup runs right then.
+  await inWorker(setup.context, (id) => {
+    const spy: any = { attach: chrome.debugger.attach.bind(chrome.debugger), sendCommand: chrome.debugger.sendCommand.bind(chrome.debugger), captures: 0, release: false };
+    (globalThis as any).stallSpy = spy;
+    chrome.debugger.sendCommand = (async (target: any, method: string, params?: any) => {
+      if (target.tabId === id && method === "Runtime.evaluate") {
+        const expression = String(params?.expression ?? "");
+        if (expression === "0" && !spy.release) throw new Error("held");
+        // The indicator's own removal a few seconds after the last call
+        // would hide what this checks.
+        if (expression.endsWith('("chat-with-work-indicator",false)')) return { result: {} };
+        if (spy.captures === 1 && !spy.release && expression.includes(")(true,") && expression.includes("data-chat-with-work-capture")) {
+          spy.release = true;
+          await new Promise((done) => setTimeout(done, 5_000));
+        }
+      }
+      if (target.tabId === id && method === "Page.captureScreenshot") {
+        if (++spy.captures === 1) return new Promise(() => {});
+        const seen = await spy.sendCommand(target, "Runtime.evaluate", { expression: "document.getElementById('chat-with-work-indicator')?.style.display ?? 'missing'", returnByValue: true });
+        spy.indicatorAtCapture = seen.result.value;
+      }
+      return spy.sendCommand(target, method, params);
+    }) as typeof chrome.debugger.sendCommand;
+  }, tab);
+  const first = await setup.daemon.call("screenshot", { tab });
+  expect(first.error?.message).toContain("isn't responding");
+  await new Promise((done) => setTimeout(done, 6_000));
+  const second = await setup.daemon.call("screenshot", { tab });
+  expect(second.error).toBeUndefined();
+  expect(await inWorker(setup.context, () => (globalThis as any).stallSpy.indicatorAtCapture)).toBe("none");
+});
