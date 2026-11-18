@@ -967,12 +967,16 @@ mod tests {
     #[test]
     fn a_restart_shows_a_folder_indexed_before_as_ready_and_checks_it_quietly() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("docs");
+        // A folder is kept by its canonical path, as `cww roots add` saves
+        // it; macOS's temporary directory isn't one (/var links to
+        // /private/var), and a root reached through a link reads nothing.
+        let base = crate::roots::canonical(tmp.path()).unwrap();
+        let root = base.join("docs");
         std::fs::create_dir(&root).unwrap();
         for i in 0..3 {
             std::fs::write(root.join(format!("note-{i}.txt")), "hello").unwrap();
         }
-        let dir = tmp.path().join("index");
+        let dir = base.join("index");
         let indexed = |indexer: &Indexer, files: u64| {
             indexer
                 .status()
@@ -1003,7 +1007,7 @@ mod tests {
         drop(next);
 
         // At another path, the same ID is a new folder.
-        let other = tmp.path().join("other");
+        let other = base.join("other");
         std::fs::create_dir(&other).unwrap();
         let moved = Indexer::start(dir.clone(), settings(&other), Changes::default());
         assert_eq!(moved.status()["docs"].state, IndexState::Pending);
@@ -1011,7 +1015,7 @@ mod tests {
 
         // A pass cut short leaves files in the index but no note: shown
         // as indexing, never as ready.
-        let cut = tmp.path().join("cut");
+        let cut = base.join("cut");
         let index = SearchIndex::open(&cut).unwrap();
         index.upsert("docs", "note-0.txt", "hello", 1, 5).unwrap();
         index.commit().unwrap();
