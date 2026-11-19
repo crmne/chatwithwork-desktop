@@ -726,7 +726,10 @@ impl Daemon {
         )
         .with_commands(command_tools(&config, &self.runner, &self.once))
         .with_runner(self.runner.clone())
-        .with_chat_files(self.chat_files.clone())
+        .with_chat_files(
+            self.chat_files.clone(),
+            self.paths.state_dir.join("upload-snapshots"),
+        )
         .with_asks(Arc::clone(&self.asks))
         .with_unattended_grants(self.unattended_grants.clone())
         .with_printing(crate::printing::tools::PrintTools {

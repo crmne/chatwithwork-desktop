@@ -138,7 +138,7 @@ pub enum Caller {
     },
 }
 
-pub const READ_TOOLS: [&str; 7] = [
+pub const READ_TOOLS: [&str; 8] = [
     "roots",
     "search",
     "list",
@@ -146,6 +146,7 @@ pub const READ_TOOLS: [&str; 7] = [
     "grep",
     "glob",
     "read_bytes",
+    "send_to_chat",
 ];
 
 /// Offered only while a shared folder allows changes.
@@ -199,6 +200,8 @@ struct Inner {
     max_message_bytes: usize,
     /// Where `copy_from_chat` fetches a chat's file from, while connected.
     chat_files: crate::chat_files::ChatFiles,
+    /// cww's own folder for the private copies `send_to_chat` streams.
+    snapshots: std::path::PathBuf,
 }
 
 impl LocalFiles {
@@ -225,16 +228,23 @@ impl LocalFiles {
                 paused,
                 max_message_bytes,
                 chat_files: crate::chat_files::ChatFiles::default(),
+                snapshots: std::path::PathBuf::new(),
             }),
         }
     }
 
-    /// Fetch chats' files for `copy_from_chat` through these tokens.
-    pub fn with_chat_files(self, chat_files: crate::chat_files::ChatFiles) -> Self {
+    /// Fetch and send chats' files (`copy_from_chat`, `send_to_chat`)
+    /// through these tokens, sending private copies made in `snapshots`.
+    pub fn with_chat_files(
+        self,
+        chat_files: crate::chat_files::ChatFiles,
+        snapshots: std::path::PathBuf,
+    ) -> Self {
         let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
         Self {
             inner: Arc::new(Inner {
                 chat_files,
+                snapshots,
                 ..inner
             }),
         }
@@ -1241,6 +1251,23 @@ impl LocalFiles {
                 resp.keep(kept, Some(BUDGET_NOTE));
                 Ok(Output::Glob(resp))
             }
+            "send_to_chat" => {
+                let req: SendToChatRequest = parse_args(args)?;
+                let files = self.inner.chat_files.clone();
+                let limiter = Arc::clone(&self.inner.limiter);
+                let snapshots = self.inner.snapshots.clone();
+                let value = blocking(move || {
+                    send_to_chat(
+                        &reader,
+                        &limiter,
+                        &|path, size, sha256| files.send(&req.transfer, path, size, sha256),
+                        &req.path,
+                        &snapshots,
+                    )
+                })
+                .await?;
+                Ok(Output::Ask(value))
+            }
             "read_bytes" => {
                 let req: ReadBytesRequest = parse_args(args)?;
                 let wanted = req.max_bytes.unwrap_or(crate::reader::MAX_COPY_CHUNK_BYTES);
@@ -1570,6 +1597,52 @@ struct CopyFromChatRequest {
 /// file, then fetched from the server, every byte counted and hashed as it
 /// arrives, and put in place only if it is exactly the `size` and SHA-256
 /// the approved call named.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SendToChatRequest {
+    path: String,
+    transfer: String,
+}
+
+/// Send a shared file to a chat (`copy_to_chat`): resolved and refused like
+/// `read`, by where it really is, counted against the copy budget before
+/// anything leaves (a send that fails partway still counts), and streamed
+/// from a private copy of exactly the bytes checked, never by reopening the
+/// shared path, so nothing swapped in after the check can go in its place.
+/// The copy is removed once sent.
+type SendFile<'a> = &'a dyn Fn(&std::path::Path, u64, &str) -> Result<Value, ToolError>;
+
+fn send_to_chat(
+    reader: &Reader,
+    limiter: &Limiter,
+    send: SendFile<'_>,
+    path: &str,
+    snapshots: &std::path::Path,
+) -> Result<Value, ToolError> {
+    let checked = reader.upload_file(path, crate::chat_files::MAX_BYTES)?;
+    if limiter.copy_allowance(checked.size.max(1))? < checked.size {
+        return Err(ToolError::new(
+            ErrorCode::RateLimited,
+            "This computer's hourly allowance for copying files doesn't cover this one. Try again later.",
+        ));
+    }
+    let file = reader.upload_snapshot(path, crate::chat_files::MAX_BYTES, snapshots)?;
+    limiter.record_copy(file.size);
+    let kept = send(&file.real, file.size, &file.sha256);
+    // The copy is in a folder of its own; nothing else is in it.
+    if let Some(folder) = file.real.parent() {
+        let _ = std::fs::remove_dir_all(folder);
+    }
+    let kept = kept?;
+    Ok(json!({
+        "path": file.path,
+        "size": file.size,
+        "sha256": file.sha256,
+        "modified": file.modified,
+        "kept": kept,
+    }))
+}
+
 type Fetch<'a> =
     &'a dyn Fn(&str, &mut dyn FnMut(&[u8]) -> Result<(), ToolError>) -> Result<(), ToolError>;
 
@@ -2340,6 +2413,22 @@ fn read_tools() -> Vec<Tool> {
             }),
         ),
         tool(
+            "send_to_chat",
+            "Send a local file to a chat",
+            "Send a file's bytes, whatever it holds, straight to Chat with Work over HTTPS, to \
+             copy it into a chat's files: the server names the chat and where with `transfer`, \
+             its grant for this computer. Files up to 200 MB.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "`<root_id>:relative/path` of a file." },
+                    "transfer": { "type": "string", "description": "Chat with Work's grant for this copy, for this computer." }
+                },
+                "required": ["path", "transfer"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
             "read_bytes",
             "Copy a local file",
             "Read a file's bytes, whatever it holds, in base64, one chunk at a time from \
@@ -2551,6 +2640,10 @@ mod coding_tests;
 #[cfg(test)]
 #[path = "copy_from_chat_tests.rs"]
 mod copy_from_chat_tests;
+
+#[cfg(test)]
+#[path = "send_to_chat_tests.rs"]
+mod send_to_chat_tests;
 
 #[cfg(test)]
 mod tests {

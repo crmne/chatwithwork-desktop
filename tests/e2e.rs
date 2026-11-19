@@ -1669,6 +1669,7 @@ async fn serves_tools_and_enforces_policy_over_the_wire() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes"
         ]
     );
@@ -4237,6 +4238,7 @@ async fn changes_files_over_the_wire() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes",
             "create",
             "copy_from_chat",
@@ -4260,6 +4262,7 @@ async fn changes_files_over_the_wire() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes",
         ]
         .contains(&name);
@@ -4811,6 +4814,7 @@ async fn allowing_changes_is_a_local_switch() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes"
         ]
     );
@@ -4871,6 +4875,7 @@ async fn allowing_changes_is_a_local_switch() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes"
         ]
     );

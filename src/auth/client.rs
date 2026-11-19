@@ -587,6 +587,65 @@ impl AuthClient {
         unreachable!("the loop returns on the second attempt")
     }
 
+    /// POST a file to the server as this device (`path`, with its
+    /// DPoP-bound token and a fresh proof), streamed from `file` without
+    /// holding it in memory, with its size and SHA-256 in headers for the
+    /// server to check. Redirects are never followed. The status and the
+    /// JSON answer.
+    pub fn upload_file(
+        &self,
+        key: &DeviceKey,
+        path: &str,
+        access_token: &str,
+        file: &std::path::Path,
+        size: u64,
+        sha256: &str,
+    ) -> Result<(u16, serde_json::Value)> {
+        let url = self.server.endpoint(path);
+        for attempt in 0..2 {
+            let mut reader = std::fs::File::open(file).context("opening the file")?;
+            let proof = key.proof("POST", &url, self.nonce().as_deref(), Some(access_token));
+            let mut response = self
+                .agent
+                .post(&url)
+                .header("Authorization", &format!("DPoP {access_token}"))
+                .header("DPoP", &proof)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/octet-stream")
+                .header("Content-Length", &size.to_string())
+                .header("X-Content-SHA256", sha256)
+                .config()
+                .timeout_global(Some(UPLOAD_TIMEOUT * 4))
+                .build()
+                .send(ureq::SendBody::from_reader(&mut reader))
+                .with_context(|| format!("contacting {url}"))?;
+            let status = response.status().as_u16();
+            self.set_nonce(
+                response
+                    .headers()
+                    .get("DPoP-Nonce")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string),
+            );
+            if (300..400).contains(&status) {
+                bail!(
+                    "the server answered {url} with a redirect ({status}); redirects are never followed"
+                );
+            }
+            let body: serde_json::Value = response
+                .body_mut()
+                .with_config()
+                .limit(64 * 1024)
+                .read_json()
+                .unwrap_or(serde_json::Value::Null);
+            if attempt == 0 && body["error"] == "use_dpop_nonce" {
+                continue;
+            }
+            return Ok((status, body));
+        }
+        unreachable!("the loop returns on the second attempt")
+    }
+
     /// GET a public file of the server's (an image under `/assets/`),
     /// without any token or proof: the status, the content type, and at
     /// most `limit` bytes (more is an error). Redirects are never
