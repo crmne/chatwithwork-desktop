@@ -12,6 +12,7 @@ interface PopupState {
   blocked_sites?: string[];
   changes: boolean;
   tabs: number;
+  fileAccess?: boolean;
 }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -67,6 +68,9 @@ function render(state: PopupState): void {
       return item;
     }),
   );
+  // Uploads need the browser's file access switch, which only the person
+  // can turn on.
+  $("uploads").hidden = !state.changes || state.fileAccess !== false;
   $("stop").hidden = state.stopped;
   $("resume").hidden = !state.stopped;
 }
@@ -77,6 +81,7 @@ async function ask(type: string): Promise<void> {
 
 $("stop").addEventListener("click", () => void ask("stop"));
 $("resume").addEventListener("click", () => void ask("resume"));
+$("file-access").addEventListener("click", () => void ask("file_access"));
 void ask("state");
 // The connection can change while the menu is open.
 setInterval(() => void ask("state"), 1000);

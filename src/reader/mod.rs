@@ -19,6 +19,7 @@ pub mod walk;
 pub mod watch;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -196,6 +197,176 @@ struct State {
 }
 
 type CacheKey = (String, (u64, u64), i64, u64);
+
+/// A file checked for an upload (`Reader::upload_file`).
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadFile {
+    /// `root_id:relative/path`, as the call named it.
+    pub path: String,
+    /// The shared folder's label.
+    pub folder: String,
+    pub name: String,
+    pub size: u64,
+    pub modified: String,
+    pub mime_type: String,
+    pub sha256: String,
+    /// Where it really is, for the browser only: never sent to the server,
+    /// logged or audited.
+    #[serde(skip)]
+    pub real: PathBuf,
+}
+
+impl UploadFile {
+    /// What binds an approval to these files, in this order: each one's
+    /// shared path, size, modification time and SHA-256.
+    pub fn fingerprint(files: &[UploadFile]) -> String {
+        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+        for file in files {
+            digest.update(file.path.as_bytes());
+            digest.update(&[0]);
+            digest.update(file.size.to_string().as_bytes());
+            digest.update(&[0]);
+            digest.update(file.modified.as_bytes());
+            digest.update(&[0]);
+            digest.update(file.sha256.as_bytes());
+            digest.update(b"\n");
+        }
+        digest
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+/// How long the copies handed to the browser are kept: a page reads a
+/// chosen file only when it sends it, which may be long after it was
+/// chosen (a form filled in over an afternoon), so a day, and only a newer
+/// upload clears older ones.
+pub const SNAPSHOT_LIFE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// A new private file for a copy of `name`, in a folder of its own under
+/// `dir`, after clearing copies older than [`SNAPSHOT_LIFE`].
+fn upload_snapshot_file(
+    dir: &std::path::Path,
+    name: &str,
+) -> Result<(PathBuf, std::fs::File), ToolError> {
+    let unavailable =
+        |e: std::io::Error| ToolError::internal(format!("keeping a copy to upload: {}", e.kind()));
+    crate::paths::ensure_private_dir(dir)
+        .map_err(|_| ToolError::internal("keeping a copy to upload"))?;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok());
+            if old.is_some_and(|age| age > SNAPSHOT_LIFE) {
+                let path = entry.path();
+                if let Ok(files) = std::fs::read_dir(&path) {
+                    for file in files.flatten() {
+                        if let Ok(meta) = file.metadata() {
+                            let mut permissions = meta.permissions();
+                            #[allow(clippy::permissions_set_readonly_false)]
+                            permissions.set_readonly(false);
+                            let _ = std::fs::set_permissions(file.path(), permissions);
+                        }
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+    let folder = dir.join(
+        safe_fs::temp_name()
+            .trim_start_matches('.')
+            .trim_end_matches(".tmp"),
+    );
+    crate::paths::ensure_private_dir(&folder)
+        .map_err(|_| ToolError::internal("keeping a copy to upload"))?;
+    let path = folder.join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path).map_err(unavailable)?;
+    Ok((safe_fs::without_verbatim_prefix(&path), file))
+}
+
+/// The MIME type a page's `accept` is checked against, by the name's
+/// extension, as browsers guess it for a chosen file.
+pub fn upload_mime_type(name: &str) -> &'static str {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "jxl" => "image/jxl",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "ogv" => "video/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/x-m4a",
+        "aac" => "audio/aac",
+        "weba" => "audio/webm",
+        "mpeg" | "mpg" => "video/mpeg",
+        "m4v" => "video/x-m4v",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "3gp" => "video/3gpp",
+        "rtf" => "application/rtf",
+        "epub" => "application/epub+zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "7z" => "application/x-7z-compressed",
+        "ics" => "text/calendar",
+        "vcf" => "text/vcard",
+        "yaml" | "yml" => "application/yaml",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "crx" => "application/x-chrome-extension",
+        "apk" => "application/vnd.android.package-archive",
+        "json" => "application/json",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "md" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "xml" => "text/xml",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
 
 pub struct Reader {
     state: RwLock<State>,
@@ -599,6 +770,145 @@ impl Reader {
         })
     }
 
+    /// A file in a shared folder to hand to a page's upload field: resolved
+    /// and refused exactly as `read` is (the folder's symlink rule, the
+    /// deny list, hard links, only a regular file), then vouched for by
+    /// where the open file really is, inside the folder, every symlink
+    /// resolved, so the browser gets that path and nothing the page or the
+    /// model named. Its size, modification time and SHA-256 bind an
+    /// approval to this very file: a file that changes after it was checked
+    /// is refused at upload (`Conflict`). Never reads more than `max_bytes`.
+    pub fn upload_file(&self, path: &str, max_bytes: u64) -> Result<UploadFile, ToolError> {
+        self.checked_upload(path, max_bytes, None)
+    }
+
+    /// [`Reader::upload_file`], and a private copy of exactly the bytes it
+    /// hashed, under the name the call gave, in a new folder of its own in
+    /// `snapshots` (cww's own, never shared): what the browser gets to
+    /// upload, so a file changed, replaced or relinked after it was checked
+    /// can't reach the page in its place. `real` is the copy.
+    pub fn upload_snapshot(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        snapshots: &std::path::Path,
+    ) -> Result<UploadFile, ToolError> {
+        self.checked_upload(path, max_bytes, Some(snapshots))
+    }
+
+    fn checked_upload(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        snapshots: Option<&std::path::Path>,
+    ) -> Result<UploadFile, ToolError> {
+        use std::io::{Read, Write};
+        let state = self.state.read().expect("reader state");
+        let tool_path = ToolPath::parse(path)?;
+        let Some(name) = tool_path.rel.file_name().map(str::to_string) else {
+            return Err(ToolError::new(
+                ErrorCode::NotAFile,
+                "this path is a folder; name a file in it",
+            ));
+        };
+        let root = root_by_id(&state, &tool_path.root_id)?;
+        let mut opened = root.open_file(&tool_path.rel, policy(&state))?;
+        if opened.size > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "the file is {} bytes; files up to {max_bytes} bytes can be uploaded",
+                    opened.size
+                ),
+            ));
+        }
+        let real = safe_fs::opened_file_path(&opened.file).ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::Unsupported,
+                "this computer can't say where the file is, so it can't be uploaded",
+            )
+        })?;
+        let folder = safe_fs::without_verbatim_prefix(&root.path);
+        if !safe_fs::is_within(&folder, &real) || real == folder {
+            return Err(ToolError::new(
+                ErrorCode::OutsideRoot,
+                "the file is outside the shared folder",
+            ));
+        }
+        // The browser opens the file by its path: that path must name this
+        // very file, not one put there since.
+        if safe_fs::path_identity(&real) != Some(opened.identity) {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "the file changed while it was checked; try again",
+            ));
+        }
+        let mut copy = match snapshots {
+            Some(dir) => Some(upload_snapshot_file(dir, &name)?),
+            None => None,
+        };
+        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut buffer = vec![0u8; 256 * 1024];
+        let mut read = 0u64;
+        loop {
+            let n = opened
+                .file
+                .read(&mut buffer)
+                .map_err(|e| ToolError::internal(format!("reading file: {}", e.kind())))?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            if read > max_bytes {
+                return Err(ToolError::new(
+                    ErrorCode::Conflict,
+                    "the file grew while it was checked; try again",
+                ));
+            }
+            digest.update(&buffer[..n]);
+            if let Some((_, file)) = copy.as_mut() {
+                file.write_all(&buffer[..n])
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?;
+            }
+        }
+        if read != opened.size {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "the file changed while it was checked; try again",
+            ));
+        }
+        let sha256 = digest
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let real = match copy {
+            Some((copied, file)) => {
+                file.sync_all()
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?;
+                let mut permissions = file
+                    .metadata()
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?
+                    .permissions();
+                permissions.set_readonly(true);
+                let _ = std::fs::set_permissions(&copied, permissions);
+                copied
+            }
+            None => real,
+        };
+        Ok(UploadFile {
+            path: tool_path.to_string(),
+            folder: root.label.clone(),
+            mime_type: upload_mime_type(&name).to_string(),
+            name,
+            size: opened.size,
+            modified: format_time(opened.modified),
+            sha256,
+            real,
+        })
+    }
+
     /// Whose read budget reads from the shared folder `id` count against:
     /// the folder's own, when the person gave it one, or the shared one.
     pub fn read_scope(&self, id: &str) -> crate::limits::ReadScope {
@@ -846,6 +1156,9 @@ pub fn format_time(secs: i64) -> String {
         .and_then(|t| t.format(&Rfc3339).ok())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod upload_tests;
 
 #[cfg(test)]
 mod tests {

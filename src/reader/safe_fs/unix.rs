@@ -447,6 +447,56 @@ impl ChangeDir {
         Err(ToolError::internal("no free name for a temporary file"))
     }
 
+    /// Stage a new file whose bytes `fill` writes as they arrive (a file
+    /// from a chat, streamed), with the download mark, `mode`, and fsync
+    /// like [`ChangeDir::stage`]. A refusal from `fill` leaves nothing behind.
+    /// Also answers the staged file's identity, so the caller can check the
+    /// name still names it before putting it in place.
+    pub fn stage_from(
+        &self,
+        mode: u32,
+        fill: &mut dyn FnMut(&mut dyn Write) -> Result<(), ToolError>,
+    ) -> Result<(Staged, (u64, u64)), ToolError> {
+        for _ in 0..16 {
+            let name = OsString::from(temp_name());
+            let fd = match rustix::fs::openat(
+                &self.fd,
+                &name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            ) {
+                Ok(fd) => fd,
+                Err(Errno::EXIST) => continue,
+                Err(e) => return Err(change_error(e, "creating the file")),
+            };
+            let staged = Staged { name };
+            let mut file = File::from(fd);
+            if let Err(e) = fill(&mut file) {
+                drop(file);
+                self.discard(staged);
+                return Err(e);
+            }
+            let finished = mark_from_internet(&file)
+                .and_then(|()| {
+                    rustix::fs::fchmod(
+                        &file,
+                        Mode::from_raw_mode((mode & 0o666) as rustix::fs::RawMode),
+                    )
+                })
+                .and_then(|()| rustix::fs::fsync(&file))
+                .and_then(|()| rustix::fs::fstat(&file));
+            match finished {
+                Ok(stat) => return Ok((staged, (stat.st_dev as u64, stat.st_ino as u64))),
+                Err(e) => {
+                    drop(file);
+                    self.discard(staged);
+                    return Err(change_error(e, "writing the file"));
+                }
+            }
+        }
+        Err(ToolError::internal("no free name for a temporary file"))
+    }
+
     /// Put a staged file in place as `name`, which must not exist.
     pub fn commit(&self, staged: Staged, name: &OsStr) -> Result<(), ToolError> {
         match rename_noreplace(self.fd.as_fd(), &staged.name, self.fd.as_fd(), name) {

@@ -9,10 +9,11 @@ import { cancelEngine, engineEvents, engineMethods } from "./engine.js";
 import { halt } from "./cdp.js";
 import { browserStopped, ToolError } from "./errors.js";
 import { groupTabs } from "./group.js";
+import { fileAccess, uploadMethods } from "./uploads.js";
 
 export const HOST = "com.chatwithwork.desktop";
 const RECONNECT_ALARM = "reconnect";
-const methods = { ...readMethods, ...changeMethods, ...engineMethods };
+const methods = { ...readMethods, ...changeMethods, ...uploadMethods, ...engineMethods };
 
 type DaemonState = "connected" | "not_running" | "refused" | "unknown";
 
@@ -72,14 +73,18 @@ async function connect(): Promise<void> {
 }
 
 function announceHello(): void {
-  post({
+  // Turning the browser's file access switch reloads the extension, so it
+  // says it again in the next hello.
+  void fileAccess().then((access) => post({
     event: "hello",
     version: chrome.runtime.getManifest().version,
     site_policy_version: 2,
     engine_protocol: 1,
+    uploads: 1,
+    file_access: access,
     browser: navigator.userAgent,
     stopped: state.stopped,
-  });
+  }));
 }
 
 function scheduleReconnect(): void {
@@ -197,6 +202,10 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (message?.type === "stop") await setStopped(true);
     if (message?.type === "resume") await setStopped(false);
     if (message?.type === "reconnect") await connect();
+    // The browser's own page for this extension, where its file access switch is.
+    if (message?.type === "file_access") {
+      await chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }).catch(() => {});
+    }
     const tabs = await groupTabs();
     reply({
       native: state.native,
@@ -209,6 +218,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       blocked_sites: state.policy.blocked_sites,
       changes: state.policy.changes,
       tabs: tabs.length,
+      fileAccess: await fileAccess(),
       version: chrome.runtime.getManifest().version,
     });
   })();

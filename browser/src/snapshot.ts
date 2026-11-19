@@ -3,6 +3,8 @@
 // `[ref=e<id>]` the change tools take. Never raw HTML, and never the value
 // of a sensitive field.
 
+import { uploadNote, type UploadMark } from "./upload-marks.js";
+
 export interface AXValue {
   type?: string;
   value?: unknown;
@@ -59,6 +61,10 @@ export interface SnapshotOptions {
   // gives them no control role, like a bare "×" that removes a row. They
   // get a ref, shown as `clickable` when they have no role of their own.
   clickable?: ReadonlySet<number>;
+  // Backend node IDs of file fields, and the labels and buttons that go
+  // with them, shown with `[upload]`. File fields the tree leaves out
+  // (hidden ones, those in frames) are listed after the page.
+  uploads?: ReadonlyMap<number, UploadMark>;
 }
 
 const MEANINGFUL = /[\p{L}\p{N}].*[\p{L}\p{N}]/u;
@@ -70,7 +76,13 @@ export function snapshotText(nodes: readonly AXNode[], options: SnapshotOptions 
   if (!root) return "";
   const lines: string[] = [];
   const start = isRoot(root) ? root.childIds ?? [] : [root.nodeId];
-  for (const id of start) visit(id, 0, false, byId, lines, options, new Set());
+  const shown = new Set<number>();
+  for (const id of start) visit(id, 0, false, byId, lines, { ...options, shown }, new Set());
+  for (const [backend, mark] of options.uploads ?? []) {
+    if (mark.kind !== "field" || shown.has(backend)) continue;
+    const label = mark.label ? ` "${cut(clean(mark.label), NAME_LIMIT).replace(/"/g, "'")}"` : "";
+    lines.push(`- upload field${label} [ref=e${backend}]${uploadNote(mark)}`);
+  }
   return lines.join("\n");
 }
 
@@ -79,13 +91,15 @@ function isRoot(node: AXNode): boolean {
   return role === "RootWebArea" || role === "WebArea";
 }
 
+type VisitOptions = SnapshotOptions & { shown?: Set<number> };
+
 function visit(
   id: string,
   depth: number,
   skipText: boolean,
   byId: Map<string, AXNode>,
   lines: string[],
-  options: SnapshotOptions,
+  options: VisitOptions,
   seen: Set<string>,
 ): void {
   if (seen.has(id)) return;
@@ -109,7 +123,8 @@ function visit(
     return;
   }
   const backend = node.backendDOMNodeId;
-  const clickable = backend !== undefined && options.clickable?.has(backend) === true;
+  const dropZone = backend !== undefined && options.uploads?.get(backend)?.kind === "drop";
+  const clickable = dropZone || (backend !== undefined && options.clickable?.has(backend) === true);
   const bare = node.ignored || TRANSPARENT.has(role) || role === "";
   if (bare && !clickable) {
     for (const child of children) visit(child, depth, skipText, byId, lines, options, seen);
@@ -130,8 +145,13 @@ function visit(
   }
   const sensitive = backend !== undefined && options.sensitive?.has(backend) === true;
   const focusable = (node.properties ?? []).some((p) => p.name === "focusable" && p.value?.value === true);
-  if (backend !== undefined && (INTERACTIVE.has(role) || focusable || clickable)) {
+  const upload = backend !== undefined ? options.uploads?.get(backend) : undefined;
+  if (backend !== undefined && (INTERACTIVE.has(role) || focusable || clickable || upload)) {
     line += ` [ref=e${backend}]`;
+  }
+  if (upload && !sensitive) {
+    line += uploadNote(upload);
+    options.shown?.add(backend!);
   }
   if (sensitive) line += " [sensitive]";
   const value = node.value?.value;
@@ -164,7 +184,7 @@ function clickableLine(
   skipText: boolean,
   byId: Map<string, AXNode>,
   lines: string[],
-  options: SnapshotOptions,
+  options: VisitOptions,
   seen: Set<string>,
 ): void {
   const before = lines.length;
@@ -179,9 +199,14 @@ function clickableLine(
     else if (only !== name && only.length <= INLINE_TEXT_LIMIT) inline = `: ${only}`;
     if (only === name || inline) lines.splice(before + 1, 1);
   }
-  let line = `${indent(depth)}- clickable`;
+  const upload = options.uploads?.get(node.backendDOMNodeId!);
+  let line = `${indent(depth)}- ${upload?.kind === "drop" ? "drop zone" : "clickable"}`;
   if (name) line += ` "${cut(name, NAME_LIMIT).replace(/"/g, "'")}"`;
   line += ` [ref=e${node.backendDOMNodeId}]`;
+  if (upload) {
+    line += uploadNote(upload);
+    options.shown?.add(node.backendDOMNodeId!);
+  }
   if (!MEANINGFUL.test(name)) {
     const near = textBefore(lines, before);
     if (near) line += ` [near="${cut(near, NEAR_LIMIT).replace(/"/g, "'")}"]`;

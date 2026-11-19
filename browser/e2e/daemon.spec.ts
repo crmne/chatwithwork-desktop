@@ -130,6 +130,56 @@ test("local CLI reads and approved actions use the real confined daemon and exte
   }
 });
 
+test("the real daemon uploads only a checked file from a shared folder, bound to what the dry run saw", async () => {
+  const shared = join(home, "Shared Uploads");
+  mkdirSync(shared);
+  writeFileSync(join(shared, "listing.png"), Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+  writeFileSync(join(home, "outside.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+  await stopDaemon();
+  writeFileSync(join(home, "config", "config.toml"), `[browser]\nenabled = true\n\n[[roots]]\nid = "uploads"\nlabel = "Uploads"\npath = ${JSON.stringify(shared)}\nfollow_symlinks = false\nwritable = false\n`);
+  await startDaemon();
+  const fixture = await serve({ "/": `<!doctype html><title>Upload fixture</title>
+    <label>Store listing screenshot <input type="file" accept="image/png" onchange="document.querySelector('#out').textContent = [...this.files].map(f => f.name + ':' + f.size).join(',')"></label>
+    <p id="out">Nothing chosen</p>` });
+  cww("browser", "allow", fixture.origin);
+  cww("browser", "allow-changes");
+  const context = await launchBrowser(home);
+  try {
+    await until(() => JSON.parse(cww("browser", "status", "--json")).extension?.uploads || undefined, "an extension that uploads connects");
+    const tool = JSON.parse(cww("browser", "tools")).tools.find((t: any) => t.name === "browser_upload");
+    expect(tool.annotations.destructiveHint).toBe(true);
+    const opened = await browserCall("browser_open", { url: fixture.origin }, true);
+    const tab = opened.structuredContent.tab;
+    const read = await browserCall("browser_read", { tab });
+    const ref = /\[ref=(e\d+)\] \[upload accept="image\/png"\]/.exec(read.structuredContent.text)?.[1];
+    expect(ref, read.structuredContent.text).toBeTruthy();
+
+    const outside = await browserCall("browser_upload", { tab, ref, paths: ["uploads:../outside.png"], dry_run: true });
+    expect(outside.structuredContent.error.code).toBe("invalid_path");
+    const unapproved = await browserCall("browser_upload", { tab, ref, paths: ["uploads:listing.png"] });
+    expect(unapproved.structuredContent.error.code).toBe("needs_approval");
+
+    const preview = await browserCall("browser_upload", { tab, ref, paths: ["uploads:listing.png"], dry_run: true });
+    expect(preview.exitCode).toBe(0);
+    expect(preview.structuredContent.files).toEqual([expect.objectContaining({ path: "uploads:listing.png", folder: "Uploads", name: "listing.png", size: 16, mime_type: "image/png" })]);
+    expect(JSON.stringify(preview)).not.toContain(shared);
+    const fingerprint = preview.structuredContent.fingerprint;
+
+    const stale = await browserCall("browser_upload", { tab, ref, paths: ["uploads:listing.png"], expected_sha256: "0".repeat(64) }, true);
+    expect(stale.structuredContent.error.code).toBe("conflict");
+    const done = await browserCall("browser_upload", { tab, ref, paths: ["uploads:listing.png"], expected_sha256: fingerprint }, true);
+    expect(done.exitCode).toBe(0);
+    expect(done.structuredContent.shows.join("\n")).toContain("listing.png:16");
+    const audit = readFileSync(join(home, "state", "audit.jsonl"), "utf8");
+    expect(audit).toContain("browser_upload");
+    expect(audit).not.toContain("listing.png");
+    expect(audit).not.toContain(shared);
+  } finally {
+    await context.close();
+    fixture.server.close();
+  }
+});
+
 test.afterEach(async () => {
   await stopDaemon();
   rmSync(home, { recursive: true, force: true });

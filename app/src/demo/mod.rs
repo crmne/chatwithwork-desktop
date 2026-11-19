@@ -429,9 +429,11 @@ fn sample() -> State {
         // Synthetic connected-browser state for settings review, never registers
         // a host or touches the person's actual browser profile.
         "browser": if std::env::var_os("CWW_DEMO_BROWSER").is_some() {
-            json!({"enabled":true,"changes":false,"stopped":false,
+            // CWW_DEMO_BROWSER=uploads-off: actions on, the extension's file access off.
+            let uploads_off = std::env::var("CWW_DEMO_BROWSER").as_deref() == Ok("uploads-off");
+            json!({"enabled":true,"changes":uploads_off,"stopped":false,
                 "ask_before_actions":true,"sites":["github.com","example.com"],"all_sites":false,"blocked_sites":[],"bots":[],
-                "extension":{"browser":"Chromium","version":"0.1.2","site_policy_version":2,"stopped":false}})
+                "extension":{"browser":"Chromium","version":"0.1.5","site_policy_version":2,"uploads":true,"file_access":!uploads_off,"stopped":false}})
         } else {
             // The browser off, as a real daemon says it (null isn't a status).
             json!({"enabled":false,"changes":false,"stopped":false,"ask_before_actions":true,

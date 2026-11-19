@@ -286,9 +286,26 @@ export function takeDialog(tabId: number): string | undefined {
   return dialog;
 }
 
+// Calls waiting for one event of a tab, such as the file chooser opening.
+const eventWaiters = new Set<{ tabId: number; method: string; done: (params: any) => void }>();
+
+// The next `method` event of `tabId` within `ms`, or undefined. Register it
+// before doing what makes the page send it.
+export function nextEvent<T = any>(tabId: number, method: string, ms: number): { event: Promise<T | undefined>; cancel: () => void } {
+  let waiter: { tabId: number; method: string; done: (params: any) => void } | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const event = new Promise<T | undefined>((resolve) => {
+    waiter = { tabId, method, done: (params) => { clearTimeout(timer); eventWaiters.delete(waiter!); resolve(params); } };
+    eventWaiters.add(waiter);
+    timer = setTimeout(() => waiter!.done(undefined), ms);
+  });
+  return { event, cancel: () => waiter?.done(undefined) };
+}
+
 chrome.debugger.onEvent.addListener((source, method, params: any) => {
   const tabId = source.tabId;
   if (tabId === undefined || !sessions.has(tabId)) return;
+  for (const waiter of eventWaiters) if (waiter.tabId === tabId && waiter.method === method) waiter.done(params ?? {});
   if (method === "Page.downloadWillBegin" && typeof params?.url === "string") {
     pageStartedDownload(params.url);
     return;

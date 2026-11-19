@@ -6,5 +6,5 @@
     "outDir": "../build-tests",
     "noEmit": false
   },
-  "include": ["./*.test.ts", "../src/sites.ts", "../src/classify.ts", "../src/snapshot.ts"]
+  "include": ["./*.test.ts", "../src/sites.ts", "../src/classify.ts", "../src/snapshot.ts", "../src/accept.ts", "../src/upload-marks.ts"]
 }

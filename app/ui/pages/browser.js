@@ -42,6 +42,16 @@ function connection(browser) {
     updateNeeded ? h("div", { class: "row__actions" }, button("Get extension", () => call("open_url", { url: EXTENSION_URL }))) : null);
 }
 
+// Uploads need the browser's own switch for the extension, which only the
+// person can turn on there; the daemon can't, and doesn't try.
+function uploads(browser) {
+  const ext = browser.extension;
+  if (!browser.changes || !ext?.uploads || ext.file_access !== false) return null;
+  return h("div", { class: "row", "data-key": "browser-uploads" }, h("div", { class: "row__body" },
+    h("h3", {}, "Uploads", h("span", { class: "state state--attention" }, "Off in the browser")),
+    h("p", {}, "In chrome://extensions, open Chat with Work’s Details and turn on “Allow access to file URLs”.")));
+}
+
 function siteList(app, browser, blocked) {
   const view = app.view("browser");
   const key = blocked ? "blockedSite" : "allowedSite";
@@ -98,6 +108,7 @@ export function render(app) {
     browser.enabled ? connection(browser) : null,
     browser.enabled ? setting("Allow actions", "Click, type and navigate on permitted sites.",
       switchInput(browser.changes, changes => change(app, { cmd: "browser_changes", changes }), { label: "Allow actions in the browser", key: "browser-actions", disabled: view.busy })) : null,
+    browser.enabled ? uploads(browser) : null,
     browser.enabled ? setting("Ask before browser actions", browser.ask_before_actions
       ? "Approve actions in Chat with Work."
       : "Actions run without asking, including sending, buying and deleting.",

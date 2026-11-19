@@ -63,6 +63,10 @@ pub struct Extension {
     pub version: String,
     pub site_policy_version: u64,
     pub engine_protocol: u64,
+    /// The extension hands files to upload fields (`upload`).
+    pub uploads: bool,
+    /// Its "Allow access to file URLs" switch, which uploads need.
+    pub file_access: bool,
     pub browser: String,
     /// The person pressed Stop in the extension.
     pub stopped: bool,
@@ -462,6 +466,10 @@ impl Bridge {
                     .get("engine_protocol")
                     .and_then(Value::as_u64)
                     .unwrap_or_default();
+                session.extension.uploads =
+                    message.get("uploads").and_then(Value::as_u64) >= Some(1);
+                session.extension.file_access =
+                    message.get("file_access") == Some(&Value::Bool(true));
                 session.extension.browser = browser_name(&text("browser"));
                 session.extension.stopped = message.get("stopped") == Some(&Value::Bool(true));
             }
@@ -575,6 +583,9 @@ fn tool_error(error: &Value) -> ToolError {
         "no_tab" => ErrorCode::NoTab,
         "sensitive_field" => ErrorCode::SensitiveField,
         "would_submit" => ErrorCode::WouldSubmit,
+        "file_access_off" => ErrorCode::FileAccessOff,
+        "unsupported" => ErrorCode::Unsupported,
+        "conflict" => ErrorCode::Conflict,
         "browser_stopped" => ErrorCode::BrowserStopped,
         "not_found" => ErrorCode::NotFound,
         "not_writable" => ErrorCode::NotWritable,

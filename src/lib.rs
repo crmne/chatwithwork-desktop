@@ -12,6 +12,7 @@ pub mod auth;
 pub mod bots;
 pub mod browser;
 pub mod browsing;
+pub mod chat_files;
 pub mod chats;
 pub mod coding;
 pub mod commands;

@@ -87,6 +87,8 @@ struct Daemon {
     chats: Arc<ChatHub>,
     /// The chat API as this device, while it's paired.
     chat_client: Mutex<Option<Arc<ChatClient>>>,
+    /// The tunnel's tokens for `copy_from_chat`, while it's up.
+    chat_files: crate::chat_files::ChatFiles,
     notifications: Arc<crate::notification_delivery::Client>,
     /// Bots' requests for unattended commands, waiting for the person here.
     asks: Arc<crate::unattended_asks::Asks>,
@@ -660,6 +662,7 @@ async fn run_with_notifications(
         reloaded: Notify::new(),
         chats: Arc::new(ChatHub::new(events.clone())),
         chat_client: Mutex::new(None),
+        chat_files: crate::chat_files::ChatFiles::default(),
         notifications: crate::notification_delivery::Client::new(
             notifications,
             shutdown.child_token(),
@@ -723,6 +726,7 @@ impl Daemon {
         )
         .with_commands(command_tools(&config, &self.runner, &self.once))
         .with_runner(self.runner.clone())
+        .with_chat_files(self.chat_files.clone())
         .with_asks(Arc::clone(&self.asks))
         .with_unattended_grants(self.unattended_grants.clone())
         .with_printing(crate::printing::tools::PrintTools {
@@ -737,6 +741,10 @@ impl Daemon {
                     Some(Arc::clone(&self.writer)),
                     Arc::clone(&self.limiter),
                     config.browser.changes,
+                )
+                .with_reader(
+                    Arc::clone(&self.reader),
+                    self.paths.state_dir.join("upload-snapshots"),
                 )
             }),
         )
@@ -1138,6 +1146,7 @@ impl Daemon {
             unreadable = 0;
             let Some(credentials) = credentials else {
                 *self.chat_client.lock().await = None;
+                self.chat_files.set(None);
                 if configured {
                     // Paired once, with nothing left to sign in with: the
                     // keychain was reset, or something deleted its entries.
@@ -1189,10 +1198,12 @@ impl Daemon {
                 Ok(tunnel) => {
                     *self.chat_client.lock().await =
                         Some(Arc::new(ChatClient::new(tunnel.tokens())));
+                    self.chat_files.set(Some(tunnel.tokens()));
                     tunnel
                 }
                 Err(e) => {
                     *self.chat_client.lock().await = None;
+                    self.chat_files.set(None);
                     // A proxy setting that can't work: wait for a fixed config.
                     tracing::error!("can't reach the server: {e:#}");
                     self.status.set(Connection::Offline, Some(format!("{e:#}")));

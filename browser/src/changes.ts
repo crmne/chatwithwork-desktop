@@ -187,7 +187,7 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
-async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
+export async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
   const deadline = Date.now() + 4_000;
   const alignments = [null, "center", "end", "start"];
   let reason = "that element isn't visible on the page";
@@ -345,12 +345,21 @@ const click: Method = async (params, policy) => {
     allowedChanges(policy);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
+  const started = Date.now();
+  await pressAt(t, policy, surface, location);
+  return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
+};
+
+// Press `surface` of `t` at `location` once, as the click tool does: a
+// guard against a layout change during dispatch, a hover, then a recheck
+// that nothing now covers the point and the control is still ready before
+// the press. Never retried after the press is sent.
+export async function pressAt(t: Target, policy: Policy, surface: number, location: Point): Promise<void> {
   const key = `__cwwPointer_${crypto.randomUUID()}`;
   const document = await mainDocument(t.tabId);
   const contextId = await isolatedContext(t.tabId);
   const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, INSTALL_POINTER_GUARD, [key, location], [surface]);
   if (obstruction) throw new ToolError("page_error", obstruction);
-  const started = Date.now();
   const mouse = (type: string, extra: object = {}) =>
     send(t.tabId, "Input.dispatchMouseEvent", { type, ...location, button: "left", clickCount: 1, ...extra });
   try {
@@ -374,8 +383,7 @@ const click: Method = async (params, policy) => {
       await evaluateInContext(t.tabId, contextId, guardStatus(key, true), { ...options, existingOnly: true }).catch(() => {});
     }, { existingOnly: true });
   }
-  return { dry_run: false, ...what, ...(await settle(t.tabId, policy, started)) };
-};
+}
 
 interface MainDocument { id: string; loaderId: string }
 

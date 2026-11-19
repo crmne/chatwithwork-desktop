@@ -677,6 +677,99 @@ impl Writer {
         self.create_file(&t, bytes, dry_run)
     }
 
+    /// Save a file from a chat as the new file `path`, its `size` bytes
+    /// written by `fill` as they arrive (`copy_from_chat`): never over
+    /// anything, never a program or launcher, within `max_bytes` and the
+    /// change budgets, with the system's download mark. The checks hold the
+    /// change lock; the transfer doesn't, so other changes go on meanwhile,
+    /// and the folder must still allow changes, and the name still be free,
+    /// when the file is put in place. A dry run checks without `fill`.
+    pub fn save_streamed(
+        &self,
+        path: &str,
+        size: u64,
+        max_bytes: u64,
+        dry_run: bool,
+        fill: &mut dyn FnMut(&mut dyn std::io::Write) -> Result<(), ToolError>,
+    ) -> Result<ChangeResult, ToolError> {
+        let t = {
+            let _one = self.one_at_a_time();
+            let view = self.reader.change_view();
+            let t = self.target(&view, path)?;
+            kinds::check_new_name(&t.name)?;
+            if size > max_bytes {
+                return Err(ToolError::new(
+                    ErrorCode::TooLarge,
+                    format!(
+                        "The file is {size} bytes; files up to {max_bytes} bytes can be saved from a chat."
+                    ),
+                ));
+            }
+            if t.dir.entry(t.name())?.is_some() {
+                return Err(ToolError::new(
+                    ErrorCode::Exists,
+                    format!("{} already exists. Pick another name.", t.tool_path),
+                ));
+            }
+            let mut result = ChangeResult::new(
+                t.tool_path.clone(),
+                Effect::Created,
+                EntryKind::File,
+                dry_run,
+            );
+            result.size = Some(size);
+            if dry_run {
+                return Ok(result);
+            }
+            self.limiter.check_change(size)?;
+            t
+        };
+        let (staged, staged_identity) = t.dir.stage_from(new_file_mode(), fill)?;
+        let _one = self.one_at_a_time();
+        let view = self.reader.change_view();
+        // Everything checked before the transfer, again: the folder still
+        // allows changes and isn't shared read-only inside, the name is
+        // still free and allowed, the folder is the one the file went into
+        // (not renamed or replaced meanwhile), and the staged name still
+        // names the file that was written.
+        let fresh = match self.target(&view, path) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                t.dir.discard(staged);
+                return Err(e);
+            }
+        };
+        let same_folder = fresh.dir.identity() == t.dir.identity();
+        let same_file = t
+            .dir
+            .entry(&staged.name())
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.identity == staged_identity);
+        if !same_folder || !same_file {
+            t.dir.discard(staged);
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "The folder changed while the file arrived; nothing was saved.",
+            ));
+        }
+        t.dir.commit(staged, t.name()).map_err(|e| match e.code {
+            ErrorCode::Exists => ToolError::new(
+                ErrorCode::Exists,
+                format!(
+                    "{} appeared while the file arrived; nothing was saved.",
+                    t.tool_path
+                ),
+            ),
+            _ => e,
+        })?;
+        let mut result =
+            ChangeResult::new(t.tool_path.clone(), Effect::Created, EntryKind::File, false);
+        result.size = Some(size);
+        result.written = size;
+        Ok(result)
+    }
+
     /// Write `bytes` as the new file `t`.
     fn create_file(
         &self,

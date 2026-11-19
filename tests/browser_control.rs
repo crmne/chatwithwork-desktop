@@ -242,7 +242,9 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     assert_eq!(changed["browser"]["ask_before_actions"], false);
     let listed = control(&paths, ControlRequest::BrowserTools).await;
     for tool in listed["tools"].as_array().unwrap() {
-        if cww::browsing::tools::CHANGE_TOOLS.contains(&tool["name"].as_str().unwrap()) {
+        let name = tool["name"].as_str().unwrap();
+        // An upload asks every time, whatever the computer's choice.
+        if name != "browser_upload" && cww::browsing::tools::CHANGE_TOOLS.contains(&name) {
             assert_eq!(tool["_meta"][cww::tools::BROWSER_AUTO_APPROVE_META], true);
             assert_eq!(tool["annotations"]["readOnlyHint"], false);
         } else {
