@@ -4293,6 +4293,34 @@ pub(super) fn buffer_to_ansi(buffer: &ratatui::buffer::Buffer) -> String {
 }
 
 #[test]
+fn a_question_with_wide_characters_keeps_its_outline_straight() {
+    let mut app = app();
+    open_budget(&mut app);
+    let mut transcript = budget_transcript("idle");
+    transcript.entries.push(Entry::User {
+        id: 9,
+        content: "第三季度的预算是多少".into(),
+        author: None,
+        attachments: vec![],
+    });
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(transcript),
+    }));
+    let screen = render_to_string(&app, 100, 30);
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("第"))
+        .expect("the question");
+    let rows = &lines[at - 1..=at + 1];
+    // A cell each, a wide character's covered cell as a space.
+    let right_edge = |line: &str| line.trim_end().chars().count();
+    let widths: Vec<usize> = rows.iter().map(|l| right_edge(l)).collect();
+    assert!(widths.windows(2).all(|w| w[0] == w[1]), "{rows:#?}");
+}
+
+#[test]
 fn ansi_text_keeps_wide_characters_in_their_columns() {
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 3, 1));
     buffer.set_string(0, 0, "界X", ratatui::style::Style::new());

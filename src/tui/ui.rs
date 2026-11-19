@@ -1672,7 +1672,9 @@ fn bubble(
 ) {
     let most = (width * 3 / 4).clamp(16, width);
     let wrapped = wrap(text.trim(), most.saturating_sub(4));
-    let inner = wrapped.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    // In terminal columns, so a wide character keeps the outline straight.
+    let columns = |line: &str| Span::raw(line.to_string()).width();
+    let inner = wrapped.iter().map(|l| columns(l)).max().unwrap_or(0);
     let indent = " ".repeat(width.saturating_sub(inner + 4));
     if let Some(author) = author {
         lines.push(Line::styled(author.to_string(), theme.micro()).alignment(Alignment::Right));
@@ -1689,7 +1691,7 @@ fn bubble(
         Span::styled(format!("╭{across}╮"), edge),
     ]));
     for line in wrapped {
-        let pad = inner - line.chars().count();
+        let pad = inner.saturating_sub(columns(&line));
         lines.push(Line::from(vec![
             Span::raw(indent.clone()),
             Span::styled(side, edge),
