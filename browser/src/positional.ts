@@ -133,8 +133,10 @@ function point(capture: Capture, params: Params, xName = "x", yName = "y"): { x:
 // approved call acts on those same elements and not on whatever the page
 // put there while the person looked at the card. A call nobody was shown
 // (an automatic one) has nothing to match.
-const shown = new Map<string, { ids: number[]; at: number }>();
-const SHOWN_LIFE_MS = 60 * 60_000;
+// Kept until a new dry run of the same call replaces it, however long the
+// person takes; only the oldest go once there are many.
+const shown = new Map<string, number[]>();
+const SHOWN_KEPT = 500;
 
 function shownKey(tabId: number, method: string, params: Params): string {
   const rest = Object.entries(params).filter(([k]) => !["dry_run", "tab", "preflight"].includes(k)).sort(([a], [b]) => a.localeCompare(b));
@@ -146,17 +148,21 @@ function shownKey(tabId: number, method: string, params: Params): string {
 // replaces what the person was shown.
 export function showed(tabId: number, method: string, params: Params, ids: number[]): void {
   if (params.preflight === true) return;
-  for (const [key, entry] of shown) if (Date.now() - entry.at > SHOWN_LIFE_MS) shown.delete(key);
-  shown.set(shownKey(tabId, method, params), { ids, at: Date.now() });
+  const key = shownKey(tabId, method, params);
+  shown.delete(key);
+  shown.set(key, ids);
+  while (shown.size > SHOWN_KEPT) shown.delete(shown.keys().next().value!);
 }
 
 export function sameAsShown(tabId: number, method: string, params: Params, ids: number[]): void {
+  // A refused call keeps its record, so the same call again is refused too
+  // until a new dry run (a new card) shows what is there now.
   const key = shownKey(tabId, method, params);
   const entry = shown.get(key);
-  shown.delete(key);
-  if (entry && Date.now() - entry.at <= SHOWN_LIFE_MS && (entry.ids.length !== ids.length || entry.ids.some((id, i) => id !== ids[i]))) {
+  if (entry && (entry.length !== ids.length || entry.some((id, i) => id !== ids[i]))) {
     throw new ToolError("page_error", "the page changed since the person saw it: something else is there now, so nothing was done; look again");
   }
+  shown.delete(key);
 }
 
 // What the page draws itself, whose purpose nothing on the page says.
@@ -304,7 +310,10 @@ export async function after(tabId: number, policy: Policy, started: number): Pro
     return { tab: tabId, allowed: false, site: hostOfUrl(gone.url ?? ""), note: "the tab went on to a site that isn't allowed; nothing from it is shown" };
   }
   const bare = (u: string) => u.split("#")[0];
-  if (!fresh || !pictured || pictured.id !== fresh.capture || bare(pictured.url) !== bare(tab.url ?? "")) {
+  // The same document too: a reload of the same address is another page.
+  const document = await send<{ frameTree: { frame: { loaderId: string } } }>(tabId, "Page.getFrameTree").catch(() => null);
+  if (!fresh || !pictured || pictured.id !== fresh.capture || bare(pictured.url) !== bare(tab.url ?? "") ||
+      document?.frameTree.frame.loaderId !== pictured.loaderId) {
     return { ...settled, ...about(tab), note: "the page was still changing; look again" };
   }
   return { ...settled, ...about(tab), look: fresh };

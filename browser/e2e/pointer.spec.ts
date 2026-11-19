@@ -172,7 +172,13 @@ test("an approved click acts only on what the card showed, never on a replacemen
   const done = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false });
   expect(done.error?.code).toBe("page_error");
   expect(done.error?.message).toContain("since the person saw it");
+  // The same call again is refused too, until a new dry run shows the page as it is.
+  expect((await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false })).error?.message).toContain("since the person saw it");
   expect(await said("/themes")).toBe("");
+  const shownAgain = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false, dry_run: true });
+  expect(shownAgain.error).toBeUndefined();
+  expect((await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false })).error).toBeUndefined();
+  expect(await said("/themes")).toBe("chose Ocean\n");
 });
 
 test("a drag that starts on a send button may send, and Delete with nothing focused may delete", async () => {
