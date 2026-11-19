@@ -27,4 +27,4 @@
                                │
                                │
                                │
-  C  Carmine                   │
+ (C) Carmine                   │

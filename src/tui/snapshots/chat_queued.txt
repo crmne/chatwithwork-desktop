@@ -1,5 +1,5 @@
- ◆ Chat with Work              │                    What did we budget for Q3, and who signed it
-                               │                    off?
+ ◆ Chat with Work              │                  │ off?                                         │
+                               │                  ╰──────────────────────────────────────────────╯
   + New chat                   │
   / Search chats               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
                                │
@@ -27,4 +27,4 @@
   PINNED                  all  │                                  ╰╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯
    Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ Add to this answer, or queue what's next           esc stops │
-  C  Carmine                   │ ╰────────────────────────────────────────────────────────────────╯
+ (C) Carmine                   │ ╰────────────────────────────────────────────────────────────────╯
