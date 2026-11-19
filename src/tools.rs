@@ -200,6 +200,8 @@ struct Inner {
     max_message_bytes: usize,
     /// Where `copy_from_chat` fetches a chat's file from, while connected.
     chat_files: crate::chat_files::ChatFiles,
+    /// cww's own folder for the private copies `send_to_chat` streams.
+    snapshots: std::path::PathBuf,
 }
 
 impl LocalFiles {
@@ -226,16 +228,23 @@ impl LocalFiles {
                 paused,
                 max_message_bytes,
                 chat_files: crate::chat_files::ChatFiles::default(),
+                snapshots: std::path::PathBuf::new(),
             }),
         }
     }
 
-    /// Fetch chats' files for `copy_from_chat` through these tokens.
-    pub fn with_chat_files(self, chat_files: crate::chat_files::ChatFiles) -> Self {
+    /// Fetch and send chats' files (`copy_from_chat`, `send_to_chat`)
+    /// through these tokens, sending private copies made in `snapshots`.
+    pub fn with_chat_files(
+        self,
+        chat_files: crate::chat_files::ChatFiles,
+        snapshots: std::path::PathBuf,
+    ) -> Self {
         let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
         Self {
             inner: Arc::new(Inner {
                 chat_files,
+                snapshots,
                 ..inner
             }),
         }
@@ -1246,12 +1255,14 @@ impl LocalFiles {
                 let req: SendToChatRequest = parse_args(args)?;
                 let files = self.inner.chat_files.clone();
                 let limiter = Arc::clone(&self.inner.limiter);
+                let snapshots = self.inner.snapshots.clone();
                 let value = blocking(move || {
                     send_to_chat(
                         &reader,
                         &limiter,
                         &|path, size, sha256| files.send(&req.transfer, path, size, sha256),
                         &req.path,
+                        &snapshots,
                     )
                 })
                 .await?;
@@ -1594,9 +1605,11 @@ struct SendToChatRequest {
 }
 
 /// Send a shared file to a chat (`copy_to_chat`): resolved and refused like
-/// `read`, by where it really is, counted against the copy budget, streamed
-/// to the server, and checked again after, so a file that changed while it
-/// went isn't reported as sent whole.
+/// `read`, by where it really is, counted against the copy budget before
+/// anything leaves (a send that fails partway still counts), and streamed
+/// from a private copy of exactly the bytes checked, never by reopening the
+/// shared path, so nothing swapped in after the check can go in its place.
+/// The copy is removed once sent.
 type SendFile<'a> = &'a dyn Fn(&std::path::Path, u64, &str) -> Result<Value, ToolError>;
 
 fn send_to_chat(
@@ -1604,23 +1617,23 @@ fn send_to_chat(
     limiter: &Limiter,
     send: SendFile<'_>,
     path: &str,
+    snapshots: &std::path::Path,
 ) -> Result<Value, ToolError> {
-    let file = reader.upload_file(path, crate::chat_files::MAX_BYTES)?;
-    if limiter.copy_allowance(file.size.max(1))? < file.size {
+    let checked = reader.upload_file(path, crate::chat_files::MAX_BYTES)?;
+    if limiter.copy_allowance(checked.size.max(1))? < checked.size {
         return Err(ToolError::new(
             ErrorCode::RateLimited,
             "This computer's hourly allowance for copying files doesn't cover this one. Try again later.",
         ));
     }
-    let kept = send(&file.real, file.size, &file.sha256)?;
+    let file = reader.upload_snapshot(path, crate::chat_files::MAX_BYTES, snapshots)?;
     limiter.record_copy(file.size);
-    let again = reader.upload_file(path, crate::chat_files::MAX_BYTES)?;
-    if again.sha256 != file.sha256 || again.real != file.real {
-        return Err(ToolError::new(
-            ErrorCode::Conflict,
-            format!("{path} changed while it was being sent. Copy it again."),
-        ));
+    let kept = send(&file.real, file.size, &file.sha256);
+    // The copy is in a folder of its own; nothing else is in it.
+    if let Some(folder) = file.real.parent() {
+        let _ = std::fs::remove_dir_all(folder);
     }
+    let kept = kept?;
     Ok(json!({
         "path": file.path,
         "size": file.size,

@@ -12,6 +12,7 @@ use crate::status::Changes;
 struct Fixture {
     _tmp: tempfile::TempDir,
     base: PathBuf,
+    snapshots: PathBuf,
     reader: Reader,
 }
 
@@ -47,27 +48,35 @@ fn fixture() -> Fixture {
     .unwrap();
     Fixture {
         _tmp: tmp,
+        snapshots: base.join("snapshots"),
         base,
         reader,
     }
 }
 
 #[test]
-fn sends_the_file_by_where_it_really_is_and_counts_it() {
+fn sends_a_private_copy_of_the_checked_bytes_and_counts_it() {
     let f = fixture();
     let limiter = Limiter::new(Limits::default());
     let sent = std::cell::RefCell::new(None);
     let send = |path: &Path, size: u64, sha: &str| -> Result<Value, ToolError> {
+        assert_eq!(fs::read(path).unwrap(), vec![9u8; 30_000]);
         *sent.borrow_mut() = Some((path.to_path_buf(), size, sha.to_string()));
         Ok(json!({ "path": "builds/app.AppImage", "size": size }))
     };
-    let answer = send_to_chat(&f.reader, &limiter, &send, "builds:app.AppImage").unwrap();
+    let answer = send_to_chat(
+        &f.reader,
+        &limiter,
+        &send,
+        "builds:app.AppImage",
+        &f.snapshots,
+    )
+    .unwrap();
     let (path, size, sha) = sent.into_inner().unwrap();
-    // Where the file really is, without Windows' `\\?\` prefix.
-    assert_eq!(
-        path,
-        crate::reader::safe_fs::without_verbatim_prefix(&f.base.join("builds/app.AppImage"))
-    );
+    // A copy in cww's own folder, never the shared path, removed once sent.
+    assert!(path.starts_with(&f.snapshots), "{path:?}");
+    assert!(!path.exists());
+    assert!(fs::read_dir(&f.snapshots).unwrap().next().is_none());
     assert_eq!(size, 30_000);
     assert_eq!(sha.len(), 64);
     assert_eq!(answer["kept"]["size"], 30_000);
@@ -100,13 +109,13 @@ fn refuses_what_isnt_shared_without_sending_anything() {
         "builds:",
     ] {
         assert!(
-            send_to_chat(&f.reader, &limiter, &send, path).is_err(),
+            send_to_chat(&f.reader, &limiter, &send, path, &f.snapshots).is_err(),
             "{path}"
         );
     }
     #[cfg(unix)]
     assert_eq!(
-        send_to_chat(&f.reader, &limiter, &send, "builds:link.txt")
+        send_to_chat(&f.reader, &limiter, &send, "builds:link.txt", &f.snapshots)
             .unwrap_err()
             .code,
         ErrorCode::Denied
@@ -123,32 +132,74 @@ fn keeps_to_the_hourly_copy_allowance() {
     });
     let send =
         |_: &Path, size: u64, _: &str| -> Result<Value, ToolError> { Ok(json!({ "size": size })) };
-    assert!(send_to_chat(&f.reader, &limiter, &send, "builds:app.AppImage").is_ok());
-    let error = send_to_chat(&f.reader, &limiter, &send, "builds:app.AppImage").unwrap_err();
+    assert!(
+        send_to_chat(
+            &f.reader,
+            &limiter,
+            &send,
+            "builds:app.AppImage",
+            &f.snapshots
+        )
+        .is_ok()
+    );
+    let error = send_to_chat(
+        &f.reader,
+        &limiter,
+        &send,
+        "builds:app.AppImage",
+        &f.snapshots,
+    )
+    .unwrap_err();
     assert_eq!(error.code, ErrorCode::RateLimited);
 }
 
 #[test]
-fn a_file_that_changed_while_it_went_is_reported_and_a_refusal_passes_through() {
+fn a_file_that_changes_while_it_goes_sends_what_was_checked_and_a_failure_still_counts() {
     let f = fixture();
-    let limiter = Limiter::new(Limits::default());
-    let changing = |_: &Path, _: u64, _: &str| -> Result<Value, ToolError> {
+    let limiter = Limiter::new(Limits {
+        copy_bytes_per_hour: 70_000,
+        ..Limits::default()
+    });
+    let changing = |path: &Path, _: u64, _: &str| -> Result<Value, ToolError> {
         fs::write(f.base.join("builds/app.AppImage"), vec![1u8; 30_000]).unwrap();
+        assert_eq!(fs::read(path).unwrap(), vec![9u8; 30_000]);
         Ok(Value::Null)
     };
-    assert_eq!(
-        send_to_chat(&f.reader, &limiter, &changing, "builds:app.AppImage")
-            .unwrap_err()
-            .code,
-        ErrorCode::Conflict
-    );
+    send_to_chat(
+        &f.reader,
+        &limiter,
+        &changing,
+        "builds:app.AppImage",
+        &f.snapshots,
+    )
+    .unwrap();
     let refusing = |_: &Path, _: u64, _: &str| -> Result<Value, ToolError> {
         Err(ToolError::new(ErrorCode::Exists, "already there"))
     };
     assert_eq!(
-        send_to_chat(&f.reader, &limiter, &refusing, "builds:app.AppImage")
-            .unwrap_err()
-            .code,
+        send_to_chat(
+            &f.reader,
+            &limiter,
+            &refusing,
+            "builds:app.AppImage",
+            &f.snapshots
+        )
+        .unwrap_err()
+        .code,
         ErrorCode::Exists
+    );
+    // The refused send counted too: the allowance is spent.
+    let send = |_: &Path, _: u64, _: &str| -> Result<Value, ToolError> { Ok(Value::Null) };
+    assert_eq!(
+        send_to_chat(
+            &f.reader,
+            &limiter,
+            &send,
+            "builds:app.AppImage",
+            &f.snapshots
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::RateLimited
     );
 }
