@@ -241,8 +241,10 @@ impl UploadFile {
 }
 
 /// How long the copies handed to the browser are kept: a page reads a
-/// chosen file when it sends it, which may be a while after it was chosen.
-const SNAPSHOT_LIFE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// chosen file only when it sends it, which may be long after it was
+/// chosen (a form filled in over an afternoon), so a day, and only a newer
+/// upload clears older ones.
+pub const SNAPSHOT_LIFE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// A new private file for a copy of `name`, in a folder of its own under
 /// `dir`, after clearing copies older than [`SNAPSHOT_LIFE`].

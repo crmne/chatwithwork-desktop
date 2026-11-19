@@ -187,6 +187,38 @@ fn a_copy_keeps_the_name_the_call_gave_and_the_bytes_checked() {
 
 #[cfg(unix)]
 #[test]
+fn copies_stay_while_a_page_may_still_send_them() {
+    let f = fixture(false);
+    let dir = f.base.join("snapshots");
+    let first = f
+        .reader
+        .upload_snapshot("work:bundle.aab", 1 << 20, &dir)
+        .unwrap();
+    // Another upload an hour later leaves the first copy for the page that holds it.
+    let folder = first.real.parent().unwrap().to_path_buf();
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60);
+    std::fs::File::open(&folder)
+        .unwrap()
+        .set_modified(hour_ago)
+        .unwrap();
+    f.reader
+        .upload_snapshot("work:shots/listing.png", 1 << 20, &dir)
+        .unwrap();
+    assert!(first.real.exists());
+    // A copy past a day is cleared.
+    let old = std::time::SystemTime::now() - SNAPSHOT_LIFE - std::time::Duration::from_secs(60);
+    std::fs::File::open(&folder)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    f.reader
+        .upload_snapshot("work:shots/listing.png", 1 << 20, &dir)
+        .unwrap();
+    assert!(!folder.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn refuses_a_hard_link_to_a_file_elsewhere() {
     let f = fixture(false);
     fs::hard_link(
