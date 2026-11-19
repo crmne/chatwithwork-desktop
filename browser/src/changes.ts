@@ -24,7 +24,7 @@ import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
 import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
-import { focused } from "./positional.js";
+import { after, focused, sameAsShown, showed } from "./positional.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
 const TYPE_MAX_CHARS = 10_000;
@@ -480,11 +480,15 @@ const type: Method = async (params, policy) => {
   }
   if (!editable(t.facts)) throw new ToolError("invalid_argument", "that element isn't a field to type in");
   const what = { target: described(t.facts), text, submit, clear };
+  const intoFocus = params.ref === undefined;
   if (dry) {
     const shot = await preview(t);
     const now = await still(t.tabId, policy);
+    if (intoFocus) showed(t.tabId, "type", params, [t.backendNodeId]);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
+  // Into the field the card showed, not one focus moved to since.
+  if (intoFocus) sameAsShown(t.tabId, "type", params, [t.backendNodeId]);
   await send(t.tabId, "DOM.focus", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, SELECT_CONTENTS, [clear]);
   // In a rich-text editor, text typed over a selection takes the selection's
@@ -502,7 +506,9 @@ const type: Method = async (params, policy) => {
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter });
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter });
   }
-  return { dry_run: false, target: what.target, submit, ...(await settle(t.tabId, policy, started)) };
+  // Typing into focus comes from acting by position: answer with a fresh
+  // picture to point at next.
+  return { dry_run: false, target: what.target, submit, ...(await (intoFocus ? after(t.tabId, policy, started) : settle(t.tabId, policy, started))) };
 };
 
 export const CHOOSE = `function (values, apply) {

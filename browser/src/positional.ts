@@ -8,7 +8,8 @@
 // position is never a way around a refusal the click would give.
 
 import { about, only, still, tabFor, withDialog, type Method, type Params, type Policy } from "./actions.js";
-import { allowedChanges, described, dryRun, flag, pressAt, preview, settle, target, type Target } from "./changes.js";
+import { resolveTab } from "./group.js";
+import { allowedChanges, described, dryRun, editable, flag, pressAt, preview, settle, target, type Target } from "./changes.js";
 import { isolatedContext, evaluateInContext, send, cleanUp } from "./cdp.js";
 import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
@@ -127,6 +128,37 @@ function point(capture: Capture, params: Params, xName = "x", yName = "y"): { x:
   return toViewport(capture, number(params[xName], xName, capture.imageWidth), number(params[yName], yName, capture.imageHeight));
 }
 
+// What each dry run showed the person, by the call it checked, so the
+// approved call acts on those same elements and not on whatever the page
+// put there while the person looked at the card. A call nobody was shown
+// (an automatic one) has nothing to match.
+const shown = new Map<string, { ids: number[]; at: number }>();
+const SHOWN_LIFE_MS = 60 * 60_000;
+
+function shownKey(tabId: number, method: string, params: Params): string {
+  const rest = Object.entries(params).filter(([k]) => k !== "dry_run" && k !== "tab").sort(([a], [b]) => a.localeCompare(b));
+  return `${tabId}:${method}:${JSON.stringify(rest)}`;
+}
+
+export function showed(tabId: number, method: string, params: Params, ids: number[]): void {
+  for (const [key, entry] of shown) if (Date.now() - entry.at > SHOWN_LIFE_MS) shown.delete(key);
+  shown.set(shownKey(tabId, method, params), { ids, at: Date.now() });
+}
+
+export function sameAsShown(tabId: number, method: string, params: Params, ids: number[]): void {
+  const key = shownKey(tabId, method, params);
+  const entry = shown.get(key);
+  shown.delete(key);
+  if (entry && Date.now() - entry.at <= SHOWN_LIFE_MS && (entry.ids.length !== ids.length || entry.ids.some((id, i) => id !== ids[i]))) {
+    throw new ToolError("page_error", "the page changed since the person saw it: something else is there now, so nothing was done; look again");
+  }
+}
+
+// What the page draws itself, whose purpose nothing on the page says.
+function drawnFacts(facts: ElementFacts): boolean {
+  return facts.tag === "canvas" || (facts.tag.includes("-") && !facts.role);
+}
+
 // What a click there would reach: the control around the element under the
 // point, as the browser hit-tests it, through shadow roots and frames.
 const CONTROL = `function () {
@@ -166,9 +198,7 @@ async function underPoint(tabId: number, location: { x: number; y: number }, pol
     await send(tabId, "Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
   }
   const t = await target({ tab: tabId, ref: `e${control}` }, policy);
-  const tag = t.facts.tag;
-  const drawn = tag === "canvas" || (tag.includes("-") && !t.facts.role);
-  return { ...t, drawn };
+  return { ...t, drawn: drawnFacts(t.facts) };
 }
 
 // Why a press there may send, buy, post or delete something, as the click
@@ -243,11 +273,22 @@ function named(t: Target): object {
 }
 
 // After an action: where the tab is, and a fresh look to point at next.
-async function after(tabId: number, policy: Policy, started: number): Promise<object> {
+export async function after(tabId: number, policy: Policy, started: number): Promise<object> {
   const settled = (await settle(tabId, policy, started)) as { allowed?: boolean; closed?: boolean };
   if (settled.allowed === false || settled.closed) return settled;
   await new Promise((r) => setTimeout(r, SETTLE_MS));
-  return { ...settled, look: await look(tabId) };
+  const fresh = await look(tabId).catch(() => null);
+  // The picture is of the page the tab shows now: it goes back only if that
+  // page is still in the group, on an allowed site, and the one pictured.
+  const tab = await resolveTab(tabId).catch(() => null);
+  if (!tab) return { tab: tabId, closed: true };
+  const url = tab.url ?? "";
+  if (!siteAllowed(url, policy.sites, policy.all_sites, policy.blocked_sites)) {
+    return { tab: tabId, allowed: false, site: hostOfUrl(url), note: "the tab went on to a site that isn't allowed; nothing from it is shown" };
+  }
+  const pictured = fresh ? captures.get(tabId) : undefined;
+  if (!fresh || !pictured || pictured.url.split("#")[0] !== url.split("#")[0]) return { ...settled, ...about(tab), note: "the page was still changing; look again" };
+  return { ...settled, ...about(await still(tabId, policy)), look: fresh };
 }
 
 const clickAt: Method = async (params, policy) => {
@@ -270,10 +311,12 @@ const clickAt: Method = async (params, policy) => {
   if (dry) {
     const shot = await previewAt(tabId, location);
     const now = await still(tabId, policy);
+    showed(tabId, "click_at", params, [t.backendNodeId]);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
   // The page must still stand as the screenshot showed it, and the same
-  // control must still be under the point.
+  // control the card showed must still be under the point.
+  sameAsShown(tabId, "click_at", params, [t.backendNodeId]);
   await current(tabId, params.capture);
   const again = await underPoint(tabId, location, policy);
   if (again.backendNodeId !== t.backendNodeId) throw new ToolError("page_error", "the page changed, look again: something else is under that point now");
@@ -325,8 +368,10 @@ const drag: Method = async (params, policy) => {
   const destination = await underPoint(tabId, to, policy);
   refuse(source, policy);
   if (isSensitiveField(destination.facts)) throw new ToolError("sensitive_field", "that drop point is a password, payment or one-time code field");
-  // Dropping on something named like an action (a "Delete" bin) may do it.
-  const reason = (destination.backendNodeId !== source.backendNodeId ? reasonFor(destination) : null) ?? (source.drawn ? reasonFor(source) : null);
+  // Pressing the source may do what clicking it does (a drag that barely
+  // moves is a click), and dropping on something named like an action (a
+  // "Delete" bin) may do that.
+  const reason = reasonFor(source) ?? (destination.backendNodeId !== source.backendNodeId ? reasonFor(destination) : null);
   if (!saysSubmits && reason) {
     throw new ToolError("would_submit", `this drag may send or delete something (${reason}); call again with submits: true so the person sees it first`);
   }
@@ -334,14 +379,24 @@ const drag: Method = async (params, policy) => {
   if (dry) {
     const shot = await previewAt(tabId, from, to);
     const now = await still(tabId, policy);
+    showed(tabId, "drag", params, [source.backendNodeId, destination.backendNodeId]);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
+  sameAsShown(tabId, "drag", params, [source.backendNodeId, destination.backendNodeId]);
   await current(tabId, params.capture);
+  const changed = "the page changed, look again: something else is under that point now";
+  if ((await underPoint(tabId, from, policy)).backendNodeId !== source.backendNodeId) throw new ToolError("page_error", changed);
   const started = Date.now();
   const mouse = (type: string, at: { x: number; y: number }, extra: object = {}) =>
     send(tabId, "Input.dispatchMouseEvent", { type, ...at, button: "left", ...extra });
   await mouse("mouseMoved", from, { button: "none" });
+  // Hovering may make the page put something else there: press only what
+  // was checked.
+  if ((await underPoint(tabId, from, policy).catch(() => null))?.backendNodeId !== source.backendNodeId) {
+    throw new ToolError("page_error", `${changed}; nothing was pressed`);
+  }
   await mouse("mousePressed", from, { buttons: 1, clickCount: 1 });
+  let release = from;
   try {
     const steps = 12;
     for (let i = 1; i <= steps; i++) {
@@ -349,8 +404,16 @@ const drag: Method = async (params, policy) => {
       await mouse("mouseMoved", { x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }, { buttons: 1 });
       await new Promise((r) => setTimeout(r, 16));
     }
+    // Let go there only over what was checked: the drop target, or the
+    // dragged element itself, which many pages move under the pointer.
+    const there = await underPoint(tabId, to, policy).catch(() => null);
+    if (there && (there.backendNodeId === destination.backendNodeId || there.backendNodeId === source.backendNodeId)) release = to;
   } finally {
-    await mouse("mouseReleased", to, { buttons: 0, clickCount: 1 });
+    await mouse("mouseReleased", release, { buttons: 0, clickCount: 1 });
+  }
+  if (release !== to) {
+    captures.delete(tabId);
+    throw new ToolError("page_error", "the drop point changed during the drag, so it was let go where it started; look again");
   }
   captures.delete(tabId);
   return { dry_run: false, ...what, ...(await after(tabId, policy, started)) };
@@ -394,7 +457,13 @@ export async function focused(tabId: number, policy: Policy): Promise<Target | n
   if (!result.result.objectId || result.result.subtype !== "node") return null;
   try {
     const { node } = await send<{ node: { backendNodeId: number } }>(tabId, "DOM.describeNode", { objectId: result.result.objectId });
-    return await target({ tab: tabId, ref: `e${node.backendNodeId}` }, policy);
+    const t = await target({ tab: tabId, ref: `e${node.backendNodeId}` }, policy);
+    // Focus inside another site's frame can't be inspected, so keys and
+    // typing don't go there.
+    if (["iframe", "frame", "embed", "object"].includes(t.facts.tag)) {
+      throw new ToolError("page_error", "focus is inside an embedded frame, which keys and typing can't reach; click or Tab elsewhere first");
+    }
+    return t;
   } finally {
     await send(tabId, "Runtime.releaseObject", { objectId: result.result.objectId }).catch(() => {});
   }
@@ -402,13 +471,21 @@ export async function focused(tabId: number, policy: Policy): Promise<Target | n
 
 const TEXT_TYPES = new Set(["", "text", "search", "email", "url", "tel", "number", "password"]);
 
-// Whether Enter or Space on `facts` may send something: a button's press,
-// a field's Enter in a form, or what the page drew itself.
-function keyReason(key: string, facts: ElementFacts): string | null {
-  if (key === "Enter" && facts.form && (facts.tag === "textarea" ? false : facts.tag === "input" && TEXT_TYPES.has((facts.attrs.type ?? "").toLowerCase()))) {
+// Whether a key may send, buy, post or delete something, given what has
+// focus: any key but Tab when nothing has (the page decides what it does),
+// Enter or Space on a button, in a form's field, or on what the page drew
+// itself, and Delete or Backspace anywhere but a text field.
+function keyReason(key: string, focus: ElementFacts | null): string | null {
+  if (!focus) return key === "Tab" ? null : "nothing has focus, so the page decides what it does";
+  const acts = key === "Enter" || key === "Space";
+  const deletes = key === "Delete" || key === "Backspace";
+  if ((acts || deletes) && drawnFacts(focus)) return "it's drawn by the page (a canvas or custom element), so what the key does can't be told";
+  if (deletes) return editable(focus) ? null : "outside a text field, Delete and Backspace may delete what's selected";
+  if (!acts) return null;
+  if (key === "Enter" && focus.form && focus.tag === "input" && TEXT_TYPES.has((focus.attrs.type ?? "").toLowerCase())) {
     return "Enter in this field submits its form";
   }
-  return submitReason(facts);
+  return submitReason(focus);
 }
 
 const press: Method = async (params, policy) => {
@@ -425,8 +502,7 @@ const press: Method = async (params, policy) => {
   const tab = await tabFor(params, policy);
   const tabId = tab.id!;
   const before = await focused(tabId, policy);
-  const acts = name === "Enter" || name === "Space";
-  const reason = acts ? (before ? keyReason(name, before.facts) : "nothing has focus, so the page decides what it does") : null;
+  const reason = keyReason(name, before?.facts ?? null);
   if (before && isSensitiveField(before.facts) && !["Tab", "Escape"].includes(name)) {
     throw new ToolError("sensitive_field", "a password, payment or one-time code field has focus; press Tab to move on, the person fills those in");
   }
@@ -437,16 +513,18 @@ const press: Method = async (params, policy) => {
   if (dry) {
     const shot = before ? await preview(before) : await captureTab(tabId, PREVIEW_BYTES);
     const now = await still(tabId, policy);
+    showed(tabId, "press", params, before ? [before.backendNodeId] : []);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
+  sameAsShown(tabId, "press", params, before ? [before.backendNodeId] : []);
   const modifiers = shift ? 8 : 0;
   const base = { key: key.key, code: key.code, windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode, modifiers };
   const started = Date.now();
   await send(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(key.text ? { text: key.text } : {}) });
   await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...base });
   captures.delete(tabId);
-  const settled = await settle(tabId, policy, started) as { allowed?: boolean };
-  const now = settled.allowed === false ? null : await focused(tabId, policy).catch(() => null);
+  const settled = await after(tabId, policy, started) as { allowed?: boolean; closed?: boolean };
+  const now = settled.allowed === false || settled.closed ? null : await focused(tabId, policy).catch(() => null);
   return withDialog(tabId, { dry_run: false, ...what, ...settled, now_focused: now ? named(now) : null });
 };
 

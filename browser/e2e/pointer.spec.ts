@@ -27,6 +27,10 @@ const PAGES: Record<string, string> = {
       document.addEventListener("mouseup", (e) => { if (!held) return; const over = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.tagName === "LI" && el !== held);
         if (over) { list.insertBefore(held, over.nextSibling); said("order " + [...list.children].map((li) => li.textContent).join(",")); } held = null; });</script>`,
   "/long": `<!doctype html><title>Long</title><button id="b" style="margin:40px" onclick="said('pressed')">Choose</button><div style="height:3000px"></div>${STATE}`,
+  "/form": `<!doctype html><title>Form</title><form onsubmit="event.preventDefault(); said('sent')"><input id="note" value="x"><button id="send" style="margin:40px">Send</button></form>${STATE}`,
+  "/swap": `<!doctype html><title>Swap</title><div id="src" style="width:120px;height:60px;margin:40px;background:#ccc">Card</div>${STATE}
+    <script>src.addEventListener("mouseover", () => { const pw = document.createElement("input"); pw.type = "password"; pw.style.cssText = "width:120px;height:60px;margin:40px;display:block";
+      pw.addEventListener("mousedown", () => said("pressed password")); src.replaceWith(pw); }, { once: true });</script>`,
   "/password": `<!doctype html><title>Sign in</title><label>Password <input type="password" id="pw" style="width:300px;margin:40px"></label>`,
   "/covered": `<!doctype html><title>Covered</title><button id="b" style="margin:40px" onclick="said('pressed under')">Save</button>
     <div id="banner" style="position:fixed;inset:0 0 auto 0;height:200px;background:#eee" onclick="said('banner')">Cookie choices</div>${STATE}`,
@@ -89,6 +93,7 @@ test("the same dialog by keyboard: Tab to the second card, Enter, and focus repo
   const tab = await open("/keyboard");
   const first = await setup.daemon.call("press", { tab, key: "Tab", submits: false });
   expect(first.result.now_focused.name).toContain("Classic");
+  expect(first.result.look.capture).toBeTruthy();
   const second = await setup.daemon.call("press", { tab, key: "Tab", submits: false });
   expect(second.result.now_focused.name).toContain("Ocean");
   const back = await setup.daemon.call("press", { tab, key: "Tab", shift: true, submits: false });
@@ -146,6 +151,46 @@ test("drag a slider, and a sortable item to another place", async () => {
   const moved = await setup.daemon.call("drag", { tab, capture: shot.capture, ...from, to_x: to.x, to_y: to.y, submits: false });
   expect(moved.error).toBeUndefined();
   expect(await said("/slider")).toContain("order Two,Three,One");
+});
+
+test("an approved click acts only on what the card showed, never on a replacement", async () => {
+  const tab = await open("/themes");
+  const shot = (await setup.daemon.call("look", { tab })).result;
+  const point = await at("/themes", ".card:nth-child(2)", shot);
+  const checked = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false, dry_run: true });
+  expect(checked.result.target.name).toContain("Ocean");
+  await page("/themes").evaluate(() => { const old = document.querySelectorAll(".card")[1]; old.replaceWith(old.cloneNode(true)); });
+  const done = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false });
+  expect(done.error?.code).toBe("page_error");
+  expect(done.error?.message).toContain("since the person saw it");
+  expect(await said("/themes")).toBe("");
+});
+
+test("a drag that starts on a send button may send, and Delete with nothing focused may delete", async () => {
+  const tab = await open("/form");
+  const shot = (await setup.daemon.call("look", { tab })).result;
+  const send = await at("/form", "#send", shot);
+  const dragged = await setup.daemon.call("drag", { tab, capture: shot.capture, ...send, to_x: send.x, to_y: send.y, submits: false });
+  expect(dragged.error?.code).toBe("would_submit");
+  expect(await said("/form")).toBe("");
+  await page("/form").evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect((await setup.daemon.call("press", { tab, key: "Delete", submits: false })).error?.code).toBe("would_submit");
+  expect((await setup.daemon.call("press", { tab, key: "Escape", submits: false })).error?.code).toBe("would_submit");
+  await page("/form").evaluate(() => { const note = document.querySelector("#note") as HTMLInputElement; note.focus(); note.setSelectionRange(1, 1); });
+  const deleted = await setup.daemon.call("press", { tab, key: "Backspace", submits: false });
+  expect(deleted.error).toBeUndefined();
+  expect(deleted.result.look.capture).toBeTruthy();
+  expect(await page("/form").evaluate(() => (document.querySelector("#note") as HTMLInputElement).value)).toBe("");
+});
+
+test("a drag never presses what hovering put under the point", async () => {
+  const tab = await open("/swap");
+  const shot = (await setup.daemon.call("look", { tab })).result;
+  const from = await at("/swap", "#src", shot);
+  const dragged = await setup.daemon.call("drag", { tab, capture: shot.capture, ...from, to_x: from.x + 200, to_y: from.y, submits: false });
+  expect(dragged.error?.code).toBe("page_error");
+  expect(dragged.error?.message).toContain("nothing was pressed");
+  expect(await said("/swap")).toBe("");
 });
 
 test("a page that scrolled between the look and the click is refused", async () => {
