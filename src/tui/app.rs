@@ -19,6 +19,7 @@ use super::chat::{
 use super::commands::{self, Cmd, Command};
 use super::composer::{Composer, History};
 use super::dictation::{self, Phase};
+use super::newbot::FormRow as FormRowKind;
 use crate::audit::AuditEntry;
 use crate::control::PROTOCOL_VERSION;
 
@@ -222,6 +223,8 @@ pub enum View {
     Decisions,
     /// A bot's page: its state and its runs.
     Bot(u64),
+    /// New bot: a sentence, or a recipe and its form.
+    NewBot,
     Settings(Page),
 }
 
@@ -520,6 +523,33 @@ pub enum ChatCommand {
         number: u64,
         before: Option<String>,
     },
+    /// New bot's recipes.
+    Recipes,
+    /// A recipe's form, with these tools picked for its slots.
+    Recipe {
+        key: String,
+        tools: Vec<(String, String)>,
+    },
+    /// New bot's sentence: start the chat that builds the bot.
+    StartBotBuilder {
+        sentence: String,
+        project: Option<u64>,
+    },
+    /// Try a bot not made yet (a recipe's form, or a chat's card, `chat`),
+    /// following the try until it ends.
+    TryBot {
+        body: serde_json::Value,
+        origin: super::newbot::Origin,
+    },
+    MakeBot {
+        body: serde_json::Value,
+        origin: super::newbot::Origin,
+    },
+    /// Connect an integration in the browser, signed in as this person.
+    Connect {
+        key: String,
+        server: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -655,6 +685,22 @@ pub enum ChatMsg {
         project: u64,
         result: Result<(Vec<ChatSummary>, Option<String>), Failure>,
     },
+    Recipes(Result<Vec<super::newbot::Recipe>, Failure>),
+    Recipe {
+        key: String,
+        result: Result<serde_json::Value, Failure>,
+    },
+    BotBuilderStarted(Result<ChatSummary, Failure>),
+    /// How a try stands, again each time it moves on.
+    Trial {
+        origin: super::newbot::Origin,
+        result: Result<serde_json::Value, Failure>,
+    },
+    BotMade {
+        origin: super::newbot::Origin,
+        result: Result<serde_json::Value, Failure>,
+    },
+    Connected(Result<(), Failure>),
 }
 
 // One message at a time goes through the channel; a read chat is the big one.
@@ -743,6 +789,11 @@ pub struct ChatPane {
     pub decision_row: usize,
     /// The bot shown, as last read.
     pub bot_page: Option<BotPage>,
+    /// New bot, while it's open.
+    pub new_bot: Option<super::newbot::NewBot>,
+    /// What trying or making the open chat's proposed bot said.
+    pub draft_result: Vec<String>,
+    pub draft_busy: Option<&'static str>,
     /// The open chat; `None` is a new one.
     pub open: Option<u64>,
     pub transcript: Option<Transcript>,
@@ -823,6 +874,9 @@ impl Default for ChatPane {
             decisions_again: false,
             decision_row: 0,
             bot_page: None,
+            new_bot: None,
+            draft_result: Vec::new(),
+            draft_busy: None,
             open: None,
             transcript: None,
             loading: false,
@@ -1634,7 +1688,18 @@ impl App {
         match msg {
             Msg::WindowFocus(focused) => {
                 self.window_focused = focused;
-                Vec::new()
+                // Back from the browser: a service may be connected now.
+                let shown = self.view == View::NewBot;
+                match self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut()) {
+                    Some(form) if focused && shown && !form.loading => {
+                        form.loading = true;
+                        vec![Effect::Chat(ChatCommand::Recipe {
+                            key: form.key.clone(),
+                            tools: form.tools(),
+                        })]
+                    }
+                    _ => Vec::new(),
+                }
             }
             Msg::Key(key) => self.key(key),
             Msg::Mouse(event) => self.mouse(event),
@@ -1728,7 +1793,7 @@ impl App {
 
     /// Focus targets, in Tab order.
     pub fn focus_order(&self) -> Vec<Focus> {
-        if matches!(self.view, View::Decisions | View::Bot(_)) {
+        if matches!(self.view, View::Decisions | View::Bot(_) | View::NewBot) {
             vec![Focus::Chats, Focus::Main]
         } else if self.chat.ready() {
             vec![Focus::Chats, Focus::Composer]
@@ -1818,6 +1883,12 @@ impl App {
         let side = !matches!(self.view, View::Settings(_));
         if in_chat && self.focus == Focus::Composer {
             return self.composer_key(key);
+        }
+        if self.view == View::NewBot
+            && self.focus == Focus::Main
+            && let Some(effects) = self.new_bot_key(key)
+        {
+            return effects;
         }
         if std::mem::take(&mut self.go) {
             return self.go_to(key);
@@ -1911,6 +1982,7 @@ impl App {
             }
             KeyCode::Char('n') if offer.is_some() => self.offer_dismissed = true,
             KeyCode::Char('n' | 'c') if side && self.chat.ready() => return self.new_chat(),
+            KeyCode::Char('b') if side && self.chat.can_make_bots() => return self.open_new_bot(),
             KeyCode::Char('r') => {
                 if matches!(self.daemon, Daemon::NotRunning(_)) {
                     self.notice(super::theme::Signal::Idle, LOOKING);
@@ -2547,6 +2619,9 @@ impl App {
             Cmd::Pause => self.daemon.paused() == Some(false),
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
+            Cmd::NewBot => self.chat.can_make_bots(),
+            Cmd::MakeBot | Cmd::TryBot => self.open_draft().is_some_and(|d| d.made.is_none()),
+            Cmd::OpenBot => self.open_draft().is_some_and(|d| d.made.is_some()),
             Cmd::Commands => !self.commands.commands.is_empty(),
             _ => true,
         }
@@ -2664,6 +2739,26 @@ impl App {
             return Vec::new();
         }
         match cmd {
+            Cmd::NewBot => {
+                let effects = self.open_new_bot();
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    new_bot.sentence = args.trim().to_string();
+                }
+                return effects;
+            }
+            Cmd::MakeBot | Cmd::TryBot => return self.draft_action(cmd == Cmd::MakeBot),
+            Cmd::OpenBot => {
+                let made = self
+                    .chat
+                    .transcript
+                    .as_ref()
+                    .and_then(|t| t.bot_draft.as_ref())
+                    .and_then(|d| d.made.as_ref())
+                    .map(|m| m.id);
+                if let Some(id) = made {
+                    return self.open_bot(id);
+                }
+            }
             Cmd::Unqueue => return self.unqueue_last(),
             Cmd::New => {
                 self.chat.project = None;
@@ -3546,6 +3641,20 @@ impl App {
                 input.push_str(text.replace(['\r', '\n'], " ").trim())
             }
             Some(_) => {}
+            None if self.view == View::NewBot && self.focus == Focus::Main => {
+                let text = text.replace(['\r', '\n'], " ");
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    match new_bot.form.as_mut() {
+                        Some(form) => match form.current() {
+                            FormRowKind::Name => form.name.push_str(text.trim()),
+                            FormRowKind::When => form.at = text.trim().chars().take(5).collect(),
+                            _ => {}
+                        },
+                        None if new_bot.row == 0 => new_bot.sentence.push_str(&text),
+                        None => {}
+                    }
+                }
+            }
             None if self.view == View::Chat && self.focus == Focus::Composer => {
                 if let Some(picker) = self.chat.picker.as_mut() {
                     picker
@@ -3581,6 +3690,12 @@ impl App {
             _ => return Vec::new(),
         };
         let delta: isize = if up { -1 } else { 1 };
+        if self.view == View::NewBot
+            && let Some(form) = self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut())
+        {
+            form.scroll = form.scroll.saturating_add_signed(-delta * 3).min(1_000);
+            return Vec::new();
+        }
         if let Some(Modal::Help { scroll }) = self.modal {
             self.modal = Some(Modal::Help {
                 scroll: scroll.saturating_add_signed(delta * 3),
@@ -3644,6 +3759,30 @@ impl App {
                 return self.open_item(item);
             }
             Hit::Filter(filter) if self.chat.ready() => return self.set_filter(filter),
+            Hit::Row(i) if self.view == View::NewBot => {
+                self.focus = Focus::Main;
+                let Some(new_bot) = self.chat.new_bot.as_mut() else {
+                    return Vec::new();
+                };
+                match new_bot.form.as_mut() {
+                    Some(form) => {
+                        form.row = i;
+                        if matches!(form.current(), FormRowKind::Try | FormRowKind::Make) {
+                            return self
+                                .new_bot_key(KeyEvent::from(KeyCode::Enter))
+                                .unwrap_or_default();
+                        }
+                    }
+                    None => {
+                        new_bot.row = i;
+                        if i > 0 {
+                            return self
+                                .new_bot_key(KeyEvent::from(KeyCode::Enter))
+                                .unwrap_or_default();
+                        }
+                    }
+                }
+            }
             Hit::Row(i) => match self.view {
                 View::Decisions => {
                     self.focus = Focus::Main;
@@ -3754,7 +3893,8 @@ impl App {
     /// opens, a project opens or closes, "N more" shows more in place.
     fn open_item(&mut self, item: SideItem) -> Vec<Effect> {
         match item {
-            SideItem::NewBot | SideItem::NewChat => self.new_chat(),
+            SideItem::NewBot => self.open_new_bot(),
+            SideItem::NewChat => self.new_chat(),
             SideItem::Decisions => self.open_decisions(),
             SideItem::Chat(number) | SideItem::PinnedChat(number) => self.open_chat(number),
             SideItem::Bot(id) | SideItem::PinnedBot(id) => self.open_bot(id),
@@ -3948,6 +4088,301 @@ impl App {
         }
     }
 
+    /// New bot: its sentence, and its recipes to start from.
+    fn open_new_bot(&mut self) -> Vec<Effect> {
+        let (project, project_id) = match self.chat.selected_item() {
+            Some(SideItem::Project(id)) => (
+                self.chat
+                    .sidebar()
+                    .and_then(|s| s.projects.iter().find(|p| p.id == id))
+                    .and_then(|p| p.number),
+                Some(id),
+            ),
+            // From a chat in a project, New bot starts there, as the web's
+            // New bot pressed in a project does.
+            _ => match self.chat.open_summary().and_then(|c| c.project.as_ref()) {
+                Some(project) => (
+                    project.number.or_else(|| {
+                        self.chat
+                            .sidebar()
+                            .and_then(|s| s.projects.iter().find(|p| p.id == project.id))
+                            .and_then(|p| p.number)
+                    }),
+                    Some(project.id),
+                ),
+                None => (None, None),
+            },
+        };
+        self.view = View::NewBot;
+        self.focus = Focus::Main;
+        self.chat.select(SideItem::NewBot);
+        let recipes = self
+            .chat
+            .new_bot
+            .take()
+            .and_then(|n| n.recipes)
+            .filter(Result::is_ok);
+        let loaded = recipes.is_some();
+        self.chat.new_bot = Some(super::newbot::NewBot {
+            recipes,
+            project,
+            project_id,
+            ..Default::default()
+        });
+        if loaded {
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::Recipes)]
+        }
+    }
+
+    /// The bot the open chat proposes, or made.
+    pub fn open_draft(&self) -> Option<&super::newbot::BotDraft> {
+        self.chat
+            .transcript
+            .as_ref()
+            .filter(|t| Some(t.chat.number) == self.chat.open)
+            .and_then(|t| t.bot_draft.as_ref())
+    }
+
+    /// `/make-bot` and `/try-bot`: the open chat's card's Make bot and Try it.
+    fn draft_action(&mut self, make: bool) -> Vec<Effect> {
+        use super::theme::Signal;
+        let (Some(chat), Some(draft)) = (self.chat.open, self.open_draft()) else {
+            self.notice(Signal::Idle, "This chat doesn't propose a bot.");
+            return Vec::new();
+        };
+        if draft.made.is_some() {
+            self.notice(Signal::Idle, "It's made already: /bot opens it.");
+            return Vec::new();
+        }
+        if make && !draft.ready {
+            let needs = if draft.needs.is_empty() {
+                "more details".to_string()
+            } else {
+                draft.needs.join(", ")
+            };
+            self.notice(Signal::Attention, &format!("Make bot needs {needs} first."));
+            return Vec::new();
+        }
+        if !make && let Some(refusal) = draft.try_refusal.clone() {
+            self.notice(Signal::Attention, &refusal);
+            return Vec::new();
+        }
+        let body = super::newbot::builder_body(chat);
+        self.chat.draft_result.clear();
+        if make {
+            self.chat.draft_busy = Some("Making the bot…");
+            vec![Effect::Chat(ChatCommand::MakeBot {
+                body,
+                origin: super::newbot::Origin::Chat(chat),
+            })]
+        } else {
+            self.chat.draft_busy = Some("Trying it…");
+            vec![Effect::Chat(ChatCommand::TryBot {
+                body,
+                origin: super::newbot::Origin::Chat(chat),
+            })]
+        }
+    }
+
+    /// Keys of New bot; `None` for the ones every screen has.
+    fn new_bot_key(&mut self, key: KeyEvent) -> Option<Vec<Effect>> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let server = self.chat_daemon().server().map(str::to_string);
+        let new_bot = self.chat.new_bot.as_mut()?;
+        if let Some(form) = new_bot.form.as_mut() {
+            let current = form.current();
+            let rows = form.rows().len();
+            return Some(match key.code {
+                KeyCode::Esc => {
+                    new_bot.form = None;
+                    Vec::new()
+                }
+                KeyCode::Tab | KeyCode::BackTab => return None,
+                KeyCode::Up => {
+                    form.row = form.row.saturating_sub(1);
+                    Vec::new()
+                }
+                KeyCode::Down => {
+                    form.row = (form.row + 1).min(rows - 1);
+                    Vec::new()
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    if form.step(key.code == KeyCode::Right) {
+                        form.loading = true;
+                        vec![Effect::Chat(ChatCommand::Recipe {
+                            key: form.key.clone(),
+                            tools: form.tools(),
+                        })]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                KeyCode::Enter if matches!(current, FormRowKind::Try | FormRowKind::Make) => {
+                    if form.busy.is_some() {
+                        return Some(Vec::new());
+                    }
+                    let make = current == FormRowKind::Make;
+                    match form.body() {
+                        Ok(body) => {
+                            form.error = None;
+                            form.result.clear();
+                            form.busy = Some(if make {
+                                "Making the bot…"
+                            } else {
+                                "Trying it…"
+                            });
+                            let origin = super::newbot::Origin::Form(form.id);
+                            form.scroll = 0;
+                            vec![Effect::Chat(if make {
+                                ChatCommand::MakeBot { body, origin }
+                            } else {
+                                ChatCommand::TryBot { body, origin }
+                            })]
+                        }
+                        Err(e) => {
+                            form.error = Some(format!("{e:#}"));
+                            Vec::new()
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    form.row = (form.row + 1).min(rows - 1);
+                    Vec::new()
+                }
+                KeyCode::PageUp => {
+                    form.scroll = form.scroll.saturating_add(5).min(1_000);
+                    Vec::new()
+                }
+                KeyCode::PageDown => {
+                    form.scroll = form.scroll.saturating_sub(5);
+                    Vec::new()
+                }
+                KeyCode::Char('r') if !matches!(current, FormRowKind::Name) => {
+                    form.loading = true;
+                    vec![Effect::Chat(ChatCommand::Recipe {
+                        key: form.key.clone(),
+                        tools: form.tools(),
+                    })]
+                }
+                KeyCode::Char('c') if matches!(current, FormRowKind::Slot(_)) => {
+                    let FormRowKind::Slot(kind) = current else {
+                        return Some(Vec::new());
+                    };
+                    let slot = form
+                        .slots()
+                        .into_iter()
+                        .find(|s| s["kind"] == kind.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    match (form.picked(&slot), server) {
+                        (Some((key, _, false)), Some(server)) => {
+                            vec![Effect::Chat(ChatCommand::Connect { key, server })]
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                KeyCode::Backspace if current == FormRowKind::Name => {
+                    form.name.pop();
+                    Vec::new()
+                }
+                KeyCode::Char('u') if ctrl && current == FormRowKind::Name => {
+                    form.name.clear();
+                    Vec::new()
+                }
+                KeyCode::Char(c) if !ctrl && current == FormRowKind::Name => {
+                    form.name.push(c);
+                    Vec::new()
+                }
+                KeyCode::Backspace if current == FormRowKind::When => {
+                    form.at.pop();
+                    Vec::new()
+                }
+                KeyCode::Char(c @ ('0'..='9' | ':')) if current == FormRowKind::When => {
+                    if form.at.chars().count() >= 5 {
+                        form.at.clear();
+                    }
+                    form.at.push(c);
+                    Vec::new()
+                }
+                KeyCode::Char('j') => {
+                    form.row = (form.row + 1).min(rows - 1);
+                    Vec::new()
+                }
+                KeyCode::Char('k') => {
+                    form.row = form.row.saturating_sub(1);
+                    Vec::new()
+                }
+                _ => return None,
+            });
+        }
+        let recipes = new_bot.recipe_list().len();
+        Some(match key.code {
+            KeyCode::Esc => {
+                self.view = View::Chat;
+                self.focus = Focus::Chats;
+                Vec::new()
+            }
+            KeyCode::Tab | KeyCode::BackTab => return None,
+            KeyCode::Up => {
+                new_bot.row = new_bot.row.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Down => {
+                new_bot.row = (new_bot.row + 1).min(recipes);
+                Vec::new()
+            }
+            KeyCode::Enter if new_bot.row == 0 => {
+                let sentence = new_bot.sentence.trim().to_string();
+                if sentence.is_empty() || new_bot.sending {
+                    return Some(Vec::new());
+                }
+                new_bot.sending = true;
+                new_bot.error = None;
+                vec![Effect::Chat(ChatCommand::StartBotBuilder {
+                    sentence,
+                    project: new_bot.project_id,
+                })]
+            }
+            KeyCode::Enter => {
+                let Some(recipe) = new_bot.recipe_list().get(new_bot.row - 1) else {
+                    return Some(Vec::new());
+                };
+                let key = recipe.key.clone();
+                new_bot.forms += 1;
+                let mut form = super::newbot::RecipeForm::opened(&key, new_bot.forms);
+                form.project = new_bot.project;
+                new_bot.form = Some(form);
+                vec![Effect::Chat(ChatCommand::Recipe {
+                    key,
+                    tools: Vec::new(),
+                })]
+            }
+            KeyCode::Backspace if new_bot.row == 0 => {
+                new_bot.sentence.pop();
+                Vec::new()
+            }
+            KeyCode::Char('u') if ctrl && new_bot.row == 0 => {
+                new_bot.sentence.clear();
+                Vec::new()
+            }
+            KeyCode::Char(c) if !ctrl && new_bot.row == 0 => {
+                new_bot.sentence.push(c);
+                Vec::new()
+            }
+            KeyCode::Char('j') => {
+                new_bot.row = (new_bot.row + 1).min(recipes);
+                Vec::new()
+            }
+            KeyCode::Char('k') => {
+                new_bot.row = new_bot.row.saturating_sub(1);
+                Vec::new()
+            }
+            _ => return None,
+        })
+    }
+
     /// Decisions: everything waiting for the person, read again.
     fn open_decisions(&mut self) -> Vec<Effect> {
         self.view = View::Decisions;
@@ -4132,6 +4567,8 @@ impl App {
         let chat = &mut self.chat;
         chat.open = Some(number);
         chat.transcript = None;
+        chat.draft_result.clear();
+        chat.draft_busy = None;
         chat.streamed.clear();
         chat.progress = None;
         chat.pending_question = None;
@@ -5009,6 +5446,132 @@ impl App {
                         }
                     }
                 }
+                Err(failure) => self.notice(Signal::Negative, &failure.message),
+            },
+            ChatMsg::Recipes(result) => {
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    new_bot.recipes = Some(result.map_err(|f| f.message));
+                }
+            }
+            ChatMsg::Recipe { key, result } => {
+                if let Some(form) = self
+                    .chat
+                    .new_bot
+                    .as_mut()
+                    .and_then(|n| n.form.as_mut())
+                    .filter(|f| f.key == key)
+                {
+                    match result {
+                        Ok(data) => form.take(data),
+                        Err(failure) => {
+                            form.loading = false;
+                            form.error = Some(failure.message);
+                        }
+                    }
+                }
+            }
+            ChatMsg::BotBuilderStarted(result) => match result {
+                Ok(chat) => {
+                    self.chat.new_bot = None;
+                    let number = chat.number;
+                    self.chat.upsert_chat(chat);
+                    self.chat.select(SideItem::Chat(number));
+                    return self.open_chat(number);
+                }
+                Err(failure) => {
+                    if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                        new_bot.sending = false;
+                        new_bot.error = Some(failure.message);
+                    }
+                }
+            },
+            ChatMsg::Trial { origin, result } => {
+                let running = result
+                    .as_ref()
+                    .is_ok_and(|v| v["trial"]["state"] == "running");
+                let (lines, error) = match &result {
+                    Ok(answer) => (super::newbot::trial_lines(answer), None),
+                    Err(failure) => (Vec::new(), Some(failure.message.clone())),
+                };
+                // Only where it was started, if that's still on screen.
+                match origin {
+                    super::newbot::Origin::Chat(number) if self.chat.open == Some(number) => {
+                        self.chat.draft_busy = running.then_some("Trying it…");
+                        self.chat.draft_result = match error {
+                            Some(error) => vec![error],
+                            None => lines,
+                        };
+                    }
+                    super::newbot::Origin::Form(id) => {
+                        if let Some(form) = self
+                            .chat
+                            .new_bot
+                            .as_mut()
+                            .and_then(|n| n.form.as_mut())
+                            .filter(|f| f.id == id)
+                        {
+                            form.busy = running.then_some("Trying it…");
+                            form.error = error;
+                            form.result = lines;
+                        }
+                    }
+                    super::newbot::Origin::Chat(_) => {}
+                }
+            }
+            ChatMsg::BotMade { origin, result } => {
+                use super::newbot::Origin;
+                let mut effects = vec![Effect::Chat(ChatCommand::List)];
+                let form_shown = |app: &Self, id: u64| {
+                    app.view == View::NewBot
+                        && app
+                            .chat
+                            .new_bot
+                            .as_ref()
+                            .and_then(|n| n.form.as_ref())
+                            .is_some_and(|f| f.id == id)
+                };
+                match (origin, result) {
+                    (Origin::Chat(number), result) => {
+                        if self.chat.open == Some(number) {
+                            self.chat.draft_busy = None;
+                            self.chat.draft_result = match result {
+                                Ok(answer) => super::newbot::made_lines(&answer),
+                                Err(failure) => vec![failure.message],
+                            };
+                        }
+                        effects.extend(self.refresh_chat(number));
+                    }
+                    (Origin::Form(id), Ok(answer)) => {
+                        let lines = super::newbot::made_lines(&answer);
+                        // Made either way; only a form still shown moves on.
+                        if form_shown(self, id) {
+                            self.chat.new_bot = None;
+                            if let Some(bot) = answer["bot"]["id"].as_u64() {
+                                effects.extend(self.open_bot(bot));
+                            }
+                        }
+                        self.notice(Signal::Positive, &lines.join(" "));
+                    }
+                    (Origin::Form(id), Err(failure)) => {
+                        if let Some(form) = self
+                            .chat
+                            .new_bot
+                            .as_mut()
+                            .and_then(|n| n.form.as_mut())
+                            .filter(|f| f.id == id)
+                        {
+                            form.busy = None;
+                            form.error = Some(failure.message);
+                        }
+                    }
+                }
+                return effects;
+            }
+            ChatMsg::Connected(result) => match result {
+                Ok(()) => self.notice(
+                    Signal::Idle,
+                    "Finish connecting in the browser, then come back here.",
+                ),
                 Err(failure) => self.notice(Signal::Negative, &failure.message),
             },
             ChatMsg::Downloaded(result) => match result {

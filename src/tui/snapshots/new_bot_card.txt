@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │                  ╭──────────────────────────────────────────────╮
+                               │                  │ What did we budget for Q3, and who signed it │
+  ◙ New bot     + New chat     │                  │ off?                                         │
+  ◇ Decisions             3 ●  │                  ╰──────────────────────────────────────────────╯
+  / Search chats and bots      │
+                               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+  PINNED                       │
+   Onboarding checklist        │  The Q3 budget is €40k, signed off by Ada on 12 September.
+   ◙ Inbox triage         4 ●  │
+                               │  • Marketing: €18k
+  PROJECTS     All Chats Bots  │  • Engineering: €22k
+   ▾ ◫ HQ                      │
+     ▸ ■ Drafts           2 ●  │  Details are in the plan[1].
+       ◙ Morning brief      ●  │
+   ▾ □ Falcon                  │  SOURCES
+       Falcon launch copy 1 ●  │  [1] Q3 plan.pdf  https://drive.google.com/file/d/q3
+       ◙ Issue fixer      1 ●  │
+       Launch plan for Falcon  │  ╭──────────────────────────────────────────────────────────────╮
+       Falcon pricing          │  │ ◙ Ticket digest                                              │
+       Falcon press list       │  │ WHEN  Every day at 8:00                                      │
+       Falcon FAQ              │  │ USES  Chatwoot                                               │
+       7 more                  │  │ DOES  Reads yesterday's tickets and sums them up by theme.   │
+                               │  │                                                              │
+  RECENT                       │  │ /make-bot makes it   /try-bot tries it, changing nothing     │
+   Ticket digest               │  ╰──────────────────────────────────────────────────────────────╯
+   Q3 budget                   │
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │ ╭────────────────────────────────────────────────────────────────╮
+                               │ │ ❯ Reply to Chat with Work                       / for commands │
+ (C) Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

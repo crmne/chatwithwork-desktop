@@ -238,6 +238,12 @@ impl Bots {
         self.call("DELETE", &format!("desktop/bots/{}", bot_id(id)?), None)
     }
 
+    /// New bot's sentence: starts the chat that builds the bot from it
+    /// (`{"sentence", "project_id"}`), answering `{"chat"}`.
+    pub fn start_builder(&self, body: &Value) -> Result<Value> {
+        self.call("POST", "desktop/bot_builders", Some(body))
+    }
+
     pub fn start_trial(&self, body: &Value) -> Result<Value> {
         self.call("POST", "desktop/bot_trials", Some(body))
     }

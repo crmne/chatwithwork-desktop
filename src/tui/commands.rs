@@ -5,6 +5,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     New,
+    NewBot,
+    MakeBot,
+    TryBot,
+    OpenBot,
     Resume,
     Search,
     Model,
@@ -71,6 +75,38 @@ const fn command(
 /// Every command, in the order the list shows them.
 pub const COMMANDS: &[Command] = &[
     command(Cmd::New, "new", &["clear"], "", false, "Start a new chat"),
+    command(
+        Cmd::NewBot,
+        "new-bot",
+        &[],
+        "[what it should do]",
+        false,
+        "Make a bot: say what it does, or start from a recipe",
+    ),
+    command(
+        Cmd::MakeBot,
+        "make-bot",
+        &[],
+        "",
+        false,
+        "Make the bot this chat proposes",
+    ),
+    command(
+        Cmd::TryBot,
+        "try-bot",
+        &[],
+        "",
+        false,
+        "Try the bot this chat proposes; it changes nothing outside",
+    ),
+    command(
+        Cmd::OpenBot,
+        "bot",
+        &[],
+        "",
+        false,
+        "Open the bot this chat made",
+    ),
     command(
         Cmd::Resume,
         "resume",
