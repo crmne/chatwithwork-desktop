@@ -151,6 +151,7 @@ async fn lists_the_coding_tools() {
             "read",
             "grep",
             "glob",
+            "send_to_chat",
             "read_bytes",
             "create",
             "copy_from_chat",
@@ -166,7 +167,7 @@ async fn lists_the_coding_tools() {
     for tool in &tools {
         let a = tool.annotations.as_ref().unwrap();
         assert_eq!(a.open_world_hint, Some(false), "{}", tool.name);
-        if ["grep", "glob", "read_bytes"].contains(&tool.name.as_ref()) {
+        if ["grep", "glob", "read_bytes", "send_to_chat"].contains(&tool.name.as_ref()) {
             assert_eq!(a.read_only_hint, Some(true));
             assert_eq!(a.destructive_hint, Some(false));
             assert_eq!(a.idempotent_hint, Some(true));

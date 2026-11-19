@@ -107,6 +107,83 @@ impl ChatFiles {
     }
 }
 
+impl ChatFiles {
+    /// Send the file at `file` (where it really is, checked by the reader)
+    /// into the chat the server's `transfer` names (`copy_to_chat`):
+    /// `POST /desktop/chat_file_uploads/<transfer>`, streamed, with its size
+    /// and SHA-256 for the server to check. Answers what the server kept.
+    pub fn send(
+        &self,
+        transfer: &str,
+        file: &std::path::Path,
+        size: u64,
+        sha256: &str,
+    ) -> Result<serde_json::Value, ToolError> {
+        if !valid_transfer(transfer) {
+            return Err(ToolError::invalid_argument(
+                "`transfer` isn't one the server made",
+            ));
+        }
+        let Some(tokens) = self
+            .tokens
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return Err(ToolError::new(
+                ErrorCode::Unavailable,
+                "This computer isn't connected to Chat with Work right now.",
+            ));
+        };
+        let path = format!("desktop/chat_file_uploads/{transfer}");
+        let mut retried = false;
+        loop {
+            let token = tokens.access_token().map_err(|e| {
+                ToolError::new(
+                    ErrorCode::Unavailable,
+                    format!("Couldn't sign in to Chat with Work: {e}"),
+                )
+            })?;
+            let (status, body) = tokens
+                .client()
+                .upload_file(tokens.key(), &path, &token, file, size, sha256)
+                .map_err(|e| {
+                    ToolError::new(
+                        ErrorCode::Unavailable,
+                        format!("Couldn't send the file: {e:#}"),
+                    )
+                })?;
+            match status {
+                200..=299 => return Ok(body),
+                401 if !retried => {
+                    tokens.invalidate();
+                    retried = true;
+                }
+                _ => {
+                    let reason = body["error_description"]
+                        .as_str()
+                        .map(|s| {
+                            s.chars()
+                                .filter(|c| !c.is_control())
+                                .take(300)
+                                .collect::<String>()
+                        })
+                        .unwrap_or_else(|| format!("the server answered {status}"));
+                    return Err(ToolError::new(
+                        match status {
+                            409 => ErrorCode::Exists,
+                            413 => ErrorCode::TooLarge,
+                            404 | 410 => ErrorCode::NotFound,
+                            _ => ErrorCode::NotAllowed,
+                        },
+                        format!("Chat with Work didn't keep the file: {reason}"),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
