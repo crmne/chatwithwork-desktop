@@ -4254,8 +4254,17 @@ pub(super) fn buffer_to_ansi(buffer: &ratatui::buffer::Buffer) -> String {
     let mut out = String::new();
     for y in 0..buffer.area.height {
         let mut last = String::new();
+        // Cells under a double-width character, which the terminal fills.
+        let mut covered = 0;
         for x in 0..buffer.area.width {
+            if covered > 0 {
+                covered -= 1;
+                continue;
+            }
             let cell = &buffer[(x, y)];
+            covered = ratatui::text::Span::raw(cell.symbol())
+                .width()
+                .saturating_sub(1);
             let mut sgr = vec!["0".to_string()];
             for (m, code) in [
                 (Modifier::BOLD, "1"),
@@ -4281,6 +4290,18 @@ pub(super) fn buffer_to_ansi(buffer: &ratatui::buffer::Buffer) -> String {
         out.push_str("\x1b[0m\n");
     }
     out
+}
+
+#[test]
+fn ansi_text_keeps_wide_characters_in_their_columns() {
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 3, 1));
+    buffer.set_string(0, 0, "界X", ratatui::style::Style::new());
+    let text = buffer_to_ansi(&buffer);
+    let visible: String = text
+        .split('\x1b')
+        .map(|part| part.split_once('m').map_or(part, |(_, rest)| rest))
+        .collect();
+    assert_eq!(visible, "界X\n");
 }
 
 /// `cargo test --lib tui::tests::evidence -- --ignored` with
