@@ -149,7 +149,7 @@ pub const READ_TOOLS: [&str; 7] = [
 ];
 
 /// Offered only while a shared folder allows changes.
-pub const CHANGE_TOOLS: [&str; 8] = [
+pub const CHANGE_TOOLS: [&str; 9] = [
     "create",
     "write",
     "edit",
@@ -158,6 +158,7 @@ pub const CHANGE_TOOLS: [&str; 8] = [
     "delete",
     "create_document",
     "patch",
+    "copy_from_chat",
 ];
 
 /// What a `grep` or `glob` answer says when the read budget cut it.
@@ -196,6 +197,8 @@ struct Inner {
     audit: Arc<AuditLog>,
     paused: Arc<AtomicBool>,
     max_message_bytes: usize,
+    /// Where `copy_from_chat` fetches a chat's file from, while connected.
+    chat_files: crate::chat_files::ChatFiles,
 }
 
 impl LocalFiles {
@@ -221,6 +224,18 @@ impl LocalFiles {
                 audit,
                 paused,
                 max_message_bytes,
+                chat_files: crate::chat_files::ChatFiles::default(),
+            }),
+        }
+    }
+
+    /// Fetch chats' files for `copy_from_chat` through these tokens.
+    pub fn with_chat_files(self, chat_files: crate::chat_files::ChatFiles) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                chat_files,
+                ..inner
             }),
         }
     }
@@ -1256,6 +1271,16 @@ impl LocalFiles {
                 }
                 Ok(Output::Patch(result))
             }
+            "copy_from_chat" => {
+                let req: CopyFromChatRequest = parse_args(args)?;
+                let writer = Arc::clone(&self.inner.writer);
+                let files = self.inner.chat_files.clone();
+                let result = blocking(move || {
+                    copy_from_chat(&writer, &|transfer, sink| files.fetch(transfer, sink), &req)
+                })
+                .await?;
+                Ok(Output::Change(result))
+            }
             change if CHANGE_TOOLS.contains(&change) => {
                 // A dry run of `write` or `edit` answers with a diff of the
                 // file as it is: that is a read, and counts against the
@@ -1527,6 +1552,85 @@ pub fn browser_tools(browser: &BrowserTools) -> Vec<Tool> {
             tool
         })
         .collect()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CopyFromChatRequest {
+    path: String,
+    size: u64,
+    sha256: String,
+    #[serde(default)]
+    transfer: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// Save a chat's file as the new file `req.path`: checked like any new
+/// file, then fetched from the server, every byte counted and hashed as it
+/// arrives, and put in place only if it is exactly the `size` and SHA-256
+/// the approved call named.
+type Fetch<'a> =
+    &'a dyn Fn(&str, &mut dyn FnMut(&[u8]) -> Result<(), ToolError>) -> Result<(), ToolError>;
+
+fn copy_from_chat(
+    writer: &Writer,
+    fetch: Fetch<'_>,
+    req: &CopyFromChatRequest,
+) -> Result<ChangeResult, ToolError> {
+    let expected = req.sha256.to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ToolError::invalid_argument("`sha256` is 64 hex digits"));
+    }
+    if req.size == 0 {
+        return Err(ToolError::invalid_argument(
+            "an empty file needs no copying: use create",
+        ));
+    }
+    let max = crate::chat_files::MAX_BYTES;
+    if req.dry_run {
+        let mut result = writer.save_streamed(&req.path, req.size, max, true, &mut |_| Ok(()))?;
+        result.sha256 = Some(expected);
+        return Ok(result);
+    }
+    let Some(transfer) = req.transfer.as_deref() else {
+        return Err(ToolError::invalid_argument(
+            "`transfer` names the approved file",
+        ));
+    };
+    let size = req.size;
+    let mut fill = |out: &mut dyn std::io::Write| -> Result<(), ToolError> {
+        let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut received = 0u64;
+        fetch(transfer, &mut |piece| {
+            received += piece.len() as u64;
+            if received > size {
+                return Err(ToolError::new(
+                    ErrorCode::Conflict,
+                    "The file that arrived is bigger than the one approved; nothing was saved.",
+                ));
+            }
+            hash.update(piece);
+            out.write_all(piece)
+                .map_err(|e| ToolError::internal(format!("writing the file: {}", e.kind())))
+        })?;
+        let digest: String = hash
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if received != size || digest != expected {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "The file that arrived isn't the one approved; nothing was saved.",
+            ));
+        }
+        Ok(())
+    };
+    let mut result = writer.save_streamed(&req.path, size, max, false, &mut fill)?;
+    result.sha256 = Some(expected);
+    Ok(result)
 }
 
 /// Run the change tool `name` with `args` in `writer`.
@@ -1863,6 +1967,30 @@ pub fn change_tools() -> Vec<Tool> {
                     "dry_run": { "type": "boolean", "description": DRY_RUN }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }),
+            false,
+            false,
+            None,
+        ),
+        change_tool(
+            "copy_from_chat",
+            "Save a chat's file on the computer",
+            "Save one of the chat's files, byte for byte, any type, as a new file in a shared \
+             folder that allows changes (`writable: true` in `roots`), up to 200 MB: never over \
+             anything already there, and programs, scripts that run when opened, and shortcuts \
+             are never saved. The file arrives straight from Chat with Work after the person \
+             approves saving it, and is kept only if it is exactly the file approved.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "`<root_id>:relative/path` of the new file." },
+                    "size": { "type": "integer", "minimum": 1, "description": "The file's size in bytes, as Chat with Work says it." },
+                    "sha256": { "type": "string", "description": "The file's SHA-256 (hex), as Chat with Work says it." },
+                    "transfer": { "type": "string", "description": "Chat with Work's grant for this file, for this computer. Not needed for a dry run." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["path", "size", "sha256"],
                 "additionalProperties": false
             }),
             false,
@@ -2419,6 +2547,10 @@ impl ServerHandler for LocalFiles {
 #[cfg(all(test, unix))]
 #[path = "tools_tests.rs"]
 mod coding_tests;
+
+#[cfg(test)]
+#[path = "copy_from_chat_tests.rs"]
+mod copy_from_chat_tests;
 
 #[cfg(test)]
 mod tests {

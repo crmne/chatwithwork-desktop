@@ -153,6 +153,7 @@ async fn lists_the_coding_tools() {
             "glob",
             "read_bytes",
             "create",
+            "copy_from_chat",
             "write",
             "edit",
             "mkdir",

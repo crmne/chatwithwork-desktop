@@ -245,6 +245,20 @@ pub enum Body<'a> {
     },
 }
 
+/// How a [`AuthClient::download`] went.
+#[derive(Debug)]
+pub enum Fetched {
+    /// Every byte arrived and the sink took it.
+    Done,
+    /// The server refused, with its status and JSON body.
+    Refused {
+        status: u16,
+        body: serde_json::Value,
+    },
+    /// The sink stopped the transfer with this refusal.
+    Stopped(crate::error::ToolError),
+}
+
 pub struct AuthClient {
     server: ServerUrl,
     agent: ureq::Agent,
@@ -503,6 +517,72 @@ impl AuthClient {
                 continue;
             }
             return Ok((status, body));
+        }
+        unreachable!("the loop returns on the second attempt")
+    }
+
+    /// GET a file the server streams to this device (`path`, with its
+    /// DPoP-bound token and a fresh proof), handing each piece to `sink` as
+    /// it arrives, so a large file is never held in memory. Redirects are
+    /// never followed. A refusal comes back with its status and JSON body.
+    pub fn download(
+        &self,
+        key: &DeviceKey,
+        path: &str,
+        access_token: &str,
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), crate::error::ToolError>,
+    ) -> Result<Fetched> {
+        use std::io::Read;
+        let url = self.server.endpoint(path);
+        for attempt in 0..2 {
+            let proof = key.proof("GET", &url, self.nonce().as_deref(), Some(access_token));
+            let mut response = self
+                .agent
+                .get(&url)
+                .header("Authorization", &format!("DPoP {access_token}"))
+                .header("DPoP", &proof)
+                .header("Accept", "application/octet-stream")
+                .config()
+                .timeout_global(Some(UPLOAD_TIMEOUT * 4))
+                .build()
+                .call()
+                .with_context(|| format!("contacting {url}"))?;
+            let status = response.status().as_u16();
+            self.set_nonce(
+                response
+                    .headers()
+                    .get("DPoP-Nonce")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string),
+            );
+            if (300..400).contains(&status) {
+                bail!(
+                    "the server answered {url} with a redirect ({status}); redirects are never followed"
+                );
+            }
+            if status != 200 {
+                let body: serde_json::Value = response
+                    .body_mut()
+                    .with_config()
+                    .limit(64 * 1024)
+                    .read_json()
+                    .unwrap_or(serde_json::Value::Null);
+                if attempt == 0 && body["error"] == "use_dpop_nonce" {
+                    continue;
+                }
+                return Ok(Fetched::Refused { status, body });
+            }
+            let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+            let mut buffer = vec![0u8; 256 * 1024];
+            loop {
+                let read = reader.read(&mut buffer).context("receiving the file")?;
+                if read == 0 {
+                    return Ok(Fetched::Done);
+                }
+                if let Err(refusal) = sink(&buffer[..read]) {
+                    return Ok(Fetched::Stopped(refusal));
+                }
+            }
         }
         unreachable!("the loop returns on the second attempt")
     }

@@ -679,6 +679,48 @@ impl ChangeDir {
         Err(ToolError::internal("no free name for a temporary file"))
     }
 
+    /// Stage a new file whose bytes `fill` writes as they arrive, like
+    /// [`ChangeDir::stage`]. A refusal from `fill` leaves nothing behind.
+    pub fn stage_from(
+        &self,
+        _mode: u32,
+        fill: &mut dyn FnMut(&mut dyn Write) -> Result<(), ToolError>,
+    ) -> Result<Staged, ToolError> {
+        for _ in 0..16 {
+            let path = self.child(OsStr::new(&temp_name()));
+            let mut file = match OpenOptions::new()
+                .write(true)
+                .access_mode(FILE_GENERIC_WRITE | DELETE | WRITE_DAC | READ_CONTROL)
+                .share_mode(0)
+                .create_new(true)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&path)
+            {
+                Ok(file) => file,
+                Err(e) if is_exists(&e) => continue,
+                Err(e) => return Err(change_error(&e)),
+            };
+            let filled = fill(&mut file);
+            let finished = filled.is_ok().then(|| {
+                file.sync_all()
+                    .and_then(|()| mark_from_internet(&file, &path))
+            });
+            let staged = Staged { file, path };
+            match (filled, finished) {
+                (Err(e), _) => {
+                    self.discard(staged);
+                    return Err(e);
+                }
+                (Ok(()), Some(Err(e))) => {
+                    self.discard(staged);
+                    return Err(change_error(&e));
+                }
+                _ => return Ok(staged),
+            }
+        }
+        Err(ToolError::internal("no free name for a temporary file"))
+    }
+
     pub fn commit(&self, staged: Staged, name: &OsStr) -> Result<(), ToolError> {
         match rename_handle(&staged.file, &self.child(name)) {
             Ok(()) => Ok(()),

@@ -279,8 +279,9 @@ pub fn definitions() -> Vec<Definition> {
                  in the file picker: `ref` is a file field, or a button or label `browser_read` \
                  marks `[upload]`; `drop: true` drops them on `ref` instead, for a zone that \
                  says to drag files there. `paths` are `<root_id>:relative/path` of files in \
-                 shared folders (up to 10, each up to 200 MB): only files already on this \
-                 computer, in a folder it shares, can be uploaded. The person \
+                 shared folders (up to 10, each up to 200 MB): only files on this computer, \
+                 in a folder it shares, can be uploaded; save a chat's file here first \
+                 with `copy_from_chat`, then upload it from that path. The person \
                  approves every upload, seeing each file and the site; it is never allowed for \
                  the rest of a chat. Answers what the page shows afterwards (the file's name, or \
                  an error the page gives), never the file's contents. Sites whose picker opens \
