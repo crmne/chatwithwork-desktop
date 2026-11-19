@@ -234,6 +234,9 @@ impl Tray {
         if view.browser_stopped.is_some() {
             menu.insert(&browser, browser_position(view.detail.is_some()))?;
         }
+        // Linux panels name the item by its title, which is GLib's
+        // application name, the binary's ("cww-app") until it's set.
+        crate::linux::name_application(&app.package_info().name);
         let icon = TrayIconBuilder::with_id("cww-app")
             .icon(icon(view.dimmed))
             .icon_as_template(cfg!(target_os = "macos"))

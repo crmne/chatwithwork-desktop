@@ -42,6 +42,21 @@ pub fn prepare_web_view() {
     }
 }
 
+/// Names the app for GLib: the tray item's title (the StatusNotifierItem's
+/// `Title`, which panels show on hover, as libappindicator has no tooltip)
+/// is GLib's application name, which is the binary's, "cww-app", until set.
+/// Given the build's product name (tauri.conf.json's `productName`). Set
+/// once; later calls leave it.
+pub fn name_application(name: &str) {
+    #[cfg(target_os = "linux")]
+    if gtk::glib::application_name().is_none_or(|current| current != name) {
+        static NAMED: std::sync::Once = std::sync::Once::new();
+        NAMED.call_once(|| gtk::glib::set_application_name(name));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = name;
+}
+
 /// Opens GTK's display before Tauri does. Tauri's event loop (tao) panics
 /// when GTK can't start, which happens whenever the app is started outside
 /// a graphical session: from SSH, a service started before the desktop
