@@ -285,9 +285,10 @@ fn dictation_is_cancelled_by_navigation_and_ignores_old_words() {
 fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
-        .draw(|frame| render(frame, app, &Theme::new(Depth::TrueColor), NOW))
+        .draw(|frame| render(frame, app, &Theme::new(Depth::Ansi), NOW))
         .unwrap();
     let buffer = terminal.backend().buffer();
+    assert_terminal_colours(buffer);
     let mut out = String::new();
     for y in 0..buffer.area.height {
         let mut line = String::new();
@@ -298,6 +299,23 @@ fn render_to_string(app: &App, width: u16, height: u16) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Every cell keeps the terminal's background and uses its palette: no
+/// painted surface, no fixed RGB or 256-colour index anywhere.
+fn assert_terminal_colours(buffer: &ratatui::buffer::Buffer) {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            assert!(
+                super::theme::terminal_colours_only(cell.fg, cell.bg),
+                "({x}, {y}) {:?} has fg {:?} and bg {:?}",
+                cell.symbol(),
+                cell.fg,
+                cell.bg
+            );
+        }
+    }
 }
 
 /// Compare with `src/tui/snapshots/<name>.txt`, or write it when
@@ -2227,7 +2245,7 @@ fn draw(app: &mut App) {
     let mut hits = Hits::default();
     terminal
         .draw(|frame| {
-            hits = super::ui::render_hits(frame, app, &Theme::new(Depth::TrueColor), NOW);
+            hits = super::ui::render_hits(frame, app, &Theme::new(Depth::Ansi), NOW);
         })
         .unwrap();
     app.hits = hits;
@@ -3123,8 +3141,8 @@ fn the_mouse_selects_opens_and_scrolls() {
 }
 
 #[test]
-fn thinking_shimmers_in_grey_rather_than_the_rainbow() {
-    use super::theme::{FAINT, MUTED};
+fn thinking_shimmers_in_the_terminals_own_ink_rather_than_the_rainbow() {
+    use ratatui::style::{Color, Modifier};
     let mut app = app();
     open_budget(&mut app);
     app.update(Msg::Chat(ChatMsg::Shown {
@@ -3133,24 +3151,17 @@ fn thinking_shimmers_in_grey_rather_than_the_rainbow() {
     }));
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal
-        .draw(|frame| render(frame, &app, &Theme::new(Depth::TrueColor), NOW))
+        .draw(|frame| render(frame, &app, &Theme::new(Depth::Ansi), NOW))
         .unwrap();
     let buffer = terminal.backend().buffer();
     let (x, y) = find(&app, "Thinking");
-    let between = |v: u8, a: u8, b: u8| a.min(b) <= v && v <= a.max(b);
+    let mut dim = 0;
     for i in 0..8 {
         let cell = &buffer[(x + i, y)];
-        let ratatui::style::Color::Rgb(r, g, b) = cell.fg else {
-            panic!("no colour on {:?}", cell.symbol());
-        };
-        assert!(
-            between(r, FAINT.0, MUTED.0)
-                && between(g, FAINT.1, MUTED.1)
-                && between(b, FAINT.2, MUTED.2),
-            "{} is ({r}, {g}, {b})",
-            cell.symbol()
-        );
+        assert_eq!(cell.fg, Color::Reset, "{} is coloured", cell.symbol());
+        dim += usize::from(cell.modifier.contains(Modifier::DIM));
     }
+    assert!(dim > 0, "the band sweeps over dim letters");
     // Writing, once the answer streams in.
     app.update(Msg::Chat(ChatMsg::Live {
         chat: 42,
@@ -3525,10 +3536,11 @@ fn snapshot_settings_privacy() {
 }
 
 #[test]
-fn a_card_that_needs_you_is_tinted_whole_never_striped() {
+fn a_card_that_needs_you_is_ringed_in_its_colour_on_the_terminals_background() {
+    use ratatui::style::Color;
     let mut app = app();
     waiting(&mut app, vec![approval()], vec![]);
-    let theme = Theme::new(Depth::TrueColor);
+    let theme = Theme::new(Depth::Ansi);
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|frame| render(frame, &app, &theme, NOW))
@@ -3540,17 +3552,9 @@ fn a_card_that_needs_you_is_tinted_whole_never_striped() {
         .rev()
         .find(|&cx| buffer[(cx, y)].symbol() == "│")
         .expect("a ring");
-    let wash = theme.wash(Signal::Attention).bg;
-    assert_eq!(
-        buffer[(ring, y)].fg,
-        theme.edge(Signal::Attention).fg.unwrap()
-    );
-    assert_eq!(Some(buffer[(ring + 1, y)].bg), wash);
-    assert_ne!(
-        buffer[(ring, y)].fg,
-        theme.signal(Signal::Attention).fg.unwrap(),
-        "no stripe in the signal's own colour"
-    );
+    assert_eq!(buffer[(ring, y)].fg, Color::Yellow);
+    assert_eq!(buffer[(ring + 1, y)].bg, Color::Reset);
+    assert_eq!(buffer[(x, y)].bg, Color::Reset);
 }
 
 #[test]
@@ -3875,7 +3879,7 @@ fn organization_terminal_review_screens() {
     for (name, app) in [("before", before), ("after", after)] {
         for (width, height) in [(60, 24), (100, 36)] {
             for (mode, depth, ink, canvas) in [
-                ("dark", Depth::TrueColor, "#e9ecf4", "#06070b"),
+                ("dark", Depth::Ansi, "#e9ecf4", "#06070b"),
                 ("mono", Depth::Mono, "#111111", "#ffffff"),
             ] {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -4208,4 +4212,186 @@ fn alt_up_and_the_x_take_back_your_latest_queued_message() {
     }));
     assert!(app.chat.input.is_empty());
     assert_eq!(app.chat.unqueueing, None);
+}
+
+// --------------------------------------------------------------- evidence
+
+/// The screen as ANSI text, colours and attributes as the terminal would
+/// get them, for reviewing a change in a real terminal or as an image.
+pub(super) fn buffer_to_ansi(buffer: &ratatui::buffer::Buffer) -> String {
+    use ratatui::style::{Color, Modifier};
+    fn colour(c: Color, bg: bool) -> String {
+        let base = if bg { 40 } else { 30 };
+        let named = |i: u8| {
+            if i < 8 {
+                format!("{}", base + i)
+            } else {
+                format!("{}", base + 60 + i - 8)
+            }
+        };
+        match c {
+            Color::Reset => format!("{}", base + 9),
+            Color::Black => named(0),
+            Color::Red => named(1),
+            Color::Green => named(2),
+            Color::Yellow => named(3),
+            Color::Blue => named(4),
+            Color::Magenta => named(5),
+            Color::Cyan => named(6),
+            Color::Gray => named(7),
+            Color::DarkGray => named(8),
+            Color::LightRed => named(9),
+            Color::LightGreen => named(10),
+            Color::LightYellow => named(11),
+            Color::LightBlue => named(12),
+            Color::LightMagenta => named(13),
+            Color::LightCyan => named(14),
+            Color::White => named(15),
+            Color::Indexed(i) => format!("{};5;{i}", base + 8),
+            Color::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", base + 8),
+        }
+    }
+    let mut out = String::new();
+    for y in 0..buffer.area.height {
+        let mut last = String::new();
+        // Cells under a double-width character, which the terminal fills.
+        let mut covered = 0;
+        for x in 0..buffer.area.width {
+            if covered > 0 {
+                covered -= 1;
+                continue;
+            }
+            let cell = &buffer[(x, y)];
+            covered = ratatui::text::Span::raw(cell.symbol())
+                .width()
+                .saturating_sub(1);
+            let mut sgr = vec!["0".to_string()];
+            for (m, code) in [
+                (Modifier::BOLD, "1"),
+                (Modifier::DIM, "2"),
+                (Modifier::ITALIC, "3"),
+                (Modifier::UNDERLINED, "4"),
+                (Modifier::REVERSED, "7"),
+                (Modifier::CROSSED_OUT, "9"),
+            ] {
+                if cell.modifier.contains(m) {
+                    sgr.push(code.into());
+                }
+            }
+            sgr.push(colour(cell.fg, false));
+            sgr.push(colour(cell.bg, true));
+            let sgr = format!("\x1b[{}m", sgr.join(";"));
+            if sgr != last {
+                out.push_str(&sgr);
+                last = sgr;
+            }
+            out.push_str(cell.symbol());
+        }
+        out.push_str("\x1b[0m\n");
+    }
+    out
+}
+
+#[test]
+fn a_question_with_wide_characters_keeps_its_outline_straight() {
+    let mut app = app();
+    open_budget(&mut app);
+    let mut transcript = budget_transcript("idle");
+    transcript.entries.push(Entry::User {
+        id: 9,
+        content: "第三季度的预算是多少".into(),
+        author: None,
+        attachments: vec![],
+    });
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(transcript),
+    }));
+    let screen = render_to_string(&app, 100, 30);
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("第"))
+        .expect("the question");
+    let rows = &lines[at - 1..=at + 1];
+    // A cell each, a wide character's covered cell as a space.
+    let right_edge = |line: &str| line.trim_end().chars().count();
+    let widths: Vec<usize> = rows.iter().map(|l| right_edge(l)).collect();
+    assert!(widths.windows(2).all(|w| w[0] == w[1]), "{rows:#?}");
+}
+
+#[test]
+fn ansi_text_keeps_wide_characters_in_their_columns() {
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 3, 1));
+    buffer.set_string(0, 0, "界X", ratatui::style::Style::new());
+    let text = buffer_to_ansi(&buffer);
+    let visible: String = text
+        .split('\x1b')
+        .map(|part| part.split_once('m').map_or(part, |(_, rest)| rest))
+        .collect();
+    assert_eq!(visible, "界X\n");
+}
+
+/// `cargo test --lib tui::tests::evidence -- --ignored` with
+/// `CWW_EVIDENCE_DIR` set writes the main screens as ANSI text there, at
+/// 140x40, for each colour depth.
+#[test]
+#[ignore]
+fn evidence() {
+    let Some(dir) = std::env::var_os("CWW_EVIDENCE_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut screens: Vec<(&str, App)> = Vec::new();
+    {
+        let mut app = app();
+        budget_open(&mut app, every_action());
+        app.update(key(KeyCode::Esc));
+        screens.push(("chat", app));
+    }
+    {
+        let mut app = app();
+        waiting(&mut app, vec![approval()], vec![]);
+        screens.push(("approval", app));
+    }
+    {
+        let mut app = app();
+        chats_ready(&mut app);
+        app.update(char('n'));
+        for c in "What changed in Falcon this week?".chars() {
+            app.update(char(c));
+        }
+        screens.push(("new_chat", app));
+    }
+    {
+        let mut app = app();
+        running(
+            &mut app,
+            status(
+                "connected",
+                vec![root("work-docs", "Work docs", "ready", 1532)],
+            ),
+        );
+        app.update(Msg::Chat(ChatMsg::Listed(Ok(chat_list()))));
+        app.view = View::Settings(Page::Folders);
+        screens.push(("settings", app));
+    }
+    for (name, app) in &screens {
+        for (depth_name, theme) in evidence_themes() {
+            let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+            terminal
+                .draw(|frame| render(frame, app, &theme, NOW))
+                .unwrap();
+            let text = buffer_to_ansi(terminal.backend().buffer());
+            std::fs::write(dir.join(format!("{name}.{depth_name}.ans")), text).unwrap();
+        }
+    }
+}
+
+fn evidence_themes() -> Vec<(&'static str, Theme)> {
+    vec![
+        ("ansi", Theme::new(Depth::Ansi)),
+        ("mono", Theme::new(Depth::Mono)),
+    ]
 }

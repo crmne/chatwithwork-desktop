@@ -1,19 +1,19 @@
- ◆ Chat with Work              │                    What did we budget for Q3, and who signed it
-                               │                    off?
-  + New chat                   │
-  / Search chats               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+ ◆ Chat with Work              │                  ╭──────────────────────────────────────────────╮
+                               │                  │ What did we budget for Q3, and who signed it │
+  + New chat                   │                  │ off?                                         │
+  / Search chats               │                  ╰──────────────────────────────────────────────╯
                                │
-  RECENT                       │  The Q3 budget is €40k, signed off by Ada on 12 September.
+  RECENT                       │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
    Q3 budget                   │
-   Launch plan for Falcon      │  • Marketing: €18k
-   Onboarding checklist        │  • Engineering: €22k
-   Vendor contracts            │
-   Hiring plan                 │  Details are in the plan[1].
+   Launch plan for Falcon      │  The Q3 budget is €40k, signed off by Ada on 12 September.
+   Onboarding checklist        │
+   Vendor contracts            │  • Marketing: €18k
+   Hiring plan                 │  • Engineering: €22k
+                               │
+                               │  Details are in the plan[1].
                                │
                                │  SOURCES
                                │  [1] Q3 plan.pdf  https://drive.google.com/file/d/q3
-                               │
-                               │
                                │
                                │
                                │
@@ -27,4 +27,4 @@
   PINNED                  all  │ │ ▌Gemini 3.8 Flash  current · About 3 credits per answer        │
    Falcon                      │ │  GPT-6 Sol · About 12 credits per answer                       │
                                │ │  Claude Opus · You're out of credits. Add credits in Settings… │
-  C  Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯
+ (C) Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯

@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn draws_the_common_markdown() {
-        let theme = Theme::new(Depth::TrueColor);
+        let theme = Theme::new(Depth::Ansi);
         let mut notes =
             Footnotes::new([("Q3 plan.pdf".to_string(), Some("https://d/q3".to_string()))]);
         let lines = render(

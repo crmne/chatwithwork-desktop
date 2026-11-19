@@ -251,7 +251,7 @@ A first run is three keys: `c` to pair, `s` to start the daemon if the installer
 
 Chats in the terminal are a separate permission from sharing folders. `cww login` asks for both, and the approval page lets you decline chats (`cww login --no-chats` doesn't ask). A computer paired without them asks when you press `o`, and you allow it in Chat with Work under Settings, Computers; you can turn it off there at any time. The TUI never holds a token: the daemon asks Chat with Work for it, and answers stream over the daemon's connection. The logos and file-type icons chats show (in the desktop app) come from the paired server too: the daemon fetches only images under its `/assets/`, without the token, at most 1 MiB each and never through a redirect. [CHAT_API.md](CHAT_API.md) explains the design.
 
-The UI uses no CPU while nothing happens, follows `NO_COLOR`, and falls back to 256 colours on terminals without true colour.
+The UI uses no CPU while nothing happens and draws in your terminal's own colours: it never paints a background, so it looks the same as the rest of your terminal, light or dark, themed or not. It uses your foreground with bold and dim, reverse video for the selection, and the 16 ANSI colours only for state (green done, blue working, yellow waiting for you, red failed), which your theme restyles. With `NO_COLOR` set it uses no colour at all.
 
 ## Bots from the terminal
 

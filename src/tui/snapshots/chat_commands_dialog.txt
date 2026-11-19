@@ -1,9 +1,9 @@
- ◆ Chat with Work              │                    What did we budget for Q3, and who signed it
-                               │                    off?
-  + New chat                   │
-  / Search chats               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+ ◆ Chat with Work              │                  ╭──────────────────────────────────────────────╮
+                               │                  │ What did we budget for Q3, and who signed it │
+  + New chat                   │                  │ off?                                         │
+  / Search chats               │                  ╰──────────────────────────────────────────────╯
                                │
-  RECENT                       │  The Q3 budget is €40k, signed off by Ada on 12 September.
+  RECENT                       │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
    Q3 budget                   │
   ╭ COMMANDS ON THIS COMPUTER ───────────────────────────────────────────────────────────────────╮
   │ › ● bin/rails test                                                                       42s │
@@ -27,4 +27,4 @@
   PINNED                  all  │  ● Running bin/rails test in App › api · 42s            /commands
    Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ Reply to Chat with Work                                      │
-  C  Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯
+ (C) Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯

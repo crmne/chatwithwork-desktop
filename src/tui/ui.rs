@@ -46,7 +46,6 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme, now: OffsetDateTime) 
 pub fn render_hits(frame: &mut Frame, app: &App, theme: &Theme, now: OffsetDateTime) -> Hits {
     let mut hits = Hits::default();
     let area = frame.area();
-    frame.render_widget(Block::new().style(theme.base()), area);
     let side_width = match area.width {
         90.. => 32,
         64.. => 26,
@@ -82,8 +81,7 @@ fn sidebar(
 ) {
     let block = Block::new()
         .borders(Borders::RIGHT)
-        .border_style(theme.line())
-        .style(theme.sunken());
+        .border_style(theme.line());
     let inner = pad(block.inner(area), 1, 0);
     frame.render_widget(block, area);
     let low = app
@@ -103,7 +101,7 @@ fn sidebar(
     ])
     .areas(inner);
     let name = Line::from(vec![
-        Span::styled(MARK, theme.rainbow(0.48)),
+        Span::styled(MARK, theme.strong()),
         Span::raw(" "),
         Span::styled("Chat with Work", theme.strong()),
     ]);
@@ -160,7 +158,7 @@ fn account_line(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &
             .flat_map(char::to_uppercase)
             .collect();
         Line::from(vec![
-            Span::styled(format!(" {initial} "), theme.bubble().patch(theme.muted())),
+            Span::styled(format!("({initial})"), theme.muted()),
             Span::raw(" "),
             Span::styled(
                 ellipsize(name, area.width.saturating_sub(5) as usize),
@@ -235,7 +233,7 @@ fn chats_section(
     };
     let mut new_chat = Line::from(vec![
         marker(new_selected),
-        Span::styled("+ ", theme.rainbow(0.2)),
+        Span::styled("+ ", theme.strong()),
         Span::styled("New chat", new_style),
     ]);
     if new_selected && focused {
@@ -569,12 +567,7 @@ fn main_pane(
         heading(frame, pad(header, 2, 0), left, app, theme, now, hits);
     }
     chat_view(frame, pad(body, 2, 0), app, theme, now, hits);
-    // A notice that needs you is tinted whole, as the web's are.
-    let tint = match app.notice.as_ref().map(|n| n.signal) {
-        Some(signal @ (Signal::Attention | Signal::Negative)) => theme.wash(signal),
-        _ => theme.base(),
-    };
-    frame.render_widget(Paragraph::new(notice).style(tint), pad(notice_area, 2, 0));
+    frame.render_widget(Paragraph::new(notice), pad(notice_area, 2, 0));
     composer_box(frame, pad(composer, 1, 0), app, theme, now, view, hits);
 }
 
@@ -896,12 +889,11 @@ pub(super) fn render_card(
     lines: Vec<Line<'static>>,
     theme: &Theme,
 ) {
-    // Tinted whole, with a ring in the signal's colour, as the web's notices
-    // and approval cards are: never a stripe down one side.
+    // Ringed in the signal's colour, as the web's notices and approval cards
+    // are: never a stripe down one side, and never a painted background.
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(theme.edge(card.signal))
-        .style(theme.wash(card.signal));
+        .border_style(theme.edge(card.signal));
     let inner = pad(block.inner(area), 1, 0);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), inner);
@@ -1471,8 +1463,8 @@ fn card_edge(width: usize, top: bool, signal: Signal, theme: &Theme) -> Line<'st
 }
 
 /// Closes the card opened at `start` (its top edge): every line since gets
-/// the ring at both sides and the wash behind it, as the web tints a card
-/// that needs someone whole; a selected line keeps its own highlight.
+/// the ring at both sides, in the signal's colour, as the web rings a card
+/// that needs someone; the terminal's own background stays behind it.
 fn tint_card(
     lines: &mut Vec<Line<'static>>,
     start: usize,
@@ -1480,27 +1472,19 @@ fn tint_card(
     signal: Signal,
     theme: &Theme,
 ) {
-    let wash = theme.wash(signal);
-    let edge = theme.edge(signal).patch(wash);
+    let edge = theme.edge(signal);
     let inner = width.saturating_sub(4);
     for line in lines.iter_mut().skip(start + 1) {
-        let fill = line
-            .style
-            .bg
-            .map_or(wash, |bg| ratatui::style::Style::new().bg(bg));
         let pad = inner.saturating_sub(line.width());
-        let mut spans = vec![Span::styled("│", edge), Span::styled(" ", wash)];
-        spans.extend(line.spans.drain(..).map(|span| {
-            let style = if span.style.bg.is_some() {
-                span.style
-            } else {
-                fill.patch(span.style)
-            };
-            Span::styled(span.content, style)
-        }));
-        spans.push(Span::styled(" ".repeat(pad + 1), fill));
+        let mut spans = vec![Span::styled("│", edge), Span::raw(" ")];
+        spans.extend(
+            line.spans
+                .drain(..)
+                .map(|span| Span::styled(span.content, line.style.patch(span.style))),
+        );
+        spans.push(Span::raw(" ".repeat(pad + 1)));
         spans.push(Span::styled("│", edge));
-        *line = Line::from(spans).style(line.style);
+        *line = Line::from(spans);
     }
     lines.push(card_edge(width, false, signal, theme));
 }
@@ -1539,7 +1523,7 @@ fn detail_lines<'a>(
 fn choice_line(text: &str, selected: bool, theme: &Theme) -> Line<'static> {
     if selected {
         Line::from(vec![
-            Span::styled(PROMPT, theme.rainbow(0.48)),
+            Span::styled(PROMPT, theme.strong()),
             Span::raw(" "),
             Span::styled(text.to_string(), theme.strong()),
         ])
@@ -1619,7 +1603,7 @@ fn question_lines(
                 let room = width.saturating_sub(label_width + 4);
                 let mut spans = vec![
                     if here {
-                        Span::styled(PROMPT, theme.rainbow(0.48))
+                        Span::styled(PROMPT, theme.strong())
                     } else {
                         Span::raw(" ")
                     },
@@ -1675,7 +1659,9 @@ fn question_lines(
     lines.push(Line::raw(""));
 }
 
-/// A question, as a bubble on the right.
+/// A question, as a bubble on the right: its text in a rounded outline,
+/// since the terminal's background is never painted. A message still
+/// waiting in the queue has a dashed outline and dim text.
 fn bubble(
     lines: &mut Vec<Line<'static>>,
     text: &str,
@@ -1686,23 +1672,37 @@ fn bubble(
 ) {
     let most = (width * 3 / 4).clamp(16, width);
     let wrapped = wrap(text.trim(), most.saturating_sub(4));
-    let inner = wrapped.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    // In terminal columns, so a wide character keeps the outline straight.
+    let columns = |line: &str| Span::raw(line.to_string()).width();
+    let inner = wrapped.iter().map(|l| columns(l)).max().unwrap_or(0);
     let indent = " ".repeat(width.saturating_sub(inner + 4));
     if let Some(author) = author {
         lines.push(Line::styled(author.to_string(), theme.micro()).alignment(Alignment::Right));
     }
-    let style = if pending {
-        theme.bubble().patch(theme.faint())
+    let (text_style, side, rule) = if pending {
+        (theme.faint(), "┆", "┄")
     } else {
-        theme.bubble()
+        (theme.ink(), "│", "─")
     };
+    let edge = theme.line();
+    let across = rule.repeat(inner + 2);
+    lines.push(Line::from(vec![
+        Span::raw(indent.clone()),
+        Span::styled(format!("╭{across}╮"), edge),
+    ]));
     for line in wrapped {
-        let pad = inner - line.chars().count();
+        let pad = inner.saturating_sub(columns(&line));
         lines.push(Line::from(vec![
             Span::raw(indent.clone()),
-            Span::styled(format!("  {line}{}  ", " ".repeat(pad)), style),
+            Span::styled(side, edge),
+            Span::styled(format!(" {line}{} ", " ".repeat(pad)), text_style),
+            Span::styled(side, edge),
         ]));
     }
+    lines.push(Line::from(vec![
+        Span::raw(indent),
+        Span::styled(format!("╰{across}╯"), edge),
+    ]));
     lines.push(Line::raw(""));
 }
 
@@ -1923,7 +1923,7 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
     let usable = pane.ready() && locked.is_none();
     let focused = usable && app.focus == Focus::Composer && app.modal.is_none();
     let room = width.saturating_sub(3).max(4);
-    let prompt = || Span::styled(PROMPT, theme.rainbow(0.48));
+    let prompt = || Span::styled(PROMPT, theme.strong());
     let mut view = ComposerView {
         lines: Vec::new(),
         cursor: None,
@@ -2221,9 +2221,10 @@ fn picker_rows(view: &mut ComposerView, app: &App, theme: &Theme, width: usize) 
     }
 }
 
-/// The composer, with the Live Wire rainbow for its edge: dimmed while it
-/// can't send, flowing while an answer is written. Without true colour it's
-/// the nearest 256 colours, and with `NO_COLOR` a bold or dim frame.
+/// The composer, with its edge saying what's happening: a dim outline at
+/// rest and while it can't send, yellow while a change or a question waits
+/// for the person, and the rainbow flowing in ANSI colours while an answer
+/// is written. With `NO_COLOR`, bold while it works.
 fn composer_box(
     frame: &mut Frame,
     area: Rect,
@@ -2244,7 +2245,16 @@ fn composer_box(
     } else {
         0.0
     };
-    rainbow_border(frame.buffer_mut(), area, theme, usable, phase);
+    let edge = if !usable {
+        Edge::Plain(theme.line())
+    } else if pane.pending_decision().is_some() || pane.pending_question().is_some() {
+        Edge::Plain(theme.edge(Signal::Attention))
+    } else if phase > 0.0 {
+        Edge::Rainbow(phase)
+    } else {
+        Edge::Plain(theme.line())
+    };
+    composer_edge(frame.buffer_mut(), area, theme, edge);
     // The model, on the bottom edge, where the desktop app shows it.
     if let Some(model) = pane.model_name().filter(|_| usable && area.height >= 3) {
         let label = format!(
@@ -2274,34 +2284,35 @@ fn composer_box(
     }
 }
 
-/// The composer's edge: the rainbow, dimmed while it can't send, shifted
-/// by `phase` so it flows while an answer is written.
-fn rainbow_border(buf: &mut Buffer, area: Rect, theme: &Theme, bright: bool, phase: f32) {
+enum Edge {
+    Plain(Style),
+    /// Flowing, shifted by this much of the way round.
+    Rainbow(f32),
+}
+
+/// Draws the composer's edge in `edge`'s colours, foreground only.
+fn composer_edge(buf: &mut Buffer, area: Rect, theme: &Theme, edge: Edge) {
     if area.width < 2 || area.height < 2 {
         return;
     }
     let span = (area.width - 1) as f32;
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            let edge = y == area.top()
+            let on_edge = y == area.top()
                 || y == area.bottom() - 1
                 || x == area.left()
                 || x == area.right() - 1;
-            if !edge {
+            if !on_edge {
                 continue;
             }
-            let along = (x - area.left()) as f32 / span;
-            // Flowing: the gradient runs there and back so it never jumps.
-            let t = if phase > 0.0 {
-                let shifted = (along + phase) % 1.0;
-                1.0 - (2.0 * shifted - 1.0).abs()
-            } else {
-                along
-            };
-            let style = if bright {
-                theme.rainbow(t)
-            } else {
-                theme.rainbow_dim(t)
+            let style = match edge {
+                Edge::Plain(style) => style,
+                Edge::Rainbow(phase) => {
+                    // The gradient runs there and back so it never jumps.
+                    let along = (x - area.left()) as f32 / span;
+                    let shifted = (along + phase) % 1.0;
+                    theme.rainbow(1.0 - (2.0 * shifted - 1.0).abs())
+                }
             };
             if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
                 cell.set_style(style);
@@ -2568,7 +2579,7 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
     let text_width = width.saturating_sub(4) as usize;
     let (title, lines) = match modal {
         Modal::AddRoot { input } => {
-            let mut spans = vec![Span::styled(PROMPT, theme.rainbow(0.48)), Span::raw(" ")];
+            let mut spans = vec![Span::styled(PROMPT, theme.strong()), Span::raw(" ")];
             spans.push(Span::styled(
                 tail(input, text_width.saturating_sub(3)),
                 theme.ink(),
@@ -2592,7 +2603,7 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
         }
         Modal::RenameRoot { id, input } => {
             let spans = vec![
-                Span::styled(PROMPT, theme.rainbow(0.48)),
+                Span::styled(PROMPT, theme.strong()),
                 Span::raw(" "),
                 Span::styled(tail(input, text_width.saturating_sub(3)), theme.ink()),
             ];
@@ -2784,7 +2795,6 @@ fn modal_box(frame: &mut Frame, area: Rect, modal: &Modal, app: &App, theme: &Th
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme.line())
-        .style(theme.surface())
         .title(Span::styled(format!(" {title} "), theme.micro()));
     let inner = pad(block.inner(rect), 1, 0);
     frame.render_widget(block, rect);
@@ -3025,11 +3035,10 @@ pub(super) fn sweep(now: OffsetDateTime) -> f32 {
     (now.unix_timestamp_nanos().rem_euclid(2_000_000_000)) as f32 / 2_000_000_000.0
 }
 
-/// The mark beside "Thinking": the spinner, its colour going round the
-/// rainbow as the web's ring does around the brand mark.
+/// The mark beside "Thinking": the spinner, in the blue that says it's
+/// working.
 fn working_mark(theme: &Theme, now: OffsetDateTime) -> Span<'static> {
-    let t = (now.unix_timestamp_nanos().rem_euclid(2_400_000_000)) as f32 / 2_400_000_000.0;
-    Span::styled(spinner(now), theme.rainbow(1.0 - (2.0 * t - 1.0).abs()))
+    Span::styled(spinner(now), theme.signal(Signal::Live))
 }
 
 pub(super) fn spinner(now: OffsetDateTime) -> &'static str {
