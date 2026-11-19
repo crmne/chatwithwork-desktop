@@ -418,6 +418,15 @@ pub fn definitions() -> Vec<Definition> {
     ]
 }
 
+/// Actions the extension binds to what their dry run showed (the element
+/// under a point, a drag's ends, the focused element): the daemon's own
+/// checks just before acting say `preflight`, so they never replace it.
+/// Only the daemon sets it, after the call's arguments were checked.
+fn binds_to_preview(name: &str, args: &Value) -> bool {
+    matches!(name, "browser_click_at" | "browser_drag" | "browser_press")
+        || (name == "browser_type" && args.get("ref").is_none())
+}
+
 pub fn is_browser_tool(name: &str) -> bool {
     definitions().iter().any(|d| d.name == name)
 }
@@ -602,6 +611,9 @@ impl BrowserTools {
             // widen sites, bypass protected fields, or authorize a bot.
             let mut preview = args.clone();
             preview["dry_run"] = Value::Bool(true);
+            if binds_to_preview(name, &preview) {
+                preview["preflight"] = Value::Bool(true);
+            }
             if name == "browser_download" {
                 self.download(preview, None).await?;
             } else {
@@ -631,6 +643,15 @@ impl BrowserTools {
                 .and_then(Value::as_u64)
                 .unwrap_or(32_000) as usize;
             params["max_chars"] = json!(asked.min(allowance).max(1));
+        }
+        // A local client's approved call is checked again by a dry run of
+        // its own just before it acts (`call_local_browser`): that check must
+        // not replace what the client showed the person.
+        if dry_run
+            && matches!(caller, Caller::LocalBrowser { approved: true })
+            && binds_to_preview(name, &params)
+        {
+            params["preflight"] = Value::Bool(true);
         }
         let mut value = super::engine::call(&self.bridge, engine.as_ref(), method, params).await?;
         // The person may have stopped the browser, or taken a site off the

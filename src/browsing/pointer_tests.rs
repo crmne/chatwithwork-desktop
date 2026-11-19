@@ -229,3 +229,48 @@ fn a_click_drag_or_key_may_submit_unless_the_call_says_it_doesnt_and_hovering_on
     }
     assert_eq!(kind("browser_hover"), Kind::Read);
 }
+
+#[tokio::test]
+async fn only_the_daemons_own_check_before_acting_is_a_preflight() {
+    let (bridge, calls) = attached(true, page).await;
+    let tools = tools(bridge);
+    let at = json!({ "capture": "c1", "x": 10, "y": 20, "dry_run": true });
+    tools
+        .call("browser_click_at", at.clone(), &Caller::Person, None)
+        .await
+        .unwrap();
+    tools
+        .call(
+            "browser_click_at",
+            at,
+            &Caller::LocalBrowser { approved: true },
+            None,
+        )
+        .await
+        .unwrap();
+    tools
+        .call(
+            "browser_press",
+            json!({ "key": "Tab", "dry_run": true }),
+            &Caller::LocalBrowser { approved: true },
+            None,
+        )
+        .await
+        .unwrap();
+    let seen = calls.lock().unwrap().clone();
+    assert_eq!(seen[0].1.get("preflight"), None, "the person's own preview");
+    assert_eq!(seen[1].1["preflight"], true);
+    assert_eq!(seen[2].1["preflight"], true);
+    // A model can't send it: it isn't one of the tool's arguments.
+    let refused = tools
+        .call(
+            "browser_click_at",
+            json!({ "capture": "c1", "x": 1, "y": 1, "preflight": true }),
+            &Caller::Person,
+            None,
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(refused.code, ErrorCode::InvalidArgument);
+}

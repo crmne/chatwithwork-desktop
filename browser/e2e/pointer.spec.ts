@@ -35,6 +35,7 @@ const PAGES: Record<string, string> = {
     customElements.define("x-pay", class extends HTMLElement { constructor() { super(); const root = this.attachShadow({ mode: "closed" });
       root.innerHTML = '<input type="password" id="card">'; this.focusCard = () => root.querySelector("input").focus(); } });</script>`,
   "/based": `<!doctype html><title>Based</title><base href="https://elsewhere.invalid/"><a id="away" href="/help" style="display:block;margin:40px;padding:20px">Help</a>${STATE}`,
+  "/svg": `<!doctype html><title>Svg</title><svg width="300" height="80" style="margin:40px"><a id="away" href="https://elsewhere.invalid/x"><rect width="300" height="80" fill="#08c"/></a></svg>${STATE}`,
   "/password": `<!doctype html><title>Sign in</title><label>Password <input type="password" id="pw" style="width:300px;margin:40px"></label>`,
   "/covered": `<!doctype html><title>Covered</title><button id="b" style="margin:40px" onclick="said('pressed under')">Save</button>
     <div id="banner" style="position:fixed;inset:0 0 auto 0;height:200px;background:#eee" onclick="said('banner')">Cookie choices</div>${STATE}`,
@@ -164,6 +165,10 @@ test("an approved click acts only on what the card showed, never on a replacemen
   const checked = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false, dry_run: true });
   expect(checked.result.target.name).toContain("Ocean");
   await page("/themes").evaluate(() => { const old = document.querySelectorAll(".card")[1]; old.replaceWith(old.cloneNode(true)); });
+  // The daemon's own check right before acting sees the replacement, but
+  // doesn't replace what the person was shown.
+  const preflight = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false, dry_run: true, preflight: true });
+  expect(preflight.error).toBeUndefined();
   const done = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...point, submits: false });
   expect(done.error?.code).toBe("page_error");
   expect(done.error?.message).toContain("since the person saw it");
@@ -209,6 +214,10 @@ test("keys never go into a closed part of the page, and a link goes where the br
   const link = await at("/based", "#away", shot);
   const clicked = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...link, submits: false });
   expect(clicked.error?.code).toBe("site_not_allowed");
+  tab = await open("/svg");
+  const drawn = (await setup.daemon.call("look", { tab })).result;
+  const svgLink = await at("/svg", "rect", drawn);
+  expect((await setup.daemon.call("click_at", { tab, capture: drawn.capture, ...svgLink, submits: false })).error?.code).toBe("site_not_allowed");
 });
 
 test("a page that scrolled between the look and the click is refused", async () => {

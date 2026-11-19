@@ -10,7 +10,8 @@
 import { about, only, still, tabFor, withDialog, type Method, type Params, type Policy } from "./actions.js";
 import { resolveTab } from "./group.js";
 import { allowedChanges, described, dryRun, editable, flag, pressAt, preview, settle, target, type Target } from "./changes.js";
-import { isolatedContext, evaluateInContext, send, cleanUp } from "./cdp.js";
+import { callOn, isolatedContext, evaluateInContext, send, cleanUp } from "./cdp.js";
+import { guardStatus, INSTALL_POINTER_GUARD } from "./pointer.js";
 import { isSensitiveField, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { capture as captureTab } from "./actions.js";
@@ -136,11 +137,15 @@ const shown = new Map<string, { ids: number[]; at: number }>();
 const SHOWN_LIFE_MS = 60 * 60_000;
 
 function shownKey(tabId: number, method: string, params: Params): string {
-  const rest = Object.entries(params).filter(([k]) => k !== "dry_run" && k !== "tab").sort(([a], [b]) => a.localeCompare(b));
+  const rest = Object.entries(params).filter(([k]) => !["dry_run", "tab", "preflight"].includes(k)).sort(([a], [b]) => a.localeCompare(b));
   return `${tabId}:${method}:${JSON.stringify(rest)}`;
 }
 
+// A dry run the daemon makes itself right before acting (a local client's
+// approved call, or an automatic action) checks the page again but never
+// replaces what the person was shown.
 export function showed(tabId: number, method: string, params: Params, ids: number[]): void {
+  if (params.preflight === true) return;
   for (const [key, entry] of shown) if (Date.now() - entry.at > SHOWN_LIFE_MS) shown.delete(key);
   shown.set(shownKey(tabId, method, params), { ids, at: Date.now() });
 }
@@ -173,7 +178,11 @@ const CONTROL = `function () {
 
 // A link's destination as the browser resolves it (the page's base and
 // scheme), for the allowed-sites check.
-const LINK = `function () { return this instanceof HTMLAnchorElement || this instanceof HTMLAreaElement ? this.href : null; }`;
+const LINK = `function () {
+  if (this instanceof HTMLAnchorElement || this instanceof HTMLAreaElement) return this.href;
+  if (this instanceof SVGAElement) { const raw = this.href.baseVal || this.getAttribute("xlink:href") || ""; try { return raw ? new URL(raw, document.baseURI).href : null; } catch (e) { return null; } }
+  return null;
+}`;
 
 async function underPoint(tabId: number, location: { x: number; y: number }, policy: Policy): Promise<Target & { drawn: boolean; href: string | null }> {
   const hit = await send<{ backendNodeId?: number; frameId?: string }>(tabId, "DOM.getNodeForLocation", {
@@ -284,21 +293,25 @@ export async function after(tabId: number, policy: Policy, started: number): Pro
   if (settled.allowed === false || settled.closed) return settled;
   await new Promise((r) => setTimeout(r, SETTLE_MS));
   const fresh = await look(tabId).catch(() => null);
-  // The picture is of the page the tab shows now: it goes back only if that
-  // page is still in the group, on an allowed site, and the one pictured.
-  const tab = await resolveTab(tabId).catch(() => null);
-  if (!tab) return { tab: tabId, closed: true };
-  const url = tab.url ?? "";
-  if (!siteAllowed(url, policy.sites, policy.all_sites, policy.blocked_sites)) {
-    return { tab: tabId, allowed: false, site: hostOfUrl(url), note: "the tab went on to a site that isn't allowed; nothing from it is shown" };
-  }
+  // The picture is of the page the tab shows now: it goes back only if the
+  // tab, checked once more (in the group, on an allowed site), shows the
+  // very page that picture recorded, and the answer describes that tab.
   const pictured = fresh ? captures.get(tabId) : undefined;
-  if (!fresh || !pictured || pictured.url.split("#")[0] !== url.split("#")[0]) return { ...settled, ...about(tab), note: "the page was still changing; look again" };
-  return { ...settled, ...about(await still(tabId, policy)), look: fresh };
+  const tab = await still(tabId, policy).catch(() => null);
+  if (!tab) {
+    const gone = await resolveTab(tabId).catch(() => null);
+    if (!gone) return { tab: tabId, closed: true };
+    return { tab: tabId, allowed: false, site: hostOfUrl(gone.url ?? ""), note: "the tab went on to a site that isn't allowed; nothing from it is shown" };
+  }
+  const bare = (u: string) => u.split("#")[0];
+  if (!fresh || !pictured || pictured.id !== fresh.capture || bare(pictured.url) !== bare(tab.url ?? "")) {
+    return { ...settled, ...about(tab), note: "the page was still changing; look again" };
+  }
+  return { ...settled, ...about(tab), look: fresh };
 }
 
 const clickAt: Method = async (params, policy) => {
-  only(params, ["tab", "capture", "x", "y", "double", "submits", "dry_run"]);
+  only(params, ["tab", "capture", "x", "y", "double", "submits", "dry_run", "preflight"]);
   allowedChanges(policy);
   const saysSubmits = flag(params, "submits", true);
   const double = flag(params, "double", false);
@@ -361,7 +374,7 @@ const wheel: Method = async (params, policy) => {
 };
 
 const drag: Method = async (params, policy) => {
-  only(params, ["tab", "capture", "x", "y", "to_x", "to_y", "submits", "dry_run"]);
+  only(params, ["tab", "capture", "x", "y", "to_x", "to_y", "submits", "dry_run", "preflight"]);
   allowedChanges(policy);
   const saysSubmits = flag(params, "submits", true);
   const dry = dryRun(params);
@@ -397,11 +410,26 @@ const drag: Method = async (params, policy) => {
     send(tabId, "Input.dispatchMouseEvent", { type, ...at, button: "left", ...extra });
   await mouse("mouseMoved", from, { button: "none" });
   // Hovering may make the page put something else there: press only what
-  // was checked.
+  // was checked, and keep the press from reaching anything else even if
+  // the page moves something under the point as it arrives.
   if ((await underPoint(tabId, from, policy).catch(() => null))?.backendNodeId !== source.backendNodeId) {
     throw new ToolError("page_error", `${changed}; nothing was pressed`);
   }
-  await mouse("mousePressed", from, { buttons: 1, clickCount: 1 });
+  const key = `__cwwPointer_${crypto.randomUUID()}`;
+  const guarded = await isolatedContext(tabId);
+  const obstruction = await callOn<string | null>(tabId, source.backendNodeId, INSTALL_POINTER_GUARD,
+    [key, from, ["pointerdown", "mousedown"]], [source.backendNodeId]);
+  if (obstruction) throw new ToolError("page_error", `${obstruction}; nothing was pressed`);
+  try {
+    await mouse("mousePressed", from, { buttons: 1, clickCount: 1 });
+  } finally {
+    const blocked = await evaluateInContext<string | null>(tabId, guarded, guardStatus(key, true)).catch(() => null);
+    if (blocked) {
+      await mouse("mouseReleased", from, { buttons: 0, clickCount: 1 });
+      captures.delete(tabId);
+      throw new ToolError("page_error", `${blocked}; the press was held back and nothing was dragged`);
+    }
+  }
   let release = from;
   try {
     const steps = 12;
@@ -502,7 +530,7 @@ function keyReason(key: string, focus: ElementFacts | null): string | null {
 }
 
 const press: Method = async (params, policy) => {
-  only(params, ["tab", "key", "shift", "submits", "dry_run"]);
+  only(params, ["tab", "key", "shift", "submits", "dry_run", "preflight"]);
   allowedChanges(policy);
   const name = params.key;
   if (typeof name !== "string" || !Object.hasOwn(KEYS, name)) {
