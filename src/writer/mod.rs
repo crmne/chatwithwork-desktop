@@ -724,15 +724,33 @@ impl Writer {
             self.limiter.check_change(size)?;
             t
         };
-        let staged = t.dir.stage_from(new_file_mode(), fill)?;
+        let (staged, staged_identity) = t.dir.stage_from(new_file_mode(), fill)?;
         let _one = self.one_at_a_time();
         let view = self.reader.change_view();
-        let root = ToolPath::parse(path)?.root_id;
-        if !view.writable(&root) {
+        // Everything checked before the transfer, again: the folder still
+        // allows changes and isn't shared read-only inside, the name is
+        // still free and allowed, the folder is the one the file went into
+        // (not renamed or replaced meanwhile), and the staged name still
+        // names the file that was written.
+        let fresh = match self.target(&view, path) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                t.dir.discard(staged);
+                return Err(e);
+            }
+        };
+        let same_folder = fresh.dir.identity() == t.dir.identity();
+        let same_file = t
+            .dir
+            .entry(&staged.name())
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.identity == staged_identity);
+        if !same_folder || !same_file {
             t.dir.discard(staged);
             return Err(ToolError::new(
-                ErrorCode::NotWritable,
-                "The folder stopped allowing changes while the file arrived; nothing was saved.",
+                ErrorCode::Conflict,
+                "The folder changed while the file arrived; nothing was saved.",
             ));
         }
         t.dir.commit(staged, t.name()).map_err(|e| match e.code {

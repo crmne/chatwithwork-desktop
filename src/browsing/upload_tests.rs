@@ -153,7 +153,10 @@ fn shared() -> Shared {
 
 fn tools(bridge: Arc<Bridge>, shared: &Shared) -> BrowserTools {
     let limiter = Arc::new(Limiter::new(Limits::default()));
-    BrowserTools::new(bridge, None, limiter, true).with_reader(Arc::clone(&shared.reader))
+    BrowserTools::new(bridge, None, limiter, true).with_reader(
+        Arc::clone(&shared.reader),
+        shared.base.join("cww/state/upload-snapshots"),
+    )
 }
 
 fn uploads(calls: &Calls) -> Vec<Value> {
@@ -193,7 +196,7 @@ async fn the_browser_gets_the_checked_real_path_and_the_server_never_does() {
     assert_eq!(sent.len(), 1);
     assert_eq!(
         sent[0]["files"],
-        json!([{ "path": shared.base.join("builds/app-release.aab").to_string_lossy(), "name": "app-release.aab",
+        json!([{ "path": crate::reader::safe_fs::without_verbatim_prefix(&shared.base.join("builds/app-release.aab")).to_string_lossy(), "name": "app-release.aab",
             "size": 2048, "mime_type": "application/octet-stream" }])
     );
     assert!(sent[0].get("paths").is_none());
@@ -280,6 +283,49 @@ async fn the_approved_upload_must_name_the_files_the_dry_run_checked() {
         .unwrap();
     assert_eq!(changed.code, ErrorCode::Conflict);
     assert_eq!(uploads(&calls).len(), 2);
+}
+
+#[tokio::test]
+async fn the_approved_upload_hands_the_browser_a_private_copy_of_the_checked_bytes() {
+    let shared = shared();
+    let (bridge, calls) = attached(
+        hello(),
+        page(json!([{ "name": "app-release.aab", "size": 2048 }])),
+    )
+    .await;
+    let tools = tools(bridge, &shared);
+    let fingerprint = tools
+        .call(
+            "browser_upload",
+            args(json!({ "dry_run": true })),
+            &Caller::Person,
+            None,
+        )
+        .await
+        .unwrap()
+        .value["fingerprint"]
+        .clone();
+    tools
+        .call(
+            "browser_upload",
+            args(json!({ "expected_sha256": fingerprint })),
+            &Caller::Person,
+            None,
+        )
+        .await
+        .unwrap();
+    let sent = uploads(&calls);
+    let copy = PathBuf::from(sent[1]["files"][0]["path"].as_str().unwrap());
+    let snapshots = crate::reader::safe_fs::without_verbatim_prefix(
+        &shared.base.join("cww/state/upload-snapshots"),
+    );
+    assert!(copy.starts_with(&snapshots), "{copy:?}");
+    assert_eq!(copy.file_name().unwrap(), "app-release.aab");
+    assert_eq!(fs::read(&copy).unwrap(), vec![7u8; 2048]);
+    assert!(fs::metadata(&copy).unwrap().permissions().readonly());
+    // Changing the shared file now changes nothing the page gets.
+    fs::write(shared.base.join("builds/app-release.aab"), vec![9u8; 2048]).unwrap();
+    assert_eq!(fs::read(&copy).unwrap(), vec![7u8; 2048]);
 }
 
 #[tokio::test]
@@ -426,7 +472,7 @@ async fn offered_only_with_shared_folders_and_actions_allowed() {
     let without = BrowserTools::new(Arc::clone(&bridge), None, Arc::clone(&limiter), true);
     assert!(!without.offers("browser_upload"));
     assert!(tools(Arc::clone(&bridge), &shared).offers("browser_upload"));
-    let read_only =
-        BrowserTools::new(bridge, None, limiter, false).with_reader(Arc::clone(&shared.reader));
+    let read_only = BrowserTools::new(bridge, None, limiter, false)
+        .with_reader(Arc::clone(&shared.reader), shared.base.join("snapshots"));
     assert!(!read_only.offers("browser_upload"));
 }

@@ -62,12 +62,24 @@ test("file fields, their labels and their buttons are marked, hidden ones includ
   assert.equal(marks.has(unrelated.backendNodeId), false);
 });
 
+test("fields in a frame from another origin are left alone", () => {
+  const theirs = el("input", { type: "file" });
+  const ours = el("input", { type: "file" });
+  const root = { ...doc([el("html", {}, [el("body", {}, [
+    ours,
+    el("iframe", {}, [], { contentDocument: { ...doc([theirs]), documentURL: "http://127.0.0.1:9000/field" } }),
+  ])])]), documentURL: "http://127.0.0.1:8000/page" };
+  const marks = uploadMarks(root);
+  assert.ok(marks.has(ours.backendNodeId));
+  assert.equal(marks.has(theirs.backendNodeId), false);
+});
+
 test("fields in shadow roots and frames are found", () => {
   const inShadow = el("input", { type: "file", "aria-label": "Avatar" });
   const host = el("x-uploader", {}, [], { shadowRoots: [{ backendNodeId: next++, nodeType: 11, nodeName: "#document-fragment", children: [inShadow] }] });
   const inFrame = el("input", { type: "file", name: "attachment" });
-  const frame = el("iframe", {}, [], { contentDocument: doc([el("html", {}, [el("body", {}, [inFrame])])]) });
-  const marks = uploadMarks(doc([el("html", {}, [el("body", {}, [host, frame])])]));
+  const frame = el("iframe", {}, [], { contentDocument: { ...doc([el("html", {}, [el("body", {}, [inFrame])])]), documentURL: "https://example.com/frame" } });
+  const marks = uploadMarks({ ...doc([el("html", {}, [el("body", {}, [host, frame])])]), documentURL: "https://example.com/page" });
   assert.equal(marks.get(inShadow.backendNodeId)?.label, "Avatar");
   assert.equal(marks.get(inFrame.backendNodeId)?.label, "attachment");
 });

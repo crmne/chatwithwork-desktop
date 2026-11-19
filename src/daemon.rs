@@ -742,7 +742,10 @@ impl Daemon {
                     Arc::clone(&self.limiter),
                     config.browser.changes,
                 )
-                .with_reader(Arc::clone(&self.reader))
+                .with_reader(
+                    Arc::clone(&self.reader),
+                    self.paths.state_dir.join("upload-snapshots"),
+                )
             }),
         )
     }

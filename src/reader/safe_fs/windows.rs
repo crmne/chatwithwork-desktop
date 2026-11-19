@@ -685,7 +685,7 @@ impl ChangeDir {
         &self,
         _mode: u32,
         fill: &mut dyn FnMut(&mut dyn Write) -> Result<(), ToolError>,
-    ) -> Result<Staged, ToolError> {
+    ) -> Result<(Staged, (u64, u64)), ToolError> {
         for _ in 0..16 {
             let path = self.child(OsStr::new(&temp_name()));
             let mut file = match OpenOptions::new()
@@ -704,6 +704,8 @@ impl ChangeDir {
             let finished = filled.is_ok().then(|| {
                 file.sync_all()
                     .and_then(|()| mark_from_internet(&file, &path))
+                    .and_then(|()| file_info(&file))
+                    .map(|info| identity_of(&info))
             });
             let staged = Staged { file, path };
             match (filled, finished) {
@@ -715,7 +717,8 @@ impl ChangeDir {
                     self.discard(staged);
                     return Err(change_error(&e));
                 }
-                _ => return Ok(staged),
+                (Ok(()), Some(Ok(identity))) => return Ok((staged, identity)),
+                (Ok(()), None) => unreachable!("finished whenever filled"),
             }
         }
         Err(ToolError::internal("no free name for a temporary file"))

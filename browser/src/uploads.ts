@@ -20,7 +20,7 @@
 
 import { about, only, readableText, pageUploads, still, type Method, type Params, type Policy } from "./actions.js";
 import { accepts, fileOrdinal, UPLOAD_WORDS } from "./accept.js";
-import { allowedChanges, described, dryRun, flag, point, preview, settle, target, type Target } from "./changes.js";
+import { allowedChanges, described, dryRun, flag, point, pressAt, preview, settle, target, type Target } from "./changes.js";
 import { cleanUp, nextEvent, send } from "./cdp.js";
 import { isSensitiveField, submitReason } from "./classify.js";
 import { ToolError } from "./errors.js";
@@ -66,7 +66,7 @@ function checkFiles(value: unknown): UploadFile[] {
       file && typeof file === "object" &&
       typeof file.path === "string" && file.path.length > 0 && file.path.length <= 4096 &&
       // Only a full path, as the daemon resolved it.
-      (file.path.startsWith("/") || /^[A-Za-z]:\\/.test(file.path)) &&
+      (file.path.startsWith("/") || /^[A-Za-z]:\\/.test(file.path) || /^\\\\[^\\]+\\[^\\]+\\/.test(file.path)) &&
       typeof file.name === "string" && file.name.length > 0 && file.name.length <= 255 &&
       Number.isSafeInteger(file.size) && file.size >= 0 && file.size <= MAX_BYTES &&
       typeof file.mime_type === "string" && file.mime_type.length <= 200;
@@ -92,6 +92,9 @@ async function fieldFor(t: Target, drop: boolean): Promise<Field> {
   const type = (t.facts.attrs.type ?? "").toLowerCase();
   if (drop) return { kind: "drop", label: t.facts.name };
   if (t.facts.tag === "input" && type === "file") {
+    if (mark?.kind !== "field") {
+      throw new ToolError("site_not_allowed", "that field is in a frame from another site; nothing was uploaded");
+    }
     return {
       kind: "field",
       input: t.backendNodeId,
@@ -145,17 +148,26 @@ const FILES_OF = `function () {
   return this.files ? Array.from(this.files).map((f) => ({ name: f.name, size: f.size })) : null;
 }`;
 
-async function filesOf(tabId: number, backendNodeId: number): Promise<{ name: string; size: number }[] | null> {
-  // In the field's own frame: an isolated world belongs to the main frame only.
+// Whether the field is disabled however it is: its own attribute, or a
+// disabled fieldset around it.
+const DISABLED = `function () { return this.disabled === true || this.matches(":disabled"); }`;
+
+// Ask the node, in its own frame: an isolated world belongs to the main
+// frame only.
+async function onNode<T>(tabId: number, backendNodeId: number, fn: string): Promise<T | undefined> {
   const { object } = await send<{ object: { objectId: string } }>(tabId, "DOM.resolveNode", { backendNodeId });
   try {
-    const result = await send<{ result: { value?: { name: string; size: number }[] | null } }>(tabId, "Runtime.callFunctionOn", {
-      objectId: object.objectId, functionDeclaration: FILES_OF, returnByValue: true,
+    const result = await send<{ result: { value?: T } }>(tabId, "Runtime.callFunctionOn", {
+      objectId: object.objectId, functionDeclaration: fn, returnByValue: true,
     });
-    return result.result.value ?? null;
+    return result.result.value;
   } finally {
     await send(tabId, "Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
   }
+}
+
+async function filesOf(tabId: number, backendNodeId: number): Promise<{ name: string; size: number }[] | null> {
+  return (await onNode<{ name: string; size: number }[] | null>(tabId, backendNodeId, FILES_OF)) ?? null;
 }
 
 function notAllowed(error: unknown): boolean {
@@ -173,17 +185,12 @@ async function setFiles(tabId: number, backendNodeId: number, files: UploadFile[
 // one press, so the person's own pickers in the tab are left alone.
 async function throughChooser(t: Target, policy: Policy, files: UploadFile[]): Promise<number> {
   const { surface, ...location } = await point(t, policy);
-  void surface;
   await send(t.tabId, "Page.setInterceptFileChooserDialog", { enabled: true });
   const opened = nextEvent<{ backendNodeId?: number; mode?: string }>(t.tabId, "Page.fileChooserOpened", CHOOSER_WAIT_MS);
   try {
-    const mouse = (type: string, extra: object = {}) =>
-      send(t.tabId, "Input.dispatchMouseEvent", { type, ...location, button: "left", clickCount: 1, ...extra });
-    await mouse("mouseMoved", { button: "none", clickCount: 0 });
-    allowedChanges(policy);
-    await still(t.tabId, policy);
-    await mouse("mousePressed", { buttons: 1 });
-    await mouse("mouseReleased", { buttons: 0 });
+    // The click tool's guarded press: nothing that appears on hover, or
+    // moves under the point, gets pressed instead.
+    await pressAt(t, policy, surface, location);
     const event = await opened.event;
     if (!event) {
       throw new ToolError("page_error", "the button was pressed, but no file picker opened; nothing was uploaded. Read the page again");
@@ -256,6 +263,9 @@ const upload: Method = async (params: Params, policy: Policy) => {
     );
   }
   const field = await fieldFor(t, drop);
+  if (field.input !== undefined && (await onNode<boolean>(t.tabId, field.input, DISABLED).catch(() => true))) {
+    field.disabled = true;
+  }
   checkAgainst(field, files);
   // A button that may send something isn't pressed to pick a file.
   // Named for uploading is what it's for; any other reason still refuses.

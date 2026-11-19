@@ -4239,6 +4239,7 @@ async fn changes_files_over_the_wire() {
             "glob",
             "read_bytes",
             "create",
+            "copy_from_chat",
             "write",
             "edit",
             "mkdir",

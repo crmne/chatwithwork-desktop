@@ -74,7 +74,11 @@ fn vouches_for_a_shared_file_by_its_real_path() {
     assert_eq!(file.size, 15);
     assert_eq!(file.mime_type, "image/png");
     assert_eq!(file.sha256, sha256(b"\x89PNG\r\n\x1a\nlisting"));
-    assert_eq!(file.real, f.base.join("shared/shots/listing.png"));
+    // As the browser takes it: on Windows, without `\\?\`.
+    assert_eq!(
+        file.real,
+        safe_fs::without_verbatim_prefix(&f.base.join("shared/shots/listing.png"))
+    );
     // Where it really is never leaves the computer.
     let sent = serde_json::to_string(&file).unwrap();
     assert!(!sent.contains(f.base.to_str().unwrap()));
@@ -143,7 +147,10 @@ fn a_symlink_the_folder_follows_inside_it_hands_over_its_target() {
     let f = fixture(true);
     std::os::unix::fs::symlink("shots/listing.png", f.base.join("shared/latest.png")).unwrap();
     let file = f.reader.upload_file("work:latest.png", 1 << 20).unwrap();
-    assert_eq!(file.real, f.base.join("shared/shots/listing.png"));
+    assert_eq!(
+        file.real,
+        safe_fs::without_verbatim_prefix(&f.base.join("shared/shots/listing.png"))
+    );
     assert_eq!(file.name, "latest.png");
     // A folder that doesn't follow symlinks refuses even that one.
     let f = fixture(false);
@@ -154,6 +161,27 @@ fn a_symlink_the_folder_follows_inside_it_hands_over_its_target() {
             .unwrap_err()
             .code,
         ErrorCode::Denied
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_copy_keeps_the_name_the_call_gave_and_the_bytes_checked() {
+    let f = fixture(true);
+    std::os::unix::fs::symlink("shots/listing.png", f.base.join("shared/latest.png")).unwrap();
+    let file = f
+        .reader
+        .upload_snapshot("work:latest.png", 1 << 20, &f.base.join("snapshots"))
+        .unwrap();
+    assert_eq!(file.real.file_name().unwrap(), "latest.png");
+    assert!(file.real.starts_with(f.base.join("snapshots")));
+    assert_eq!(fs::read(&file.real).unwrap(), b"\x89PNG\r\n\x1a\nlisting");
+    assert_eq!(file.sha256, sha256(b"\x89PNG\r\n\x1a\nlisting"));
+    let plain = f.reader.upload_file("work:latest.png", 1 << 20).unwrap();
+    assert_eq!(
+        UploadFile::fingerprint(&[file]),
+        UploadFile::fingerprint(&[plain]),
+        "the copy is the file approved"
     );
 }
 
@@ -230,6 +258,9 @@ fn guesses_types_the_way_pages_check_them() {
     );
     assert_eq!(upload_mime_type("extension.zip"), "application/zip");
     assert_eq!(upload_mime_type("README"), "application/octet-stream");
+    assert_eq!(upload_mime_type("scan.BMP"), "image/bmp");
+    assert_eq!(upload_mime_type("voice.ogg"), "audio/ogg");
+    assert_eq!(upload_mime_type("clip.mkv"), "video/x-matroska");
 }
 
 #[test]
@@ -237,6 +268,10 @@ fn reports_a_path_without_the_verbatim_prefix() {
     assert_eq!(
         safe_fs::without_verbatim_prefix(Path::new(r"\\?\C:\Users\me\shot.png")),
         PathBuf::from(r"C:\Users\me\shot.png")
+    );
+    assert_eq!(
+        safe_fs::without_verbatim_prefix(Path::new(r"\\?\UNC\nas\builds\app.aab")),
+        PathBuf::from(r"\\nas\builds\app.aab")
     );
     assert_eq!(
         safe_fs::without_verbatim_prefix(Path::new("/home/me/shot.png")),

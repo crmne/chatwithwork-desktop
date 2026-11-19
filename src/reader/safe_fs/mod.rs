@@ -411,6 +411,10 @@ pub fn without_verbatim_prefix(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        // A network share: `\\?\UNC\server\share` is `\\server\share`.
+        Some(rest) if rest.len() > 4 && rest[..4].eq_ignore_ascii_case(r"UNC\") => {
+            PathBuf::from(format!(r"\\{}", &rest[4..]))
+        }
         _ => path.to_path_buf(),
     }
 }

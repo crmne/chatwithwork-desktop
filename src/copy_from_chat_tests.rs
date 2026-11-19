@@ -225,3 +225,35 @@ fn is_offered_with_the_other_changes() {
                 .is_some_and(|a| a.destructive_hint == Some(false))
     }));
 }
+
+#[test]
+fn a_folder_moved_while_the_file_arrived_gets_nothing() {
+    let f = fixture();
+    fs::create_dir_all(f.base.join("builds/incoming")).unwrap();
+    let bytes = b"bundle".to_vec();
+    let moving = |_: &str, sink: Sink<'_>| -> Result<(), ToolError> {
+        fs::rename(
+            f.base.join("builds/incoming"),
+            f.base.join("builds/archived"),
+        )
+        .unwrap();
+        fs::create_dir_all(f.base.join("builds/incoming")).unwrap();
+        sink(b"bundle")
+    };
+    let error = copy_from_chat(
+        &f.writer,
+        &moving,
+        &request("builds:incoming/app.aab", &bytes, false),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(!f.base.join("builds/incoming/app.aab").exists());
+    assert!(!f.base.join("builds/archived/app.aab").exists());
+    assert_eq!(
+        fs::read_dir(f.base.join("builds/archived"))
+            .unwrap()
+            .count(),
+        0,
+        "nothing left behind"
+    );
+}

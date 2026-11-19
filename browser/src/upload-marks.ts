@@ -16,6 +16,16 @@ export interface DomNode {
   children?: DomNode[];
   shadowRoots?: DomNode[];
   contentDocument?: DomNode;
+  // A document's address, which says whose its fields are.
+  documentURL?: string;
+}
+
+function originOf(url: string | undefined): string {
+  try {
+    return url ? new URL(url).origin : "";
+  } catch {
+    return "";
+  }
 }
 
 export interface UploadMark {
@@ -84,8 +94,12 @@ function isFileInput(seen: Seen): boolean {
   return tag(seen.node) === "input" && (seen.attrs.type ?? "").trim().toLowerCase() === "file";
 }
 
+// Only the page's own fields: a frame from another origin (another site, or
+// the same host on another port) is that origin's, whatever the site rules
+// say of the tab, so nothing in it is marked or handed files.
 export function uploadMarks(root: DomNode): Map<number, UploadMark> {
   const all: Seen[] = [];
+  const top = originOf(root.documentURL);
   const visit = (node: DomNode, parent: Seen | null, scope: DomNode) => {
     let here = parent;
     if (node.nodeType === 1) {
@@ -94,7 +108,9 @@ export function uploadMarks(root: DomNode): Map<number, UploadMark> {
     }
     for (const child of node.children ?? []) visit(child, here, scope);
     for (const shadow of node.shadowRoots ?? []) visit(shadow, here, shadow);
-    if (node.contentDocument) visit(node.contentDocument, null, node.contentDocument);
+    if (node.contentDocument && top && originOf(node.contentDocument.documentURL) === top) {
+      visit(node.contentDocument, null, node.contentDocument);
+    }
   };
   visit(root, null, root);
 

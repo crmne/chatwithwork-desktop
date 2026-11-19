@@ -29,6 +29,13 @@ customElements.define("x-uploader", class extends HTMLElement { connectedCallbac
 } });
 </script>`,
   "/password": `<!doctype html><title>Password</title><label>Password <input type="password"></label>`,
+  "/fieldset": `<!doctype html><title>Fieldset</title><fieldset disabled><label>Locked <input type="file" onchange="show(this.files)"></label></fieldset>${REPORT}`,
+  "/swap": `<!doctype html><title>Swap</title><div style="position:relative;width:200px;height:60px">
+    <button type="button" id="b" style="width:200px;height:60px">Upload photo</button></div>${REPORT}<script>
+b.onclick = () => { const i = document.createElement("input"); i.type = "file"; i.onchange = () => show(i.files); i.click(); };
+b.onmouseover = () => { const send = document.createElement("button"); send.textContent = "Send"; send.style.cssText = "position:absolute;inset:0;z-index:5";
+  send.onclick = () => out.textContent += "SENT\\n"; b.parentElement.append(send); };
+</script>`,
 };
 
 let setup: Setup;
@@ -36,8 +43,13 @@ let server: { close: () => void };
 let origin: string;
 let files: Record<string, { path: string; name: string; size: number; mime_type: string }>;
 
+let other: { server: { close: () => void }; origin: string };
+
 test.beforeAll(async () => {
   ({ server, origin } = await serve(PAGES));
+  // The same host on another port: another origin the site rules don't cover.
+  other = await serve({ "/field": `<!doctype html><label>Theirs <input type="file"></label>` });
+  PAGES["/foreign"] = `<!doctype html><title>Foreign</title><iframe src="${other.origin}/field" width="400" height="120"></iframe>`;
   setup = await launch([origin]);
   const shared = join(setup.home, "shared");
   mkdirSync(shared);
@@ -56,7 +68,7 @@ test.beforeAll(async () => {
   setup.daemon.setPolicy({ changes: true });
 });
 
-test.afterAll(async () => { await setup?.cleanup(); server?.close(); });
+test.afterAll(async () => { await setup?.cleanup(); server?.close(); other?.server.close(); });
 test.afterEach(async () => {
   for (const page of setup.context.pages()) if (page.url().startsWith(origin)) await page.close();
 });
@@ -193,6 +205,27 @@ test("refuses what isn't an upload field, a password field, and paths it wasn't 
   expect(password.error?.code).toBe("sensitive_field");
   const relative = await setup.daemon.call("upload", { tab, ref, files: [{ ...files.png, path: "shared/listing.png" }] });
   expect(relative.error?.code).toBe("invalid_argument");
+});
+
+test("refuses a field a fieldset disables, and one in a frame from another origin", async () => {
+  const fieldset = await openAndRead("/fieldset");
+  const locked = await setup.daemon.call("upload", { tab: fieldset.tab, ref: refOf(fieldset.text, "[upload"), files: [files.png], dry_run: true });
+  expect(locked.error?.message).toContain("disabled");
+  const foreign = await openAndRead("/foreign");
+  expect(foreign.text).not.toContain("[upload");
+  // Its field by the reference the page's tree gives it, if any, is refused too.
+  const ref = /\[ref=(e\d+)\][^\n]*Theirs|Theirs[^\n]*\[ref=(e\d+)\]/.exec(foreign.text);
+  if (ref) {
+    const refused = await setup.daemon.call("upload", { tab: foreign.tab, ref: ref[1] ?? ref[2], files: [files.png], dry_run: true });
+    expect(refused.error).toBeTruthy();
+  }
+});
+
+test("a picker button that turns into something else on hover is never pressed", async () => {
+  const { tab, text } = await openAndRead("/swap");
+  const done = await setup.daemon.call("upload", { tab, ref: refOf(text, 'button "Upload photo"'), files: [files.png] });
+  expect(done.error?.code).toBe("page_error");
+  expect(await reported("/swap")).not.toContain("SENT");
 });
 
 test("without the browser's file access switch, says how to turn it on", async () => {

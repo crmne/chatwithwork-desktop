@@ -30,6 +30,26 @@ test("menu pictures", async () => {
       await page.click("#resume");
       await page.close();
     }
+    // As a Chrome Web Store install starts: the file access switch off,
+    // which uploads need. Changing it reloads the extension.
+    const settings = await setup.context.newPage();
+    await settings.goto("chrome://extensions");
+    await settings.evaluate(async (id) => {
+      await (chrome as any).developerPrivate.updateProfileConfiguration({ inDeveloperMode: true });
+      await (chrome as any).developerPrivate.updateExtensionConfiguration({ extensionId: id, fileAccess: false });
+    }, EXTENSION_ID);
+    await settings.close();
+    for (const scheme of ["light", "dark"] as const) {
+      const page = await setup.context.newPage();
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width: 320, height: 600 });
+      for (let i = 0; ; i++) {
+        try { await page.goto(`chrome-extension://${EXTENSION_ID}/popup.html`); break; } catch (e) { if (i > 40) throw e; await page.waitForTimeout(250); }
+      }
+      await page.waitForSelector("#uploads:not([hidden])", { timeout: 20_000 });
+      await page.screenshot({ path: `${process.env.SHOTS}/menu-uploads-off-${scheme}.png` });
+      await page.close();
+    }
     await setup.daemon.close();
     const page = await setup.context.newPage();
     await page.setViewportSize({ width: 320, height: 470 });

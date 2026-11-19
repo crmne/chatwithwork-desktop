@@ -450,11 +450,13 @@ impl ChangeDir {
     /// Stage a new file whose bytes `fill` writes as they arrive (a file
     /// from a chat, streamed), with the download mark, `mode`, and fsync
     /// like [`ChangeDir::stage`]. A refusal from `fill` leaves nothing behind.
+    /// Also answers the staged file's identity, so the caller can check the
+    /// name still names it before putting it in place.
     pub fn stage_from(
         &self,
         mode: u32,
         fill: &mut dyn FnMut(&mut dyn Write) -> Result<(), ToolError>,
-    ) -> Result<Staged, ToolError> {
+    ) -> Result<(Staged, (u64, u64)), ToolError> {
         for _ in 0..16 {
             let name = OsString::from(temp_name());
             let fd = match rustix::fs::openat(
@@ -481,13 +483,16 @@ impl ChangeDir {
                         Mode::from_raw_mode((mode & 0o666) as rustix::fs::RawMode),
                     )
                 })
-                .and_then(|()| rustix::fs::fsync(&file));
-            if let Err(e) = finished {
-                drop(file);
-                self.discard(staged);
-                return Err(change_error(e, "writing the file"));
+                .and_then(|()| rustix::fs::fsync(&file))
+                .and_then(|()| rustix::fs::fstat(&file));
+            match finished {
+                Ok(stat) => return Ok((staged, (stat.st_dev as u64, stat.st_ino as u64))),
+                Err(e) => {
+                    drop(file);
+                    self.discard(staged);
+                    return Err(change_error(e, "writing the file"));
+                }
             }
-            return Ok(staged);
         }
         Err(ToolError::internal("no free name for a temporary file"))
     }

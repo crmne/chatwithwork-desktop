@@ -218,11 +218,11 @@ pub struct UploadFile {
 
 impl UploadFile {
     /// What binds an approval to these files, in this order: each one's
-    /// real path, size, modification time and SHA-256.
+    /// shared path, size, modification time and SHA-256.
     pub fn fingerprint(files: &[UploadFile]) -> String {
         let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
         for file in files {
-            digest.update(file.real.to_string_lossy().as_bytes());
+            digest.update(file.path.as_bytes());
             digest.update(&[0]);
             digest.update(file.size.to_string().as_bytes());
             digest.update(&[0]);
@@ -238,6 +238,62 @@ impl UploadFile {
             .map(|b| format!("{b:02x}"))
             .collect()
     }
+}
+
+/// How long the copies handed to the browser are kept: a page reads a
+/// chosen file when it sends it, which may be a while after it was chosen.
+const SNAPSHOT_LIFE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// A new private file for a copy of `name`, in a folder of its own under
+/// `dir`, after clearing copies older than [`SNAPSHOT_LIFE`].
+fn upload_snapshot_file(
+    dir: &std::path::Path,
+    name: &str,
+) -> Result<(PathBuf, std::fs::File), ToolError> {
+    let unavailable =
+        |e: std::io::Error| ToolError::internal(format!("keeping a copy to upload: {}", e.kind()));
+    crate::paths::ensure_private_dir(dir)
+        .map_err(|_| ToolError::internal("keeping a copy to upload"))?;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok());
+            if old.is_some_and(|age| age > SNAPSHOT_LIFE) {
+                let path = entry.path();
+                if let Ok(files) = std::fs::read_dir(&path) {
+                    for file in files.flatten() {
+                        if let Ok(meta) = file.metadata() {
+                            let mut permissions = meta.permissions();
+                            #[allow(clippy::permissions_set_readonly_false)]
+                            permissions.set_readonly(false);
+                            let _ = std::fs::set_permissions(file.path(), permissions);
+                        }
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+    let folder = dir.join(
+        safe_fs::temp_name()
+            .trim_start_matches('.')
+            .trim_end_matches(".tmp"),
+    );
+    crate::paths::ensure_private_dir(&folder)
+        .map_err(|_| ToolError::internal("keeping a copy to upload"))?;
+    let path = folder.join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path).map_err(unavailable)?;
+    Ok((safe_fs::without_verbatim_prefix(&path), file))
 }
 
 /// The MIME type a page's `accept` is checked against, by the name's
@@ -256,6 +312,34 @@ pub fn upload_mime_type(name: &str) -> &'static str {
         "avif" => "image/avif",
         "heic" => "image/heic",
         "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "jxl" => "image/jxl",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "ogv" => "video/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/x-m4a",
+        "aac" => "audio/aac",
+        "weba" => "audio/webm",
+        "mpeg" | "mpg" => "video/mpeg",
+        "m4v" => "video/x-m4v",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "3gp" => "video/3gpp",
+        "rtf" => "application/rtf",
+        "epub" => "application/epub+zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "7z" => "application/x-7z-compressed",
+        "ics" => "text/calendar",
+        "vcf" => "text/vcard",
+        "yaml" | "yml" => "application/yaml",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
         "pdf" => "application/pdf",
         "zip" => "application/zip",
         "crx" => "application/x-chrome-extension",
@@ -693,7 +777,30 @@ impl Reader {
     /// approval to this very file: a file that changes after it was checked
     /// is refused at upload (`Conflict`). Never reads more than `max_bytes`.
     pub fn upload_file(&self, path: &str, max_bytes: u64) -> Result<UploadFile, ToolError> {
-        use std::io::Read;
+        self.checked_upload(path, max_bytes, None)
+    }
+
+    /// [`Reader::upload_file`], and a private copy of exactly the bytes it
+    /// hashed, under the name the call gave, in a new folder of its own in
+    /// `snapshots` (cww's own, never shared): what the browser gets to
+    /// upload, so a file changed, replaced or relinked after it was checked
+    /// can't reach the page in its place. `real` is the copy.
+    pub fn upload_snapshot(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        snapshots: &std::path::Path,
+    ) -> Result<UploadFile, ToolError> {
+        self.checked_upload(path, max_bytes, Some(snapshots))
+    }
+
+    fn checked_upload(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        snapshots: Option<&std::path::Path>,
+    ) -> Result<UploadFile, ToolError> {
+        use std::io::{Read, Write};
         let state = self.state.read().expect("reader state");
         let tool_path = ToolPath::parse(path)?;
         let Some(name) = tool_path.rel.file_name().map(str::to_string) else {
@@ -734,6 +841,10 @@ impl Reader {
                 "the file changed while it was checked; try again",
             ));
         }
+        let mut copy = match snapshots {
+            Some(dir) => Some(upload_snapshot_file(dir, &name)?),
+            None => None,
+        };
         let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
         let mut buffer = vec![0u8; 256 * 1024];
         let mut read = 0u64;
@@ -753,6 +864,10 @@ impl Reader {
                 ));
             }
             digest.update(&buffer[..n]);
+            if let Some((_, file)) = copy.as_mut() {
+                file.write_all(&buffer[..n])
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?;
+            }
         }
         if read != opened.size {
             return Err(ToolError::new(
@@ -766,6 +881,20 @@ impl Reader {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
+        let real = match copy {
+            Some((copied, file)) => {
+                file.sync_all()
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?;
+                let mut permissions = file
+                    .metadata()
+                    .map_err(|e| ToolError::internal(format!("copying the file: {}", e.kind())))?
+                    .permissions();
+                permissions.set_readonly(true);
+                let _ = std::fs::set_permissions(&copied, permissions);
+                copied
+            }
+            None => real,
+        };
         Ok(UploadFile {
             path: tool_path.to_string(),
             folder: root.label.clone(),

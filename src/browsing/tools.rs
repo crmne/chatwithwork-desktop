@@ -3,6 +3,7 @@
 //! checked here (the kill switch, bots, the read budget, the sites in every
 //! answer) and again in the extension.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -334,6 +335,8 @@ pub struct BrowserTools {
     /// The shared folders, which uploads come from; none in tests that
     /// upload nothing.
     reader: Option<Arc<Reader>>,
+    /// Where the copies the browser uploads are kept (cww's own state).
+    snapshots: PathBuf,
 }
 
 impl BrowserTools {
@@ -349,12 +352,15 @@ impl BrowserTools {
             limiter,
             changes,
             reader: None,
+            snapshots: PathBuf::new(),
         }
     }
 
-    /// Uploads come from these shared folders.
-    pub fn with_reader(mut self, reader: Arc<Reader>) -> Self {
+    /// Uploads come from these shared folders, through copies kept in
+    /// `snapshots`.
+    pub fn with_reader(mut self, reader: Arc<Reader>, snapshots: PathBuf) -> Self {
         self.reader = Some(reader);
+        self.snapshots = snapshots;
         self
     }
 
@@ -477,7 +483,7 @@ impl BrowserTools {
         }
         let mut params = args;
         let uploading = if name == "browser_upload" {
-            Some(self.upload_files(&mut params, caller).await?)
+            Some(self.upload_files(&mut params).await?)
         } else {
             None
         };
@@ -545,7 +551,6 @@ impl BrowserTools {
     async fn upload_files(
         &self,
         params: &mut Value,
-        caller: &Caller,
     ) -> Result<(Vec<UploadFile>, String), ToolError> {
         let object = params
             .as_object_mut()
@@ -589,10 +594,16 @@ impl BrowserTools {
                 "Update the Chat with Work browser extension to upload files. Nothing was uploaded.",
             ));
         }
+        // The real upload hands the browser private copies of exactly the
+        // bytes checked; the dry run only checks.
+        let snapshots = (!dry_run).then(|| self.snapshots.clone());
         let files = tokio::task::spawn_blocking(move || {
             paths
                 .iter()
-                .map(|path| reader.upload_file(path, UPLOAD_MAX_BYTES))
+                .map(|path| match &snapshots {
+                    Some(dir) => reader.upload_snapshot(path, UPLOAD_MAX_BYTES, dir),
+                    None => reader.upload_file(path, UPLOAD_MAX_BYTES),
+                })
                 .collect::<Result<Vec<_>, _>>()
         })
         .await
@@ -608,9 +619,8 @@ impl BrowserTools {
                          uploaded; check it again so they see it as it is now",
                     ));
                 }
-                // A local client's approved upload repeats its dry run just
-                // before, with these very files.
-                None if matches!(caller, Caller::LocalBrowser { .. }) => {}
+                // Local clients too: their approval is of the dry run they
+                // showed the person, so it names that dry run's files.
                 None => {
                     return Err(ToolError::invalid_argument(
                         "an upload needs expected_sha256, the fingerprint its dry run answered",
