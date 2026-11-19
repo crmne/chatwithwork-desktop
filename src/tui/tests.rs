@@ -1573,6 +1573,7 @@ fn budget_transcript(state: &str) -> Transcript {
         approvals: vec![],
         questions: vec![],
         queued: vec![],
+        bot_draft: None,
         entries: vec![
             Entry::User {
                 id: 1,
@@ -4666,6 +4667,221 @@ fn the_sidebar_hides_and_shows() {
     assert!(render_to_string(&app, 100, 30).contains("PROJECTS"));
 }
 
+// ---------------------------------------------------------------- new bot
+
+fn recipes() -> Vec<super::newbot::Recipe> {
+    serde_json::from_value(serde_json::json!([
+        {"key": "inbox_triage", "name": "Inbox triage", "summary": "Sorts new email and drafts replies.",
+         "group": "For you", "starts": "When an email arrives"},
+        {"key": "standup", "name": "Daily standup", "summary": "Asks the team what they did.",
+         "group": "Team", "starts": "Every weekday at 9:00"}
+    ]))
+    .unwrap()
+}
+
+fn recipe_form() -> serde_json::Value {
+    serde_json::json!({
+        "recipe": {"key": "inbox_triage", "name": "Inbox triage", "summary": "Sorts new email and drafts replies.", "starts": "When an email arrives"},
+        "defaults": {"name": "Inbox triage"},
+        "slots": [{"kind": "email", "label": "Email", "optional": false, "chosen": "gmail",
+                   "tools": [{"key": "gmail", "name": "Gmail", "connected": true},
+                             {"key": "outlook", "name": "Outlook", "connected": false}]}],
+        "trigger": {"key": "gmail", "name": "When an email arrives"},
+        "projects": [{"number": 3, "name": "Falcon"}],
+        "still_needs": []
+    })
+}
+
+fn new_bot_open(app: &mut App) {
+    sidebar_ready(app);
+    assert!(app.chat.select(SideItem::NewBot));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::Chat(ChatCommand::Recipes)]
+    );
+    assert_eq!(app.view, View::NewBot);
+    app.update(Msg::Chat(ChatMsg::Recipes(Ok(recipes()))));
+}
+
+#[test]
+fn snapshot_new_bot_starts_from_a_sentence_in_a_chat() {
+    let mut app = app();
+    new_bot_open(&mut app);
+    for c in "Every morning, sum up yesterday's tickets".chars() {
+        app.update(char(c));
+    }
+    assert_snapshot("new_bot", &app);
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::Chat(ChatCommand::StartBotBuilder {
+            sentence: "Every morning, sum up yesterday's tickets".into(),
+            project: None
+        })]
+    );
+    // The chat that builds it opens, as on the web.
+    let mut started = summary(
+        70,
+        "Every morning, sum up yesterday's tickets",
+        "2026-09-25T08:20:00Z",
+    );
+    started.state = "processing".into();
+    let effects = app.update(Msg::Chat(ChatMsg::BotBuilderStarted(Ok(started))));
+    assert_eq!(effects[0], Effect::Chat(ChatCommand::Open(70)));
+    assert_eq!(app.view, View::Chat);
+    assert!(app.chat.new_bot.is_none());
+}
+
+#[test]
+fn snapshot_a_chat_that_builds_a_bot_shows_its_card_and_makes_it() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    let mut chat = summary(70, "Ticket digest", "2026-09-25T08:20:00Z");
+    chat.can = every_action();
+    app.chat.upsert_chat(chat.clone());
+    assert!(app.chat.select(SideItem::Chat(70)));
+    app.update(key(KeyCode::Enter));
+    let mut transcript = budget_transcript("idle");
+    transcript.chat = chat;
+    transcript.bot_draft = Some(
+        serde_json::from_value(serde_json::json!({
+            "name": "Ticket digest", "recipe": null,
+            "when": ["Every day at 8:00"], "uses": ["Chatwoot"],
+            "does": "Reads yesterday's tickets and sums them up by theme.",
+            "ready": true, "needs": [], "connect": [], "try_refusal": null, "made": null
+        }))
+        .unwrap(),
+    );
+    app.update(Msg::Chat(ChatMsg::Shown {
+        chat: 70,
+        result: Ok(transcript.clone()),
+    }));
+    assert_snapshot("new_bot_card", &app);
+    type_text(&mut app, "/make-bot");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects.contains(&Effect::Chat(ChatCommand::MakeBot {
+            body: serde_json::json!({"builder": 70}),
+            chat: Some(70)
+        })),
+        "{effects:?}"
+    );
+    let effects = app.update(Msg::Chat(ChatMsg::BotMade {
+        chat: Some(70),
+        result: Ok(serde_json::json!({"bot": {"id": 21, "name": "Ticket digest"}})),
+    }));
+    assert!(
+        effects.contains(&Effect::Chat(ChatCommand::List)),
+        "it joins the sidebar"
+    );
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Open(70))));
+    assert_eq!(
+        app.chat.draft_result[0],
+        "Made Ticket digest. It's in your sidebar."
+    );
+}
+
+#[test]
+fn snapshot_a_recipe_opens_as_new_bots_form_tries_and_makes() {
+    let mut app = app();
+    new_bot_open(&mut app);
+    app.update(key(KeyCode::Down));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::Chat(ChatCommand::Recipe {
+            key: "inbox_triage".into(),
+            tools: vec![]
+        })]
+    );
+    app.update(Msg::Chat(ChatMsg::Recipe {
+        key: "inbox_triage".into(),
+        result: Ok(recipe_form()),
+    }));
+    // When: a time.
+    app.update(key(KeyCode::Down));
+    app.update(key(KeyCode::Right));
+    for c in "08:30".chars() {
+        app.update(char(c));
+    }
+    // Email: Outlook, which isn't connected; the server is asked again.
+    app.update(key(KeyCode::Down));
+    assert_eq!(
+        app.update(key(KeyCode::Right)),
+        vec![Effect::Chat(ChatCommand::Recipe {
+            key: "inbox_triage".into(),
+            tools: vec![("email".into(), "outlook".into())]
+        })]
+    );
+    app.update(Msg::Chat(ChatMsg::Recipe {
+        key: "inbox_triage".into(),
+        result: Ok(recipe_form()),
+    }));
+    assert_snapshot("new_bot_form", &app);
+    // c connects it in the browser.
+    assert_eq!(
+        app.update(char('c')),
+        vec![Effect::Chat(ChatCommand::Connect {
+            key: "outlook".into(),
+            server: "https://chatwithwork.com".into()
+        })]
+    );
+    // Try it, then Make bot.
+    app.update(key(KeyCode::Down));
+    app.update(key(KeyCode::Down));
+    let effects = app.update(key(KeyCode::Enter));
+    let Effect::Chat(ChatCommand::TryBot { body, chat: None }) = &effects[0] else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(body["schedule"]["frequency"], "day");
+    assert_eq!(body["schedule"]["at"], "08:30");
+    assert_eq!(body["bot"]["choices"]["email"], "outlook");
+    app.update(Msg::Chat(ChatMsg::Trial {
+        chat: None,
+        result: Ok(
+            serde_json::json!({"trial": {"state": "done", "answer": "3 new emails, 1 needs you."}}),
+        ),
+    }));
+    let screen = render_to_string(&app, 100, 30);
+    assert!(screen.contains("3 new emails"), "{screen}");
+    app.update(key(KeyCode::Down));
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(matches!(
+        effects[0],
+        Effect::Chat(ChatCommand::MakeBot { chat: None, .. })
+    ));
+    let effects = app.update(Msg::Chat(ChatMsg::BotMade {
+        chat: None,
+        result: Ok(serde_json::json!({"bot": {"id": 22, "name": "Inbox triage"}, "connect_first": [{"key": "outlook", "name": "Outlook"}]})),
+    }));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Bot {
+        id: 22,
+        filter: None
+    })));
+    assert_eq!(app.view, View::Bot(22));
+}
+
+#[test]
+fn new_bot_says_why_it_cant_when_the_server_refuses() {
+    let mut app = app();
+    new_bot_open(&mut app);
+    for c in "Watch the ECB rate".chars() {
+        app.update(char(c));
+    }
+    app.update(key(KeyCode::Enter));
+    app.update(Msg::Chat(ChatMsg::BotBuilderStarted(Err(Failure::new(
+        "locked",
+        "You're out of credits. Top up in Settings.",
+    )))));
+    assert_eq!(app.view, View::NewBot);
+    let screen = render_to_string(&app, 100, 30);
+    assert!(screen.contains("out of credits"), "{screen}");
+    // b opens it from anywhere in the sidebar too.
+    app.update(key(KeyCode::Esc));
+    assert_eq!(app.view, View::Chat);
+    assert!(app.update(char('b')).is_empty(), "recipes kept");
+    assert_eq!(app.view, View::NewBot);
+}
+
 // --------------------------------------------------------------- evidence
 
 /// The screen as ANSI text, colours and attributes as the terminal would
@@ -4860,6 +5076,27 @@ fn evidence() {
             result: Ok(bot_json()),
         }));
         screens.push(("bot", app));
+    }
+    {
+        let mut app = app();
+        new_bot_open(&mut app);
+        for c in "Every morning, sum up yesterday's tickets".chars() {
+            app.update(char(c));
+        }
+        screens.push(("new_bot", app));
+    }
+    {
+        let mut app = app();
+        new_bot_open(&mut app);
+        app.update(key(KeyCode::Down));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Recipe {
+            key: "inbox_triage".into(),
+            result: Ok(recipe_form()),
+        }));
+        app.update(key(KeyCode::Down));
+        app.update(key(KeyCode::Right));
+        screens.push(("new_bot_form", app));
     }
     for (name, app) in &screens {
         for (depth_name, theme) in evidence_themes() {

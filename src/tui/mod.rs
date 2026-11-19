@@ -16,6 +16,7 @@ mod daemon;
 pub mod dictation;
 mod history;
 pub mod markdown;
+mod newbot;
 mod organizations;
 mod pages;
 mod running;
@@ -334,6 +335,23 @@ impl BotsAccess {
     }
 }
 
+/// How often a try is read again while it runs, and for how long.
+const TRIAL_POLL: Duration = Duration::from_secs(2);
+const TRIAL_WAIT: Duration = Duration::from_secs(5 * 60);
+
+fn no_bots() -> chat::Failure {
+    chat::Failure::new("unsupported", "Bots aren't available here.")
+}
+
+/// One call to the bots API, with the computer's own sign-in.
+fn with_bots(
+    bots: Option<BotsAccess>,
+    call: impl FnOnce(&crate::bots::Bots) -> anyhow::Result<serde_json::Value>,
+) -> Result<serde_json::Value, chat::Failure> {
+    let bots = bots.ok_or_else(no_bots)?.connect()?;
+    call(&bots).map_err(bots_failure)
+}
+
 /// A refusal from the bots API, as the chat pane shows failures.
 fn bots_failure(error: anyhow::Error) -> chat::Failure {
     let json = crate::bots::error_json(&error);
@@ -593,6 +611,97 @@ impl ChatRunner {
                         )),
                     };
                     send(ChatMsg::Bot { id, filter, result });
+                });
+            }
+            ChatCommand::Recipes => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let result = with_bots(bots, |bots| bots.recipes()).and_then(|answer| {
+                        serde_json::from_value(answer["recipes"].clone())
+                            .map_err(|e| chat::Failure::new("unsupported", e.to_string()))
+                    });
+                    send(ChatMsg::Recipes(result));
+                });
+            }
+            ChatCommand::Recipe { key, tools } => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let result = with_bots(bots, |bots| bots.recipe(&key, &tools));
+                    send(ChatMsg::Recipe { key, result });
+                });
+            }
+            ChatCommand::StartBotBuilder { sentence, project } => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let mut body = serde_json::json!({ "sentence": sentence });
+                    if let Some(project) = project {
+                        body["project_id"] = serde_json::json!(project);
+                    }
+                    let result =
+                        with_bots(bots, |bots| bots.start_builder(&body)).and_then(|answer| {
+                            serde_json::from_value(answer["chat"].clone())
+                                .map_err(|e| chat::Failure::new("unsupported", e.to_string()))
+                        });
+                    send(ChatMsg::BotBuilderStarted(result));
+                });
+            }
+            ChatCommand::TryBot { body, chat } => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let bots = match bots.ok_or_else(no_bots).and_then(|b| b.connect()) {
+                        Ok(bots) => bots,
+                        Err(failure) => {
+                            return send(ChatMsg::Trial {
+                                chat,
+                                result: Err(failure),
+                            });
+                        }
+                    };
+                    let started = bots.start_trial(&body).map_err(bots_failure);
+                    let id = started
+                        .as_ref()
+                        .ok()
+                        .and_then(|a| a["trial"]["id"].as_u64());
+                    let mut running = started
+                        .as_ref()
+                        .is_ok_and(|a| a["trial"]["state"] == "running");
+                    send(ChatMsg::Trial {
+                        chat,
+                        result: started,
+                    });
+                    let begun = Instant::now();
+                    while running && let Some(id) = id {
+                        if begun.elapsed() > TRIAL_WAIT {
+                            break;
+                        }
+                        thread::sleep(TRIAL_POLL);
+                        let answer = bots.trial(id).map_err(bots_failure);
+                        running = answer
+                            .as_ref()
+                            .is_ok_and(|a| a["trial"]["state"] == "running");
+                        send(ChatMsg::Trial {
+                            chat,
+                            result: answer,
+                        });
+                    }
+                });
+            }
+            ChatCommand::MakeBot { body, chat } => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let result = with_bots(bots, |bots| bots.create(&body));
+                    send(ChatMsg::BotMade { chat, result });
+                });
+            }
+            ChatCommand::Connect { key, server } => {
+                thread::spawn(move || {
+                    let result = chats
+                        .connector_handoff(key, "read".into(), None)
+                        .map(|path| {
+                            let url = format!("{}{path}", server.trim_end_matches('/'));
+                            crate::browser::open(&url);
+                        });
+                    send(ChatMsg::Connected(result));
                 });
             }
             ChatCommand::ProjectChats {

@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │
+                               │  ◙ What should your bot do?
+  ◙ New bot     + New chat     │
+  ◇ Decisions             3 ●  │  ╭──────────────────────────────────────────────────────────────╮
+  / Search chats and bots      │  │ ❯ Every morning, sum up yesterday's tickets                  │
+                               │  ╰──────────────────────────────────────────────────────────────╯
+  PINNED                       │
+   Onboarding checklist        │  Enter starts a chat that proposes the bot.
+   ◙ Inbox triage         4 ●  │
+                               │  OR START FROM A RECIPE
+  PROJECTS     All Chats Bots  │
+   ▾ ◫ HQ                      │  For you
+     ▸ ■ Drafts           2 ●  │   Inbox triage  Sorts new email and draf…   When an email arrives
+       ◙ Morning brief      ●  │
+   ▾ □ Falcon                  │  Team
+       Falcon launch copy 1 ●  │   Daily standup  Asks the team what they…   Every weekday at 9:00
+       ◙ Issue fixer      1 ●  │
+       Launch plan for Falcon  │
+       Falcon pricing          │
+       Falcon press list       │
+       Falcon FAQ              │
+       7 more                  │
+                               │
+  RECENT                       │
+   Q3 budget                   │
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │
+   Vendor contracts            │
+                               │
+ (C) Carmine                   │  enter start its chat   ↓ recipes   esc back

@@ -70,6 +70,7 @@ pub fn render_hits(frame: &mut Frame, app: &App, theme: &Theme, now: OffsetDateT
         View::Chat => main_pane(frame, main, app, theme, now, &mut hits),
         View::Decisions => super::views::decisions(frame, main, app, theme, now, &mut hits),
         View::Bot(id) => super::views::bot(frame, main, app, id, theme, now, &mut hits),
+        View::NewBot => super::newbot::render(frame, main, app, theme, now, &mut hits),
         View::Settings(page) => {
             let bare = side.width == 0;
             pages::render(frame, main, app, page, bare, theme, now, &mut hits);
@@ -1320,6 +1321,9 @@ fn transcript(
         }
         lines.push(Line::from(spans));
     }
+    if !pane.working() {
+        draft_lines(&mut lines, app, width, theme);
+    }
     queue_lines(&mut lines, &mut marks, app, width, theme);
     waiting_lines(&mut lines, &mut marks, app, width, theme);
     if let Some(error) = &pane.error {
@@ -1329,6 +1333,106 @@ fn transcript(
         lines.pop();
     }
     (lines, marks, question)
+}
+
+/// The bot a chat that builds one proposes, as the web's card at its end:
+/// When, Uses and Does, what Make bot still needs, and the commands that
+/// make or try it; once it's made, the bot to open.
+fn draft_lines(lines: &mut Vec<Line<'static>>, app: &App, width: usize, theme: &Theme) {
+    let Some(draft) = app.open_draft() else {
+        return;
+    };
+    let pane = &app.chat;
+    if lines.last().is_some_and(|l| l.width() > 0) {
+        lines.push(Line::raw(""));
+    }
+    let inner = width.saturating_sub(4);
+    let start = lines.len();
+    lines.push(card_edge(width, true, Signal::Idle, theme));
+    let name = draft
+        .made
+        .as_ref()
+        .map(|m| m.name.clone())
+        .or(draft.name.clone())
+        .unwrap_or_else(|| "Your bot".into());
+    lines.push(Line::from(vec![
+        Span::styled(format!("{BOT} "), theme.strong()),
+        Span::styled(ellipsize(&name, inner.saturating_sub(2)), theme.strong()),
+    ]));
+    if let Some(made) = &draft.made {
+        lines.push(Line::styled(
+            ellipsize(&format!("Made. /bot opens {}.", made.name), inner),
+            theme.signal_ink(Signal::Positive),
+        ));
+    } else {
+        if let Some(recipe) = &draft.recipe {
+            lines.push(Line::styled(
+                ellipsize(&format!("From the recipe {}", recipe.name), inner),
+                theme.muted(),
+            ));
+        }
+        let part = |lines: &mut Vec<Line<'static>>, label: &str, items: &[String]| {
+            if items.is_empty() {
+                return;
+            }
+            for (i, item) in items.iter().enumerate() {
+                let head = if i == 0 {
+                    format!("{label:<6}")
+                } else {
+                    " ".repeat(6)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(head, theme.micro()),
+                    Span::styled(ellipsize(item, inner.saturating_sub(6)), theme.ink()),
+                ]));
+            }
+        };
+        part(lines, "WHEN", &draft.when);
+        part(lines, "USES", &draft.uses);
+        if let Some(does) = draft.does.as_deref().filter(|d| !d.is_empty()) {
+            let wrapped = wrap(does, inner.saturating_sub(6));
+            let shown: Vec<String> = wrapped.iter().take(3).cloned().collect();
+            part(lines, "DOES", &shown);
+        }
+        for need in &draft.needs {
+            lines.push(Line::styled(
+                ellipsize(&format!("Make bot needs {need}"), inner),
+                theme.signal_ink(Signal::Attention),
+            ));
+        }
+        for service in &draft.connect {
+            lines.push(Line::styled(
+                ellipsize(&format!("Connect {} for it to run", service.name), inner),
+                theme.signal_ink(Signal::Attention),
+            ));
+        }
+        lines.push(Line::raw(""));
+        let mut keys = Vec::new();
+        if draft.ready {
+            keys.push(("/make-bot", "makes it"));
+        }
+        if draft.try_refusal.is_none() {
+            keys.push(("/try-bot", "tries it, changing nothing"));
+        }
+        if keys.is_empty() {
+            lines.push(Line::styled(
+                "Say what to change, and it updates.",
+                theme.faint(),
+            ));
+        } else {
+            lines.push(key_hints(&keys, theme));
+        }
+    }
+    if let Some(busy) = pane.draft_busy {
+        lines.push(Line::styled(busy, theme.signal_ink(Signal::Live)));
+    }
+    for line in &pane.draft_result {
+        for part in wrap(line, inner) {
+            lines.push(Line::styled(part, theme.ink()));
+        }
+    }
+    tint_card(lines, start, width, Signal::Idle, theme);
+    lines.push(Line::raw(""));
 }
 
 /// Messages sent while an answer runs, after the conversation as the web

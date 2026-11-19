@@ -606,6 +606,9 @@ pub struct Transcript {
     /// takes them (then they're `user` entries) or they're taken back.
     /// Servers from before the queue send none.
     pub queued: Vec<Queued>,
+    /// In a chat that builds a bot, for its maker: the bot it proposes, or
+    /// the one it made.
+    pub bot_draft: Option<super::newbot::BotDraft>,
 }
 
 /// A message waiting in the chat's queue, as the web's pending bubble
