@@ -187,7 +187,7 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
-async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
+export async function point(t: Target, policy: Policy): Promise<Point & { surface: number }> {
   const deadline = Date.now() + 4_000;
   const alignments = [null, "center", "end", "start"];
   let reason = "that element isn't visible on the page";

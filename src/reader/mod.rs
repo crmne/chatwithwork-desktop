@@ -19,6 +19,7 @@ pub mod walk;
 pub mod watch;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -196,6 +197,90 @@ struct State {
 }
 
 type CacheKey = (String, (u64, u64), i64, u64);
+
+/// A file checked for an upload (`Reader::upload_file`).
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadFile {
+    /// `root_id:relative/path`, as the call named it.
+    pub path: String,
+    /// The shared folder's label.
+    pub folder: String,
+    pub name: String,
+    pub size: u64,
+    pub modified: String,
+    pub mime_type: String,
+    pub sha256: String,
+    /// Where it really is, for the browser only: never sent to the server,
+    /// logged or audited.
+    #[serde(skip)]
+    pub real: PathBuf,
+}
+
+impl UploadFile {
+    /// What binds an approval to these files, in this order: each one's
+    /// real path, size, modification time and SHA-256.
+    pub fn fingerprint(files: &[UploadFile]) -> String {
+        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+        for file in files {
+            digest.update(file.real.to_string_lossy().as_bytes());
+            digest.update(&[0]);
+            digest.update(file.size.to_string().as_bytes());
+            digest.update(&[0]);
+            digest.update(file.modified.as_bytes());
+            digest.update(&[0]);
+            digest.update(file.sha256.as_bytes());
+            digest.update(b"\n");
+        }
+        digest
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+/// The MIME type a page's `accept` is checked against, by the name's
+/// extension, as browsers guess it for a chosen file.
+pub fn upload_mime_type(name: &str) -> &'static str {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "ico" => "image/x-icon",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "crx" => "application/x-chrome-extension",
+        "apk" => "application/vnd.android.package-archive",
+        "json" => "application/json",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "md" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "xml" => "text/xml",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
 
 pub struct Reader {
     state: RwLock<State>,
@@ -599,6 +684,100 @@ impl Reader {
         })
     }
 
+    /// A file in a shared folder to hand to a page's upload field: resolved
+    /// and refused exactly as `read` is (the folder's symlink rule, the
+    /// deny list, hard links, only a regular file), then vouched for by
+    /// where the open file really is, inside the folder, every symlink
+    /// resolved, so the browser gets that path and nothing the page or the
+    /// model named. Its size, modification time and SHA-256 bind an
+    /// approval to this very file: a file that changes after it was checked
+    /// is refused at upload (`Conflict`). Never reads more than `max_bytes`.
+    pub fn upload_file(&self, path: &str, max_bytes: u64) -> Result<UploadFile, ToolError> {
+        use std::io::Read;
+        let state = self.state.read().expect("reader state");
+        let tool_path = ToolPath::parse(path)?;
+        let Some(name) = tool_path.rel.file_name().map(str::to_string) else {
+            return Err(ToolError::new(
+                ErrorCode::NotAFile,
+                "this path is a folder; name a file in it",
+            ));
+        };
+        let root = root_by_id(&state, &tool_path.root_id)?;
+        let mut opened = root.open_file(&tool_path.rel, policy(&state))?;
+        if opened.size > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "the file is {} bytes; files up to {max_bytes} bytes can be uploaded",
+                    opened.size
+                ),
+            ));
+        }
+        let real = safe_fs::opened_file_path(&opened.file).ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::Unsupported,
+                "this computer can't say where the file is, so it can't be uploaded",
+            )
+        })?;
+        let folder = safe_fs::without_verbatim_prefix(&root.path);
+        if !safe_fs::is_within(&folder, &real) || real == folder {
+            return Err(ToolError::new(
+                ErrorCode::OutsideRoot,
+                "the file is outside the shared folder",
+            ));
+        }
+        // The browser opens the file by its path: that path must name this
+        // very file, not one put there since.
+        if safe_fs::path_identity(&real) != Some(opened.identity) {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "the file changed while it was checked; try again",
+            ));
+        }
+        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut buffer = vec![0u8; 256 * 1024];
+        let mut read = 0u64;
+        loop {
+            let n = opened
+                .file
+                .read(&mut buffer)
+                .map_err(|e| ToolError::internal(format!("reading file: {}", e.kind())))?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            if read > max_bytes {
+                return Err(ToolError::new(
+                    ErrorCode::Conflict,
+                    "the file grew while it was checked; try again",
+                ));
+            }
+            digest.update(&buffer[..n]);
+        }
+        if read != opened.size {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "the file changed while it was checked; try again",
+            ));
+        }
+        let sha256 = digest
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Ok(UploadFile {
+            path: tool_path.to_string(),
+            folder: root.label.clone(),
+            mime_type: upload_mime_type(&name).to_string(),
+            name,
+            size: opened.size,
+            modified: format_time(opened.modified),
+            sha256,
+            real,
+        })
+    }
+
     /// Whose read budget reads from the shared folder `id` count against:
     /// the folder's own, when the person gave it one, or the shared one.
     pub fn read_scope(&self, id: &str) -> crate::limits::ReadScope {
@@ -846,6 +1025,9 @@ pub fn format_time(secs: i64) -> String {
         .and_then(|t| t.format(&Rfc3339).ok())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod upload_tests;
 
 #[cfg(test)]
 mod tests {

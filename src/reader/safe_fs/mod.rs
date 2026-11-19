@@ -371,6 +371,50 @@ impl RootHandle {
     }
 }
 
+/// The path the system reports for an open file: where it really is, every
+/// symlink on the way resolved, whatever name reached it. `None` if the
+/// platform can't say. Local use only (an upload's path for the browser).
+pub fn opened_file_path(file: &File) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let fd = std::os::fd::OwnedFd::from(file.try_clone().ok()?);
+        sys::handle_path(&fd)
+    }
+    #[cfg(windows)]
+    {
+        sys::final_path(file)
+            .ok()
+            .map(|path| without_verbatim_prefix(&path))
+    }
+}
+
+/// The identity of the regular file `path` names now, the way a program
+/// opening it by that path finds it: `(device, inode)`, or the volume and
+/// file index on Windows. `None` for anything else, or nothing there.
+pub fn path_identity(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).ok()?;
+        metadata.is_file().then(|| (metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        std::fs::metadata(path).ok()?.is_file().then_some(())?;
+        sys::path_identity(path).ok()
+    }
+}
+
+/// `C:\dir` for `\\?\C:\dir`, which Windows reports for handles; other
+/// paths, and other platforms' paths, as they are.
+pub fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// Component-wise containment: `/a/root2` is not inside `/a/root`.
 pub fn is_within(root: &Path, candidate: &Path) -> bool {
     candidate.starts_with(root)

@@ -738,6 +738,7 @@ impl Daemon {
                     Arc::clone(&self.limiter),
                     config.browser.changes,
                 )
+                .with_reader(Arc::clone(&self.reader))
             }),
         )
     }

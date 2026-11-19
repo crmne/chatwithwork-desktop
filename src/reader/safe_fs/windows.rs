@@ -449,6 +449,13 @@ fn open_with(path: &Path, access: u32) -> io::Result<File> {
 
 /// The volume serial number and file index: what identifies a file or
 /// folder whatever name reaches it.
+/// The identity of the file `path` names now, as a program opening it by
+/// that path would find it.
+pub fn path_identity(path: &Path) -> io::Result<(u64, u64)> {
+    let file = File::open(path)?;
+    Ok(identity_of(&file_info(&file)?))
+}
+
 fn identity_of(info: &BY_HANDLE_FILE_INFORMATION) -> (u64, u64) {
     (
         info.dwVolumeSerialNumber as u64,

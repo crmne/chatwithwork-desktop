@@ -10,6 +10,7 @@ import { afterCapture, indicate, prepareForCapture } from "./page.js";
 import { hostOfUrl, siteAllowed } from "./sites.js";
 import { documentIdentity, rememberRefs, sameDocument } from "./engine-refs.js";
 import { page, snapshotText, type AXNode } from "./snapshot.js";
+import { uploadMarks, type DomNode, type UploadMark } from "./upload-marks.js";
 
 export interface Policy {
   sites: string[];
@@ -115,7 +116,8 @@ const read: Method = async (params, policy) => {
   const document = await documentIdentity(tabId);
   const { nodes, sensitive } = await sensitiveFields(tabId);
   const clickable = await clickableElements(tabId);
-  const text = snapshotText(nodes, { sensitive, clickable });
+  const uploads = await pageUploads(tabId);
+  const text = snapshotText(nodes, { sensitive, clickable, uploads });
   const now = await still(tabId, policy);
   const current = await documentIdentity(tabId);
   if (!sameDocument(document, current)) throw new ToolError("page_error", "the page changed while reading; read it again");
@@ -421,6 +423,21 @@ const wait: Method = async (params, policy) => {
   const now = await still(tabId, policy);
   return withDialog(tabId, { ...about(now), found, waited_ms: Date.now() - started });
 };
+
+// The page as browser_read shows it, sensitive fields' values left out.
+export async function readableText(tabId: number): Promise<string> {
+  const { nodes, sensitive } = await sensitiveFields(tabId);
+  return snapshotText(nodes, { sensitive });
+}
+
+// The page's upload fields, and the labels and buttons that go with them.
+export async function pageUploads(tabId: number): Promise<Map<number, UploadMark>> {
+  const { root } = await send<{ root: DomNode }>(tabId, "DOM.getDocument", { depth: -1, pierce: true }).catch((error) => {
+    if (error instanceof ToolError && error.code === "browser_stopped") throw error;
+    return { root: undefined as unknown as DomNode };
+  });
+  return root ? uploadMarks(root) : new Map();
+}
 
 // Whether the text browser_read would show for the page includes `text`.
 async function readableIncludes(tabId: number, text: string): Promise<boolean> {

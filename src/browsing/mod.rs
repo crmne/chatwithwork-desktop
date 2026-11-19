@@ -25,3 +25,6 @@ pub fn host_if_invoked() {
     };
     std::process::exit(code);
 }
+
+#[cfg(test)]
+mod upload_tests;

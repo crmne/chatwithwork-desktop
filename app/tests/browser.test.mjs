@@ -95,3 +95,16 @@ test("browser approval defaults to asking and can only change when actions are a
   browser.ask_before_actions=false;
   assert.ok(render(app).textContent.includes("including sending, buying and deleting"));
 });
+
+test("uploads say how to turn on the browser's file access, only when it's off", () => {
+  const off = fixture({changes:true, extension:{browser:"Chrome",uploads:true,file_access:false}});
+  const row = byKey(render(off.app), "browser-uploads");
+  assert.ok(row);
+  assert.ok(row.textContent.includes("Allow access to file URLs"));
+  assert.ok(row.textContent.includes("chrome://extensions"));
+  for (const overrides of [
+    {changes:true, extension:{browser:"Chrome",uploads:true,file_access:true}},
+    {changes:false, extension:{browser:"Chrome",uploads:true,file_access:false}},
+    {changes:true, extension:{browser:"Chrome"}},
+  ]) assert.equal(byKey(render(fixture(overrides).app), "browser-uploads"), null);
+});

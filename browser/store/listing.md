@@ -20,7 +20,7 @@ What goes into each field of the Developer Dashboard for the Chat with Work exte
 >
 > It works only in its own tab group, "Chat with Work", in the background, so you keep using your other tabs. It reads a page the way a screen reader does, takes a screenshot when it needs to see the layout, scrolls and waits for pages to load.
 >
-> If you also allow actions, it can open pages on your allowed sites, click, type, choose from lists, close its tabs and save files into a folder you share. Actions ask first, unless you let them run. Anything that may send, buy, post or delete something shows you a screenshot of the tab with the button outlined before you approve it.
+> If you also allow actions, it can open pages on your allowed sites, click, type, choose from lists, close its tabs, save files into a folder you share, and upload files from a folder you share (each upload asks you, every time). Actions ask first, unless you let them run. Anything that may send, buy, post or delete something shows you a screenshot of the tab with the button outlined before you approve it.
 >
 > What it never does:
 > - Act on a tab outside its tab group, or on a site you didn't allow.
@@ -46,7 +46,7 @@ What goes into each field of the Developer Dashboard for the Chat with Work exte
 
 | Permission | Why |
 |---|---|
-| `debugger` | The single purpose. It attaches only to tabs in the "Chat with Work" tab group, on allowed sites, to read the page's accessibility tree, take screenshots, scroll, and click and type for actions the person approved. It detaches after a minute without a call. No script a website or a server sends is run through it: the extension sends only its own fixed commands. |
+| `debugger` | The single purpose. It attaches only to tabs in the "Chat with Work" tab group, on allowed sites, to read the page's accessibility tree, take screenshots, scroll, click and type for actions the person approved, and hand an upload field the files the person approved from a folder they share (only their name and size are read back, never their contents). It detaches after a minute without a call. No script a website or a server sends is run through it: the extension sends only its own fixed commands. |
 | `tabs` | Lists the tabs in its group with their titles and addresses, checks each tab's address against the allowed sites before acting, and opens allowed pages in its group. |
 | `tabGroups` | Finds and creates its "Chat with Work" tab group, the only place it acts. |
 | `nativeMessaging` | Talks to Chat with Work Desktop on the person's computer (`com.chatwithwork.desktop`), its only connection. |

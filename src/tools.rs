@@ -590,6 +590,14 @@ impl LocalFiles {
                 named.extend(expected.keys().map(String::as_str));
             }
         }
+        // An upload's files.
+        named.extend(
+            args["paths"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        );
         for value in named {
             let root = value.split(':').next().unwrap_or_default().to_string();
             let Some(loan) = reader.loan(&root, id) else {
@@ -1510,7 +1518,8 @@ pub fn browser_tools(browser: &BrowserTools) -> Vec<Tool> {
             if let Some(annotations) = tool.annotations.as_mut() {
                 annotations.open_world_hint = Some(true);
             }
-            if is_action && browser.auto_approves() {
+            // An upload asks every time, whatever the computer's choice.
+            if is_action && browser.auto_approves() && definition.name != "browser_upload" {
                 tool.meta
                     .get_or_insert_with(Default::default)
                     .insert(BROWSER_AUTO_APPROVE_META.into(), Value::Bool(true));

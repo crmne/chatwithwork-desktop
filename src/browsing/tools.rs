@@ -11,6 +11,7 @@ use super::bridge::{Bridge, stopped};
 use super::sites;
 use crate::error::{ErrorCode, ToolError};
 use crate::limits::Limiter;
+use crate::reader::{Reader, UploadFile};
 use crate::tools::Caller;
 use crate::writer::Writer;
 
@@ -42,7 +43,7 @@ const DRY_RUN: &str = "Check the action and describe it, with a screenshot, with
 
 /// The tools that act on pages, offered only while the person allowed
 /// actions on this computer.
-pub const CHANGE_TOOLS: [&str; 7] = [
+pub const CHANGE_TOOLS: [&str; 8] = [
     "browser_open",
     "browser_back",
     "browser_close",
@@ -50,7 +51,12 @@ pub const CHANGE_TOOLS: [&str; 7] = [
     "browser_type",
     "browser_select",
     "browser_download",
+    "browser_upload",
 ];
+
+/// Files one upload hands to a page, and how big each may be.
+pub const UPLOAD_MAX_FILES: usize = 10;
+pub const UPLOAD_MAX_BYTES: u64 = 200 * 1024 * 1024;
 
 pub fn definitions() -> Vec<Definition> {
     vec![
@@ -265,6 +271,37 @@ pub fn definitions() -> Vec<Definition> {
             }),
             kind: Kind::Write,
         },
+        Definition {
+            name: "browser_upload",
+            title: "Upload a file in the browser",
+            description: "Hand files from a shared folder on this computer to a page's upload \
+                 field, in a tab in the \"Chat with Work\" group, as if the person chose them \
+                 in the file picker: `ref` is a file field, or a button or label `browser_read` \
+                 marks `[upload]`; `drop: true` drops them on `ref` instead, for a zone that \
+                 says to drag files there. `paths` are `<root_id>:relative/path` of files in \
+                 shared folders (up to 10, each up to 200 MB): only files already on this \
+                 computer, in a folder it shares, can be uploaded. The person \
+                 approves every upload, seeing each file and the site; it is never allowed for \
+                 the rest of a chat. Answers what the page shows afterwards (the file's name, or \
+                 an error the page gives), never the file's contents. Sites whose picker opens \
+                 only through the browser's own file system access (`showOpenFilePicker`) are \
+                 refused (`unsupported`).",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "ref": { "type": "string", "description": "The upload field's, or its button's, ref from `browser_read`, like `e123`." },
+                    "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": UPLOAD_MAX_FILES, "description": "`<root_id>:relative/path` of each file, in shared folders." },
+                    "drop": { "type": "boolean", "default": false, "description": "Drop the files on `ref`, as if dragged there from the computer. Default false." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN },
+                    "expected_sha256": { "type": "string", "description": "The `fingerprint` the dry run answered; the upload is refused if the files changed since." }
+                },
+                "required": ["ref", "paths"],
+                "additionalProperties": false
+            }),
+            // It sends the person's files to a website: it always asks.
+            kind: Kind::Destructive { write_when: None },
+        },
     ]
 }
 
@@ -293,6 +330,9 @@ pub struct BrowserTools {
     limiter: Arc<Limiter>,
     /// Actions were allowed when the tools were listed.
     changes: bool,
+    /// The shared folders, which uploads come from; none in tests that
+    /// upload nothing.
+    reader: Option<Arc<Reader>>,
 }
 
 impl BrowserTools {
@@ -307,7 +347,14 @@ impl BrowserTools {
             writer,
             limiter,
             changes,
+            reader: None,
         }
+    }
+
+    /// Uploads come from these shared folders.
+    pub fn with_reader(mut self, reader: Arc<Reader>) -> Self {
+        self.reader = Some(reader);
+        self
     }
 
     pub fn auto_approves(&self) -> bool {
@@ -333,10 +380,13 @@ impl BrowserTools {
             .filter(|d| match d.kind {
                 Kind::Read => true,
                 _ if !self.changes => false,
-                _ => {
-                    d.name != "browser_download"
-                        || self.writer.as_ref().is_some_and(|writer| writer.enabled())
-                }
+                _ => match d.name {
+                    "browser_download" => {
+                        self.writer.as_ref().is_some_and(|writer| writer.enabled())
+                    }
+                    "browser_upload" => self.reader.is_some(),
+                    _ => true,
+                },
             })
             .collect()
     }
@@ -394,6 +444,15 @@ impl BrowserTools {
         );
         let method = name.trim_start_matches("browser_");
         let engine = super::engine::route(&self.bridge, method);
+        if name == "browser_upload" && automatic && !dry_run {
+            // An upload sends the person's files to a website: it waits for
+            // their approval of that very upload, whatever the computer's
+            // automatic-actions choice.
+            return Err(ToolError::new(
+                ErrorCode::NeedsApproval,
+                "Uploads always need the person's approval of each upload.",
+            ));
+        }
         if is_change && automatic && !dry_run {
             self.check_automatic(caller)?;
             // Automatic actions keep the same checked preflight. It cannot
@@ -416,6 +475,11 @@ impl BrowserTools {
             self.limiter.check_change(0)?;
         }
         let mut params = args;
+        let uploading = if name == "browser_upload" {
+            Some(self.upload_files(&mut params, caller).await?)
+        } else {
+            None
+        };
         if name == "browser_read"
             && let Some(allowance) = read_allowance
         {
@@ -450,6 +514,9 @@ impl BrowserTools {
         if name == "browser_tabs" {
             value = tabs_answer(value, &policy);
         }
+        if let Some((files, fingerprint)) = uploading {
+            value = upload_answer(value, &files, fingerprint)?;
+        }
         let image = value
             .as_object_mut()
             .and_then(|object| object.remove("image"))
@@ -468,6 +535,105 @@ impl BrowserTools {
             ));
         }
         Ok(Answer { value, image, site })
+    }
+
+    /// Check the files an upload names, in place of the paths in `params`:
+    /// the browser gets each file's real path, checked here, never one the
+    /// page or the model gave. The approved upload must name the files the
+    /// dry run checked, unchanged (`expected_sha256`).
+    async fn upload_files(
+        &self,
+        params: &mut Value,
+        caller: &Caller,
+    ) -> Result<(Vec<UploadFile>, String), ToolError> {
+        let object = params
+            .as_object_mut()
+            .ok_or_else(|| ToolError::invalid_argument("arguments must be an object"))?;
+        let paths: Vec<String> = object
+            .remove("paths")
+            .and_then(|paths| paths.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|path| path.as_str().map(str::to_string))
+            .collect::<Option<_>>()
+            .ok_or_else(|| ToolError::invalid_argument("paths must be a list of paths"))?;
+        if paths.is_empty() || paths.len() > UPLOAD_MAX_FILES {
+            return Err(ToolError::invalid_argument(format!(
+                "pass paths: a list of 1 to {UPLOAD_MAX_FILES} files, each \
+                 `<root_id>:relative/path` in a shared folder"
+            )));
+        }
+        if (1..paths.len()).any(|i| paths[..i].contains(&paths[i])) {
+            return Err(ToolError::invalid_argument("paths names a file twice"));
+        }
+        let expected = object
+            .remove("expected_sha256")
+            .map(|value| value.as_str().map(str::to_string))
+            .map(|value| {
+                value.ok_or_else(|| ToolError::invalid_argument("expected_sha256 must be a string"))
+            })
+            .transpose()?;
+        let dry_run = object.get("dry_run") == Some(&Value::Bool(true));
+        let Some(reader) = self.reader.clone() else {
+            return Err(ToolError::new(
+                ErrorCode::Unavailable,
+                "no shared folder on this computer to upload from",
+            ));
+        };
+        if let Some(extension) = self.bridge.extension()
+            && !extension.uploads
+        {
+            return Err(ToolError::new(
+                ErrorCode::BrowserUnavailable,
+                "Update the Chat with Work browser extension to upload files. Nothing was uploaded.",
+            ));
+        }
+        let files = tokio::task::spawn_blocking(move || {
+            paths
+                .iter()
+                .map(|path| reader.upload_file(path, UPLOAD_MAX_BYTES))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(|_| ToolError::internal("checking the files crashed"))??;
+        let fingerprint = UploadFile::fingerprint(&files);
+        if !dry_run {
+            match expected {
+                Some(expected) if expected == fingerprint => {}
+                Some(_) => {
+                    return Err(ToolError::new(
+                        ErrorCode::Conflict,
+                        "a file changed after the person approved this upload, so nothing was \
+                         uploaded; check it again so they see it as it is now",
+                    ));
+                }
+                // A local client's approved upload repeats its dry run just
+                // before, with these very files.
+                None if matches!(caller, Caller::LocalBrowser { .. }) => {}
+                None => {
+                    return Err(ToolError::invalid_argument(
+                        "an upload needs expected_sha256, the fingerprint its dry run answered",
+                    ));
+                }
+            }
+        }
+        object.insert(
+            "files".into(),
+            Value::Array(
+                files
+                    .iter()
+                    .map(|file| {
+                        json!({
+                            "path": file.real.to_string_lossy(),
+                            "name": file.name,
+                            "size": file.size,
+                            "mime_type": file.mime_type,
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+        Ok((files, fingerprint))
     }
 
     /// Fetch a file in the browser and save it through the writer, with
@@ -558,6 +724,54 @@ impl BrowserTools {
             site,
         })
     }
+}
+
+/// An upload's answer as the server sees it: the files as this computer
+/// checked them (their shared folder and name, never where they really
+/// are), and, once uploaded, only if the page holds those very files.
+fn upload_answer(
+    mut value: Value,
+    files: &[UploadFile],
+    fingerprint: String,
+) -> Result<Value, ToolError> {
+    let dry_run = value.get("dry_run") == Some(&Value::Bool(true));
+    if !dry_run {
+        let chosen: Vec<(String, u64)> = value
+            .get("chosen")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|file| {
+                (
+                    file.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    file.get("size").and_then(Value::as_u64).unwrap_or(u64::MAX),
+                )
+            })
+            .collect();
+        let wanted: Vec<(String, u64)> = files.iter().map(|f| (f.name.clone(), f.size)).collect();
+        // A page that takes the files and moves them elsewhere (a drop zone
+        // that uploads at once) may show none; one that shows others got
+        // something else.
+        if !chosen.is_empty() && chosen != wanted {
+            return Err(ToolError::new(
+                ErrorCode::PageError,
+                "the page holds other files than the ones approved; check what it shows",
+            ));
+        }
+    }
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| ToolError::new(ErrorCode::PageError, "the browser sent no answer"))?;
+    object.remove("chosen");
+    object.insert(
+        "files".into(),
+        serde_json::to_value(files).unwrap_or_default(),
+    );
+    object.insert("fingerprint".into(), Value::String(fingerprint));
+    Ok(value)
 }
 
 /// The tab list as the server sees it: tabs on sites that aren't allowed

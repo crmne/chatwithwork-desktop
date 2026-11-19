@@ -65,6 +65,9 @@ pub enum ErrorCode {
     WouldSubmit,
     /// The page or the browser failed to do what was asked.
     PageError,
+    /// The browser won't let the extension hand a file to a page: its
+    /// "Allow access to file URLs" switch is off.
+    FileAccessOff,
     /// The system's printing can't take a job: no CUPS, a printer that's
     /// gone or stopped.
     PrinterUnavailable,
@@ -114,6 +117,7 @@ impl ErrorCode {
             Self::SensitiveField => "sensitive_field",
             Self::WouldSubmit => "would_submit",
             Self::PageError => "page_error",
+            Self::FileAccessOff => "file_access_off",
             Self::NotAllowed => "not_allowed",
             Self::NotInstalled => "not_installed",
             Self::NotSignedIn => "not_signed_in",

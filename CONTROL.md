@@ -368,10 +368,10 @@ The browser settings (docs/browser.md), and the connection the extension's nativ
 ```json
 {"ok": true, "browser": {"enabled": true, "changes": false, "ask_before_actions": true, "stopped": false, "sites": ["github.com"], "all_sites": false, "blocked_sites": [], "bots": [],
   "connected": true, "extension": {"origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/",
-  "version": "0.1.2", "site_policy_version": 2, "browser": "Chrome 141", "stopped": false, "since": "2026-10-22T08:14:03Z"}}}
+  "version": "0.1.5", "site_policy_version": 2, "engine_protocol": 1, "uploads": true, "file_access": false, "browser": "Chrome 141", "stopped": false, "since": "2026-10-22T08:14:03Z"}}}
 ```
 
-`status` carries the same object as `browser`. `extension` is `null` while no browser is connected; its `stopped` is true while the person pressed Stop in the extension.
+`status` carries the same object as `browser`. `extension` is `null` while no browser is connected; its `stopped` is true while the person pressed Stop in the extension. `uploads` says the extension can hand files to upload fields (0.1.5 and later), and `file_access` whether the browser's "Allow access to file URLs" switch for it is on, which uploads need; only the person can turn it on, at `chrome://extensions`.
 
 | Request | Does |
 |---|---|
@@ -426,7 +426,7 @@ The CLI equivalents are `cww browser tools` and
 {"cmd": "browser_attach", "origin": "chrome-extension://ehjfihpogoacjodjnanclodinjnnpmcp/"}
 ```
 
-The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "all_sites": false, "blocked_sites": [], "stopped": false, "changes": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "site_policy_version": 2, "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
+The daemon answers `{"ok": true}` when the origin is the published extension's (or one of `[browser] extension_ids`) and no other browser is attached, or `{"ok": false, "code": "not_allowed" | "busy", "error": ...}`. After `ok`, the connection carries JSON lines both ways until either side closes it: to the extension, the policy (`{"method": "policy", "params": {"sites": [...], "all_sites": false, "blocked_sites": [], "stopped": false, "changes": false}}`, at once and on every change) and requests (`{"id": 7, "method": "read", "params": {...}}`); from the extension, answers (`{"id": 7, "result": {...}}` or `{"id": 7, "error": {"code": "site_not_allowed", "message": "..."}}`) and events (`{"event": "hello", "version", "site_policy_version": 2, "engine_protocol", "uploads": 1, "file_access", "browser", "stopped"}`, `{"event": "state", "stopped"}`). Lines from the extension may be up to 4 MiB.
 
 Missing `all_sites` and `blocked_sites` mean false and empty. Missing hello capability means version 1. If All sites or any block is configured, the daemon requires capability 2 before forwarding any call, including dry runs. These controls are refused in chat-only organization runtimes. The remote page API exposes none of them; app-owned local settings revalidate the account before and after any widening confirmation. Daemon resume never clears the extension's independent Stop.
 
