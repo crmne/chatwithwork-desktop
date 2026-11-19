@@ -63,7 +63,11 @@ fn sends_the_file_by_where_it_really_is_and_counts_it() {
     };
     let answer = send_to_chat(&f.reader, &limiter, &send, "builds:app.AppImage").unwrap();
     let (path, size, sha) = sent.into_inner().unwrap();
-    assert_eq!(path, f.base.join("builds/app.AppImage"));
+    // Where the file really is, without Windows' `\\?\` prefix.
+    assert_eq!(
+        path,
+        crate::reader::safe_fs::without_verbatim_prefix(&f.base.join("builds/app.AppImage"))
+    );
     assert_eq!(size, 30_000);
     assert_eq!(sha.len(), 64);
     assert_eq!(answer["kept"]["size"], 30_000);
