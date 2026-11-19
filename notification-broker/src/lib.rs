@@ -158,11 +158,11 @@ impl Native {
     }
 }
 
-/// The dark canvas. Windows shows the mark, a white bubble with a black
-/// scribble, on a tile of it, which keeps the dark theme from inverting it.
+/// The dark canvas of Chat with Work's design (Live Wire's `--canvas`).
+/// Windows shows the mark, a white bubble with a black scribble, on a tile
+/// of it, which keeps the dark theme from inverting it.
 fn logo_background() -> [u8; 3] {
-    let (red, green, blue) = cww::tui::theme::CANVAS;
-    [red, green, blue]
+    [0x06, 0x07, 0x0B]
 }
 
 impl Backend for Native {
