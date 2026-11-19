@@ -64,6 +64,12 @@ It still couldn't leave the tab group or the allowed sites, read or type into pr
 
 Before any of the above: can the engine's runtime, started under the command sandbox on Linux, drive one tab in the group through the extension, with the clock and Stop ending it at once, and with the filter refusing a `Browser.*` call and a file set? On macOS and Windows the same, once Linux works. Measured: start time, the cost of the filter per command, and whether Playwright's page API works through a filtered target list.
 
+What exists to build on, read from the code:
+
+- The engine helper (`src/browsing/engine.rs`) already starts the verified Node with `--no-addons --no-global-search-paths`, a cleared environment and framed JSON over its pipes, and relays its CDP to the extension for one leased operation. It runs inside the daemon's own confinement, which is why scripts need the command sandbox instead.
+- The command sandbox (`src/commands/plan.rs`, through mxc) builds a plan per run: folders, network level, limits. A script's plan is one with no shared folder, no network and its own clock.
+- `src/commands/run.rs` starts a sandboxed process and closes its stdin, since commands don't talk back. `src/commands/think.rs` already reads a sandboxed program's output live while it runs. A script runner is a variant of `run::spawn` that keeps both pipes open for the framed CDP relay, ended by the same `run_stop`.
+
 ## Open questions
 
 - Which of Playwright's page API works with the filter as written. Locators and waits need `Runtime` and `DOM`; tracing and emulation don't.
