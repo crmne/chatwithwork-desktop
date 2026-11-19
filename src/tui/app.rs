@@ -214,10 +214,14 @@ impl Daemon {
     }
 }
 
-/// The chats, or the settings on one of their pages.
+/// The chats, Decisions, a bot, or the settings on one of their pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Chat,
+    /// Everything waiting for the person, as the web's home page.
+    Decisions,
+    /// A bot's page: its state and its runs.
+    Bot(u64),
     Settings(Page),
 }
 
@@ -286,6 +290,8 @@ impl Page {
 pub enum Focus {
     Chats,
     Composer,
+    /// The list on Decisions or a bot's page.
+    Main,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -500,6 +506,20 @@ pub enum ChatCommand {
     WaitForAccess,
     /// Open a page of the paired server in the browser.
     OpenUrl(String),
+    /// Read everything waiting for the person.
+    Decisions,
+    /// Read a bot's page, its runs filtered by `filter`.
+    Bot {
+        id: u64,
+        filter: Option<String>,
+    },
+    /// Read a project's chats after `before` (its history's cursor), for
+    /// "N more" past the chats the list holds.
+    ProjectChats {
+        project: u64,
+        number: u64,
+        before: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -538,6 +558,8 @@ pub enum Effect {
     StopCommand(String),
     /// Save the crash report choice in config.toml.
     CrashReports(bool),
+    /// Keep the sidebar's filter for the next run.
+    RememberFilter(super::sidebar::Filter),
     Quit,
 }
 
@@ -564,6 +586,8 @@ pub enum DaemonMsg {
     },
 }
 
+// A read list is the big one, and it goes through the channel once.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMsg {
     Dictation(u64, dictation::Update),
@@ -618,6 +642,16 @@ pub enum ChatMsg {
         chat: u64,
         action: ChatAction,
         result: Result<Acted, Failure>,
+    },
+    Decisions(Result<super::chat::Decisions, Failure>),
+    Bot {
+        id: u64,
+        result: Result<serde_json::Value, Failure>,
+    },
+    /// A page of a project's chats, and the cursor of the next.
+    ProjectChats {
+        project: u64,
+        result: Result<(Vec<ChatSummary>, Option<String>), Failure>,
     },
 }
 
@@ -686,13 +720,23 @@ pub struct ChatPane {
     /// The server keeps the list current, so it needn't be read again
     /// after each change made here.
     pub list_live: bool,
-    /// The selected row of the sidebar, in [`ChatPane::side_items`]: 0 is
-    /// "New chat", then the chats the search leaves, then the projects.
+    /// The selected row of the sidebar, in [`ChatPane::side_items`]: New
+    /// bot, New chat and Decisions, then the rows under the search.
     pub selected: usize,
     /// What's typed after `/`, while searching.
     pub search: Option<String>,
-    /// The project whose chats the sidebar shows, picked in its list.
-    pub filter: Option<u64>,
+    /// What's open and shown in the projects' tree, and the filter.
+    pub tree: super::sidebar::Tree,
+    /// Decisions, as last read; `None` until opened.
+    pub decisions: Option<super::chat::Decisions>,
+    pub decisions_loading: bool,
+    pub decisions_error: Option<String>,
+    /// A read of the list for its sidebar is under way.
+    pub relisting: bool,
+    /// The selected row of Decisions.
+    pub decision_row: usize,
+    /// The bot shown, as last read.
+    pub bot_page: Option<BotPage>,
     /// The open chat; `None` is a new one.
     pub open: Option<u64>,
     pub transcript: Option<Transcript>,
@@ -764,7 +808,13 @@ impl Default for ChatPane {
             list_live: false,
             selected: 0,
             search: None,
-            filter: None,
+            tree: super::sidebar::Tree::default(),
+            decisions: None,
+            decisions_loading: false,
+            decisions_error: None,
+            relisting: false,
+            decision_row: 0,
+            bot_page: None,
             open: None,
             transcript: None,
             loading: false,
@@ -806,13 +856,78 @@ impl Default for ChatPane {
 /// A row of the sidebar that can be selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SideItem {
+    NewBot,
     NewChat,
-    /// A chat in Recent.
+    Decisions,
+    /// A chat, under its project or in Recent.
     Chat(u64),
-    /// A pinned project, in Pinned.
+    /// A bot, one row, under its project or in Recent.
+    Bot(u64),
+    /// A project's header in the tree: Enter opens or closes it.
     Project(u64),
-    /// A pinned chat, in Pinned (it stays in Recent too, as on the web).
+    /// A pinned chat, in Pinned (it stays in its list too, as on the web).
     PinnedChat(u64),
+    PinnedBot(u64),
+    /// "N more" under a project: its next chats, in place.
+    More(u64),
+    /// "Show fewer": back to its first few.
+    Fewer(u64),
+    /// "N more" under the top-level projects.
+    MoreProjects,
+}
+
+/// A bot's page: what the server said of it, and the runs listed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BotPage {
+    pub id: u64,
+    /// The runs' filter: `None` for All, or `waiting`, `yours`, ...
+    pub filter: Option<String>,
+    /// `{"bot": {...}, "runs": [...]}` as the server sent it.
+    pub data: Option<serde_json::Value>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// The selected run.
+    pub selected: usize,
+}
+
+impl BotPage {
+    pub fn bot(&self) -> Option<&serde_json::Value> {
+        self.data.as_ref().map(|d| &d["bot"])
+    }
+
+    /// Its runs, newest first: under the bot, or beside it.
+    pub fn runs(&self) -> Vec<&serde_json::Value> {
+        let data = match &self.data {
+            Some(data) => data,
+            None => return Vec::new(),
+        };
+        data["bot"]["runs"]
+            .as_array()
+            .or(data["runs"].as_array())
+            .map(|runs| runs.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// The runs' filters as the bot's page offers them: `(key, label)`.
+    pub fn filters(&self) -> Vec<(Option<String>, String)> {
+        let given = self.data.as_ref().and_then(|d| {
+            d["bot"]["run_filters"]
+                .as_array()
+                .or(d["run_filters"].as_array())
+        });
+        match given {
+            Some(filters) => filters
+                .iter()
+                .map(|f| {
+                    (
+                        f["key"].as_str().map(str::to_string),
+                        f["label"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect(),
+            None => vec![(None, "All".to_string())],
+        }
+    }
 }
 
 /// Whether `a` goes above `b` in the list: its latest question is newer,
@@ -825,6 +940,10 @@ fn above(a: &ChatSummary, b: &ChatSummary) -> bool {
         _ => a.number > b.number,
     }
 }
+
+/// What `g` waits for.
+pub const GO_HINT: &str =
+    "g then: d Decisions · s Settings · c Chats · b Bots · a All · l Activity";
 
 /// What `/model` can offer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -979,17 +1098,18 @@ pub enum Hit {
     Settings,
     /// The search row.
     Search,
-    NewChat,
-    Chat(u64),
+    /// A row of the sidebar.
+    Side(SideItem),
+    /// A word of the sidebar's filter.
+    Filter(super::sidebar::Filter),
     /// The chat list, for the wheel.
     Chats,
     Root(usize),
-    /// A project in the sidebar: its chats, and a new chat in it.
-    Project(u64),
+    /// A row of Decisions, or a run on a bot's page.
+    Row(usize),
+
     /// A page of the web's settings, by its place in the list's links.
     Web(usize),
-    /// The web's page of every project.
-    AllProjects,
     Composer,
     /// A row of the slash command list.
     Menu(usize),
@@ -1031,96 +1151,63 @@ impl ChatPane {
         self.access == Access::Ready
     }
 
-    /// Recent: the chats the search and the project picked leave, newest
-    /// first, pinned ones included, as the web lists them.
+    /// The chats the sidebar's rows show, in their order.
     pub fn visible(&self) -> Vec<&ChatSummary> {
-        self.matching()
-    }
-
-    /// Pinned, under Recent as on the web: the pinned projects, in pin order.
-    pub fn pinned_projects(&self) -> Vec<&Project> {
-        let projects = &self.list.projects;
-        self.list
-            .pins
-            .projects
-            .iter()
-            .filter_map(|id| projects.iter().find(|p| p.id == *id))
-            .collect()
-    }
-
-    /// Pinned, after the projects: the pinned chats, in pin order.
-    pub fn pinned_chats(&self) -> Vec<&ChatSummary> {
-        let chats = &self.list.chats;
-        self.list
-            .pins
-            .chats
-            .iter()
-            .filter_map(|n| chats.iter().find(|c| c.number == *n))
-            .collect()
-    }
-
-    /// The chats the search and the project picked leave, newest first.
-    fn matching(&self) -> Vec<&ChatSummary> {
-        let query = self
-            .search
-            .as_deref()
-            .map(|q| q.trim().trim_start_matches('#').to_lowercase())
-            .filter(|q| !q.is_empty());
-        self.list
-            .chats
-            .iter()
-            .filter(|chat| {
-                self.filter
-                    .is_none_or(|id| chat.project.as_ref().is_some_and(|p| p.id == id))
-            })
-            .filter(|chat| match &query {
-                None => true,
-                Some(query) => {
-                    chat.title.to_lowercase().contains(query)
-                        || chat.number.to_string() == *query
-                        || chat
-                            .project
-                            .as_ref()
-                            .is_some_and(|p| p.name.to_lowercase().contains(query))
-                }
+        self.side_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                SideItem::Chat(number) => self.chat(number),
+                _ => None,
             })
             .collect()
     }
 
-    /// The sidebar's rows that can be selected, in order: "New chat",
-    /// Recent, then Pinned's projects and chats (not while searching).
+    /// The sidebar's rows that can be selected, in order: New bot, New
+    /// chat and Decisions, then the list under the search.
     pub fn side_items(&self) -> Vec<SideItem> {
-        let mut items = vec![SideItem::NewChat];
-        items.extend(self.visible().iter().map(|c| SideItem::Chat(c.number)));
-        if self.search.is_none() {
-            items.extend(
-                self.pinned_projects()
-                    .iter()
-                    .map(|p| SideItem::Project(p.id)),
-            );
-            items.extend(
-                self.pinned_chats()
-                    .iter()
-                    .map(|c| SideItem::PinnedChat(c.number)),
-            );
-        }
+        let mut items = self.top_items();
+        items.extend(self.rows().into_iter().filter_map(|row| match row {
+            super::sidebar::Row::Item { item, .. } => Some(item),
+            super::sidebar::Row::Label(_) => None,
+        }));
         items
+    }
+
+    pub fn selected_item(&self) -> Option<SideItem> {
+        self.side_items().get(self.selected).copied()
     }
 
     /// The selected chat, unless something else is selected.
     pub fn selected_chat(&self) -> Option<&ChatSummary> {
-        match self.side_items().get(self.selected)? {
-            SideItem::Chat(number) | SideItem::PinnedChat(number) => {
-                self.list.chats.iter().find(|c| c.number == *number)
-            }
+        match self.selected_item()? {
+            SideItem::Chat(number) | SideItem::PinnedChat(number) => self.chat(number),
             _ => None,
         }
     }
 
-    /// The project the sidebar shows the chats of.
-    pub fn filter_project(&self) -> Option<&Project> {
-        let id = self.filter?;
-        self.list.projects.iter().find(|p| p.id == id)
+    /// Select `item`, where the sidebar shows it.
+    pub fn select(&mut self, item: SideItem) -> bool {
+        match self.side_items().iter().position(|i| *i == item) {
+            Some(at) => {
+                self.selected = at;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The first row the search leaves, or New chat.
+    fn select_first_match(&mut self) {
+        let top = self.top_items().len();
+        let items = self.side_items();
+        self.selected = if items.len() > top {
+            top
+        } else {
+            self.top_items()
+                .iter()
+                .position(|i| *i == SideItem::NewChat)
+                .unwrap_or(0)
+        };
     }
 
     /// Change the list, keeping the same row selected where it's still
@@ -1137,12 +1224,7 @@ impl ChatPane {
 
     /// The whole list, as read.
     pub fn set_list(&mut self, list: ChatList) {
-        self.keep_selection(|pane| {
-            pane.list = list;
-            if pane.filter_project().is_none() {
-                pane.filter = None;
-            }
-        });
+        self.keep_selection(|pane| pane.list = list);
     }
 
     /// A chat as the server last sent it: new ones go in, others are
@@ -1187,12 +1269,7 @@ impl ChatPane {
 
     /// The projects, as the server last listed them.
     pub fn set_projects(&mut self, projects: Vec<Project>) {
-        self.keep_selection(|pane| {
-            pane.list.projects = projects;
-            if pane.filter_project().is_none() {
-                pane.filter = None;
-            }
-        });
+        self.keep_selection(|pane| pane.list.projects = projects);
     }
 
     /// The open chat, as last read or listed.
@@ -1424,6 +1501,10 @@ pub struct App {
     pub commands: crate::commands::follow::Snapshot,
     /// Whether crash reports are sent, as the General page shows it.
     pub crash_reports: crate::crash_reports::Consent,
+    /// `[` hid the sidebar.
+    pub sidebar_hidden: bool,
+    /// `g` was pressed: the next key says where to go.
+    pub go: bool,
 }
 
 impl App {
@@ -1456,7 +1537,15 @@ impl App {
             later: Vec::new(),
             commands: crate::commands::follow::Snapshot::default(),
             crash_reports: crate::crash_reports::Consent::default(),
+            sidebar_hidden: false,
+            go: false,
         }
+    }
+
+    /// With the sidebar's filter as the person left it.
+    pub fn with_filter(mut self, filter: super::sidebar::Filter) -> Self {
+        self.chat.tree.filter = filter;
+        self
     }
 
     /// With the crash report choice, asking for it first if nobody has
@@ -1626,7 +1715,9 @@ impl App {
 
     /// Focus targets, in Tab order.
     pub fn focus_order(&self) -> Vec<Focus> {
-        if self.chat.ready() {
+        if matches!(self.view, View::Decisions | View::Bot(_)) {
+            vec![Focus::Chats, Focus::Main]
+        } else if self.chat.ready() {
             vec![Focus::Chats, Focus::Composer]
         } else {
             vec![Focus::Chats]
@@ -1710,11 +1801,21 @@ impl App {
             return self.modal_key(modal, key);
         }
         let in_chat = self.view == View::Chat;
+        // The sidebar shows the chats beside the chat, Decisions or a bot.
+        let side = !matches!(self.view, View::Settings(_));
         if in_chat && self.focus == Focus::Composer {
             return self.composer_key(key);
         }
-        if in_chat && self.chat.search.is_some() {
+        if std::mem::take(&mut self.go) {
+            return self.go_to(key);
+        }
+        if side && self.chat.search.is_some() {
             return self.search_key(key);
+        }
+        if self.focus == Focus::Main
+            && let Some(effects) = self.main_key(key)
+        {
+            return effects;
         }
         if let View::Settings(page) = self.view
             && let Some(effects) = self.page_key(page, key)
@@ -1727,22 +1828,49 @@ impl App {
                 self.quit = true;
                 return vec![Effect::Quit];
             }
-            KeyCode::Tab if in_chat => self.cycle_focus(true),
-            KeyCode::BackTab if in_chat => self.cycle_focus(false),
-            KeyCode::Char(',') if in_chat => self.settings(self.attention_page()),
+            KeyCode::Tab if side => self.cycle_focus(true),
+            KeyCode::BackTab if side => self.cycle_focus(false),
+            KeyCode::Char(',') if side => self.settings(self.attention_page()),
             KeyCode::Char(',') => self.view = View::Chat,
             KeyCode::Char('l') if self.view == View::Settings(Page::Activity) => {
                 self.view = View::Chat;
             }
+            KeyCode::Char('l') if !side => {
+                self.settings(Page::Activity);
+                self.log_scroll = 0;
+            }
+            KeyCode::Char('g') if side && self.chat.ready() => {
+                self.go = true;
+                self.notice(super::theme::Signal::Idle, GO_HINT);
+            }
+            KeyCode::Char('[') if side => self.sidebar_hidden = !self.sidebar_hidden,
+            KeyCode::Char('f') if side && self.chat.ready() => return self.next_filter(),
+            KeyCode::Right | KeyCode::Char('l') if side && self.chat.ready() => {
+                return self.tree_right();
+            }
+            KeyCode::Left | KeyCode::Char('h') if side && self.chat.ready() => self.tree_left(),
+            // Without chats, l is still the activity log.
             KeyCode::Char('l') => {
                 self.settings(Page::Activity);
                 self.log_scroll = 0;
+            }
+            KeyCode::Char('+') if side && self.chat.ready() => return self.new_chat_here(),
+            KeyCode::Up if side && key.modifiers.contains(KeyModifiers::ALT) => {
+                return self.adjacent_chat(-1);
+            }
+            KeyCode::Down if side && key.modifiers.contains(KeyModifiers::ALT) => {
+                return self.adjacent_chat(1);
             }
             KeyCode::Esc if self.pairing.is_some() => {
                 self.pairing = None;
                 return vec![Effect::Daemon(DaemonCommand::CancelPairing)];
             }
-            KeyCode::Esc if !in_chat => self.view = View::Chat,
+            KeyCode::Esc if !in_chat => {
+                self.view = View::Chat;
+                if self.focus == Focus::Main {
+                    self.focus = Focus::Chats;
+                }
+            }
             KeyCode::Char('c') if self.can_pair() && self.pairing.is_none() => {
                 self.pairing = Some(Pairing::Starting);
                 return vec![Effect::Daemon(DaemonCommand::Pair)];
@@ -1769,7 +1897,7 @@ impl App {
                 }
             }
             KeyCode::Char('n') if offer.is_some() => self.offer_dismissed = true,
-            KeyCode::Char('n') if in_chat && self.chat.ready() => return self.new_chat(),
+            KeyCode::Char('n' | 'c') if side && self.chat.ready() => return self.new_chat(),
             KeyCode::Char('r') => {
                 if matches!(self.daemon, Daemon::NotRunning(_)) {
                     self.notice(super::theme::Signal::Idle, LOOKING);
@@ -1794,22 +1922,22 @@ impl App {
                 return effects;
             }
             KeyCode::Char('?') => self.modal = Some(Modal::Help { scroll: 0 }),
-            KeyCode::Char('/') if in_chat && self.chat.ready() => {
+            KeyCode::Char('/') if side && self.chat.ready() => {
                 self.chat.search = Some(String::new());
                 self.focus = Focus::Chats;
-                self.chat.selected = usize::from(!self.chat.list.chats.is_empty());
+                self.chat.select_first_match();
             }
             KeyCode::Char('o') => return self.open_in_browser(),
             KeyCode::Char('e') if in_chat => self.chat.show_steps = !self.chat.show_steps,
-            KeyCode::Up | KeyCode::Char('k') if in_chat => self.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') if in_chat => self.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') if side => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') if side => self.move_selection(1),
             KeyCode::PageUp if in_chat => self.scroll_transcript(10),
             KeyCode::PageDown if in_chat => self.scroll_transcript(-10),
             KeyCode::End if in_chat => {
                 self.chat.scroll = 0;
                 self.chat.pinned = false;
             }
-            KeyCode::Enter if in_chat && self.chat.ready() => return self.open_selected(),
+            KeyCode::Enter if side && self.chat.ready() => return self.open_selected(),
             KeyCode::Char('i') if in_chat && self.chat.ready() => self.focus = Focus::Composer,
             _ => {}
         }
@@ -1980,14 +2108,18 @@ impl App {
         match key.code {
             KeyCode::Esc => self.chat.search = None,
             KeyCode::Enter => {
-                let chosen = self.chat.selected_chat().map(|c| c.number);
+                let chosen = self.chat.selected_item();
                 self.chat.search = None;
                 return match chosen {
-                    Some(number) => {
+                    Some(SideItem::Chat(number) | SideItem::PinnedChat(number)) => {
                         self.select_chat(number);
                         self.open_chat(number)
                     }
-                    None => self.new_chat(),
+                    Some(SideItem::Bot(id) | SideItem::PinnedBot(id)) => {
+                        self.chat.select(SideItem::Bot(id));
+                        self.open_bot(id)
+                    }
+                    _ => self.new_chat(),
                 };
             }
             KeyCode::Backspace => {
@@ -2005,10 +2137,10 @@ impl App {
         }
         // The best match leads while typing.
         if matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace) {
-            self.chat.selected = usize::from(!self.chat.visible().is_empty());
+            self.chat.select_first_match();
         }
-        let len = self.chat.visible().len();
-        self.chat.selected = self.chat.selected.min(len);
+        let len = self.chat.side_items().len();
+        self.chat.selected = self.chat.selected.min(len.saturating_sub(1));
         Vec::new()
     }
 
@@ -2522,7 +2654,6 @@ impl App {
             Cmd::Unqueue => return self.unqueue_last(),
             Cmd::New => {
                 self.chat.project = None;
-                self.chat.filter = None;
                 return self.new_chat();
             }
             Cmd::Resume => self.open_picker(PickerKind::Chats, args),
@@ -2530,7 +2661,7 @@ impl App {
                 self.focus = Focus::Chats;
                 self.view = View::Chat;
                 self.chat.search = Some(args.to_string());
-                self.chat.selected = usize::from(!self.chat.visible().is_empty());
+                self.chat.select_first_match();
             }
             Cmd::Model => return self.pick_model(args),
             Cmd::Web => {
@@ -3453,9 +3584,7 @@ impl App {
                 self.scroll_transcript(-delta * 3);
             }
             Some(Hit::Log) => self.scroll_log(-delta * 3),
-            Some(Hit::Chats | Hit::Chat(_) | Hit::NewChat | Hit::Project(_)) => {
-                self.move_selection(delta);
-            }
+            Some(Hit::Chats | Hit::Side(_)) => self.move_selection(delta),
             Some(Hit::Root(_)) => self.move_root(delta),
             Some(Hit::Menu(_)) => {
                 let len = self.menu().len();
@@ -3495,24 +3624,36 @@ impl App {
                     self.chat.search = Some(String::new());
                 }
             }
-            Hit::NewChat if self.chat.ready() => {
+            Hit::Side(item) if self.chat.ready() => {
                 self.chat.search = None;
-                return self.new_chat();
+                self.focus = Focus::Chats;
+                self.chat.select(item);
+                return self.open_item(item);
             }
-            Hit::Chat(number) => {
-                self.chat.search = None;
-                self.select_chat(number);
-                return self.open_chat(number);
-            }
-            Hit::Project(id) => {
-                self.chat.search = None;
-                return self.pick_filter(id);
-            }
+            Hit::Filter(filter) if self.chat.ready() => return self.set_filter(filter),
+            Hit::Row(i) => match self.view {
+                View::Decisions => {
+                    self.focus = Focus::Main;
+                    self.chat.decision_row = i;
+                    return self
+                        .decisions_key(KeyEvent::from(KeyCode::Enter))
+                        .unwrap_or_default();
+                }
+                View::Bot(_) => {
+                    self.focus = Focus::Main;
+                    if let Some(page) = self.chat.bot_page.as_mut() {
+                        page.selected = i;
+                    }
+                    return self
+                        .bot_key(KeyEvent::from(KeyCode::Enter))
+                        .unwrap_or_default();
+                }
+                _ => {}
+            },
             Hit::Web(i) => {
                 self.selected_link = i;
                 return self.open_web(i);
             }
-            Hit::AllProjects => return self.open_page(self.chat.list.links.projects.clone()),
             Hit::Root(i) => self.selected_root = i,
             Hit::Composer if self.chat.ready() => self.focus = Focus::Composer,
             Hit::Menu(i) => {
@@ -3590,35 +3731,380 @@ impl App {
     }
 
     fn open_selected(&mut self) -> Vec<Effect> {
-        match self.chat.side_items().get(self.chat.selected).copied() {
-            Some(SideItem::Chat(number) | SideItem::PinnedChat(number)) => self.open_chat(number),
-            Some(SideItem::Project(id)) => self.pick_filter(id),
-            _ => self.new_chat(),
+        match self.chat.selected_item() {
+            Some(item) => self.open_item(item),
+            None => self.new_chat(),
         }
     }
 
-    /// A project in the sidebar: show its chats and start a new chat in
-    /// it, as the web's project page does; again, back to every chat.
-    fn pick_filter(&mut self, id: u64) -> Vec<Effect> {
-        if self.chat.filter == Some(id) {
-            self.chat.keep_selection(|pane| pane.filter = None);
-            if self.chat.open.is_none() {
-                self.chat.project = None;
+    /// What a row of the sidebar does when it's opened: a chat or a bot
+    /// opens, a project opens or closes, "N more" shows more in place.
+    fn open_item(&mut self, item: SideItem) -> Vec<Effect> {
+        match item {
+            SideItem::NewBot | SideItem::NewChat => self.new_chat(),
+            SideItem::Decisions => self.open_decisions(),
+            SideItem::Chat(number) | SideItem::PinnedChat(number) => self.open_chat(number),
+            SideItem::Bot(id) | SideItem::PinnedBot(id) => self.open_bot(id),
+            SideItem::Project(id) => {
+                self.toggle_project(id);
+                Vec::new()
             }
-            return Vec::new();
+            SideItem::More(id) => self.more(id),
+            SideItem::Fewer(id) => {
+                self.chat.tree.limit.remove(&id);
+                self.chat.select(SideItem::More(id));
+                Vec::new()
+            }
+            SideItem::MoreProjects => {
+                self.chat
+                    .keep_selection(|pane| pane.tree.all_projects = !pane.tree.all_projects);
+                Vec::new()
+            }
         }
-        self.chat.keep_selection(|pane| pane.filter = Some(id));
-        let effects = self.new_chat();
-        // Back on the project's row, to pick one of its chats next.
-        if let Some(at) = self
+    }
+
+    fn toggle_project(&mut self, id: u64) {
+        if let Some(node) = self.chat.node(id) {
+            let open = self.chat.is_open(&node);
+            self.chat.keep_selection(|pane| {
+                pane.tree.open.insert(id, !open);
+            });
+        }
+    }
+
+    /// Right, or `l`: opens a closed project, or steps into an open one.
+    fn tree_right(&mut self) -> Vec<Effect> {
+        if let Some(SideItem::Project(id)) = self.chat.selected_item()
+            && let Some(node) = self.chat.node(id)
+        {
+            if self.chat.is_open(&node) {
+                self.move_selection(1);
+            } else {
+                self.toggle_project(id);
+            }
+        }
+        Vec::new()
+    }
+
+    /// Left, or `h`: closes an open project, or steps up to the one the
+    /// row is inside.
+    fn tree_left(&mut self) {
+        let selected = self.chat.selected_item();
+        if let Some(SideItem::Project(id)) = selected
+            && let Some(node) = self.chat.node(id)
+            && self.chat.is_open(&node)
+        {
+            self.toggle_project(id);
+            return;
+        }
+        let rows: Vec<(SideItem, u16)> = self
+            .chat
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                super::sidebar::Row::Item { item, depth } => Some((item, depth)),
+                super::sidebar::Row::Label(_) => None,
+            })
+            .collect();
+        let Some(at) = rows.iter().position(|(item, _)| Some(*item) == selected) else {
+            return;
+        };
+        let depth = rows[at].1;
+        if let Some((parent, _)) = rows[..at]
+            .iter()
+            .rev()
+            .find(|(item, d)| matches!(item, SideItem::Project(_)) && *d < depth)
+        {
+            self.chat.select(*parent);
+        }
+    }
+
+    /// "N more": the next page of a project's chats, from the list, then
+    /// from the server once the list runs out.
+    fn more(&mut self, id: u64) -> Vec<Effect> {
+        let loaded = self
+            .chat
+            .list
+            .chats
+            .iter()
+            .filter(|c| c.project.as_ref().is_some_and(|p| p.id == id))
+            .count();
+        let limit = self
+            .chat
+            .tree
+            .limit
+            .get(&id)
+            .copied()
+            .unwrap_or(super::sidebar::ROWS)
+            + super::sidebar::PAGE;
+        let more = self.chat.more_in(id);
+        self.chat.tree.limit.insert(id, limit);
+        // Back on the first of the new rows, as the web moves the focus.
+        let first_new = self
             .chat
             .side_items()
             .iter()
-            .position(|i| *i == SideItem::Project(id))
-        {
+            .position(|i| *i == SideItem::More(id))
+            .or_else(|| {
+                self.chat
+                    .side_items()
+                    .iter()
+                    .position(|i| *i == SideItem::Fewer(id))
+            });
+        if let Some(at) = first_new {
             self.chat.selected = at;
         }
+        let number = self.chat.node(id).and_then(|_| {
+            self.chat
+                .sidebar()
+                .and_then(|s| s.projects.iter().find(|p| p.id == id))
+                .and_then(|p| p.number)
+        });
+        match number {
+            Some(number) if limit > loaded && more > 0 => {
+                vec![Effect::Chat(ChatCommand::ProjectChats {
+                    project: id,
+                    number,
+                    before: self.chat.tree.cursors.get(&id).cloned(),
+                })]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The next of All, Chats and Bots, kept for the next run.
+    fn next_filter(&mut self) -> Vec<Effect> {
+        let filter = self.chat.tree.filter.next();
+        self.set_filter(filter)
+    }
+
+    fn set_filter(&mut self, filter: super::sidebar::Filter) -> Vec<Effect> {
+        self.chat.keep_selection(|pane| pane.tree.filter = filter);
+        vec![Effect::RememberFilter(filter)]
+    }
+
+    /// `+` on a project's row: a new chat in it, as the web's + does.
+    fn new_chat_here(&mut self) -> Vec<Effect> {
+        let Some(SideItem::Project(id)) = self.chat.selected_item() else {
+            return self.new_chat();
+        };
+        let project = self.chat.list.projects.iter().find(|p| p.id == id).cloned();
+        let effects = self.new_chat();
+        self.chat.project = project;
         effects
+    }
+
+    /// Alt-Up and Alt-Down: the previous or next chat in the sidebar,
+    /// opened.
+    fn adjacent_chat(&mut self, delta: isize) -> Vec<Effect> {
+        let items = self.chat.side_items();
+        let mut at = self.chat.selected as isize;
+        loop {
+            at += delta;
+            let Some(item) = usize::try_from(at).ok().and_then(|i| items.get(i)) else {
+                return Vec::new();
+            };
+            if let SideItem::Chat(number) | SideItem::PinnedChat(number) = *item {
+                self.chat.selected = at as usize;
+                let effects = self.open_chat(number);
+                self.focus = Focus::Chats;
+                return effects;
+            }
+        }
+    }
+
+    /// `g` then a letter, as the web's: Decisions, Settings, the Chats or
+    /// Bots filter, or the activity log.
+    fn go_to(&mut self, key: KeyEvent) -> Vec<Effect> {
+        self.notice = None;
+        match key.code {
+            KeyCode::Char('d') => self.open_decisions(),
+            KeyCode::Char('s') => {
+                self.settings(self.attention_page());
+                Vec::new()
+            }
+            KeyCode::Char('c') => self.set_filter(super::sidebar::Filter::Chats),
+            KeyCode::Char('b') => self.set_filter(super::sidebar::Filter::Bots),
+            KeyCode::Char('a') => self.set_filter(super::sidebar::Filter::All),
+            KeyCode::Char('l') => {
+                self.settings(Page::Activity);
+                self.log_scroll = 0;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Decisions: everything waiting for the person, read again.
+    fn open_decisions(&mut self) -> Vec<Effect> {
+        self.view = View::Decisions;
+        self.focus = Focus::Main;
+        self.chat.select(SideItem::Decisions);
+        self.chat.decisions_loading = true;
+        vec![Effect::Chat(ChatCommand::Decisions)]
+    }
+
+    /// A bot's page, read again.
+    fn open_bot(&mut self, id: u64) -> Vec<Effect> {
+        self.view = View::Bot(id);
+        self.focus = Focus::Main;
+        let filter = self
+            .chat
+            .bot_page
+            .as_ref()
+            .filter(|page| page.id == id)
+            .and_then(|page| page.filter.clone());
+        self.chat.bot_page = Some(BotPage {
+            id,
+            filter: filter.clone(),
+            data: self
+                .chat
+                .bot_page
+                .take()
+                .filter(|page| page.id == id)
+                .and_then(|page| page.data),
+            loading: true,
+            error: None,
+            selected: 0,
+        });
+        vec![Effect::Chat(ChatCommand::Bot { id, filter })]
+    }
+
+    /// Keys of the list on Decisions or a bot's page; `None` for the keys
+    /// every screen has.
+    fn main_key(&mut self, key: KeyEvent) -> Option<Vec<Effect>> {
+        match self.view {
+            View::Decisions => self.decisions_key(key),
+            View::Bot(_) => self.bot_key(key),
+            _ => None,
+        }
+    }
+
+    fn decisions_key(&mut self, key: KeyEvent) -> Option<Vec<Effect>> {
+        let decisions: Vec<super::chat::Decision> = self
+            .chat
+            .decisions
+            .as_ref()
+            .map(|d| d.decisions.clone())
+            .unwrap_or_default();
+        let len = decisions.len();
+        let row = self.chat.decision_row.min(len.saturating_sub(1));
+        let chosen = decisions.get(row);
+        let decide = |chat: u64, card: &Approval| (chat, card.id);
+        let target = chosen.and_then(|d| {
+            let chat = d.chat.as_ref()?.number;
+            let card = d.card.as_ref().filter(|c| c.decidable)?;
+            Some((decide(chat, card), card.allow_for_rest_of_chat))
+        });
+        Some(match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.chat.decision_row = (row + 1).min(len.saturating_sub(1));
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.chat.decision_row = row.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Enter | KeyCode::Char('o') => match chosen.and_then(|d| d.chat.as_ref()) {
+                Some(chat) => {
+                    let number = chat.number;
+                    self.chat.select(SideItem::Chat(number));
+                    self.open_chat(number)
+                }
+                None => Vec::new(),
+            },
+            KeyCode::Char('a') => match target {
+                Some(((chat, tool_call), _)) => vec![Effect::Chat(ChatCommand::Approve {
+                    chat,
+                    tool_call,
+                    for_rest_of_chat: false,
+                })],
+                None => Vec::new(),
+            },
+            KeyCode::Char('A') => match target {
+                Some(((chat, tool_call), true)) => vec![Effect::Chat(ChatCommand::Approve {
+                    chat,
+                    tool_call,
+                    for_rest_of_chat: true,
+                })],
+                _ => Vec::new(),
+            },
+            KeyCode::Char('d') => match target {
+                Some(((chat, tool_call), _)) => vec![Effect::Chat(ChatCommand::Deny {
+                    chat,
+                    tool_call,
+                    reason: None,
+                })],
+                None => Vec::new(),
+            },
+            KeyCode::Char('r') => self.open_decisions(),
+            _ => return None,
+        })
+    }
+
+    fn bot_key(&mut self, key: KeyEvent) -> Option<Vec<Effect>> {
+        let page = self.chat.bot_page.as_ref()?;
+        let runs: Vec<u64> = page
+            .runs()
+            .iter()
+            .filter_map(|run| run["number"].as_u64())
+            .collect();
+        let len = runs.len();
+        let row = page.selected.min(len.saturating_sub(1));
+        let id = page.id;
+        Some(match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(page) = self.chat.bot_page.as_mut() {
+                    page.selected = (row + 1).min(len.saturating_sub(1));
+                }
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(page) = self.chat.bot_page.as_mut() {
+                    page.selected = row.saturating_sub(1);
+                }
+                Vec::new()
+            }
+            KeyCode::Enter => match runs.get(row) {
+                Some(number) => self.open_chat(*number),
+                None => Vec::new(),
+            },
+            KeyCode::Char('f') => {
+                let filters = page.filters();
+                let at = filters
+                    .iter()
+                    .position(|(key, _)| *key == page.filter)
+                    .unwrap_or(0);
+                let next = filters
+                    .get((at + 1) % filters.len().max(1))
+                    .and_then(|(key, _)| key.clone());
+                self.bot_filter(next)
+            }
+            KeyCode::Char('o') => {
+                let url = page
+                    .bot()
+                    .and_then(|b| b["url"].as_str())
+                    .map(str::to_string)
+                    .or_else(|| self.chat.bot(id).and_then(|b| b.url.clone()));
+                self.open_page(url)
+            }
+            KeyCode::Char('r') => self.open_bot(id),
+            _ => return None,
+        })
+    }
+
+    /// Show only the bot's runs of `filter` (`None` for all of them).
+    fn bot_filter(&mut self, filter: Option<String>) -> Vec<Effect> {
+        let Some(page) = self.chat.bot_page.as_mut() else {
+            return Vec::new();
+        };
+        page.filter = filter.clone();
+        page.loading = true;
+        page.selected = 0;
+        vec![Effect::Chat(ChatCommand::Bot {
+            id: page.id,
+            filter,
+        })]
     }
 
     /// Show a chat, read it, and follow it live.
@@ -3679,10 +4165,7 @@ impl App {
         chat.stale = false;
         chat.stopping = false;
         chat.following = Following::No;
-        chat.selected = 0;
-        if let Some(project) = chat.filter_project().cloned() {
-            chat.project = Some(project);
-        }
+        chat.select(SideItem::NewChat);
         chat.picker = None;
         chat.reason = false;
         chat.deciding = false;
@@ -3762,11 +4245,16 @@ impl App {
                 return vec![Effect::Chat(ChatCommand::RequestAccess)];
             }
             Access::NeedsApproval { url, .. } => url.clone(),
-            Access::Ready => self
-                .chat
-                .open_summary()
-                .or_else(|| self.chat.selected_chat())
-                .map(|c| c.url.clone()),
+            Access::Ready => match (self.focus, self.chat.selected_item()) {
+                (Focus::Chats, Some(SideItem::Bot(id) | SideItem::PinnedBot(id))) => {
+                    self.chat.bot(id).and_then(|b| b.url.clone())
+                }
+                _ => self
+                    .chat
+                    .open_summary()
+                    .or_else(|| self.chat.selected_chat())
+                    .map(|c| c.url.clone()),
+            },
             _ => None,
         };
         match url.filter(|url| self.on_server(url)) {
@@ -4146,6 +4634,7 @@ impl App {
                 return Vec::new();
             }
             ChatMsg::Listed(Ok(list)) => {
+                self.chat.relisting = false;
                 // The new account's HTTP response may beat its daemon status
                 // onto the UI queue. Never relabel an old transcript with it.
                 let mut effects = if self.account_changed(&list.account.id) {
@@ -4176,6 +4665,7 @@ impl App {
                 return effects;
             }
             ChatMsg::Listed(Err(failure)) => {
+                self.chat.relisting = false;
                 self.chat_failure(failure);
                 // Asked already, maybe from another terminal: check back
                 // until the owner answers, as if asked from here.
@@ -4433,7 +4923,9 @@ impl App {
                         self.chat.decision = 0;
                         self.settle(decided);
                         self.update_summary(summary);
-                        return self.refresh_chat(chat);
+                        let mut effects = self.refresh_chat(chat);
+                        effects.extend(self.decisions_again());
+                        return effects;
                     }
                     // Decided already (a second press, or someone else first):
                     // settled, not an error. The read shows how.
@@ -4441,11 +4933,55 @@ impl App {
                         if failure.code == "already_decided" || failure.code == "not_found" =>
                     {
                         self.settle(decided);
-                        return self.refresh_chat(chat);
+                        let mut effects = self.refresh_chat(chat);
+                        effects.extend(self.decisions_again());
+                        return effects;
                     }
                     Err(failure) => self.notice(Signal::Negative, &failure.message),
                 }
             }
+            ChatMsg::Decisions(result) => {
+                self.chat.decisions_loading = false;
+                match result {
+                    Ok(decisions) => {
+                        self.chat.decision_row = self
+                            .chat
+                            .decision_row
+                            .min(decisions.decisions.len().saturating_sub(1));
+                        self.chat.decisions = Some(decisions);
+                        self.chat.decisions_error = None;
+                    }
+                    Err(failure) => self.chat.decisions_error = Some(failure.message),
+                }
+            }
+            ChatMsg::Bot { id, result } => {
+                if let Some(page) = self.chat.bot_page.as_mut().filter(|p| p.id == id) {
+                    page.loading = false;
+                    match result {
+                        Ok(data) => {
+                            page.data = Some(data);
+                            page.error = None;
+                            let len = page.runs().len();
+                            page.selected = page.selected.min(len.saturating_sub(1));
+                        }
+                        Err(failure) => page.error = Some(failure.message),
+                    }
+                }
+            }
+            ChatMsg::ProjectChats { project, result } => match result {
+                Ok((chats, cursor)) => {
+                    match cursor {
+                        Some(cursor) => self.chat.tree.cursors.insert(project, cursor),
+                        None => self.chat.tree.cursors.remove(&project),
+                    };
+                    for chat in chats {
+                        if self.chat.chat(chat.number).is_none() {
+                            self.chat.upsert_chat(chat);
+                        }
+                    }
+                }
+                Err(failure) => self.notice(Signal::Negative, &failure.message),
+            },
             ChatMsg::Downloaded(result) => match result {
                 Ok(()) => self.notice(Signal::Positive, "File saved."),
                 Err(e) => self.notice(Signal::Negative, &e.message),
@@ -4481,6 +5017,27 @@ impl App {
 
     /// Read the list again after a change made here, unless the server
     /// keeps it current anyway.
+    /// The list read again for its sidebar, once for a burst of changes,
+    /// and Decisions with it while they show.
+    fn sidebar_again(&mut self) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        if !std::mem::replace(&mut self.chat.relisting, true) {
+            effects.push(Effect::Chat(ChatCommand::List));
+        }
+        effects.extend(self.decisions_again());
+        effects
+    }
+
+    /// Decisions read again while they show.
+    fn decisions_again(&mut self) -> Vec<Effect> {
+        if self.view == View::Decisions {
+            self.chat.decisions_loading = true;
+            vec![Effect::Chat(ChatCommand::Decisions)]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn list_again(&self) -> Vec<Effect> {
         if self.chat.list_live {
             Vec::new()
@@ -4512,13 +5069,25 @@ impl App {
                         .chat
                         .open_summary()
                         .is_some_and(|open| open.state != chat.state);
+                // A turn that starts or stops changes what waits: the
+                // sidebar's counts and Decisions are read again.
+                let turned = self
+                    .chat
+                    .chat(chat.number)
+                    .is_none_or(|known| known.state != chat.state)
+                    && self.chat.sidebar().is_some();
                 let number = chat.number;
                 self.chat.upsert_chat(chat);
+                let mut effects = Vec::new();
+                if turned {
+                    effects.extend(self.sidebar_again());
+                }
                 // The open chat's follower says what changed, unless it
                 // can't follow it.
                 if reread && self.chat.following != Following::Live {
-                    return self.refresh_chat(number);
+                    effects.extend(self.refresh_chat(number));
                 }
+                return effects;
             }
             ListLive::Removed(number) => {
                 self.chat.remove_chat(number);
@@ -4531,7 +5100,14 @@ impl App {
                 }
             }
             ListLive::Schedules => {}
-            ListLive::Projects(projects) => self.chat.set_projects(projects),
+            ListLive::Sidebar => return self.sidebar_again(),
+            ListLive::Projects(projects) => {
+                self.chat.set_projects(projects);
+                // The tree comes with the list.
+                if self.chat.sidebar().is_some() {
+                    return vec![Effect::Chat(ChatCommand::List)];
+                }
+            }
             ListLive::Account(account) => {
                 if self.account_changed(&account.account.id) {
                     let mut effects = self.reset_chat_scope();

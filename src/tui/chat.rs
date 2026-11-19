@@ -331,6 +331,9 @@ pub struct ChatList {
     pub pins: Pins,
     /// The web's pages the sidebar and the settings open in the browser.
     pub links: Links,
+    /// The web's sidebar: the projects' tree, bots, and what waits. `None`
+    /// from an older server.
+    pub sidebar: Option<super::sidebar::Sidebar>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -761,6 +764,66 @@ pub struct Approval {
     pub waiting_for: Option<String>,
 }
 
+/// Everything waiting for the person, as the Decisions page lists it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Decisions {
+    /// What waits now, snoozed ones left out.
+    pub count: u64,
+    pub decisions: Vec<Decision>,
+}
+
+/// One decision: what it is, where it comes from, and its card, decided
+/// through the chat's own approvals and questions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Decision {
+    pub key: String,
+    /// `approval`, `question`, `ask`, ...
+    pub kind: String,
+    /// "Approve a change", "Answer a question", ...
+    pub label: Option<String>,
+    pub summary: Option<String>,
+    /// Where it comes from, when it isn't a chat.
+    pub origin: Option<String>,
+    pub chat: Option<DecisionChat>,
+    pub since: Option<String>,
+    pub snoozed_until: Option<String>,
+    pub destructive: bool,
+    pub why: DecisionWhy,
+    /// The change waiting, as the transcript's approvals give it; only for
+    /// a change, and `None` for a question.
+    #[serde(deserialize_with = "approval_card")]
+    pub card: Option<Approval>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DecisionChat {
+    pub number: u64,
+    pub title: String,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DecisionWhy {
+    pub you: Option<Vec<String>>,
+    pub asks: Option<Vec<String>>,
+    pub if_nobody: Option<String>,
+}
+
+/// A decision's card when it's a change: it has a `summary` and `details`,
+/// which a question's card hasn't.
+fn approval_card<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Approval>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value
+        .filter(|v| v.get("summary").is_some() || v.get("waiting_for").is_some())
+        .and_then(|v| serde_json::from_value(v).ok()))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Detail {
@@ -1117,6 +1180,9 @@ pub enum ListLive {
     Offline,
     /// Changes were missed: list the chats again.
     Missed,
+    /// The sidebar changed (a bot's state, what waits, the projects'
+    /// tree): read the list again for it.
+    Sidebar,
 }
 
 impl ListLive {
@@ -1136,6 +1202,7 @@ impl ListLive {
             "removed" => Self::Removed(update["number"].as_u64()?),
             "projects" => Self::Projects(serde_json::from_value(update["projects"].clone()).ok()?),
             "schedules" => Self::Schedules,
+            "sidebar" => Self::Sidebar,
             "account" => Self::Account(serde_json::from_value(update.clone()).ok()?),
             "watching" => Self::Watching,
             "refused" => Self::Refused,
@@ -1292,6 +1359,10 @@ impl Chats {
     /// choice, `daemon_outdated` a daemon that can't relay it.
     pub fn models(&self) -> Result<Models, Failure> {
         parse(self.call(&ControlRequest::Models)?)
+    }
+
+    pub fn decisions(&self) -> Result<Decisions, Failure> {
+        parse(self.call(&ControlRequest::Decisions)?)
     }
 
     pub fn templates(

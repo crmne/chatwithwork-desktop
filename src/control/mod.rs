@@ -492,6 +492,8 @@ pub enum ControlRequest {
     },
     /// The models a question can be asked with, and the owner's default.
     Models,
+    /// Everything waiting for the owner, as the Decisions page lists it.
+    Decisions,
     Templates {
         request: crate::templates::Request,
     },
@@ -1448,6 +1450,7 @@ mod tests {
                 r#"{"cmd":"asset","path":"/assets/providers/slack-0c9450af.svg"}"#,
             ),
             (ControlRequest::Models, r#"{"cmd":"models"}"#),
+            (ControlRequest::Decisions, r#"{"cmd":"decisions"}"#),
             (
                 ControlRequest::ChatSend {
                     chat: Some("42".into()),

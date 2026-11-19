@@ -1,17 +1,17 @@
  ◆ Chat with Work              │                  │ What did we budget for Q3, and who signed it │
                                │                  │ off?                                         │
   + New chat                   │                  ╰──────────────────────────────────────────────╯
-  / Search chats               │
-                               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
-  RECENT                       │
-   Q3 budget                   │  The Q3 budget is €40k, signed off by Ada on 12 September.
-   Launch plan for Falcon      │
-   Onboarding checklist        │  • Marketing: €18k
-   Vendor contracts            │  • Engineering: €22k
-   Hiring plan                 │
-                               │  Details are in the plan[1].
                                │
-                               │  SOURCES
+  / Search chats and bots      │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+                               │
+  PROJECTS     All Chats Bots  │  The Q3 budget is €40k, signed off by Ada on 12 September.
+   ▸ □ Falcon                  │
+                               │  • Marketing: €18k
+  RECENT                       │  • Engineering: €22k
+   Q3 budget                   │
+   Onboarding checklist        │  Details are in the plan[1].
+   Vendor contracts            │
+   Hiring plan                 │  SOURCES
                                │  [1] Q3 plan.pdf  https://drive.google.com/file/d/q3
                                │
                                │  ╭──────────────────────────────────────────────────────────────╮
@@ -24,7 +24,7 @@
                                │  │   Decline                                                    │
                                │  │   Only Notion sees your answer. Never enter a password here; │
                                │  │   sign in on the service's own page instead.                 │
-  PINNED                  all  │  ╰──────────────────────────────────────────────────────────────╯
-   Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
+                               │  ╰──────────────────────────────────────────────────────────────╯
+                               │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ 30                                                           │
  (C) Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

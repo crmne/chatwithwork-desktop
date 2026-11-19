@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │  ◙ Issue fixer  Waiting for you
+                               │
+  ◙ New bot     + New chat     │  In Falcon · Fixes small bugs from GitHub issues and opens a pull
+  ◇ Decisions             3 ●  │  request.
+  / Search chats and bots      │
+                               │  WHEN
+  PINNED                       │  GitHub · When an issue is labelled bug
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │  USES
+                               │  GitHub · as Carmine
+  PROJECTS     All Chats Bots  │
+   ▾ ◫ HQ                      │  RUNS  All  Waiting  You took part  Failed
+     ▸ ■ Drafts           2 ●  │  ▌● Fix the date picker                                       1 h
+       ◙ Morning brief      ●  │   ● Flaky checkout test · you took part                      23 h
+   ▾ □ Falcon                  │
+       Falcon launch copy 1 ●  │
+       ◙ Issue fixer      1 ●  │
+       Launch plan for Falcon  │
+       Falcon pricing          │
+       Falcon press list       │
+       Falcon FAQ              │
+       7 more                  │
+                               │
+  RECENT                       │
+   Q3 budget                   │
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │
+   Vendor contracts            │
+                               │
+ (C) Carmine                   │  enter open the run   f filter   o open in the browser

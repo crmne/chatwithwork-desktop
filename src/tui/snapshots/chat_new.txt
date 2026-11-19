@@ -1,11 +1,14 @@
  ◆ Chat with Work              │  Ask anything.
                                │  Chat with Work searches your shared folders and the services you
   + New chat                   │  connected, and the chat stays in Chat with Work on the web too.
-  / Search chats               │
+                               │
+  / Search chats and bots      │
+                               │
+  PROJECTS     All Chats Bots  │
+   ▸ □ Falcon                  │
                                │
   RECENT                       │
    Q3 budget                   │
-   Launch plan for Falcon      │
    Onboarding checklist        │
    Vendor contracts            │
    Hiring plan                 │
@@ -22,9 +25,6 @@
                                │
                                │
                                │
-                               │
-                               │
-  PINNED                  all  │
-   Falcon                      │ ╭────────────────────────────────────────────────────────────────╮
+                               │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ What changed in Falcon this week?                            │
  (C) Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

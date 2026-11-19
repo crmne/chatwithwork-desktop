@@ -1,9 +1,9 @@
  ◆ Chat with Work              │  Ask anything.
                                │  Chat with Work searches your shared folders and the services you
   + New chat                   │  connected, and the chat stays in Chat with Work on the web too.
+                               │
   / pla                        │
                                │
-  RECENT                       │
  ▌ Launch plan for Falcon      │
    Hiring plan                 │
                                │

@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │  Decisions  2 waiting
+                               │
+  ◙ New bot     + New chat     │  ▌● Approve a change · Slack                                  2 h
+  ◇ Decisions             2 ●  │      Post a message to #general
+  / Search chats and bots      │      Falcon launch copy · Falcon
+                               │      Channel  #general
+  PINNED                       │      Message  We shipped!
+   Onboarding checklist        │      Posting in Slack is a change, so it asks first.
+   ◙ Inbox triage         4 ●  │
+                               │   ● Answer a question                                      20 min
+  PROJECTS     All Chats Bots  │      Which environment?
+   ▾ ◫ HQ                      │      Q3 budget
+     ▸ ■ Drafts           2 ●  │
+       ◙ Morning brief      ●  │
+   ▾ □ Falcon                  │
+       Falcon launch copy 1 ●  │
+       ◙ Issue fixer      1 ●  │
+       Launch plan for Falcon  │
+       Falcon pricing          │
+       Falcon press list       │
+       Falcon FAQ              │
+       7 more                  │
+                               │
+  RECENT                       │
+   Q3 budget                   │
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │
+   Vendor contracts            │
+                               │
+ (C) Carmine                   │  a approve   A for the rest of the chat   d deny   enter open its

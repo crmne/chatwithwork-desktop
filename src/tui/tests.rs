@@ -1555,7 +1555,8 @@ fn chat_list() -> ChatList {
                 .collect(),
             ..super::chat::Links::default()
         },
-        // Falcon is pinned, so it shows under Pinned as on the web.
+        sidebar: None,
+        // Falcon is pinned; projects show in the tree, not under Pinned.
         pins: super::chat::Pins {
             projects: vec![3],
             ..super::chat::Pins::default()
@@ -1645,7 +1646,7 @@ fn chats_ready(app: &mut App) {
 
 fn open_budget(app: &mut App) -> Vec<Effect> {
     chats_ready(app);
-    app.update(key(KeyCode::Down));
+    assert!(app.chat.select(SideItem::Chat(42)));
     app.update(key(KeyCode::Enter))
 }
 
@@ -2162,9 +2163,10 @@ fn only_pages_on_the_paired_server_open_in_the_browser() {
     let mut list = chat_list();
     list.chats[0].url = "https://evil.example/chats/42".into();
     app.update(Msg::Chat(ChatMsg::Listed(Ok(list))));
-    app.update(key(KeyCode::Down));
+    app.chat.tree.open.insert(3, true);
+    assert!(app.chat.select(SideItem::Chat(42)));
     assert!(app.update(char('o')).is_empty(), "not the paired server");
-    app.update(key(KeyCode::Down));
+    assert!(app.chat.select(SideItem::Chat(40)));
     assert_eq!(
         app.update(char('o')),
         vec![Effect::Chat(ChatCommand::OpenUrl(
@@ -2435,7 +2437,7 @@ fn commands_run_from_the_composer() {
     app.update(key(KeyCode::Enter));
     assert_eq!(app.modal, Some(Modal::Help { scroll: 0 }));
     let screen = render_to_string(&app, 100, 30);
-    assert!(screen.contains("select a chat"), "{screen}");
+    assert!(screen.contains("move through the sidebar"), "{screen}");
     let mut end = app.clone();
     end.modal = Some(Modal::Help { scroll: 500 });
     let screen = render_to_string(&end, 100, 30);
@@ -3179,19 +3181,16 @@ fn thinking_shimmers_in_the_terminals_own_ink_rather_than_the_rainbow() {
 fn snapshot_a_project_from_the_sidebar() {
     let mut app = app();
     chats_ready(&mut app);
-    for _ in 0..6 {
-        app.update(key(KeyCode::Down));
-    }
-    assert_eq!(
-        app.chat.side_items()[app.chat.selected],
-        SideItem::Project(3)
-    );
+    app.update(key(KeyCode::Down));
+    assert_eq!(app.chat.selected_item(), Some(SideItem::Project(3)));
+    // Enter opens it in place, showing its chats under it.
     app.update(key(KeyCode::Enter));
-    assert_eq!(app.chat.filter, Some(3));
-    assert_eq!(app.chat.project.as_ref().map(|p| p.id), Some(3));
-    assert_eq!(app.chat.visible().len(), 1, "the project's chats");
-    assert_eq!(app.focus, Focus::Composer, "a new chat in it");
+    assert!(app.chat.side_items().contains(&SideItem::Chat(40)));
     assert_snapshot("chat_project", &app);
+    // + starts a new chat in it.
+    assert!(app.update(char('+')).is_empty());
+    assert_eq!(app.chat.project.as_ref().map(|p| p.id), Some(3));
+    assert_eq!(app.focus, Focus::Composer, "a new chat in it");
     type_text(&mut app, "Plan?");
     let effects = app.update(key(KeyCode::Enter));
     assert!(effects.contains(&Effect::Chat(ChatCommand::Send {
@@ -3203,25 +3202,23 @@ fn snapshot_a_project_from_the_sidebar() {
         attachments: vec![],
     })));
 
-    // Picked again, every chat shows again.
+    // A click on it closes it again.
     let mut app = self::app();
     chats_ready(&mut app);
-    let (x, y) = find(&app, "   Falcon");
-    click(&mut app, x + 3, y);
-    assert_eq!(app.chat.filter, Some(3));
-    let (x, y) = find(&app, "   Falcon");
-    click(&mut app, x + 3, y);
-    assert_eq!(app.chat.filter, None);
-    assert_eq!(app.chat.project, None);
-    assert_eq!(app.chat.visible().len(), 5);
+    let (x, y) = find(&app, "Falcon");
+    click(&mut app, x, y);
+    assert!(app.chat.side_items().contains(&SideItem::Chat(40)));
+    let (x, y) = find(&app, "Falcon");
+    click(&mut app, x, y);
+    assert!(!app.chat.side_items().contains(&SideItem::Chat(40)));
 }
 
 #[test]
 fn the_list_keeps_its_selection_as_chats_come_and_go() {
     let mut app = app();
     chats_ready(&mut app);
-    app.update(key(KeyCode::Down));
-    app.update(key(KeyCode::Down));
+    app.chat.tree.open.insert(3, true);
+    assert!(app.chat.select(SideItem::Chat(40)));
     assert_eq!(app.chat.selected_chat().map(|c| c.number), Some(40));
     // A newer chat goes on top; the selection stays on the same chat.
     app.chat
@@ -3426,33 +3423,28 @@ fn snapshot_pinned_sits_under_recent_as_on_the_web() {
     list.credits.as_mut().unwrap().left = 400;
     list.credits.as_mut().unwrap().running_low = true;
     app.update(Msg::Chat(ChatMsg::Listed(Ok(list))));
-    // Recent keeps every chat, pinned ones too, newest first.
+    // Recent keeps every chat in no project, pinned ones too, newest first.
     let order: Vec<u64> = app.chat.visible().iter().map(|c| c.number).collect();
     let mut newest: Vec<(String, u64)> = app
         .chat
         .list
         .chats
         .iter()
+        .filter(|c| c.project.is_none())
         .map(|c| (c.asked_at().to_string(), c.number))
         .collect();
     newest.sort_by(|a, b| b.0.cmp(&a.0));
     assert_eq!(order, newest.iter().map(|(_, n)| *n).collect::<Vec<_>>());
     assert!(order.contains(&31) && order.contains(&38));
-    // Pinned, under it: the pinned projects, then the pinned chats, in pin order.
-    let projects: Vec<u64> = app.chat.pinned_projects().iter().map(|p| p.id).collect();
-    assert_eq!(projects, [3]);
-    let chats: Vec<u64> = app.chat.pinned_chats().iter().map(|c| c.number).collect();
-    assert_eq!(chats, [31, 38]);
+    // Pinned, above: the pinned chats, in pin order.
+    let pins: Vec<SideItem> = app
+        .chat
+        .side_items()
+        .into_iter()
+        .filter(|i| matches!(i, SideItem::PinnedChat(_)))
+        .collect();
+    assert_eq!(pins, [SideItem::PinnedChat(31), SideItem::PinnedChat(38)]);
     assert_snapshot("chat_pinned", &app);
-
-    // The projects' page on the web, from the sidebar.
-    let (x, y) = find(&app, "all");
-    assert_eq!(
-        click(&mut app, x, y),
-        vec![Effect::Chat(ChatCommand::OpenUrl(
-            "https://chatwithwork.com/482139075/projects".into()
-        ))]
-    );
 }
 
 #[test]
@@ -3820,7 +3812,7 @@ fn selected_organization_is_independent_of_folder_pairing_and_rejects_stale_repl
     for width in [60, 100] {
         assert!(render_to_string(&app, width, 30).contains("Akamai Robotics"));
     }
-    app.update(key(KeyCode::Down));
+    assert!(app.chat.select(SideItem::Chat(42)));
     app.update(key(KeyCode::Enter));
     app.update(Msg::Chat(ChatMsg::Shown {
         chat: 42,
@@ -4214,6 +4206,449 @@ fn alt_up_and_the_x_take_back_your_latest_queued_message() {
     assert_eq!(app.chat.unqueueing, None);
 }
 
+// ---------------------------------------------------------------- sidebar
+
+/// The list as a server with the web's sidebar sends it: HQ open with a
+/// project only Carmine is on inside it, Falcon open with seven chats of
+/// twelve loaded and a bot, and a personal bot in Recent.
+fn sidebar_list() -> ChatList {
+    let mut list = chat_list();
+    let in_project = |number, title: &str, at: &str, id, name: &str| {
+        let mut chat = summary(number, title, at);
+        chat.project = Some(Project {
+            id,
+            name: name.into(),
+            ..Project::default()
+        });
+        chat
+    };
+    list.chats.extend([
+        in_project(
+            41,
+            "Falcon launch copy",
+            "2026-09-25T08:19:00Z",
+            3,
+            "Falcon",
+        ),
+        in_project(39, "Falcon pricing", "2026-09-24T12:00:00Z", 3, "Falcon"),
+        in_project(37, "Falcon press list", "2026-09-23T12:00:00Z", 3, "Falcon"),
+        in_project(36, "Falcon FAQ", "2026-09-22T12:00:00Z", 3, "Falcon"),
+        in_project(
+            35,
+            "Falcon demo script",
+            "2026-09-21T12:00:00Z",
+            3,
+            "Falcon",
+        ),
+        in_project(34, "Falcon risks", "2026-09-20T12:00:00Z", 3, "Falcon"),
+    ]);
+    list.chats.sort_by(|a, b| b.asked_at().cmp(a.asked_at()));
+    list.projects = vec![
+        Project {
+            id: 1,
+            number: Some(1),
+            name: "HQ".into(),
+            hq: true,
+            ..Project::default()
+        },
+        Project {
+            id: 3,
+            number: Some(3),
+            name: "Falcon".into(),
+            ..Project::default()
+        },
+        Project {
+            id: 5,
+            number: Some(5),
+            name: "Drafts".into(),
+            ..Project::default()
+        },
+    ];
+    list.pins.chats = vec![38];
+    list.sidebar = Some(
+        serde_json::from_value(serde_json::json!({
+            "decisions": {"count": 3},
+            "can": {"new_bot": true, "new_chat": true, "new_project": true},
+            "projects": [
+                {"id": 1, "number": 1, "name": "HQ", "icon": "buildings", "hq": true, "solo": false,
+                 "depth": 0, "parent": null, "collapsed": false, "chats": [], "more": 0,
+                 "bots": [7], "waiting": 0, "working": false},
+                {"id": 5, "number": 5, "name": "Drafts", "solo": true, "depth": 1, "parent": 1,
+                 "collapsed": true, "chats": [], "more": 0, "bots": [], "waiting": 2, "working": false},
+                {"id": 3, "number": 3, "name": "Falcon", "depth": 0, "parent": null, "collapsed": false,
+                 "chats": [41, 40, 39, 37, 36], "more": 7, "bots": [9], "waiting": 1, "working": true}
+            ],
+            "bots": [
+                {"id": 7, "name": "Morning brief", "project": 1, "state": "working", "working": true,
+                 "dot": {"tone": "live", "label": "Working now"}, "active_at": "2026-09-25T08:18:00Z"},
+                {"id": 9, "name": "Issue fixer", "project": 3, "state": "waiting",
+                 "state_label": "Waiting for you", "waiting": 1,
+                 "dot": {"tone": "attention", "number": 1, "label": "Needs your yes · 1 decision waiting"},
+                 "active_at": "2026-09-25T08:10:00Z",
+                 "url": "https://chatwithwork.com/482139075/bots/9"},
+                {"id": 11, "name": "Inbox triage", "project": null, "personal": true, "state": "idle",
+                 "dot": {"tone": "positive", "number": 4, "label": "Ready · 4 runs since your last visit"},
+                 "active_at": "2026-09-24T09:00:00Z"}
+            ],
+            "waiting": {"chats": {"41": 1}},
+            "pins": {"bots": [11]}
+        }))
+        .unwrap(),
+    );
+    list
+}
+
+fn sidebar_ready(app: &mut App) {
+    running(
+        app,
+        status(
+            "connected",
+            vec![root("work-docs", "Work docs", "ready", 1532)],
+        ),
+    );
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
+}
+
+#[test]
+fn snapshot_sidebar_like_the_web() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    use SideItem::*;
+    assert_eq!(
+        app.chat.side_items(),
+        vec![
+            NewBot,
+            NewChat,
+            Decisions,
+            PinnedChat(38),
+            PinnedBot(11),
+            Project(1),
+            Project(5),
+            Bot(7),
+            Project(3),
+            Chat(41),
+            Bot(9),
+            Chat(40),
+            Chat(39),
+            Chat(37),
+            Chat(36),
+            More(3),
+            Chat(42),
+            Chat(38),
+            Bot(11),
+            Chat(31),
+            Chat(27),
+        ],
+        "projects, inside them their projects first, then chats and bots by time; Recent below"
+    );
+    assert_eq!(app.chat.more_in(3), 7, "twelve in Falcon, five shown");
+    assert_snapshot("sidebar_tree", &app);
+}
+
+#[test]
+fn projects_open_and_close_with_the_arrows() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    // Right opens a closed project, Left closes it again.
+    assert!(app.chat.select(SideItem::Project(5)));
+    app.update(key(KeyCode::Right));
+    assert_eq!(app.chat.tree.open.get(&5), Some(&true));
+    app.update(char('h'));
+    assert_eq!(app.chat.tree.open.get(&5), Some(&false));
+    // Left on a row steps up to its project; on an open project, closes it.
+    assert!(app.chat.select(SideItem::Chat(39)));
+    app.update(key(KeyCode::Left));
+    assert_eq!(app.chat.selected_item(), Some(SideItem::Project(3)));
+    app.update(key(KeyCode::Left));
+    assert!(!app.chat.side_items().contains(&SideItem::Chat(39)));
+    assert_eq!(app.chat.selected_item(), Some(SideItem::Project(3)));
+    // Enter opens it again; l steps into an open one.
+    app.update(key(KeyCode::Enter));
+    assert!(app.chat.side_items().contains(&SideItem::Chat(39)));
+    app.update(char('l'));
+    assert_eq!(app.chat.selected_item(), Some(SideItem::Chat(41)));
+}
+
+#[test]
+fn n_more_shows_the_next_chats_in_place_and_show_fewer_puts_them_away() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::More(3)));
+    let effects = app.update(key(KeyCode::Enter));
+    // Seven are loaded; the rest come from the project's page.
+    assert_eq!(
+        effects,
+        vec![Effect::Chat(ChatCommand::ProjectChats {
+            project: 3,
+            number: 3,
+            before: None
+        })]
+    );
+    for number in [35, 34] {
+        assert!(app.chat.side_items().contains(&SideItem::Chat(number)));
+    }
+    assert_eq!(app.chat.more_in(3), 5);
+    let mut older = summary(30, "Falcon kickoff", "2026-09-10T12:00:00Z");
+    older.project = Some(Project {
+        id: 3,
+        name: "Falcon".into(),
+        ..Project::default()
+    });
+    app.update(Msg::Chat(ChatMsg::ProjectChats {
+        project: 3,
+        result: Ok((vec![older], Some("cursor-2".into()))),
+    }));
+    assert!(app.chat.side_items().contains(&SideItem::Chat(30)));
+    assert_eq!(
+        app.chat.tree.cursors.get(&3).map(String::as_str),
+        Some("cursor-2")
+    );
+    // Show fewer.
+    assert!(app.chat.select(SideItem::Fewer(3)));
+    app.update(key(KeyCode::Enter));
+    assert!(!app.chat.side_items().contains(&SideItem::Chat(35)));
+    assert_eq!(app.chat.selected_item(), Some(SideItem::More(3)));
+}
+
+#[test]
+fn the_filter_picks_rows_of_both_lists_and_is_kept() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert_eq!(
+        app.update(char('f')),
+        vec![Effect::RememberFilter(super::sidebar::Filter::Chats)]
+    );
+    let items = app.chat.side_items();
+    assert!(!items.iter().any(|i| matches!(i, SideItem::Bot(_))));
+    assert!(items.contains(&SideItem::Chat(41)) && items.contains(&SideItem::Chat(42)));
+    app.update(char('f'));
+    let items = app.chat.side_items();
+    assert!(
+        !items
+            .iter()
+            .any(|i| matches!(i, SideItem::Chat(_) | SideItem::More(_)))
+    );
+    assert!(items.contains(&SideItem::Bot(9)) && items.contains(&SideItem::Bot(11)));
+    assert!(
+        items.contains(&SideItem::Project(3)),
+        "projects stay, holding their bots"
+    );
+    assert_snapshot("sidebar_bots", &app);
+    // g a, back to all of them.
+    app.update(char('g'));
+    assert_eq!(
+        app.update(char('a')),
+        vec![Effect::RememberFilter(super::sidebar::Filter::All)]
+    );
+    // A click on a word of the filter.
+    let (x, y) = find(&app, "Bots");
+    assert_eq!(
+        click(&mut app, x, y),
+        vec![Effect::RememberFilter(super::sidebar::Filter::Bots)]
+    );
+}
+
+#[test]
+fn search_finds_chats_and_bots_wherever_they_sit() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    app.update(char('/'));
+    for c in "fi".chars() {
+        app.update(char(c));
+    }
+    let items: Vec<SideItem> = app.chat.side_items().into_iter().skip(3).collect();
+    assert_eq!(items, vec![SideItem::Bot(9)], "Issue fixer");
+    app.update(key(KeyCode::Enter));
+    assert_eq!(app.view, View::Bot(9));
+}
+
+#[test]
+fn an_older_server_gets_its_projects_without_the_tree() {
+    let mut app = app();
+    chats_ready(&mut app);
+    use SideItem::*;
+    assert_eq!(
+        app.chat.side_items(),
+        vec![NewChat, Project(3), Chat(42), Chat(38), Chat(31), Chat(27)]
+    );
+    assert!(app.chat.select(Project(3)));
+    app.update(key(KeyCode::Enter));
+    assert!(app.chat.side_items().contains(&Chat(40)));
+}
+
+fn decisions_json() -> super::chat::Decisions {
+    serde_json::from_value(serde_json::json!({
+        "account": {"id": "482139075", "name": "Plenty"},
+        "count": 2,
+        "decisions": [
+            {"key": "tool_call:31", "kind": "approval", "label": "Approve a change",
+             "summary": "Post a message to #general",
+             "chat": {"number": 41, "title": "Falcon launch copy", "project": "Falcon"},
+             "since": "2026-09-25T06:20:00Z", "destructive": false,
+             "why": {"asks": ["Posting in Slack is a change, so it asks first."]},
+             "card": {"id": 31, "service": "Slack", "effect": "write", "decidable": true,
+                      "summary": "Post a message to #general",
+                      "details": [{"label": "Channel", "value": "#general"}, {"label": "Message", "value": "We shipped!"}],
+                      "allow_for_rest_of_chat": true}},
+            {"key": "tool_call:44", "kind": "question", "label": "Answer a question",
+             "summary": "Which environment?",
+             "chat": {"number": 42, "title": "Q3 budget", "project": null},
+             "since": "2026-09-25T08:00:00Z",
+             "card": {"id": 44, "service": "Sentry", "decidable": true, "kind": "form", "message": "Which environment?", "fields": []}}
+        ],
+        "snooze_choices": {}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn snapshot_decisions_decided_from_the_terminal() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::Decisions));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::Chat(ChatCommand::Decisions)]
+    );
+    assert_eq!(app.view, View::Decisions);
+    assert_eq!(app.focus, Focus::Main);
+    app.update(Msg::Chat(ChatMsg::Decisions(Ok(decisions_json()))));
+    assert_snapshot("decisions", &app);
+    assert_eq!(
+        app.update(char('A')),
+        vec![Effect::Chat(ChatCommand::Approve {
+            chat: 41,
+            tool_call: 31,
+            for_rest_of_chat: true
+        })]
+    );
+    assert_eq!(
+        app.update(char('d')),
+        vec![Effect::Chat(ChatCommand::Deny {
+            chat: 41,
+            tool_call: 31,
+            reason: None
+        })]
+    );
+    // Decided: Decisions are read again.
+    let effects = app.update(Msg::Chat(ChatMsg::Decided {
+        chat: 41,
+        result: Ok(summary(41, "Falcon launch copy", "2026-09-25T08:19:00Z")),
+    }));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Decisions)));
+    // A question isn't a change: it opens in its chat.
+    app.update(char('j'));
+    assert!(app.update(char('a')).is_empty());
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(effects[0], Effect::Chat(ChatCommand::Open(42)));
+    assert_eq!(app.view, View::Chat);
+}
+
+fn bot_json() -> serde_json::Value {
+    serde_json::json!({
+        "account": {"id": "482139075", "name": "Plenty"},
+        "bot": {
+            "id": 9, "name": "Issue fixer", "state": "waiting", "paused": false,
+            "project": {"number": 3, "name": "Falcon"},
+            "description": "Fixes small bugs from GitHub issues and opens a pull request.",
+            "url": "https://chatwithwork.com/482139075/bots/9",
+            "triggers": [{"id": 1, "app": "github", "name": "GitHub", "timing": "When an issue is labelled bug", "paused": false}],
+            "integrations": [{"id": 2, "provider": "github", "acts_as": "Carmine", "writes": "ask", "usable": true}],
+            "runs": [
+                {"number": 61, "title": "Fix the date picker", "state": "idle", "waiting": true, "took_part": false,
+                 "created_at": "2026-09-25T07:00:00Z", "last_asked_at": "2026-09-25T07:00:00Z"},
+                {"number": 58, "title": "Flaky checkout test", "state": "idle", "outcome": "failed", "took_part": true,
+                 "created_at": "2026-09-24T07:00:00Z", "last_asked_at": "2026-09-24T09:00:00Z"}
+            ],
+            "run_filters": [{"key": null, "label": "All"}, {"key": "waiting", "label": "Waiting"},
+                            {"key": "yours", "label": "You took part"}, {"key": "failed", "label": "Failed"}]
+        }
+    })
+}
+
+#[test]
+fn snapshot_a_bot_opens_as_its_page() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::Bot(9)));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::Chat(ChatCommand::Bot {
+            id: 9,
+            filter: None
+        })]
+    );
+    assert_eq!(app.view, View::Bot(9));
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 9,
+        result: Ok(bot_json()),
+    }));
+    assert_snapshot("bot_page", &app);
+    // f: its runs' next filter, read again.
+    assert_eq!(
+        app.update(char('f')),
+        vec![Effect::Chat(ChatCommand::Bot {
+            id: 9,
+            filter: Some("waiting".into())
+        })]
+    );
+    // Its runs open as chats.
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 9,
+        result: Ok(bot_json()),
+    }));
+    app.update(char('j'));
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(effects[0], Effect::Chat(ChatCommand::Open(58)));
+}
+
+#[test]
+fn a_bot_without_the_permission_says_where_to_allow_it() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::Bot(11)));
+    app.update(key(KeyCode::Enter));
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 11,
+        result: Err(Failure::new(
+            "bots_access_required",
+            "This computer can't manage your bots yet. Allow it at https://chatwithwork.com/settings, then run this again.",
+        )),
+    }));
+    let screen = render_to_string(&app, 100, 30);
+    assert!(screen.contains("can't manage your bots yet"), "{screen}");
+    assert!(screen.contains("Inbox triage"), "{screen}");
+}
+
+#[test]
+fn a_change_to_the_sidebar_reads_the_list_once_for_a_burst() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    let effects = app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar)));
+    assert_eq!(effects, vec![Effect::Chat(ChatCommand::List)]);
+    assert!(
+        app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar)))
+            .is_empty(),
+        "one read for the pair"
+    );
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
+    assert_eq!(
+        app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar))),
+        vec![Effect::Chat(ChatCommand::List)]
+    );
+}
+
+#[test]
+fn the_sidebar_hides_and_shows() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    app.update(char('['));
+    assert!(app.sidebar_hidden);
+    assert!(!render_to_string(&app, 100, 30).contains("PROJECTS"));
+    app.update(char('['));
+    assert!(render_to_string(&app, 100, 30).contains("PROJECTS"));
+}
+
 // --------------------------------------------------------------- evidence
 
 /// The screen as ANSI text, colours and attributes as the terminal would
@@ -4376,6 +4811,37 @@ fn evidence() {
         app.update(Msg::Chat(ChatMsg::Listed(Ok(chat_list()))));
         app.view = View::Settings(Page::Folders);
         screens.push(("settings", app));
+    }
+    {
+        let mut app = app();
+        sidebar_ready(&mut app);
+        assert!(app.chat.select(SideItem::Chat(41)));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Shown {
+            chat: 41,
+            result: Ok(budget_transcript("idle")),
+        }));
+        app.update(key(KeyCode::Esc));
+        screens.push(("sidebar", app));
+    }
+    {
+        let mut app = app();
+        sidebar_ready(&mut app);
+        assert!(app.chat.select(SideItem::Decisions));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Decisions(Ok(decisions_json()))));
+        screens.push(("decisions", app));
+    }
+    {
+        let mut app = app();
+        sidebar_ready(&mut app);
+        assert!(app.chat.select(SideItem::Bot(9)));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Bot {
+            id: 9,
+            result: Ok(bot_json()),
+        }));
+        screens.push(("bot", app));
     }
     for (name, app) in &screens {
         for (depth_name, theme) in evidence_themes() {
