@@ -4581,6 +4581,7 @@ fn snapshot_a_bot_opens_as_its_page() {
     assert_eq!(app.view, View::Bot(9));
     app.update(Msg::Chat(ChatMsg::Bot {
         id: 9,
+        filter: None,
         result: Ok(bot_json()),
     }));
     assert_snapshot("bot_page", &app);
@@ -4592,9 +4593,18 @@ fn snapshot_a_bot_opens_as_its_page() {
             filter: Some("waiting".into())
         })]
     );
+    // A read of the filter left behind lands late, and changes nothing.
+    let mut stale = bot_json();
+    stale["bot"]["runs"] = serde_json::json!([]);
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 9,
+        filter: None,
+        result: Ok(stale),
+    }));
     // Its runs open as chats.
     app.update(Msg::Chat(ChatMsg::Bot {
         id: 9,
+        filter: Some("waiting".into()),
         result: Ok(bot_json()),
     }));
     app.update(char('j'));
@@ -4610,6 +4620,7 @@ fn a_bot_without_the_permission_says_where_to_allow_it() {
     app.update(key(KeyCode::Enter));
     app.update(Msg::Chat(ChatMsg::Bot {
         id: 11,
+        filter: None,
         result: Err(Failure::new(
             "bots_access_required",
             "This computer can't manage your bots yet. Allow it at https://chatwithwork.com/settings, then run this again.",
@@ -4631,7 +4642,13 @@ fn a_change_to_the_sidebar_reads_the_list_once_for_a_burst() {
             .is_empty(),
         "one read for the pair"
     );
-    app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
+    // The second change came during the read: one more read after it.
+    let effects = app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
+    assert_eq!(effects, vec![Effect::Chat(ChatCommand::List)]);
+    assert!(
+        app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))))
+            .is_empty()
+    );
     assert_eq!(
         app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar))),
         vec![Effect::Chat(ChatCommand::List)]
@@ -4839,6 +4856,7 @@ fn evidence() {
         app.update(key(KeyCode::Enter));
         app.update(Msg::Chat(ChatMsg::Bot {
             id: 9,
+            filter: None,
             result: Ok(bot_json()),
         }));
         screens.push(("bot", app));

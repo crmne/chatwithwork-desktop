@@ -1541,28 +1541,7 @@ fn waiting_lines(
                 Span::styled(part, theme.ink()),
             ]));
         }
-        detail_lines(
-            lines,
-            approval
-                .fields()
-                .iter()
-                .map(|d| (d.label.as_str(), d.value.as_str())),
-            width,
-            theme,
-        );
-        if let Some(preview) = &approval.preview {
-            if let Some(body) = &preview.body {
-                answer_lines(lines, &body.markdown(), &[], width, theme);
-            }
-            for note in &preview.notes {
-                let signal = if note.tone == "warning" {
-                    Signal::Attention
-                } else {
-                    Signal::Idle
-                };
-                lines.extend(notice_line(&note.text, signal, width, theme));
-            }
-        }
+        approval_body(lines, approval, width, theme);
         let choices = ChatPane::choices(approval);
         let selected = pane.decision.min(choices.len() - 1);
         for (i, choice) in choices.iter().enumerate() {
@@ -1591,6 +1570,39 @@ fn waiting_lines(
         }
         tint_card(lines, start, width, Signal::Attention, theme);
         lines.push(Line::raw(""));
+    }
+}
+
+/// What a change will do, as its card shows it: its fields, then the
+/// preview of what it writes and its notes. The chat and Decisions both
+/// show it before it's approved.
+pub(super) fn approval_body(
+    lines: &mut Vec<Line<'static>>,
+    approval: &super::chat::Approval,
+    width: usize,
+    theme: &Theme,
+) {
+    detail_lines(
+        lines,
+        approval
+            .fields()
+            .iter()
+            .map(|d| (d.label.as_str(), d.value.as_str())),
+        width,
+        theme,
+    );
+    if let Some(preview) = &approval.preview {
+        if let Some(body) = &preview.body {
+            answer_lines(lines, &body.markdown(), &[], width, theme);
+        }
+        for note in &preview.notes {
+            let signal = if note.tone == "warning" {
+                Signal::Attention
+            } else {
+                Signal::Idle
+            };
+            lines.extend(notice_line(&note.text, signal, width, theme));
+        }
     }
 }
 

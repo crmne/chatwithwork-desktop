@@ -107,6 +107,7 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     chats.bots = Some(BotsAccess {
         paths: paths.clone(),
         organization: selector.map(str::to_string),
+        client: Arc::default(),
     });
     let presence = Presence::new(chat_paths.socket_path());
     let _organization =
@@ -309,16 +310,27 @@ struct ChatRunner {
 }
 
 /// The sign-in `cww bots` uses: this computer's own, or a saved
-/// organization's.
+/// organization's. One client for the run, so its token is refreshed one
+/// call at a time, never by two at once with the same refresh credential.
 #[derive(Clone)]
 struct BotsAccess {
     paths: Paths,
     organization: Option<String>,
+    client: Arc<Mutex<Option<Arc<crate::bots::Bots>>>>,
 }
 
 impl BotsAccess {
-    fn connect(&self) -> Result<crate::bots::Bots, chat::Failure> {
-        crate::bots::Bots::connect(&self.paths, self.organization.as_deref()).map_err(bots_failure)
+    fn connect(&self) -> Result<Arc<crate::bots::Bots>, chat::Failure> {
+        let mut client = self.client.lock().expect("bots client");
+        if let Some(bots) = client.as_ref() {
+            return Ok(Arc::clone(bots));
+        }
+        let bots = Arc::new(
+            crate::bots::Bots::connect(&self.paths, self.organization.as_deref())
+                .map_err(bots_failure)?,
+        );
+        *client = Some(Arc::clone(&bots));
+        Ok(bots)
     }
 }
 
@@ -580,7 +592,7 @@ impl ChatRunner {
                             "Bots aren't available here.",
                         )),
                     };
-                    send(ChatMsg::Bot { id, result });
+                    send(ChatMsg::Bot { id, filter, result });
                 });
             }
             ChatCommand::ProjectChats {

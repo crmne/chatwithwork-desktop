@@ -38,7 +38,7 @@ fn page(
     app: &App,
     title: Vec<Span<'static>>,
     lines: Vec<(Line<'static>, Option<Hit>)>,
-    selected: usize,
+    selected: (usize, usize),
     keys: &[(&'static str, &'static str)],
     theme: &Theme,
     now: OffsetDateTime,
@@ -54,8 +54,10 @@ fn page(
     ])
     .areas(area);
     heading(frame, head, title, app, theme, now, hits);
+    // The chosen item whole where it fits, else from its first line.
     let height = body.height as usize;
-    let start = (selected + 2).saturating_sub(height);
+    let (first, last) = selected;
+    let start = (last + 2).saturating_sub(height).min(first);
     for (i, (line, hit)) in lines.into_iter().skip(start).take(height).enumerate() {
         let at = row(body, i as u16);
         if let Some(hit) = hit {
@@ -90,6 +92,7 @@ pub(super) fn decisions(
     }
     let mut lines: Vec<(Line<'static>, Option<Hit>)> = Vec::new();
     let mut selected_line = 0;
+    let mut selected_end = 0;
     let focused = app.focus == Focus::Main && app.modal.is_none();
     match (&pane.decisions, &pane.decisions_error) {
         (_, Some(error)) => {
@@ -200,35 +203,14 @@ pub(super) fn decisions(
                                 None,
                             ));
                         }
-                        let label_width = card
-                            .details
-                            .iter()
-                            .map(|d| d.label.chars().count())
-                            .max()
-                            .unwrap_or(0)
-                            .min(16);
-                        for detail in &card.details {
-                            let room = width.saturating_sub(label_width + 8).max(8);
-                            for (n, part) in wrap(&detail.value, room).into_iter().enumerate() {
-                                let label = if n == 0 {
-                                    format!(
-                                        "{:<label_width$}",
-                                        ellipsize(&detail.label, label_width)
-                                    )
-                                } else {
-                                    " ".repeat(label_width)
-                                };
-                                lines.push((
-                                    Line::from(vec![
-                                        Span::raw(indent),
-                                        Span::styled(label, theme.faint()),
-                                        Span::raw("  "),
-                                        Span::styled(part, theme.ink()),
-                                    ]),
-                                    None,
-                                ));
-                            }
-                        }
+                        let mut body = Vec::new();
+                        super::ui::approval_body(&mut body, card, width.saturating_sub(4), theme);
+                        lines.extend(body.into_iter().map(|line| {
+                            // Its fields come indented by two of their own.
+                            let mut spans = vec![Span::raw("  ")];
+                            spans.extend(line.spans);
+                            (Line::from(spans).style(line.style), None)
+                        }));
                     }
                     for line in decision.why.asks.iter().flatten().take(2) {
                         for part in wrap(line, width.saturating_sub(4)) {
@@ -238,6 +220,9 @@ pub(super) fn decisions(
                             ));
                         }
                     }
+                }
+                if here {
+                    selected_end = lines.len().saturating_sub(1);
                 }
                 lines.push((Line::raw(""), None));
             }
@@ -265,7 +250,7 @@ pub(super) fn decisions(
         app,
         title,
         lines,
-        selected_line,
+        (selected_line, selected_end.max(selected_line)),
         &keys,
         theme,
         now,
@@ -485,7 +470,7 @@ pub(super) fn bot(
         app,
         title,
         lines,
-        selected_line,
+        (selected_line, selected_line),
         &keys,
         theme,
         now,

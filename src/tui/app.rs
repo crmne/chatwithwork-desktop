@@ -646,6 +646,8 @@ pub enum ChatMsg {
     Decisions(Result<super::chat::Decisions, Failure>),
     Bot {
         id: u64,
+        /// The runs' filter it was read with.
+        filter: Option<String>,
         result: Result<serde_json::Value, Failure>,
     },
     /// A page of a project's chats, and the cursor of the next.
@@ -733,6 +735,10 @@ pub struct ChatPane {
     pub decisions_error: Option<String>,
     /// A read of the list for its sidebar is under way.
     pub relisting: bool,
+    /// The sidebar changed again while it was read: read it once more.
+    pub relist_again: bool,
+    /// Decisions changed while they were read: read them once more.
+    pub decisions_again: bool,
     /// The selected row of Decisions.
     pub decision_row: usize,
     /// The bot shown, as last read.
@@ -813,6 +819,8 @@ impl Default for ChatPane {
             decisions_loading: false,
             decisions_error: None,
             relisting: false,
+            relist_again: false,
+            decisions_again: false,
             decision_row: 0,
             bot_page: None,
             open: None,
@@ -1224,7 +1232,12 @@ impl ChatPane {
 
     /// The whole list, as read.
     pub fn set_list(&mut self, list: ChatList) {
-        self.keep_selection(|pane| pane.list = list);
+        // Pages of a project read past the list go with the old list.
+        self.keep_selection(|pane| {
+            pane.list = list;
+            pane.tree.limit.clear();
+            pane.tree.cursors.clear();
+        });
     }
 
     /// A chat as the server last sent it: new ones go in, others are
@@ -3940,8 +3953,7 @@ impl App {
         self.view = View::Decisions;
         self.focus = Focus::Main;
         self.chat.select(SideItem::Decisions);
-        self.chat.decisions_loading = true;
-        vec![Effect::Chat(ChatCommand::Decisions)]
+        self.read_decisions()
     }
 
     /// A bot's page, read again.
@@ -4635,6 +4647,14 @@ impl App {
             }
             ChatMsg::Listed(Ok(list)) => {
                 self.chat.relisting = false;
+                if std::mem::take(&mut self.chat.relist_again) {
+                    self.chat.relisting = true;
+                    self.later.push(Effect::Chat(ChatCommand::List));
+                }
+                // Decisions read before this list are older than its count.
+                if self.view != View::Decisions {
+                    self.chat.decisions = None;
+                }
                 // The new account's HTTP response may beat its daemon status
                 // onto the UI queue. Never relabel an old transcript with it.
                 let mut effects = if self.account_changed(&list.account.id) {
@@ -4942,6 +4962,9 @@ impl App {
             }
             ChatMsg::Decisions(result) => {
                 self.chat.decisions_loading = false;
+                if std::mem::take(&mut self.chat.decisions_again) {
+                    return self.read_decisions();
+                }
                 match result {
                     Ok(decisions) => {
                         self.chat.decision_row = self
@@ -4954,8 +4977,14 @@ impl App {
                     Err(failure) => self.chat.decisions_error = Some(failure.message),
                 }
             }
-            ChatMsg::Bot { id, result } => {
-                if let Some(page) = self.chat.bot_page.as_mut().filter(|p| p.id == id) {
+            ChatMsg::Bot { id, filter, result } => {
+                // Only the read of the filter shown, if the person moved on.
+                if let Some(page) = self
+                    .chat
+                    .bot_page
+                    .as_mut()
+                    .filter(|p| p.id == id && p.filter == filter)
+                {
                     page.loading = false;
                     match result {
                         Ok(data) => {
@@ -5021,7 +5050,9 @@ impl App {
     /// and Decisions with it while they show.
     fn sidebar_again(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if !std::mem::replace(&mut self.chat.relisting, true) {
+        if std::mem::replace(&mut self.chat.relisting, true) {
+            self.chat.relist_again = true;
+        } else {
             effects.push(Effect::Chat(ChatCommand::List));
         }
         effects.extend(self.decisions_again());
@@ -5031,10 +5062,20 @@ impl App {
     /// Decisions read again while they show.
     fn decisions_again(&mut self) -> Vec<Effect> {
         if self.view == View::Decisions {
-            self.chat.decisions_loading = true;
-            vec![Effect::Chat(ChatCommand::Decisions)]
+            self.read_decisions()
         } else {
             Vec::new()
+        }
+    }
+
+    /// One read of Decisions at a time, so an older one can't land last;
+    /// a change meanwhile reads them once more after it.
+    fn read_decisions(&mut self) -> Vec<Effect> {
+        if std::mem::replace(&mut self.chat.decisions_loading, true) {
+            self.chat.decisions_again = true;
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::Decisions)]
         }
     }
 
