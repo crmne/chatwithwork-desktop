@@ -539,11 +539,11 @@ pub enum ChatCommand {
     /// following the try until it ends.
     TryBot {
         body: serde_json::Value,
-        chat: Option<u64>,
+        origin: super::newbot::Origin,
     },
     MakeBot {
         body: serde_json::Value,
-        chat: Option<u64>,
+        origin: super::newbot::Origin,
     },
     /// Connect an integration in the browser, signed in as this person.
     Connect {
@@ -693,11 +693,11 @@ pub enum ChatMsg {
     BotBuilderStarted(Result<ChatSummary, Failure>),
     /// How a try stands, again each time it moves on.
     Trial {
-        chat: Option<u64>,
+        origin: super::newbot::Origin,
         result: Result<serde_json::Value, Failure>,
     },
     BotMade {
-        chat: Option<u64>,
+        origin: super::newbot::Origin,
         result: Result<serde_json::Value, Failure>,
     },
     Connected(Result<(), Failure>),
@@ -1688,7 +1688,18 @@ impl App {
         match msg {
             Msg::WindowFocus(focused) => {
                 self.window_focused = focused;
-                Vec::new()
+                // Back from the browser: a service may be connected now.
+                let shown = self.view == View::NewBot;
+                match self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut()) {
+                    Some(form) if focused && shown && !form.loading => {
+                        form.loading = true;
+                        vec![Effect::Chat(ChatCommand::Recipe {
+                            key: form.key.clone(),
+                            tools: form.tools(),
+                        })]
+                    }
+                    _ => Vec::new(),
+                }
             }
             Msg::Key(key) => self.key(key),
             Msg::Mouse(event) => self.mouse(event),
@@ -3630,6 +3641,20 @@ impl App {
                 input.push_str(text.replace(['\r', '\n'], " ").trim())
             }
             Some(_) => {}
+            None if self.view == View::NewBot && self.focus == Focus::Main => {
+                let text = text.replace(['\r', '\n'], " ");
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    match new_bot.form.as_mut() {
+                        Some(form) => match form.current() {
+                            FormRowKind::Name => form.name.push_str(text.trim()),
+                            FormRowKind::When => form.at = text.trim().chars().take(5).collect(),
+                            _ => {}
+                        },
+                        None if new_bot.row == 0 => new_bot.sentence.push_str(&text),
+                        None => {}
+                    }
+                }
+            }
             None if self.view == View::Chat && self.focus == Focus::Composer => {
                 if let Some(picker) = self.chat.picker.as_mut() {
                     picker
@@ -3665,6 +3690,12 @@ impl App {
             _ => return Vec::new(),
         };
         let delta: isize = if up { -1 } else { 1 };
+        if self.view == View::NewBot
+            && let Some(form) = self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut())
+        {
+            form.scroll = form.scroll.saturating_add_signed(-delta * 3).min(1_000);
+            return Vec::new();
+        }
         if let Some(Modal::Help { scroll }) = self.modal {
             self.modal = Some(Modal::Help {
                 scroll: scroll.saturating_add_signed(delta * 3),
@@ -3728,6 +3759,30 @@ impl App {
                 return self.open_item(item);
             }
             Hit::Filter(filter) if self.chat.ready() => return self.set_filter(filter),
+            Hit::Row(i) if self.view == View::NewBot => {
+                self.focus = Focus::Main;
+                let Some(new_bot) = self.chat.new_bot.as_mut() else {
+                    return Vec::new();
+                };
+                match new_bot.form.as_mut() {
+                    Some(form) => {
+                        form.row = i;
+                        if matches!(form.current(), FormRowKind::Try | FormRowKind::Make) {
+                            return self
+                                .new_bot_key(KeyEvent::from(KeyCode::Enter))
+                                .unwrap_or_default();
+                        }
+                    }
+                    None => {
+                        new_bot.row = i;
+                        if i > 0 {
+                            return self
+                                .new_bot_key(KeyEvent::from(KeyCode::Enter))
+                                .unwrap_or_default();
+                        }
+                    }
+                }
+            }
             Hit::Row(i) => match self.view {
                 View::Decisions => {
                     self.focus = Focus::Main;
@@ -4043,7 +4098,20 @@ impl App {
                     .and_then(|p| p.number),
                 Some(id),
             ),
-            _ => (None, None),
+            // From a chat in a project, New bot starts there, as the web's
+            // New bot pressed in a project does.
+            _ => match self.chat.open_summary().and_then(|c| c.project.as_ref()) {
+                Some(project) => (
+                    project.number.or_else(|| {
+                        self.chat
+                            .sidebar()
+                            .and_then(|s| s.projects.iter().find(|p| p.id == project.id))
+                            .and_then(|p| p.number)
+                    }),
+                    Some(project.id),
+                ),
+                None => (None, None),
+            },
         };
         self.view = View::NewBot;
         self.focus = Focus::Main;
@@ -4107,13 +4175,13 @@ impl App {
             self.chat.draft_busy = Some("Making the bot…");
             vec![Effect::Chat(ChatCommand::MakeBot {
                 body,
-                chat: Some(chat),
+                origin: super::newbot::Origin::Chat(chat),
             })]
         } else {
             self.chat.draft_busy = Some("Trying it…");
             vec![Effect::Chat(ChatCommand::TryBot {
                 body,
-                chat: Some(chat),
+                origin: super::newbot::Origin::Chat(chat),
             })]
         }
     }
@@ -4165,10 +4233,12 @@ impl App {
                             } else {
                                 "Trying it…"
                             });
+                            let origin = super::newbot::Origin::Form(form.id);
+                            form.scroll = 0;
                             vec![Effect::Chat(if make {
-                                ChatCommand::MakeBot { body, chat: None }
+                                ChatCommand::MakeBot { body, origin }
                             } else {
-                                ChatCommand::TryBot { body, chat: None }
+                                ChatCommand::TryBot { body, origin }
                             })]
                         }
                         Err(e) => {
@@ -4180,6 +4250,21 @@ impl App {
                 KeyCode::Enter => {
                     form.row = (form.row + 1).min(rows - 1);
                     Vec::new()
+                }
+                KeyCode::PageUp => {
+                    form.scroll = form.scroll.saturating_add(5).min(1_000);
+                    Vec::new()
+                }
+                KeyCode::PageDown => {
+                    form.scroll = form.scroll.saturating_sub(5);
+                    Vec::new()
+                }
+                KeyCode::Char('r') if !matches!(current, FormRowKind::Name) => {
+                    form.loading = true;
+                    vec![Effect::Chat(ChatCommand::Recipe {
+                        key: form.key.clone(),
+                        tools: form.tools(),
+                    })]
                 }
                 KeyCode::Char('c') if matches!(current, FormRowKind::Slot(_)) => {
                     let FormRowKind::Slot(kind) = current else {
@@ -4265,7 +4350,8 @@ impl App {
                     return Some(Vec::new());
                 };
                 let key = recipe.key.clone();
-                let mut form = super::newbot::RecipeForm::new(&key);
+                new_bot.forms += 1;
+                let mut form = super::newbot::RecipeForm::opened(&key, new_bot.forms);
                 form.project = new_bot.project;
                 new_bot.form = Some(form);
                 vec![Effect::Chat(ChatCommand::Recipe {
@@ -5399,7 +5485,7 @@ impl App {
                     }
                 }
             },
-            ChatMsg::Trial { chat, result } => {
+            ChatMsg::Trial { origin, result } => {
                 let running = result
                     .as_ref()
                     .is_ok_and(|v| v["trial"]["state"] == "running");
@@ -5407,47 +5493,72 @@ impl App {
                     Ok(answer) => (super::newbot::trial_lines(answer), None),
                     Err(failure) => (Vec::new(), Some(failure.message.clone())),
                 };
-                match chat {
-                    Some(_) => {
+                // Only where it was started, if that's still on screen.
+                match origin {
+                    super::newbot::Origin::Chat(number) if self.chat.open == Some(number) => {
                         self.chat.draft_busy = running.then_some("Trying it…");
                         self.chat.draft_result = match error {
                             Some(error) => vec![error],
                             None => lines,
                         };
                     }
-                    None => {
-                        if let Some(form) = self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut())
+                    super::newbot::Origin::Form(id) => {
+                        if let Some(form) = self
+                            .chat
+                            .new_bot
+                            .as_mut()
+                            .and_then(|n| n.form.as_mut())
+                            .filter(|f| f.id == id)
                         {
                             form.busy = running.then_some("Trying it…");
                             form.error = error;
                             form.result = lines;
                         }
                     }
+                    super::newbot::Origin::Chat(_) => {}
                 }
             }
-            ChatMsg::BotMade { chat, result } => {
+            ChatMsg::BotMade { origin, result } => {
+                use super::newbot::Origin;
                 let mut effects = vec![Effect::Chat(ChatCommand::List)];
-                match (chat, result) {
-                    (Some(number), Ok(answer)) => {
-                        self.chat.draft_busy = None;
-                        self.chat.draft_result = super::newbot::made_lines(&answer);
+                let form_shown = |app: &Self, id: u64| {
+                    app.view == View::NewBot
+                        && app
+                            .chat
+                            .new_bot
+                            .as_ref()
+                            .and_then(|n| n.form.as_ref())
+                            .is_some_and(|f| f.id == id)
+                };
+                match (origin, result) {
+                    (Origin::Chat(number), result) => {
+                        if self.chat.open == Some(number) {
+                            self.chat.draft_busy = None;
+                            self.chat.draft_result = match result {
+                                Ok(answer) => super::newbot::made_lines(&answer),
+                                Err(failure) => vec![failure.message],
+                            };
+                        }
                         effects.extend(self.refresh_chat(number));
                     }
-                    (Some(number), Err(failure)) => {
-                        self.chat.draft_busy = None;
-                        self.chat.draft_result = vec![failure.message];
-                        effects.extend(self.refresh_chat(number));
-                    }
-                    (None, Ok(answer)) => {
+                    (Origin::Form(id), Ok(answer)) => {
                         let lines = super::newbot::made_lines(&answer);
-                        self.chat.new_bot = None;
-                        if let Some(id) = answer["bot"]["id"].as_u64() {
-                            effects.extend(self.open_bot(id));
+                        // Made either way; only a form still shown moves on.
+                        if form_shown(self, id) {
+                            self.chat.new_bot = None;
+                            if let Some(bot) = answer["bot"]["id"].as_u64() {
+                                effects.extend(self.open_bot(bot));
+                            }
                         }
                         self.notice(Signal::Positive, &lines.join(" "));
                     }
-                    (None, Err(failure)) => {
-                        if let Some(form) = self.chat.new_bot.as_mut().and_then(|n| n.form.as_mut())
+                    (Origin::Form(id), Err(failure)) => {
+                        if let Some(form) = self
+                            .chat
+                            .new_bot
+                            .as_mut()
+                            .and_then(|n| n.form.as_mut())
+                            .filter(|f| f.id == id)
                         {
                             form.busy = None;
                             form.error = Some(failure.message);

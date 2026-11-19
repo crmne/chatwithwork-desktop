@@ -645,14 +645,14 @@ impl ChatRunner {
                     send(ChatMsg::BotBuilderStarted(result));
                 });
             }
-            ChatCommand::TryBot { body, chat } => {
+            ChatCommand::TryBot { body, origin } => {
                 let bots = self.bots.clone();
                 thread::spawn(move || {
                     let bots = match bots.ok_or_else(no_bots).and_then(|b| b.connect()) {
                         Ok(bots) => bots,
                         Err(failure) => {
                             return send(ChatMsg::Trial {
-                                chat,
+                                origin,
                                 result: Err(failure),
                             });
                         }
@@ -666,13 +666,22 @@ impl ChatRunner {
                         .as_ref()
                         .is_ok_and(|a| a["trial"]["state"] == "running");
                     send(ChatMsg::Trial {
-                        chat,
+                        origin,
                         result: started,
                     });
                     let begun = Instant::now();
                     while running && let Some(id) = id {
                         if begun.elapsed() > TRIAL_WAIT {
-                            break;
+                            // Never leave Try it waiting: say how to see it.
+                            return send(ChatMsg::Trial {
+                                origin,
+                                result: Err(chat::Failure::new(
+                                    "timeout",
+                                    format!(
+                                        "The try is still running. Follow it with cww bots run --follow {id}."
+                                    ),
+                                )),
+                            });
                         }
                         thread::sleep(TRIAL_POLL);
                         let answer = bots.trial(id).map_err(bots_failure);
@@ -680,17 +689,17 @@ impl ChatRunner {
                             .as_ref()
                             .is_ok_and(|a| a["trial"]["state"] == "running");
                         send(ChatMsg::Trial {
-                            chat,
+                            origin,
                             result: answer,
                         });
                     }
                 });
             }
-            ChatCommand::MakeBot { body, chat } => {
+            ChatCommand::MakeBot { body, origin } => {
                 let bots = self.bots.clone();
                 thread::spawn(move || {
                     let result = with_bots(bots, |bots| bots.create(&body));
-                    send(ChatMsg::BotMade { chat, result });
+                    send(ChatMsg::BotMade { origin, result });
                 });
             }
             ChatCommand::Connect { key, server } => {

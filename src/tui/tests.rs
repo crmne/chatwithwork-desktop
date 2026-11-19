@@ -4761,12 +4761,12 @@ fn snapshot_a_chat_that_builds_a_bot_shows_its_card_and_makes_it() {
     assert!(
         effects.contains(&Effect::Chat(ChatCommand::MakeBot {
             body: serde_json::json!({"builder": 70}),
-            chat: Some(70)
+            origin: super::newbot::Origin::Chat(70)
         })),
         "{effects:?}"
     );
     let effects = app.update(Msg::Chat(ChatMsg::BotMade {
-        chat: Some(70),
+        origin: super::newbot::Origin::Chat(70),
         result: Ok(serde_json::json!({"bot": {"id": 21, "name": "Ticket digest"}})),
     }));
     assert!(
@@ -4828,14 +4828,18 @@ fn snapshot_a_recipe_opens_as_new_bots_form_tries_and_makes() {
     app.update(key(KeyCode::Down));
     app.update(key(KeyCode::Down));
     let effects = app.update(key(KeyCode::Enter));
-    let Effect::Chat(ChatCommand::TryBot { body, chat: None }) = &effects[0] else {
+    let Effect::Chat(ChatCommand::TryBot {
+        body,
+        origin: super::newbot::Origin::Form(1),
+    }) = &effects[0]
+    else {
         panic!("{effects:?}");
     };
     assert_eq!(body["schedule"]["frequency"], "day");
     assert_eq!(body["schedule"]["at"], "08:30");
     assert_eq!(body["bot"]["choices"]["email"], "outlook");
     app.update(Msg::Chat(ChatMsg::Trial {
-        chat: None,
+        origin: super::newbot::Origin::Form(1),
         result: Ok(
             serde_json::json!({"trial": {"state": "done", "answer": "3 new emails, 1 needs you."}}),
         ),
@@ -4846,10 +4850,13 @@ fn snapshot_a_recipe_opens_as_new_bots_form_tries_and_makes() {
     let effects = app.update(key(KeyCode::Enter));
     assert!(matches!(
         effects[0],
-        Effect::Chat(ChatCommand::MakeBot { chat: None, .. })
+        Effect::Chat(ChatCommand::MakeBot {
+            origin: super::newbot::Origin::Form(1),
+            ..
+        })
     ));
     let effects = app.update(Msg::Chat(ChatMsg::BotMade {
-        chat: None,
+        origin: super::newbot::Origin::Form(1),
         result: Ok(serde_json::json!({"bot": {"id": 22, "name": "Inbox triage"}, "connect_first": [{"key": "outlook", "name": "Outlook"}]})),
     }));
     assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
@@ -4858,6 +4865,42 @@ fn snapshot_a_recipe_opens_as_new_bots_form_tries_and_makes() {
         filter: None
     })));
     assert_eq!(app.view, View::Bot(22));
+}
+
+#[test]
+fn a_tries_answer_reaches_only_the_form_it_was_started_from() {
+    let mut app = app();
+    new_bot_open(&mut app);
+    app.update(key(KeyCode::Down));
+    app.update(key(KeyCode::Enter));
+    app.update(key(KeyCode::Esc));
+    // Another recipe, opened while the first one's try still runs.
+    app.update(key(KeyCode::Down));
+    app.update(key(KeyCode::Enter));
+    let form = app.chat.new_bot.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!((form.id, form.key.as_str()), (2, "standup"));
+    app.update(Msg::Chat(ChatMsg::Trial {
+        origin: super::newbot::Origin::Form(1),
+        result: Ok(serde_json::json!({"trial": {"state": "done", "answer": "old"}})),
+    }));
+    let form = app.chat.new_bot.as_ref().unwrap().form.as_ref().unwrap();
+    assert!(form.result.is_empty(), "the old form's try");
+    // Paste lands in the field.
+    app.update(Msg::Paste("Standup notes".into()));
+    let form = app.chat.new_bot.as_ref().unwrap().form.as_ref().unwrap();
+    assert_eq!(form.name, "Standup notes");
+    // Back from the browser, the recipe is read again.
+    app.update(Msg::Chat(ChatMsg::Recipe {
+        key: "standup".into(),
+        result: Ok(recipe_form()),
+    }));
+    assert_eq!(
+        app.update(Msg::WindowFocus(true)),
+        vec![Effect::Chat(ChatCommand::Recipe {
+            key: "standup".into(),
+            tools: vec![("email".into(), "gmail".into())]
+        })]
+    );
 }
 
 #[test]

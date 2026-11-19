@@ -84,9 +84,20 @@ pub enum FormRow {
     Make,
 }
 
+/// Where a try or a make was started, so its answers reach only that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The card of this chat.
+    Chat(u64),
+    /// The recipe form with this id.
+    Form(u64),
+}
+
 /// A recipe, opened as New bot's form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecipeForm {
+    /// Which opening of a form this is, for answers that come later.
+    pub id: u64,
     pub key: String,
     /// The server's form: `recipe`, `defaults`, `slots`, `trigger`,
     /// `projects`, `still_needs`, ...
@@ -106,11 +117,19 @@ pub struct RecipeForm {
     /// What a try came back with, or what making it said.
     pub result: Vec<String>,
     pub error: Option<String>,
+    /// Lines scrolled up from the end, to read a long try's answer.
+    pub scroll: usize,
 }
 
 impl RecipeForm {
     pub fn new(key: &str) -> Self {
+        Self::opened(key, 0)
+    }
+
+    pub fn opened(key: &str, id: u64) -> Self {
         Self {
+            id,
+            scroll: 0,
             key: key.to_string(),
             data: None,
             loading: true,
@@ -333,6 +352,8 @@ pub struct NewBot {
     pub sending: bool,
     pub error: Option<String>,
     pub form: Option<RecipeForm>,
+    /// Forms opened so far, which numbers the next.
+    pub forms: u64,
     /// The project New bot was opened in (with a project selected), by
     /// number for a recipe's form.
     pub project: Option<u64>,
@@ -842,7 +863,18 @@ fn render_form(
         .iter()
         .position(|(_, hit)| *hit == Some(Hit::Row(current)))
         .unwrap_or(0);
-    let start = (selected + 2).saturating_sub(height);
+    // On Try it or Make bot, the end shows: what the try said, scrolled
+    // back with Page Up or the wheel.
+    let start = if !form.result.is_empty() && matches!(rows[current], FormRow::Try | FormRow::Make)
+    {
+        lines
+            .len()
+            .saturating_sub(height)
+            .saturating_sub(form.scroll)
+            .min(selected)
+    } else {
+        (selected + 2).saturating_sub(height)
+    };
     for (i, (line, hit)) in lines.into_iter().skip(start).take(height).enumerate() {
         let at = row(area, i as u16);
         if let Some(hit) = hit {
