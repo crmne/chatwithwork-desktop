@@ -561,6 +561,12 @@ While chat 42's answer runs, the message waits in its queue and the answer also 
 The models a question can be asked with: `{"default_model_id": 12, "models": [{"id": 12, "name": "Gemini 3.8 Flash", "provider": "vertexai", "description": "…", "rate": "About 3 credits per answer", "selectable": true, "reason": null}, ...]}`. `selectable: false` means a question to it would be refused now, for the `reason`. IDs may be numbers or strings; pass them back as strings. A server without the choice fails with `unsupported` and a sentence saying so.
 
 ```json
+{"cmd": "decisions"}
+```
+
+Everything waiting for the owner in the paired organization, as Chat with Work's Decisions page lists it, in its order: `{"account": {"id", "name"}, "count": 3, "decisions": [...], "snooze_choices": {...}}`, `count` leaving out snoozed ones. Each decision has `key`, `kind`, `label` ("Approve a change"), `summary`, `origin`, `chat` (`number`, `title`, `project`, or null), `since`, `deadline`, `snoozed_until`, `someone_waiting`, `destructive`, `why` (`you`, `asks`, `if_nobody`, each absent when it has nothing), and `card`, the same JSON as the chat's `approvals` or `questions` entry for it, decided with `chat_approve`, `chat_deny`, `chat_answer` or `chat_decline`. Needs chats allowed, like `chats`. A server without it fails with `unsupported` and a sentence saying so.
+
+```json
 {"cmd":"model_preferences"}
 {"cmd":"model_preferences_update","account":"482139075","model_id":"12"}
 ```

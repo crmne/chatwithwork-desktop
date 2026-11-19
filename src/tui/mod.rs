@@ -19,9 +19,11 @@ pub mod markdown;
 mod organizations;
 mod pages;
 mod running;
+pub mod sidebar;
 pub mod streaming;
 pub mod theme;
 pub mod ui;
+mod views;
 
 #[cfg(test)]
 mod tests;
@@ -75,7 +77,10 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     let utc_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let theme = Theme::detect();
     let history_file = history::path(&chat_paths);
-    let mut app = App::new(utc_offset).with_history(history::load(&history_file));
+    let filter_file = sidebar::filter_path(&history_file);
+    let mut app = App::new(utc_offset)
+        .with_history(history::load(&history_file))
+        .with_filter(sidebar::load_filter(&filter_file));
     if let Some(profile) = &profile {
         app = app.with_organization(profile.account.id.clone());
     }
@@ -97,7 +102,13 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
         let _ = execute!(stdout(), EnableMouseCapture);
     }
     spawn_input(tx.clone());
-    let chats = ChatRunner::new(Chats::new(&chat_paths.socket_path()), tx.clone());
+    let mut chats = ChatRunner::new(Chats::new(&chat_paths.socket_path()), tx.clone());
+    // Bots are read with the computer's own sign-in, as `cww bots` reads them.
+    chats.bots = Some(BotsAccess {
+        paths: paths.clone(),
+        organization: selector.map(str::to_string),
+        client: Arc::default(),
+    });
     let presence = Presence::new(chat_paths.socket_path());
     let _organization =
         profile.map(|profile| organizations::Watcher::spawn(paths.clone(), profile, tx.clone()));
@@ -115,6 +126,7 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
         paths,
         chats,
         history: history_file,
+        filter: filter_file,
         presence,
         commands,
         tx: tx.clone(),
@@ -192,6 +204,7 @@ struct Outputs {
     link: daemon::Link,
     chats: ChatRunner,
     history: PathBuf,
+    filter: PathBuf,
     presence: Presence,
     commands: Arc<Follow>,
     paths: Paths,
@@ -220,6 +233,11 @@ impl Outputs {
                 Effect::CrashReports(on) => {
                     if let Err(e) = crate::crash_reports::set(&self.paths, on) {
                         let _ = self.tx.send(Msg::CrashReportsNotSaved(format!("{e:#}")));
+                    }
+                }
+                Effect::RememberFilter(filter) => {
+                    if let Err(e) = sidebar::save_filter(&self.filter, filter) {
+                        tracing::debug!("keeping the sidebar's filter: {e:#}");
                     }
                 }
                 Effect::Remember(entry) => {
@@ -287,6 +305,46 @@ struct ChatRunner {
     list: Mutex<Option<Follower>>,
     /// Bumped to stop an earlier wait for chat access.
     access_wait: Arc<AtomicU64>,
+    /// Where to sign in for bots, which the daemon doesn't relay.
+    bots: Option<BotsAccess>,
+}
+
+/// The sign-in `cww bots` uses: this computer's own, or a saved
+/// organization's. One client for the run, so its token is refreshed one
+/// call at a time, never by two at once with the same refresh credential.
+#[derive(Clone)]
+struct BotsAccess {
+    paths: Paths,
+    organization: Option<String>,
+    client: Arc<Mutex<Option<Arc<crate::bots::Bots>>>>,
+}
+
+impl BotsAccess {
+    fn connect(&self) -> Result<Arc<crate::bots::Bots>, chat::Failure> {
+        let mut client = self.client.lock().expect("bots client");
+        if let Some(bots) = client.as_ref() {
+            return Ok(Arc::clone(bots));
+        }
+        let bots = Arc::new(
+            crate::bots::Bots::connect(&self.paths, self.organization.as_deref())
+                .map_err(bots_failure)?,
+        );
+        *client = Some(Arc::clone(&bots));
+        Ok(bots)
+    }
+}
+
+/// A refusal from the bots API, as the chat pane shows failures.
+fn bots_failure(error: anyhow::Error) -> chat::Failure {
+    let json = crate::bots::error_json(&error);
+    let json = &json["error"];
+    chat::Failure::new(
+        json["code"].as_str().unwrap_or("failed"),
+        json["message"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{error:#}")),
+    )
 }
 
 struct Follower {
@@ -313,6 +371,7 @@ impl ChatRunner {
             following: Mutex::new(None),
             list: Mutex::new(None),
             access_wait: Arc::new(AtomicU64::new(0)),
+            bots: None,
         }
     }
 
@@ -516,6 +575,46 @@ impl ChatRunner {
             ChatCommand::FollowList(on) => self.follow_list(on),
             ChatCommand::OpenUrl(url) => {
                 crate::browser::open(&url);
+            }
+            ChatCommand::Decisions => {
+                thread::spawn(move || send(ChatMsg::Decisions(chats.decisions())));
+            }
+            ChatCommand::Bot { id, filter } => {
+                let bots = self.bots.clone();
+                thread::spawn(move || {
+                    let result = match bots {
+                        Some(bots) => bots.connect().and_then(|bots| {
+                            bots.show_runs(&id.to_string(), filter.as_deref())
+                                .map_err(bots_failure)
+                        }),
+                        None => Err(chat::Failure::new(
+                            "unsupported",
+                            "Bots aren't available here.",
+                        )),
+                    };
+                    send(ChatMsg::Bot { id, filter, result });
+                });
+            }
+            ChatCommand::ProjectChats {
+                project,
+                number,
+                before,
+            } => {
+                thread::spawn(move || {
+                    let result = chats
+                        .projects(crate::projects::Request::Show {
+                            project: number,
+                            before,
+                        })
+                        .and_then(|reply| match reply {
+                            crate::projects::Reply::Page(page) => Ok((
+                                page.chats.into_iter().map(|c| c.chat).collect(),
+                                page.next_cursor,
+                            )),
+                            _ => Err(chat::Failure::new("unsupported", "No chats came back.")),
+                        });
+                    send(ChatMsg::ProjectChats { project, result });
+                });
             }
         }
     }

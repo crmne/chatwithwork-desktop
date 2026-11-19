@@ -18,12 +18,13 @@ use time::OffsetDateTime;
 
 use super::app::{
     Access, App, ChatPane, Choice, Daemon, Focus, Following, FormRow, Hit, Hits, Modal, ModelList,
-    Pairing, PickItem, PickerKind, View, field_has_choices, parse_ts,
+    Pairing, PickItem, PickerKind, SideItem, View, field_has_choices, parse_ts,
 };
-use super::chat::{Attachment, ChatSummary, Entry, Question};
+use super::chat::{Attachment, Entry, Question};
 use super::commands::COMMANDS;
 use super::markdown::{self, Footnotes};
 use super::pages;
+use super::sidebar::{Filter, Label, Row};
 use super::theme::{Signal, Theme};
 use crate::audit::{AuditEntry, Decision};
 
@@ -32,8 +33,16 @@ pub(super) const RING: &str = "○";
 const PROMPT: &str = "❯";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// The brand mark beside the name, in the rainbow as the GUI's mark is.
+/// The brand mark beside the name.
 const MARK: &str = "◆";
+/// A bot, as the web's bot mark: a little screen with eyes.
+pub(super) const BOT: &str = "◙";
+/// Decisions, as the web's seal with a question.
+const DECISIONS: &str = "◇";
+/// A project, HQ, and a project only you are on (the web's lock).
+const FOLDER: &str = "□";
+const HQ: &str = "◫";
+const SOLO: &str = "■";
 
 /// The widest a column of text gets, as the web's reading column.
 pub(super) const COLUMN: u16 = 76;
@@ -47,6 +56,7 @@ pub fn render_hits(frame: &mut Frame, app: &App, theme: &Theme, now: OffsetDateT
     let mut hits = Hits::default();
     let area = frame.area();
     let side_width = match area.width {
+        _ if app.sidebar_hidden => 0,
         90.. => 32,
         64.. => 26,
         _ => 0,
@@ -58,6 +68,8 @@ pub fn render_hits(frame: &mut Frame, app: &App, theme: &Theme, now: OffsetDateT
     }
     match app.view {
         View::Chat => main_pane(frame, main, app, theme, now, &mut hits),
+        View::Decisions => super::views::decisions(frame, main, app, theme, now, &mut hits),
+        View::Bot(id) => super::views::bot(frame, main, app, id, theme, now, &mut hits),
         View::Settings(page) => {
             let bare = side.width == 0;
             pages::render(frame, main, app, page, bare, theme, now, &mut hits);
@@ -116,8 +128,8 @@ fn sidebar(
         );
     }
     match app.view {
-        View::Chat => chats_section(frame, body, app, theme, now, hits),
         View::Settings(page) => pages::nav(frame, body, page, theme, hits),
+        _ => chats_section(frame, body, app, theme, now, hits),
     }
     account_line(frame, row(foot, 1), app, theme, hits);
     // The meter under the name, as the web shows it when credits run low.
@@ -175,8 +187,8 @@ fn account_line(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// "New chat", the search, then the chats by day, as the web's history
-/// groups them.
+/// The web's sidebar: New bot and New chat, Decisions, the search, then
+/// Pinned, the projects' tree and Recent, scrolling under them.
 fn chats_section(
     frame: &mut Frame,
     area: Rect,
@@ -216,239 +228,366 @@ fn chats_section(
         );
         return;
     }
-
-    let marker = |selected: bool| {
-        if selected && focused {
+    let selected = pane.selected_item();
+    let here = |item: SideItem| focused && selected == Some(item);
+    let marker = |item: SideItem| {
+        if here(item) {
             Span::styled("▌", theme.ink())
         } else {
             Span::raw(" ")
         }
     };
-    // New chat and the search stay put; the chats scroll under them.
-    let new_selected = pane.selected == 0;
-    let new_style = if pane.open.is_none() {
+    let highlight = |line: Line<'static>, item: SideItem| {
+        if here(item) {
+            line.patch_style(theme.selected())
+        } else {
+            line
+        }
+    };
+
+    // New bot and New chat side by side, as the web's two buttons.
+    let top = row(area, 0);
+    let new_chat = highlight(
+        Line::from(vec![
+            marker(SideItem::NewChat),
+            Span::styled("+ ", theme.strong()),
+            Span::styled("New chat", theme.ink()),
+        ]),
+        SideItem::NewChat,
+    );
+    if pane.can_make_bots() {
+        let half = top.width / 2;
+        let left = Rect { width: half, ..top };
+        let right = Rect {
+            x: top.x + half,
+            width: top.width - half,
+            ..top
+        };
+        let new_bot = highlight(
+            Line::from(vec![
+                marker(SideItem::NewBot),
+                Span::styled(format!("{BOT} "), theme.strong()),
+                Span::styled("New bot", theme.strong()),
+            ]),
+            SideItem::NewBot,
+        );
+        frame.render_widget(Paragraph::new(new_bot), left);
+        hits.add(left, Hit::Side(SideItem::NewBot));
+        frame.render_widget(Paragraph::new(new_chat), right);
+        hits.add(right, Hit::Side(SideItem::NewChat));
+    } else {
+        frame.render_widget(Paragraph::new(new_chat), top);
+        hits.add(top, Hit::Side(SideItem::NewChat));
+    }
+
+    // Decisions, the home, with what waits; an older server has none.
+    let count = pane.decisions_count();
+    let has_decisions = pane.top_items().contains(&SideItem::Decisions);
+    let on_decisions = app.view == View::Decisions;
+    let name_style = if count > 0 {
+        theme.signal_ink(Signal::Attention)
+    } else if on_decisions {
         theme.strong()
     } else {
         theme.muted()
     };
-    let mut new_chat = Line::from(vec![
-        marker(new_selected),
-        Span::styled("+ ", theme.strong()),
-        Span::styled("New chat", new_style),
-    ]);
-    if new_selected && focused {
-        new_chat = new_chat.patch_style(theme.selected());
+    let end = if count > 0 {
+        vec![
+            Span::styled(count.to_string(), theme.signal_ink(Signal::Attention)),
+            Span::raw(" "),
+            Span::styled(DOT, theme.signal(Signal::Attention)),
+            Span::raw(" "),
+        ]
+    } else {
+        vec![Span::styled("All clear ", theme.faint())]
+    };
+    let name_style = if on_decisions {
+        name_style.add_modifier(Modifier::BOLD)
+    } else {
+        name_style
+    };
+    let decisions = spread(
+        vec![
+            marker(SideItem::Decisions),
+            Span::styled(format!("{DECISIONS} "), name_style),
+            Span::styled("Decisions", name_style),
+        ],
+        end,
+        area.width,
+    );
+    if has_decisions {
+        frame.render_widget(
+            Paragraph::new(highlight(decisions, SideItem::Decisions)),
+            row(area, 1),
+        );
+        hits.add(row(area, 1), Hit::Side(SideItem::Decisions));
     }
-    frame.render_widget(Paragraph::new(new_chat), row(area, 0));
-    hits.add(row(area, 0), Hit::NewChat);
 
     let search = match &pane.search {
-        Some(query) => {
-            let mut spans = vec![
-                Span::raw(" "),
-                Span::styled("/ ", theme.signal_ink(Signal::Live)),
-                Span::styled(tail(query, width.saturating_sub(4)), theme.ink()),
-            ];
-            if pane.visible().is_empty() {
-                spans.push(Span::styled("  no match", theme.faint()));
-            }
-            Line::from(spans)
-        }
+        Some(query) => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("/ ", theme.signal_ink(Signal::Live)),
+            Span::styled(tail(query, width.saturating_sub(4)), theme.ink()),
+        ]),
         None => Line::from(vec![
             Span::raw(" "),
             Span::styled("/ ", theme.faint()),
-            Span::styled("Search chats", theme.faint()),
+            Span::styled("Search chats and bots", theme.faint()),
         ]),
     };
-    frame.render_widget(Paragraph::new(search), row(area, 1));
-    hits.add(row(area, 1), Hit::Search);
+    frame.render_widget(Paragraph::new(search), row(area, 2));
+    hits.add(row(area, 2), Hit::Search);
 
-    let mut body = below(area, 3);
-    // Pinned, under Recent, as on the web; it says how to pin when empty.
-    let pinned = pane.pinned_projects().len() + pane.pinned_chats().len();
-    if pane.search.is_none() && body.height >= 8 {
-        let height = (pinned as u16).min(body.height / 3).max(1) + 2;
-        let at = Rect {
-            y: body.bottom() - height,
-            height,
-            ..body
-        };
-        body.height -= height;
-        pinned_section(frame, at, app, focused, theme, now, hits);
-    }
-    // Rows, what clicking each does, and which of them is the selection.
-    let mut rows: Vec<Line<'static>> = Vec::new();
-    let mut targets: Vec<Option<Hit>> = Vec::new();
-    let mut selected_row = 0;
-    if pane.search.is_none() && pane.visible().is_empty() {
-        let text = match pane.filter_project() {
-            Some(project) => format!(" No chats in {} yet", project.name),
-            None => " No chats yet".into(),
-        };
-        rows.push(Line::styled(ellipsize(&text, width), theme.faint()));
-        targets.push(None);
-    }
-    if !pane.visible().is_empty() {
-        rows.push(Line::styled(" RECENT", theme.micro()));
-        targets.push(None);
-    }
-    for (i, chat) in pane.visible().iter().enumerate() {
-        let selected = pane.selected == i + 1;
-        if selected {
-            selected_row = rows.len();
+    let body = below(area, 4);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut targets: Vec<Vec<(u16, u16, Hit)>> = Vec::new();
+    let mut selected_line = 0;
+    let filter_words = |lines: &mut Vec<Line<'static>>, targets: &mut Vec<_>, label: &str| {
+        let mut right = Vec::new();
+        let mut spots = Vec::new();
+        let mut x = 0u16;
+        for filter in Filter::ALL {
+            let style = if filter == pane.tree.filter {
+                theme.strong().add_modifier(Modifier::UNDERLINED)
+            } else {
+                theme.faint()
+            };
+            let word = filter.label();
+            spots.push((x, word.chars().count() as u16, Hit::Filter(filter)));
+            x += word.chars().count() as u16 + 1;
+            right.push(Span::styled(word.to_string(), style));
+            right.push(Span::raw(" "));
         }
-        rows.push(chat_row(
-            chat,
-            pane,
-            selected && focused,
-            marker(selected),
-            width,
-            theme,
-            now,
+        let start = area.width.saturating_sub(x);
+        let spots = spots
+            .into_iter()
+            .map(|(dx, w, hit)| (start + dx, w, hit))
+            .collect();
+        lines.push(spread(
+            vec![Span::styled(format!(" {label}"), theme.micro())],
+            right,
+            area.width,
         ));
-        targets.push(Some(Hit::Chat(chat.number)));
+        targets.push(spots);
+    };
+    let has_projects = !pane.nodes().is_empty();
+    for entry in pane.rows() {
+        match entry {
+            Row::Label(Label::Pinned) => {
+                lines.push(Line::styled(" PINNED", theme.micro()));
+                targets.push(Vec::new());
+            }
+            Row::Label(Label::Projects) => {
+                if !lines.is_empty() {
+                    lines.push(Line::raw(""));
+                    targets.push(Vec::new());
+                }
+                filter_words(&mut lines, &mut targets, "PROJECTS");
+            }
+            Row::Label(Label::Recent) => {
+                if !lines.is_empty() {
+                    lines.push(Line::raw(""));
+                    targets.push(Vec::new());
+                }
+                if has_projects {
+                    lines.push(Line::styled(" RECENT", theme.micro()));
+                    targets.push(Vec::new());
+                } else {
+                    filter_words(&mut lines, &mut targets, "RECENT");
+                }
+            }
+            Row::Label(Label::Empty) => {
+                let text = if pane.search.is_some() {
+                    " No match"
+                } else {
+                    match pane.tree.filter {
+                        Filter::Bots => " No bots yet",
+                        _ => " No chats yet",
+                    }
+                };
+                lines.push(Line::styled(text, theme.faint()));
+                targets.push(Vec::new());
+            }
+            Row::Item { item, depth } => {
+                if here(item) || selected == Some(item) {
+                    selected_line = lines.len();
+                }
+                let line = side_row(
+                    app,
+                    item,
+                    depth,
+                    here(item),
+                    marker(item),
+                    width,
+                    theme,
+                    now,
+                );
+                lines.push(highlight(line, item));
+                targets.push(vec![(0, area.width, Hit::Side(item))]);
+            }
+        }
     }
 
     let height = body.height as usize;
-    let start = (selected_row + 1).saturating_sub(height);
+    let start = (selected_line + 1).saturating_sub(height);
     hits.add(body, Hit::Chats);
-    for (i, target) in targets.into_iter().skip(start).take(height).enumerate() {
-        if let Some(target) = target {
-            hits.add(row(body, i as u16), target);
+    for (i, spots) in targets.into_iter().skip(start).take(height).enumerate() {
+        for (x, w, hit) in spots {
+            hits.add(
+                Rect {
+                    x: body.x + x,
+                    width: w.min(body.width.saturating_sub(x)),
+                    ..row(body, i as u16)
+                },
+                hit,
+            );
         }
     }
-    let shown: Vec<Line> = rows.into_iter().skip(start).take(height).collect();
+    let shown: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     frame.render_widget(Paragraph::new(shown), body);
 }
 
-/// Pinned, as the web shows it under Recent: the pinned projects (picking
-/// one shows its chats and starts a new chat in it; picking it again shows
-/// every chat), then the pinned chats, with "all" for every project.
-fn pinned_section(
-    frame: &mut Frame,
-    area: Rect,
+/// One row of the sidebar's list: a project's header, a chat, a bot, or
+/// "N more", indented by its depth in the tree.
+#[allow(clippy::too_many_arguments)]
+fn side_row(
     app: &App,
-    focused: bool,
-    theme: &Theme,
-    now: OffsetDateTime,
-    hits: &mut Hits,
-) {
-    let pane = &app.chat;
-    let mut label = vec![Span::styled(" PINNED", theme.micro())];
-    if pane.list.links.projects.is_some() {
-        label = spread(label, vec![Span::styled("all ", theme.faint())], area.width).spans;
-        hits.add(
-            Rect {
-                x: area.right().saturating_sub(4),
-                width: 4.min(area.width),
-                ..row(area, 1)
-            },
-            Hit::AllProjects,
-        );
-    }
-    frame.render_widget(Paragraph::new(Line::from(label)), row(area, 1));
-    let rows = below(area, 2);
-    let width = area.width as usize;
-    let projects = pane.pinned_projects();
-    let chats = pane.pinned_chats();
-    if projects.is_empty() && chats.is_empty() {
-        let text = " Pin a chat or project to keep it here.";
-        frame.render_widget(
-            Paragraph::new(Line::styled(ellipsize(text, width), theme.faint())),
-            row(rows, 0),
-        );
-        return;
-    }
-    let marker = |here: bool| {
-        if here && focused {
-            Span::styled("▌", theme.ink())
-        } else {
-            Span::raw(" ")
-        }
-    };
-    let first = pane.side_items().len() - projects.len() - chats.len();
-    let height = rows.height as usize;
-    let selected = pane.selected.checked_sub(first);
-    let start = selected.map_or(0, |s| (s + 1).saturating_sub(height));
-    let mut lines: Vec<(Line<'static>, Hit)> = Vec::new();
-    for (i, project) in projects.iter().enumerate() {
-        let here = selected == Some(i) && focused;
-        let active = pane.filter == Some(project.id);
-        let style = if active {
-            theme.strong()
-        } else {
-            theme.muted()
-        };
-        let mut spans = vec![
-            marker(here),
-            Span::raw(" "),
-            Span::styled(ellipsize(&project.name, width.saturating_sub(5)), style),
-        ];
-        if active {
-            spans = spread(spans, vec![Span::styled("× ", theme.faint())], area.width).spans;
-        }
-        let mut line = Line::from(spans);
-        if here {
-            line = line.patch_style(theme.selected());
-        }
-        lines.push((line, Hit::Project(project.id)));
-    }
-    for (i, chat) in chats.iter().enumerate() {
-        let here = selected == Some(projects.len() + i);
-        let line = chat_row(chat, pane, here && focused, marker(here), width, theme, now);
-        lines.push((line, Hit::Chat(chat.number)));
-    }
-    for (slot, (line, hit)) in lines.into_iter().skip(start).take(height).enumerate() {
-        let at = row(rows, slot as u16);
-        frame.render_widget(Paragraph::new(line), at);
-        hits.add(at, hit);
-    }
-}
-
-/// A chat in the list. One that's being answered gets the live dot, and
-/// its title shimmers while the TUI can tell when that stops: it's the open
-/// chat, or the server keeps the list current.
-fn chat_row(
-    chat: &ChatSummary,
-    pane: &ChatPane,
+    item: SideItem,
+    depth: u16,
     highlighted: bool,
     marker: Span<'static>,
     width: usize,
     theme: &Theme,
     now: OffsetDateTime,
 ) -> Line<'static> {
-    let open = pane.open == Some(chat.number);
-    let style = if open { theme.strong() } else { theme.muted() };
-    let dot = if chat.processing() || (open && pane.working()) {
-        Some(theme.signal(Signal::Live))
-    } else if chat.state == "error" {
-        Some(theme.signal(Signal::Attention))
-    } else {
-        None
+    let pane = &app.chat;
+    let indent = "  ".repeat(depth as usize);
+    let mut left = vec![marker, Span::raw(" "), Span::raw(indent.clone())];
+    let mut right: Vec<Span<'static>> = Vec::new();
+    let count = |n: String, signal: Signal| {
+        vec![
+            Span::styled(n, theme.signal_ink(signal)),
+            Span::raw(" "),
+            Span::styled(DOT, theme.signal(signal)),
+            Span::raw(" "),
+        ]
     };
-    let room = width.saturating_sub(
-        if dot.is_some() { 4 } else { 2 } + if chat.schedule.is_some() { 2 } else { 0 },
-    );
-    let title = ellipsize(&chat.title, room);
-    let mut spans = vec![marker, Span::raw(" ")];
-    if let Some(dot) = dot {
-        spans.push(Span::styled(DOT, dot));
-        spans.push(Span::raw(" "));
+    let name: String;
+    let mut name_style = theme.muted();
+    let mut shimmer = false;
+    match item {
+        SideItem::Project(id) => {
+            let Some(node) = pane.node(id) else {
+                return Line::raw("");
+            };
+            let open = pane.is_open(&node);
+            left.push(Span::styled(if open { "▾ " } else { "▸ " }, theme.faint()));
+            let icon = if node.hq {
+                HQ
+            } else if node.solo {
+                SOLO
+            } else {
+                FOLDER
+            };
+            left.push(Span::styled(format!("{icon} "), theme.faint()));
+            name = node.name.to_string();
+            name_style = theme.ink();
+            if !open && node.waiting > 0 {
+                right = count(node.waiting.to_string(), Signal::Attention);
+            } else if !open && node.working {
+                right = vec![
+                    Span::styled(DOT, theme.signal(Signal::Live)),
+                    Span::raw(" "),
+                ];
+            }
+        }
+        SideItem::Chat(number) | SideItem::PinnedChat(number) => {
+            let Some(chat) = pane.chat(number) else {
+                return Line::raw("");
+            };
+            let open = app.view == View::Chat && pane.open == Some(number);
+            left.push(Span::raw(if depth > 0 { "  " } else { "" }));
+            if chat.schedule.is_some() {
+                left.push(Span::styled("◷ ", theme.faint()));
+            }
+            name = chat.title.clone();
+            if open {
+                name_style = theme.strong();
+            }
+            let waiting = pane.waiting_in(number);
+            if waiting > 0 {
+                right = count(waiting.to_string(), Signal::Attention);
+            } else if chat.processing() || (open && pane.working()) {
+                right = vec![
+                    Span::styled(DOT, theme.signal(Signal::Live)),
+                    Span::raw(" "),
+                ];
+            } else if chat.state == "error" {
+                right = vec![
+                    Span::styled(DOT, theme.signal(Signal::Negative)),
+                    Span::raw(" "),
+                ];
+            }
+            shimmer = (open && pane.working()) || (pane.list_live && chat.processing());
+        }
+        SideItem::Bot(id) | SideItem::PinnedBot(id) => {
+            let Some(bot) = pane.bot(id) else {
+                return Line::raw("");
+            };
+            left.push(Span::raw(if depth > 0 { "  " } else { "" }));
+            left.push(Span::styled(format!("{BOT} "), theme.strong()));
+            name = bot.name.clone();
+            name_style = if bot.paused {
+                theme.faint()
+            } else if app.view == View::Bot(id) {
+                theme.strong()
+            } else {
+                theme.ink()
+            };
+            if let Some(dot) = &bot.dot {
+                let signal = match dot.tone.as_deref() {
+                    Some("attention") => Some(Signal::Attention),
+                    Some("negative") => Some(Signal::Negative),
+                    Some("live") => Some(Signal::Live),
+                    Some("positive") => Some(Signal::Positive),
+                    _ => None,
+                };
+                if let Some(signal) = signal {
+                    right = match dot.number() {
+                        Some(n) => count(n, signal),
+                        None => vec![Span::styled(DOT, theme.signal(signal)), Span::raw(" ")],
+                    };
+                }
+            }
+        }
+        SideItem::More(id) => {
+            left.push(Span::raw("  "));
+            name = format!("{} more", pane.more_in(id));
+            name_style = theme.faint();
+        }
+        SideItem::Fewer(_) => {
+            left.push(Span::raw("  "));
+            name = "Show fewer".into();
+            name_style = theme.faint();
+        }
+        SideItem::MoreProjects => {
+            name = if pane.tree.all_projects {
+                "Show fewer".into()
+            } else {
+                format!("{} more", pane.more_projects())
+            };
+            name_style = theme.faint();
+        }
+        SideItem::NewBot | SideItem::NewChat | SideItem::Decisions => return Line::raw(""),
     }
-    if chat.schedule.is_some() {
-        spans.push(Span::styled("◷ ", theme.faint()));
-    }
-    if (open && pane.working()) || (pane.list_live && chat.processing()) {
-        spans.extend(theme.shimmer_text(&title, sweep(now)));
+    let used: usize = left.iter().chain(&right).map(Span::width).sum();
+    let title = ellipsize(&name, width.saturating_sub(used + 1));
+    if shimmer && !highlighted {
+        left.extend(theme.shimmer_text(&title, sweep(now)));
     } else {
-        spans.push(Span::styled(title, style));
+        left.push(Span::styled(title, name_style));
     }
-    let line = Line::from(spans);
-    if highlighted {
-        line.patch_style(theme.selected())
-    } else {
-        line
-    }
+    spread(left, right, width as u16)
 }
 
 // --------------------------------------------------------- status and main
@@ -1402,28 +1541,7 @@ fn waiting_lines(
                 Span::styled(part, theme.ink()),
             ]));
         }
-        detail_lines(
-            lines,
-            approval
-                .fields()
-                .iter()
-                .map(|d| (d.label.as_str(), d.value.as_str())),
-            width,
-            theme,
-        );
-        if let Some(preview) = &approval.preview {
-            if let Some(body) = &preview.body {
-                answer_lines(lines, &body.markdown(), &[], width, theme);
-            }
-            for note in &preview.notes {
-                let signal = if note.tone == "warning" {
-                    Signal::Attention
-                } else {
-                    Signal::Idle
-                };
-                lines.extend(notice_line(&note.text, signal, width, theme));
-            }
-        }
+        approval_body(lines, approval, width, theme);
         let choices = ChatPane::choices(approval);
         let selected = pane.decision.min(choices.len() - 1);
         for (i, choice) in choices.iter().enumerate() {
@@ -1452,6 +1570,39 @@ fn waiting_lines(
         }
         tint_card(lines, start, width, Signal::Attention, theme);
         lines.push(Line::raw(""));
+    }
+}
+
+/// What a change will do, as its card shows it: its fields, then the
+/// preview of what it writes and its notes. The chat and Decisions both
+/// show it before it's approved.
+pub(super) fn approval_body(
+    lines: &mut Vec<Line<'static>>,
+    approval: &super::chat::Approval,
+    width: usize,
+    theme: &Theme,
+) {
+    detail_lines(
+        lines,
+        approval
+            .fields()
+            .iter()
+            .map(|d| (d.label.as_str(), d.value.as_str())),
+        width,
+        theme,
+    );
+    if let Some(preview) = &approval.preview {
+        if let Some(body) = &preview.body {
+            answer_lines(lines, &body.markdown(), &[], width, theme);
+        }
+        for note in &preview.notes {
+            let signal = if note.tone == "warning" {
+                Signal::Attention
+            } else {
+                Signal::Idle
+            };
+            lines.extend(notice_line(&note.text, signal, width, theme));
+        }
     }
 }
 
@@ -2814,17 +2965,56 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
     let mut groups: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
     if app.chat.ready() {
         groups.push((
-            "CHATS",
+            "SIDEBAR",
             vec![
-                ("tab", "move between the chats and the composer"),
-                ("↑ ↓  j k", "select a chat"),
-                ("enter", "open a chat"),
-                ("n", "new chat"),
-                ("/", "search chats"),
+                ("↑ ↓  j k", "move through the sidebar"),
+                ("enter", "open a chat or a bot; open or close a project"),
+                ("→ ←  l h", "open or close a project, or step up out of it"),
+                ("alt-↑ alt-↓", "open the previous or next chat"),
+                ("c  n", "new chat"),
+                ("+", "new chat in the selected project"),
+                ("/", "search chats and bots"),
+                ("f", "show all, only chats, or only bots"),
+                ("[", "hide or show the sidebar"),
+                ("tab", "move between the sidebar and the chat"),
+            ],
+        ));
+        groups.push((
+            "GO TO",
+            vec![
+                ("g d", "Decisions"),
+                ("g s", "settings"),
+                ("g c  g b  g a", "show only chats, only bots, or all"),
+                ("g l", "the activity log"),
+            ],
+        ));
+        groups.push((
+            "IN A CHAT",
+            vec![
                 ("i", "write a message"),
                 ("pgup pgdn", "scroll the chat"),
                 ("e", "show every tool step"),
                 ("o", "open the chat in the browser"),
+            ],
+        ));
+        groups.push((
+            "ON DECISIONS",
+            vec![
+                ("↑ ↓  j k", "the next or previous decision"),
+                ("a", "approve"),
+                ("A", "approve for the rest of the chat"),
+                ("d", "deny"),
+                ("enter  o", "open its chat"),
+                ("r", "read them again"),
+            ],
+        ));
+        groups.push((
+            "ON A BOT",
+            vec![
+                ("↑ ↓  j k", "select a run"),
+                ("enter", "open the run"),
+                ("f", "All, Waiting, You took part, Failed"),
+                ("o", "open the bot in the browser"),
             ],
         ));
         groups.push((
@@ -2880,7 +3070,6 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
             vec![
                 ("a", "share a folder"),
                 ("p", "pause or resume answering Chat with Work"),
-                ("l", "the activity log"),
                 ("s", "start the daemon, when it isn't running"),
                 ("c", "pair this computer, when it isn't"),
                 ("?", "this help"),

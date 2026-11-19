@@ -1,0 +1,30 @@
+ ◆ Chat with Work              │  Ask anything.
+                               │  Chat with Work searches your shared folders and the services you
+  ◙ New bot    ▌+ New chat     │  connected, and the chat stays in Chat with Work on the web too.
+  ◇ Decisions             3 ●  │
+  / Search chats and bots      │
+                               │
+  PINNED                       │
+   Onboarding checklist        │
+   ◙ Inbox triage         4 ●  │
+                               │
+  PROJECTS     All Chats Bots  │
+   ▾ ◫ HQ                      │
+     ▸ ■ Drafts           2 ●  │
+       ◙ Morning brief      ●  │
+   ▾ □ Falcon                  │
+       ◙ Issue fixer      1 ●  │
+                               │
+  RECENT                       │
+   ◙ Inbox triage         4 ●  │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │
+                               │ ╭────────────────────────────────────────────────────────────────╮
+                               │ │ ❯ Ask anything…                                                │
+ (C) Carmine                   │ ╰────────────────────────────────────────────────────────────────╯

@@ -163,6 +163,16 @@ impl Bots {
         self.call("GET", &format!("desktop/bots/{}", bot_id(id)?), None)
     }
 
+    /// The bot with its runs, those of `filter` only (`waiting`, `yours`,
+    /// `failed`, `handed_off`), as its page lists them.
+    pub fn show_runs(&self, id: &str, filter: Option<&str>) -> Result<Value> {
+        let query = match filter {
+            Some(filter) => format!("?filter={}", query_word(filter)?),
+            None => String::new(),
+        };
+        self.call("GET", &format!("desktop/bots/{}{query}", bot_id(id)?), None)
+    }
+
     pub fn recipes(&self) -> Result<Value> {
         self.call("GET", "desktop/bot_recipes", None)
     }

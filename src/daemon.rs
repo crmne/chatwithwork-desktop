@@ -2974,6 +2974,7 @@ impl Daemon {
                     .await
             }
             ControlRequest::Models => self.chat(|client| client.models()).await,
+            ControlRequest::Decisions => self.chat(|client| client.decisions()).await,
             ControlRequest::Templates { request } => {
                 self.chat(move |client| client.templates(&request)).await
             }

@@ -1,17 +1,17 @@
  ◆ Chat with Work              │                  ╭──────────────────────────────────────────────╮
                                │                  │ What did we budget for Q3, and who signed it │
   + New chat                   │                  │ off?                                         │
-  / Search chats               │                  ╰──────────────────────────────────────────────╯
+                               │                  ╰──────────────────────────────────────────────╯
+  / Search chats and bots      │
+                               │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
+  PROJECTS     All Chats Bots  │
+   ▸ □ Falcon                  │  The Q3 budget is €40k, signed off by Ada on 12 September.
                                │
-  RECENT                       │  ▸ Searched Drive and Carmine's MacBook · 2 searches, read 1 file
-   Q3 budget                   │
-   Launch plan for Falcon      │  The Q3 budget is €40k, signed off by Ada on 12 September.
+  RECENT                       │  • Marketing: €18k
+   Q3 budget                   │  • Engineering: €22k
    Onboarding checklist        │
-   Vendor contracts            │  • Marketing: €18k
-   Hiring plan                 │  • Engineering: €22k
-                               │
-                               │  Details are in the plan[1].
-                               │
+   Vendor contracts            │  Details are in the plan[1].
+   Hiring plan                 │
                                │  SOURCES
                                │  [1] Q3 plan.pdf  https://drive.google.com/file/d/q3
                                │
@@ -24,7 +24,7 @@
                                │
                                │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ /re                                                          │
-  PINNED                  all  │ │ ▌/resume [search]      Pick a recent chat                      │
-   Falcon                      │ │  /retry                Answer the last question again          │
+                               │ │ ▌/resume [search]      Pick a recent chat                      │
+                               │ │  /retry                Answer the last question again          │
                                │ │  /rename [title]       Rename this chat                        │
  (C) Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯

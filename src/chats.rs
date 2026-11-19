@@ -489,6 +489,14 @@ impl ChatClient {
         )
     }
 
+    /// Everything waiting for the owner (`GET desktop/decisions`).
+    pub fn decisions(&self) -> Result<Value> {
+        newer(
+            self.call("GET", "desktop/decisions", Body::Empty),
+            "doesn't list decisions for the terminal yet. Open Decisions in Chat with Work",
+        )
+    }
+
     pub fn templates(&self, request: &crate::templates::Request) -> Result<Value> {
         use crate::templates::Request;
         let (method, project, account, suffix) = match request {
