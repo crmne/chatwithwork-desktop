@@ -7,6 +7,19 @@
 //! `__NV_DISABLE_EXPLICIT_SYNC=1` turns explicit sync off for this process
 //! only; everyone else renders as before. A value already in the
 //! environment always wins.
+//!
+//! WebKitGTK 2.54's new Skia compositor shows one frame of an animation's
+//! start value as the animation ends: a fade ends on a frame of its first
+//! state, a slide on a frame of where it began, so a hovered icon blinks
+//! and the sidebar drops out for a frame as it settles. Measured on every
+//! composited frame of a headless WebKitGTK 2.54.1 (gamescope's output):
+//! 24 of 30 slides and 16 of 20 fades did it with Skia, none with the
+//! older compositor, at the same 60 fps (WebKit bugs 280804 and 317744 use
+//! the same switch). `WEBKIT_USE_SKIA_FOR_COMPOSITION=0` keeps GPU
+//! rendering and composites with the older one. Older WebKitGTK ignores
+//! the variable, so it's set everywhere, and `=1` turns Skia back on.
+//! Re-test on each new WebKitGTK minor (docs/desktop-app.md) and drop it
+//! once Skia's frames are clean.
 
 /// Sets the workaround for this process before any thread or GTK starts.
 pub fn prepare_web_view() {
@@ -21,6 +34,10 @@ pub fn prepare_web_view() {
             // SAFETY: called first thing in main, before any other thread
             // exists, so nothing reads the environment concurrently.
             unsafe { std::env::set_var(EXPLICIT_SYNC, "1") };
+        }
+        if needs_older_compositor(std::env::var_os(SKIA_COMPOSITION).is_some()) {
+            // SAFETY: as above.
+            unsafe { std::env::set_var(SKIA_COMPOSITION, "0") };
         }
     }
 }
@@ -65,6 +82,15 @@ fn no_display(wayland: bool, x11: bool) -> &'static str {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const EXPLICIT_SYNC: &str = "__NV_DISABLE_EXPLICIT_SYNC";
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const SKIA_COMPOSITION: &str = "WEBKIT_USE_SKIA_FOR_COMPOSITION";
+
+/// Always, unless a choice was already made.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn needs_older_compositor(already_set: bool) -> bool {
+    !already_set
+}
+
 /// Only on Wayland with NVIDIA's driver loaded, and never over a choice
 /// already made.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -82,6 +108,12 @@ mod tests {
         assert!(!needs_explicit_sync_workaround(true, true, true));
         assert!(!needs_explicit_sync_workaround(false, false, true));
         assert!(!needs_explicit_sync_workaround(false, true, false));
+    }
+
+    #[test]
+    fn the_older_compositor_is_chosen_unless_a_choice_was_made() {
+        assert!(needs_older_compositor(false));
+        assert!(!needs_older_compositor(true));
     }
 
     #[test]

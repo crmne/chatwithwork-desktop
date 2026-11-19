@@ -321,7 +321,7 @@ On first run it opens the welcome page: it starts the agent, pairs, offers to sh
 cargo run --release -p cww-app
 ```
 
-Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install; scanning also needs SANE and Tesseract, which the packages recommend; the scan window adds the languages you read itself (Add a language…). On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there.
+Install it as described under [Install](#install). On Linux it needs WebKitGTK 4.1, GTK 3 and the AppIndicator library, which the packages install; scanning also needs SANE and Tesseract, which the packages recommend; the scan window adds the languages you read itself (Add a language…). On NVIDIA's driver under Wayland it sets `__NV_DISABLE_EXPLICIT_SYNC=1` for itself, without which WebKitGTK can't draw there, and everywhere it sets `WEBKIT_USE_SKIA_FOR_COMPOSITION=0`, since WebKitGTK 2.54's new compositor flickers at the end of animations (set it to `1` to keep Skia).
 
 Through version 0.3.1, the desktop app was a native egui app with its own chat window. It is kept at the [`egui-final`](https://github.com/crmne/chatwithwork-desktop/tree/egui-final) tag, for anyone who wants to revive a fully native app.
 
