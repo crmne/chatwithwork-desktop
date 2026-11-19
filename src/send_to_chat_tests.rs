@@ -74,7 +74,11 @@ fn sends_a_private_copy_of_the_checked_bytes_and_counts_it() {
     .unwrap();
     let (path, size, sha) = sent.into_inner().unwrap();
     // A copy in cww's own folder, never the shared path, removed once sent.
-    assert!(path.starts_with(&f.snapshots), "{path:?}");
+    let snapshots = crate::reader::safe_fs::without_verbatim_prefix(&f.snapshots);
+    assert!(
+        crate::reader::safe_fs::without_verbatim_prefix(&path).starts_with(&snapshots),
+        "{path:?}"
+    );
     assert!(!path.exists());
     assert!(fs::read_dir(&f.snapshots).unwrap().next().is_none());
     assert_eq!(size, 30_000);
