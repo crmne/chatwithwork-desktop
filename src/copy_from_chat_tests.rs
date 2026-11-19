@@ -226,6 +226,9 @@ fn is_offered_with_the_other_changes() {
     }));
 }
 
+// Windows refuses to rename a folder the daemon has open, so this race
+// exists only on Unix.
+#[cfg(unix)]
 #[test]
 fn a_folder_moved_while_the_file_arrived_gets_nothing() {
     let f = fixture();
