@@ -41,6 +41,8 @@ pkgs.stdenv.mkDerivation {
     tar -xOf ${archive} ${runtime.directory}/${runtime.executable} > "$out/node"
     tar -xOf ${archive} ${runtime.directory}/LICENSE > "$out/notices/Node-LICENSE"
     chmod -R u+w "$out"
+    # The same files `stage` leaves out: declarations, source maps, Markdown.
+    python ${source}/scripts/package.py prune --directory "$out"
     chmod 755 "$out/node"
   '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" \

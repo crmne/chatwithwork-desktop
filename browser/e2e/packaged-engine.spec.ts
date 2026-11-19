@@ -2,10 +2,10 @@
 // unchanged registry engine, real native messaging host and extension.
 import { expect, test, type BrowserContext } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { cwwBinary, inWorker, launchBrowser, serve } from "./harness.js";
+import { dirname, join, relative } from "node:path";
+import { cwwBinary, inWorker, launchBrowser, repo, serve } from "./harness.js";
 
 test.skip(process.env.CWW_PACKAGED_ENGINE !== "1", "requires an immutable staged package beside CWW_BROWSER_HOST_BINARY");
 
@@ -114,4 +114,31 @@ test("packaged click, type and select use the confined full engine without focus
     const refused = await browserCall("browser_type", { tab, ref: ref("Password"), text: "blocked" }, true);
     expect(refused.structuredContent.error.code).toBe("sensitive_field");
   } finally { fixture.server.close(); }
+});
+
+// Staging leaves out of the npm tree what nothing loads (declarations, TypeScript
+// sources, source maps, Markdown: browser/engine/scripts/package.py, PRUNED).
+// The actions above run on that trimmed tree, so a runtime need for one of those
+// files fails them. Here: none is left, and every licence or notice npm installed
+// is still there.
+const PRUNED = /\.(?:[mc]?ts|map|md|markdown)$/i;
+const KEPT = /^(?:licen[cs]e|notice|copying|copyright|patents|authors|third[-_.]?party)/i;
+
+function files(root: string): string[] {
+  return readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => relative(root, join(entry.parentPath, entry.name)).split("\\").join("/"));
+}
+
+test("the staged engine leaves out only files nothing loads, and keeps every licence", () => {
+  const staged = execFileSync("python3", [join(repo, "browser", "engine", "scripts", "package.py"), "path",
+    join(dirname(cwwBinary()), "browser-engine")], { encoding: "utf8" }).trim();
+  const shipped = files(join(staged, "node_modules"));
+  const name = (path: string) => path.split("/").pop()!;
+  expect(shipped.filter(path => PRUNED.test(name(path)) && !KEPT.test(name(path)))).toEqual([]);
+  const source = join(repo, "browser", "engine", "node_modules");
+  test.skip(!existsSync(source), "needs the engine's npm tree (npm ci --prefix engine) to compare licences");
+  const licences = files(source).filter(path => KEPT.test(name(path)));
+  expect(licences.length).toBeGreaterThan(0);
+  expect(licences.filter(path => !shipped.includes(path))).toEqual([]);
 });
