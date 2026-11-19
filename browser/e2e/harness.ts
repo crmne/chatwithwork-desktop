@@ -163,12 +163,12 @@ export interface Setup {
 
 // A throwaway profile with the extension loaded and `cww` registered as its
 // native messaging host, pointing at a CWW_HOME of its own.
-export async function launch(sites: string[]): Promise<Setup> {
+export async function launch(sites: string[], options: { deviceScaleFactor?: number } = {}): Promise<Setup> {
   const home = mkdtempSync(join(tmpdir(), "cww-e2e-"));
   const socket = join(home, "run", "cww.sock");
   const daemon = new FakeDaemon(socket, sites);
   await daemon.listen();
-  const context = await launchBrowser(home);
+  const context = await launchBrowser(home, options);
   return {
     home,
     daemon,
@@ -183,7 +183,7 @@ export async function launch(sites: string[]): Promise<Setup> {
 
 // Chromium with a throwaway profile in `home`, the extension loaded, and
 // `cww` as its native messaging host with CWW_HOME=home.
-export async function launchBrowser(home: string): Promise<BrowserContext> {
+export async function launchBrowser(home: string, options: { deviceScaleFactor?: number } = {}): Promise<BrowserContext> {
   const profile = join(home, "profile");
   const hosts = join(profile, "NativeMessagingHosts");
   mkdirSync(hosts, { recursive: true });
@@ -204,7 +204,7 @@ export async function launchBrowser(home: string): Promise<BrowserContext> {
   const context = await chromium.launchPersistentContext(profile, {
     channel: "chromium",
     headless: process.env.HEADED !== "1",
-    args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`,
+    args: [...(options.deviceScaleFactor ? [`--force-device-scale-factor=${options.deviceScaleFactor}`] : []),`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`,
       ...(hardwareCheck ? ["--use-angle=gl-egl", "--use-gl=angle"] : [])],
     env: { ...process.env, CWW_HOME: home } as Record<string, string>,
   });

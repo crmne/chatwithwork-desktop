@@ -44,7 +44,7 @@ const DRY_RUN: &str = "Check the action and describe it, with a screenshot, with
 
 /// The tools that act on pages, offered only while the person allowed
 /// actions on this computer.
-pub const CHANGE_TOOLS: [&str; 8] = [
+pub const CHANGE_TOOLS: [&str; 11] = [
     "browser_open",
     "browser_back",
     "browser_close",
@@ -53,7 +53,14 @@ pub const CHANGE_TOOLS: [&str; 8] = [
     "browser_select",
     "browser_download",
     "browser_upload",
+    "browser_click_at",
+    "browser_drag",
+    "browser_press",
 ];
+
+const CAPTURE: &str = "The `capture` id of the screenshot the position comes from: the latest `browser_screenshot` of this tab, or the `look` after an action. If the page moved, resized or navigated since, the call is refused: look again.";
+const X: &str = "Horizontal position in that screenshot's pixels, from its left edge.";
+const Y: &str = "Vertical position in that screenshot's pixels, from its top edge.";
 
 /// Files one upload hands to a page, and how big each may be.
 pub const UPLOAD_MAX_FILES: usize = 10;
@@ -95,8 +102,10 @@ pub fn definitions() -> Vec<Definition> {
             name: "browser_screenshot",
             title: "Screenshot a browser tab",
             description: "A picture of what a tab in the \"Chat with Work\" group shows, as a \
-                 JPEG. Password, card and one-time code fields are blurred. Prefer \
-                 `browser_read` for text; use this for layout, charts and images.",
+                 JPEG, with its `capture` id and size in pixels. Password, card and one-time code \
+                 fields are blurred. Prefer `browser_read` for text; use this for layout, charts \
+                 and images, and before acting by position (`browser_click_at`, `browser_drag`, \
+                 `browser_hover`), whose coordinates are this picture's pixels.",
             input: json!({
                 "type": "object",
                 "properties": { "tab": { "type": "integer", "description": TAB } },
@@ -213,7 +222,7 @@ pub fn definitions() -> Vec<Definition> {
             name: "browser_type",
             title: "Type in the browser",
             description: "Type `text` into a field of a tab in the \"Chat with Work\" group, by \
-                 its ref, replacing what's there (`clear: false` adds to it). `submit: true` \
+                 its ref, or without one into the field that has focus, replacing what's there (`clear: false` adds to it). `submit: true` \
                  presses Enter after, which usually sends the form. Never types into password, \
                  payment or one-time code fields (`sensitive_field`): the person fills those in.",
             input: json!({
@@ -226,7 +235,7 @@ pub fn definitions() -> Vec<Definition> {
                     "submit": { "type": "boolean", "default": false, "description": "Press Enter after typing. Default false." },
                     "dry_run": { "type": "boolean", "description": DRY_RUN }
                 },
-                "required": ["ref", "text"],
+                "required": ["text"],
                 "additionalProperties": false
             }),
             kind: Kind::Destructive {
@@ -303,6 +312,108 @@ pub fn definitions() -> Vec<Definition> {
             }),
             // It sends the person's files to a website: it always asks.
             kind: Kind::Destructive { write_when: None },
+        },
+        Definition {
+            name: "browser_click_at",
+            title: "Click at a position in the browser",
+            description: "Click a point of a tab in the \"Chat with Work\" group, where the page \
+                 gives no usable element (a canvas, a card grid, a custom control): `x` and `y` \
+                 are pixels of the screenshot `capture` names. What's under the point gets the \
+                 same checks as `browser_click`, and the answer names it with its ref: prefer \
+                 `browser_click` with that ref next time. Say `submits: false` only for a click \
+                 that just selects, opens or navigates; `double: true` double-clicks. Answers \
+                 with a fresh `look` to point at next.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "capture": { "type": "string", "description": CAPTURE },
+                    "x": { "type": "number", "minimum": 0, "description": X },
+                    "y": { "type": "number", "minimum": 0, "description": Y },
+                    "double": { "type": "boolean", "default": false, "description": "Double-click. Default false." },
+                    "submits": { "type": "boolean", "default": true, "description": "Whether the click sends, buys, posts or deletes something. Default true." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["capture", "x", "y"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Destructive {
+                write_when: Some(json!({ "submits": false })),
+            },
+        },
+        Definition {
+            name: "browser_drag",
+            title: "Drag in the browser",
+            description: "Press at one point of a tab in the \"Chat with Work\" group, move to \
+                 another and release: a slider, a sortable list, a map. Points are pixels of the \
+                 screenshot `capture` names. Dropping on something named like an action (a \
+                 \"Delete\" bin) may do it, so `submits` defaults to true.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "capture": { "type": "string", "description": CAPTURE },
+                    "x": { "type": "number", "minimum": 0, "description": X },
+                    "y": { "type": "number", "minimum": 0, "description": Y },
+                    "to_x": { "type": "number", "minimum": 0, "description": "Where to release, horizontally, in the screenshot's pixels." },
+                    "to_y": { "type": "number", "minimum": 0, "description": "Where to release, vertically, in the screenshot's pixels." },
+                    "submits": { "type": "boolean", "default": true, "description": "Whether the drop sends or deletes something. Default true." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["capture", "x", "y", "to_x", "to_y"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Destructive {
+                write_when: Some(json!({ "submits": false })),
+            },
+        },
+        Definition {
+            name: "browser_press",
+            title: "Press a key in the browser",
+            description: "Press one key in a tab of the \"Chat with Work\" group: Tab (with \
+                 `shift` to go back), Enter, Escape, Space, the arrows, Home, End, PageUp, \
+                 PageDown, Backspace or Delete. Answers what has focus after (role, name, ref), \
+                 so a dialog can be gone through by keyboard, often more reliably than by \
+                 position. Enter and Space act on what has focus, and `submits` defaults to true \
+                 for them; the other keys only move. Never into password, payment or one-time \
+                 code fields.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "key": { "type": "string", "enum": ["Tab", "Enter", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Backspace", "Delete"] },
+                    "shift": { "type": "boolean", "default": false, "description": "Hold Shift (Shift+Tab goes back). Default false." },
+                    "submits": { "type": "boolean", "default": true, "description": "Whether the key sends, buys, posts or deletes something. Default true." },
+                    "dry_run": { "type": "boolean", "description": DRY_RUN }
+                },
+                "required": ["key"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Destructive {
+                write_when: Some(json!({ "submits": false })),
+            },
+        },
+        Definition {
+            name: "browser_hover",
+            title: "Point at a position in the browser",
+            description: "Move the pointer to a point of a tab in the \"Chat with Work\" group, \
+                 to show a menu or a tooltip, or scroll there with `delta_y` (and `delta_x`) in \
+                 CSS pixels, for a map or a list that scrolls on its own. Points are pixels of the \
+                 screenshot `capture` names. Answers with a fresh `look`.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "capture": { "type": "string", "description": CAPTURE },
+                    "x": { "type": "number", "minimum": 0, "description": X },
+                    "y": { "type": "number", "minimum": 0, "description": Y },
+                    "delta_x": { "type": "number", "description": "Scroll this far sideways at the point, in CSS pixels." },
+                    "delta_y": { "type": "number", "description": "Scroll this far down (negative: up) at the point, in CSS pixels." }
+                },
+                "required": ["capture", "x", "y"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Read,
         },
     ]
 }
@@ -449,8 +560,33 @@ impl BrowserTools {
             caller,
             Caller::BrowserAutomatic { .. } | Caller::LocalBrowser { approved: false }
         );
-        let method = name.trim_start_matches("browser_");
-        let engine = super::engine::route(&self.bridge, method);
+        let pointer = self.bridge.extension().is_some_and(|e| e.pointer);
+        let positional = matches!(
+            name,
+            "browser_click_at" | "browser_drag" | "browser_press" | "browser_hover"
+        );
+        if positional && !pointer {
+            return Err(ToolError::new(
+                ErrorCode::BrowserUnavailable,
+                "Update the Chat with Work browser extension to act by position or keyboard. Nothing was done.",
+            ));
+        }
+        // What the extension calls each: a screenshot is a `look` the
+        // positional tools can point at, and pointing with a scroll is a wheel.
+        let method = match name {
+            "browser_screenshot" if pointer => "look",
+            "browser_hover" if args.get("delta_x").is_some() || args.get("delta_y").is_some() => {
+                "wheel"
+            }
+            other => other.trim_start_matches("browser_"),
+        };
+        // Typing into what has focus is the extension's own; the bundled
+        // engine types only into a ref.
+        let engine = if method == "type" && args.get("ref").is_none() {
+            None
+        } else {
+            super::engine::route(&self.bridge, method)
+        };
         if name == "browser_upload" && automatic && !dry_run {
             // An upload sends the person's files to a website: it waits for
             // their approval of that very upload, whatever the computer's
@@ -523,6 +659,13 @@ impl BrowserTools {
         }
         if let Some((files, fingerprint)) = uploading {
             value = upload_answer(value, &files, fingerprint)?;
+        }
+        // An action's fresh look carries its picture inside it.
+        if value.get("image").is_none()
+            && let Some(look) = value.get_mut("look").and_then(Value::as_object_mut)
+            && let Some(image) = look.remove("image")
+        {
+            value["image"] = image;
         }
         let image = value
             .as_object_mut()
@@ -1062,7 +1205,8 @@ mod bridge_tests {
                 "browser_read",
                 "browser_screenshot",
                 "browser_scroll",
-                "browser_wait"
+                "browser_wait",
+                "browser_hover"
             ]
         );
         assert!(
