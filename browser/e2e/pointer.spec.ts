@@ -31,6 +31,10 @@ const PAGES: Record<string, string> = {
   "/swap": `<!doctype html><title>Swap</title><div id="src" style="width:120px;height:60px;margin:40px;background:#ccc">Card</div>${STATE}
     <script>src.addEventListener("mouseover", () => { const pw = document.createElement("input"); pw.type = "password"; pw.style.cssText = "width:120px;height:60px;margin:40px;display:block";
       pw.addEventListener("mousedown", () => said("pressed password")); src.replaceWith(pw); }, { once: true });</script>`,
+  "/closed": `<!doctype html><title>Closed</title><x-pay id="pay"></x-pay>${STATE}<script>
+    customElements.define("x-pay", class extends HTMLElement { constructor() { super(); const root = this.attachShadow({ mode: "closed" });
+      root.innerHTML = '<input type="password" id="card">'; this.focusCard = () => root.querySelector("input").focus(); } });</script>`,
+  "/based": `<!doctype html><title>Based</title><base href="https://elsewhere.invalid/"><a id="away" href="/help" style="display:block;margin:40px;padding:20px">Help</a>${STATE}`,
   "/password": `<!doctype html><title>Sign in</title><label>Password <input type="password" id="pw" style="width:300px;margin:40px"></label>`,
   "/covered": `<!doctype html><title>Covered</title><button id="b" style="margin:40px" onclick="said('pressed under')">Save</button>
     <div id="banner" style="position:fixed;inset:0 0 auto 0;height:200px;background:#eee" onclick="said('banner')">Cookie choices</div>${STATE}`,
@@ -191,6 +195,20 @@ test("a drag never presses what hovering put under the point", async () => {
   expect(dragged.error?.code).toBe("page_error");
   expect(dragged.error?.message).toContain("nothing was pressed");
   expect(await said("/swap")).toBe("");
+});
+
+test("keys never go into a closed part of the page, and a link goes where the browser resolves it", async () => {
+  let tab = await open("/closed");
+  await page("/closed").evaluate(() => (document.querySelector("#pay") as any).focusCard());
+  const key = await setup.daemon.call("press", { tab, key: "Backspace" });
+  expect(key.error?.code).toBe("page_error");
+  expect(key.error?.message).toContain("closed part of the page");
+  expect((await setup.daemon.call("type", { tab, text: "4242" })).error?.code).toBe("page_error");
+  tab = await open("/based");
+  const shot = (await setup.daemon.call("look", { tab })).result;
+  const link = await at("/based", "#away", shot);
+  const clicked = await setup.daemon.call("click_at", { tab, capture: shot.capture, ...link, submits: false });
+  expect(clicked.error?.code).toBe("site_not_allowed");
 });
 
 test("a page that scrolled between the look and the click is refused", async () => {

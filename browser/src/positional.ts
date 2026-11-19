@@ -171,7 +171,11 @@ const CONTROL = `function () {
   return el;
 }`;
 
-async function underPoint(tabId: number, location: { x: number; y: number }, policy: Policy): Promise<Target & { drawn: boolean }> {
+// A link's destination as the browser resolves it (the page's base and
+// scheme), for the allowed-sites check.
+const LINK = `function () { return this instanceof HTMLAnchorElement || this instanceof HTMLAreaElement ? this.href : null; }`;
+
+async function underPoint(tabId: number, location: { x: number; y: number }, policy: Policy): Promise<Target & { drawn: boolean; href: string | null }> {
   const hit = await send<{ backendNodeId?: number; frameId?: string }>(tabId, "DOM.getNodeForLocation", {
     x: Math.round(location.x), y: Math.round(location.y), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false,
   }).catch(() => ({ backendNodeId: undefined }));
@@ -185,6 +189,7 @@ async function underPoint(tabId: number, location: { x: number; y: number }, pol
   // In the node's own frame: an isolated world belongs to the main frame only.
   const { object } = await send<{ object: { objectId: string } }>(tabId, "DOM.resolveNode", { backendNodeId: hit.backendNodeId });
   let control = hit.backendNodeId;
+  let href: string | null = null;
   try {
     const result = await send<{ result: { objectId?: string; subtype?: string } }>(tabId, "Runtime.callFunctionOn", {
       objectId: object.objectId, functionDeclaration: CONTROL, returnByValue: false,
@@ -192,13 +197,17 @@ async function underPoint(tabId: number, location: { x: number; y: number }, pol
     if (result.result.objectId && result.result.subtype === "node") {
       const { node } = await send<{ node: { backendNodeId: number } }>(tabId, "DOM.describeNode", { objectId: result.result.objectId });
       control = node.backendNodeId;
+      const link = await send<{ result: { value?: unknown } }>(tabId, "Runtime.callFunctionOn", {
+        objectId: result.result.objectId, functionDeclaration: LINK, returnByValue: true,
+      }).catch(() => ({ result: {} as { value?: unknown } }));
+      href = typeof link.result.value === "string" ? link.result.value : null;
       await send(tabId, "Runtime.releaseObject", { objectId: result.result.objectId }).catch(() => {});
     }
   } finally {
     await send(tabId, "Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
   }
   const t = await target({ tab: tabId, ref: `e${control}` }, policy);
-  return { ...t, drawn: drawnFacts(t.facts) };
+  return { ...t, drawn: drawnFacts(t.facts), href };
 }
 
 // Why a press there may send, buy, post or delete something, as the click
@@ -209,7 +218,7 @@ function reasonFor(t: Target & { drawn: boolean }): string | null {
 }
 
 // The refusals a click on that element would get, and those a position adds.
-function refuse(t: Target, policy: Policy): void {
+function refuse(t: Target & { href?: string | null }, policy: Policy): void {
   const facts: ElementFacts = t.facts;
   if (facts.tag === "iframe" || facts.tag === "frame" || facts.tag === "embed" || facts.tag === "object") {
     throw new ToolError("page_error", "that point is inside an embedded frame, which can't be acted on by position");
@@ -223,13 +232,10 @@ function refuse(t: Target, policy: Policy): void {
   if (facts.tag === "a" && facts.attrs.download !== undefined) {
     throw new ToolError("invalid_argument", "that point downloads a file: use browser_download, which saves it into a shared folder");
   }
-  const href = facts.tag === "a" ? facts.attrs.href : undefined;
-  if (href) {
-    let url: URL | null = null;
-    try { url = new URL(href, "http://base.invalid/"); } catch { url = null; }
-    if (url && url.host !== "base.invalid" && !siteAllowed(url.href, policy.sites, policy.all_sites, policy.blocked_sites)) {
-      throw new ToolError("site_not_allowed", `that link goes to ${hostOfUrl(url.href)}, which isn't on the allowed sites`);
-    }
+  // Where a link goes, as the browser resolved it; a link that runs script
+  // or opens another app stays on this page as far as sites go.
+  if (t.href && /^https?:/i.test(t.href) && !siteAllowed(t.href, policy.sites, policy.all_sites, policy.blocked_sites)) {
+    throw new ToolError("site_not_allowed", `that link goes to ${hostOfUrl(t.href)}, which isn't on the allowed sites`);
   }
 }
 
@@ -456,7 +462,14 @@ export async function focused(tabId: number, policy: Policy): Promise<Target | n
   });
   if (!result.result.objectId || result.result.subtype !== "node") return null;
   try {
-    const { node } = await send<{ node: { backendNodeId: number } }>(tabId, "DOM.describeNode", { objectId: result.result.objectId });
+    const { node } = await send<{ node: { backendNodeId: number; shadowRoots?: { shadowRootType?: string }[] } }>(tabId, "DOM.describeNode", {
+      objectId: result.result.objectId, depth: 1, pierce: true,
+    });
+    // Focus inside a closed shadow root can't be seen, so what gets the
+    // key can't be checked.
+    if (node.shadowRoots?.some((root) => root.shadowRootType === "closed")) {
+      throw new ToolError("page_error", "focus is inside a closed part of the page that can't be checked, so keys and typing don't go there; click or Tab elsewhere first");
+    }
     const t = await target({ tab: tabId, ref: `e${node.backendNodeId}` }, policy);
     // Focus inside another site's frame can't be inspected, so keys and
     // typing don't go there.
@@ -517,6 +530,12 @@ const press: Method = async (params, policy) => {
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
   sameAsShown(tabId, "press", params, before ? [before.backendNodeId] : []);
+  // Focus must not have moved since it was checked: read it again right
+  // before the key goes.
+  const last = await focused(tabId, policy);
+  if ((last?.backendNodeId ?? null) !== (before?.backendNodeId ?? null)) {
+    throw new ToolError("page_error", "focus moved since it was checked, so the key wasn't sent; look again");
+  }
   const modifiers = shift ? 8 : 0;
   const base = { key: key.key, code: key.code, windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode, modifiers };
   const started = Date.now();

@@ -374,6 +374,15 @@ export async function pressAt(t: Target, policy: Policy, surface: number, locati
     const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
     if (state.reason) throw new ToolError("page_error", state.reason);
     for (let count = 1; count <= clicks; count++) {
+      if (count > 1) {
+        // A double click's first press may have opened another page: the
+        // second goes only to the document and site that were checked.
+        const now = await mainDocument(t.tabId).catch(() => null);
+        if (!now || now.loaderId !== document.loaderId) {
+          throw new ToolError("page_error", "the first click of the double click opened another page, so the second wasn't sent; look again");
+        }
+        await still(t.tabId, policy);
+      }
       await mouse("mousePressed", { buttons: 1, clickCount: count });
       await mouse("mouseReleased", { buttons: 0, clickCount: count });
     }
