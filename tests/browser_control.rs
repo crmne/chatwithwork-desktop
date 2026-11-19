@@ -357,7 +357,8 @@ async fn local_browser_control_preserves_policy_approval_budgets_and_audit() {
     assert_eq!(code(&control(&paths, forged).await), "rate_limited");
     control(&paths, ControlRequest::BrowserChanges { changes: false }).await;
     let tools = control(&paths, ControlRequest::BrowserTools).await;
-    assert!(!tools.to_string().contains("browser_click"));
+    // Read tools may name the actions in their descriptions; none is listed.
+    assert!(!tools.to_string().contains(r#""name":"browser_click"#));
     assert_eq!(
         control(&paths, call("browser_click", json!({"ref":"e1"}), true)).await["code"],
         "unknown_tool"

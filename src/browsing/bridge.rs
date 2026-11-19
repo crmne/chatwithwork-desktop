@@ -65,6 +65,8 @@ pub struct Extension {
     pub engine_protocol: u64,
     /// The extension hands files to upload fields (`upload`).
     pub uploads: bool,
+    /// The extension acts by position and keyboard (`click_at`, `press`, ...).
+    pub pointer: bool,
     /// Its "Allow access to file URLs" switch, which uploads need.
     pub file_access: bool,
     pub browser: String,
@@ -468,6 +470,8 @@ impl Bridge {
                     .unwrap_or_default();
                 session.extension.uploads =
                     message.get("uploads").and_then(Value::as_u64) >= Some(1);
+                session.extension.pointer =
+                    message.get("pointer").and_then(Value::as_u64) >= Some(1);
                 session.extension.file_access =
                     message.get("file_access") == Some(&Value::Bool(true));
                 session.extension.browser = browser_name(&text("browser"));

@@ -10,10 +10,11 @@ import { halt } from "./cdp.js";
 import { browserStopped, ToolError } from "./errors.js";
 import { groupTabs } from "./group.js";
 import { fileAccess, uploadMethods } from "./uploads.js";
+import { positionalMethods } from "./positional.js";
 
 export const HOST = "com.chatwithwork.desktop";
 const RECONNECT_ALARM = "reconnect";
-const methods = { ...readMethods, ...changeMethods, ...uploadMethods, ...engineMethods };
+const methods = { ...readMethods, ...changeMethods, ...uploadMethods, ...positionalMethods, ...engineMethods };
 
 type DaemonState = "connected" | "not_running" | "refused" | "unknown";
 
@@ -81,6 +82,7 @@ function announceHello(): void {
     site_policy_version: 2,
     engine_protocol: 1,
     uploads: 1,
+    pointer: 1,
     file_access: access,
     browser: navigator.userAgent,
     stopped: state.stopped,

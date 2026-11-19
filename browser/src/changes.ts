@@ -24,6 +24,7 @@ import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
 import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
+import { after, focused, sameAsShown, showed } from "./positional.js";
 
 const PREVIEW_MAX_BYTES = 120_000;
 const TYPE_MAX_CHARS = 10_000;
@@ -354,7 +355,7 @@ const click: Method = async (params, policy) => {
 // guard against a layout change during dispatch, a hover, then a recheck
 // that nothing now covers the point and the control is still ready before
 // the press. Never retried after the press is sent.
-export async function pressAt(t: Target, policy: Policy, surface: number, location: Point): Promise<void> {
+export async function pressAt(t: Target, policy: Policy, surface: number, location: Point, clicks = 1): Promise<void> {
   const key = `__cwwPointer_${crypto.randomUUID()}`;
   const document = await mainDocument(t.tabId);
   const contextId = await isolatedContext(t.tabId);
@@ -372,8 +373,19 @@ export async function pressAt(t: Target, policy: Policy, surface: number, locati
     if (moved) throw new ToolError("page_error", moved);
     const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [surface]);
     if (state.reason) throw new ToolError("page_error", state.reason);
-    await mouse("mousePressed", { buttons: 1 });
-    await mouse("mouseReleased", { buttons: 0 });
+    for (let count = 1; count <= clicks; count++) {
+      if (count > 1) {
+        // A double click's first press may have opened another page: the
+        // second goes only to the document and site that were checked.
+        const now = await mainDocument(t.tabId).catch(() => null);
+        if (!now || now.loaderId !== document.loaderId) {
+          throw new ToolError("page_error", "the first click of the double click opened another page, so the second wasn't sent; look again");
+        }
+        await still(t.tabId, policy);
+      }
+      await mouse("mousePressed", { buttons: 1, clickCount: count });
+      await mouse("mouseReleased", { buttons: 0, clickCount: count });
+    }
     // Navigation destroys the old isolated context, which is normal after a
     // successful link click. A surviving guard reports intercepted events.
     const blocked = await pointerResult(t.tabId, contextId, document, key);
@@ -458,7 +470,17 @@ const type: Method = async (params, policy) => {
   const submit = flag(params, "submit", false);
   const clear = flag(params, "clear", true);
   const dry = dryRun(params);
-  const t = await target(params, policy);
+  // Without a ref, into whatever has focus (reached with Tab or a click by
+  // position), under the same refusals.
+  let t: Target;
+  if (params.ref === undefined) {
+    const tab = await tabFor(params, policy);
+    const now = await focused(tab.id!, policy);
+    if (!now) throw new ToolError("invalid_argument", "nothing has focus: give a ref, or move focus with Tab or a click first");
+    t = now;
+  } else {
+    t = await target(params, policy);
+  }
   if (isSensitiveField(t.facts)) {
     throw new ToolError(
       "sensitive_field",
@@ -467,11 +489,15 @@ const type: Method = async (params, policy) => {
   }
   if (!editable(t.facts)) throw new ToolError("invalid_argument", "that element isn't a field to type in");
   const what = { target: described(t.facts), text, submit, clear };
+  const intoFocus = params.ref === undefined;
   if (dry) {
     const shot = await preview(t);
     const now = await still(t.tabId, policy);
+    if (intoFocus) showed(t.tabId, "type", params, [t.backendNodeId]);
     return { dry_run: true, ...about(now), ...what, ...shot };
   }
+  // Into the field the card showed, not one focus moved to since.
+  if (intoFocus) sameAsShown(t.tabId, "type", params, [t.backendNodeId]);
   await send(t.tabId, "DOM.focus", { backendNodeId: t.backendNodeId }).catch(() => {});
   await callOn(t.tabId, t.backendNodeId, SELECT_CONTENTS, [clear]);
   // In a rich-text editor, text typed over a selection takes the selection's
@@ -489,7 +515,9 @@ const type: Method = async (params, policy) => {
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...enter });
     await send(t.tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...enter });
   }
-  return { dry_run: false, target: what.target, submit, ...(await settle(t.tabId, policy, started)) };
+  // Typing into focus comes from acting by position: answer with a fresh
+  // picture to point at next.
+  return { dry_run: false, target: what.target, submit, ...(await (intoFocus ? after(t.tabId, policy, started) : settle(t.tabId, policy, started))) };
 };
 
 export const CHOOSE = `function (values, apply) {

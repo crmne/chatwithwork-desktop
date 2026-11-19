@@ -157,12 +157,12 @@ export const SCROLL_TARGET = `function (alignment) {
 // the last CDP check cannot deliver the click to an unrelated element. Like
 // Playwright, check the first press, then keep its result for the release:
 // handlers are allowed to intentionally change layout after mousedown.
-function installGuard(this: Element, surface: Element, key: string, point: Point, hit: typeof hitTarget): string | null {
+function installGuard(this: Element, surface: Element, key: string, point: Point, hit: typeof hitTarget, only?: string[]): string | null {
   const initial = hit(surface, point, this);
   if (initial) return initial;
   const control = this;
   let result: string | null | undefined;
-  const events = ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "auxclick", "dblclick"];
+  const events = only ?? ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "auxclick", "dblclick"];
   const listener = (event: Event) => {
     if (!event.isTrusted) return;
     // A label may move after a press, but it must keep activating the same
@@ -195,8 +195,8 @@ function installGuard(this: Element, surface: Element, key: string, point: Point
   return null;
 }
 
-export const INSTALL_POINTER_GUARD = `function (surface, key, point) {
-  return (${installGuard.toString()}).call(this, surface, key, point, ${hitTarget.toString()});
+export const INSTALL_POINTER_GUARD = `function (surface, key, point, only) {
+  return (${installGuard.toString()}).call(this, surface, key, point, ${hitTarget.toString()}, only);
 }`;
 
 export function guardStatus(key: string, stop: boolean): string {

@@ -117,7 +117,8 @@ const read: Method = async (params, policy) => {
   const { nodes, sensitive } = await sensitiveFields(tabId);
   const clickable = await clickableElements(tabId);
   const uploads = await pageUploads(tabId);
-  const text = snapshotText(nodes, { sensitive, clickable, uploads });
+  const regions = await unreferenced(tabId);
+  const text = snapshotText(nodes, { sensitive, clickable, uploads }) + (regions ? `\n- note: ${regions}` : "");
   const now = await still(tabId, policy);
   const current = await documentIdentity(tabId);
   if (!sameDocument(document, current)) throw new ToolError("page_error", "the page changed while reading; read it again");
@@ -423,6 +424,28 @@ const wait: Method = async (params, policy) => {
   const now = await still(tabId, policy);
   return withDialog(tabId, { ...about(now), found, waited_ms: Date.now() - started });
 };
+
+// Parts of the page a person can use that the tree gives no reference:
+// drawn on a canvas, or custom elements with no role. Said, so the model
+// looks (a screenshot) and uses a position or the keyboard there.
+const UNREFERENCED = `(() => {
+  const shown = (el) => { const r = el.getBoundingClientRect(); return r.width >= 40 && r.height >= 24 && getComputedStyle(el).visibility !== "hidden"; };
+  const canvases = [...document.querySelectorAll("canvas")].filter(shown).length;
+  const custom = [...document.querySelectorAll("*")].filter((el) => el.tagName.includes("-") && !el.getAttribute("role") && shown(el) &&
+    !el.querySelector("a[href],button,input,select,textarea,[role]") && (el.shadowRoot || getComputedStyle(el).cursor === "pointer")).length;
+  return { canvases, custom };
+})()`;
+
+async function unreferenced(tabId: number): Promise<string> {
+  const found = await evaluate<{ canvases: number; custom: number }>(tabId, UNREFERENCED).catch(() => ({ canvases: 0, custom: 0 }));
+  const parts = [
+    found.canvases ? `${found.canvases} drawn area${found.canvases === 1 ? "" : "s"} (canvas)` : "",
+    found.custom ? `${found.custom} custom element${found.custom === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.length
+    ? `this page has ${parts.join(" and ")} with no element references. Look at it with browser_screenshot, then use browser_click_at or browser_press there.`
+    : "";
+}
 
 // The page as browser_read shows it, sensitive fields' values left out.
 export async function readableText(tabId: number): Promise<string> {
