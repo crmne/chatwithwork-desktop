@@ -149,6 +149,28 @@ pub fn definitions() -> Vec<Definition> {
             kind: Kind::Read,
         },
         Definition {
+            name: "browser_hover",
+            title: "Point at a position in the browser",
+            description: "Move the pointer to a point of a tab in the \"Chat with Work\" group, \
+                 to show a menu or a tooltip, or scroll there with `delta_y` (and `delta_x`) in \
+                 CSS pixels, for a map or a list that scrolls on its own. Points are pixels of the \
+                 screenshot `capture` names. Answers with a fresh `look`.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": TAB },
+                    "capture": { "type": "string", "description": CAPTURE },
+                    "x": { "type": "number", "minimum": 0, "description": X },
+                    "y": { "type": "number", "minimum": 0, "description": Y },
+                    "delta_x": { "type": "number", "description": "Scroll this far sideways at the point, in CSS pixels." },
+                    "delta_y": { "type": "number", "description": "Scroll this far down (negative: up) at the point, in CSS pixels." }
+                },
+                "required": ["capture", "x", "y"],
+                "additionalProperties": false
+            }),
+            kind: Kind::Read,
+        },
+        Definition {
             name: "browser_open",
             title: "Open a page in the browser",
             description: "Open `url` (on a site the person allowed) in a new background tab in \
@@ -392,28 +414,6 @@ pub fn definitions() -> Vec<Definition> {
             kind: Kind::Destructive {
                 write_when: Some(json!({ "submits": false })),
             },
-        },
-        Definition {
-            name: "browser_hover",
-            title: "Point at a position in the browser",
-            description: "Move the pointer to a point of a tab in the \"Chat with Work\" group, \
-                 to show a menu or a tooltip, or scroll there with `delta_y` (and `delta_x`) in \
-                 CSS pixels, for a map or a list that scrolls on its own. Points are pixels of the \
-                 screenshot `capture` names. Answers with a fresh `look`.",
-            input: json!({
-                "type": "object",
-                "properties": {
-                    "tab": { "type": "integer", "description": TAB },
-                    "capture": { "type": "string", "description": CAPTURE },
-                    "x": { "type": "number", "minimum": 0, "description": X },
-                    "y": { "type": "number", "minimum": 0, "description": Y },
-                    "delta_x": { "type": "number", "description": "Scroll this far sideways at the point, in CSS pixels." },
-                    "delta_y": { "type": "number", "description": "Scroll this far down (negative: up) at the point, in CSS pixels." }
-                },
-                "required": ["capture", "x", "y"],
-                "additionalProperties": false
-            }),
-            kind: Kind::Read,
         },
     ]
 }

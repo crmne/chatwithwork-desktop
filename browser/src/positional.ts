@@ -203,28 +203,38 @@ function refuse(t: Target, policy: Policy): void {
   }
 }
 
-const MARK = `function (x, y, on) {
+// Rings at the points an action uses: where it presses and, for a drag,
+// a filled one where it lets go, joined by a line.
+const MARK = `function (points) {
   const ID = "chat-with-work-point";
   document.getElementById(ID)?.remove();
-  if (!on) return;
-  const dot = document.createElement("div");
-  dot.id = ID;
-  dot.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;width:22px;height:22px;margin:-13px 0 0 -13px;" +
-    "border:3px solid #f97316;border-radius:50%;box-shadow:0 0 0 2px #fff;left:" + x + "px;top:" + y + "px";
-  document.documentElement.append(dot);
+  if (!points.length) return;
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.id = ID;
+  svg.setAttribute("style", "position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none");
+  const add = (name, attrs) => { const el = document.createElementNS(NS, name); for (const k in attrs) el.setAttribute(k, attrs[k]); svg.append(el); };
+  if (points.length > 1) {
+    add("line", { x1: points[0].x, y1: points[0].y, x2: points[1].x, y2: points[1].y, stroke: "#fff", "stroke-width": 6 });
+    add("line", { x1: points[0].x, y1: points[0].y, x2: points[1].x, y2: points[1].y, stroke: "#f97316", "stroke-width": 3 });
+  }
+  points.forEach((p, i) => {
+    add("circle", { cx: p.x, cy: p.y, r: 12, fill: "none", stroke: "#fff", "stroke-width": 7 });
+    add("circle", { cx: p.x, cy: p.y, r: 12, fill: i ? "#f97316" : "none", stroke: "#f97316", "stroke-width": 3 });
+  });
+  document.documentElement.append(svg);
 }`;
 
 // A picture of the tab with the point marked, for the approval card.
 async function previewAt(tabId: number, at: { x: number; y: number }, to?: { x: number; y: number }): Promise<object> {
   const context = await isolatedContext(tabId);
-  const mark = (p: { x: number; y: number } | undefined, on: boolean, options = {}) =>
-    evaluateInContext(tabId, context, `(${MARK})(${p?.x ?? 0}, ${p?.y ?? 0}, ${on})`, options).catch(() => {});
-  await mark(at, true);
+  const mark = (points: { x: number; y: number }[], options = {}) =>
+    evaluateInContext(tabId, context, `(${MARK})(${JSON.stringify(points)})`, options).catch(() => {});
+  await mark(to ? [at, to] : [at]);
   try {
     return await captureTab(tabId, PREVIEW_BYTES);
   } finally {
-    await cleanUp(tabId, async (options) => { await mark(undefined, false, { ...options }); });
-    void to;
+    await cleanUp(tabId, async (options) => { await mark([], { ...options }); });
   }
 }
 

@@ -19,6 +19,7 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
   | `browser_screenshot` | read | A JPEG of the tab, cut to fit a tool result |
   | `browser_scroll` | read | Scroll a tab, or bring a `ref` into view |
   | `browser_wait` | read | Wait up to 15 seconds for text to appear, or for the page to settle |
+  | `browser_hover` | read | Point at a spot of the latest screenshot, or turn the wheel there |
   | `browser_open` | write | Open an allowed URL in a new tab in the group, or in one of its tabs |
   | `browser_back` | write | Go back in a tab |
   | `browser_select` | write | Choose options in a `<select>` |
@@ -27,6 +28,9 @@ Chat with Work ──tunnel (MCP)──▶ cww daemon ──control socket──
   | `browser_close` | write | Close a tab in the group |
   | `browser_download` | write | Save a link's file into a shared folder that allows changes |
   | `browser_upload` | destructive, always asks | Hand files from a shared folder to a page's upload field, or drop them on a drop zone |
+  | `browser_click_at` | destructive; write with `submits: false` | Click (or double-click) a spot of the latest screenshot |
+  | `browser_drag` | destructive; write with `submits: false` | Drag from one spot of the latest screenshot to another |
+  | `browser_press` | destructive; write with `submits: false` | Press one key (Tab, Enter, Escape, Space, arrows, Home, End, Page Up and Down, Backspace, Delete, with Shift) in what has focus |
 
   The reads are offered while the browser is on; the rest only while the person also allows actions on the computer (`cww browser allow-changes`), like a folder's "Allow changes", `browser_download` only while a folder allows changes, and `browser_upload` while a folder is shared. Each action takes `dry_run`, which checks it and describes it without doing it.
 
@@ -106,6 +110,17 @@ All of it holds on the computer, whatever the server sends. The extension enforc
 - **Kill switch.** "Stop" in the extension's menu, "Stop Using the Browser" in the tray menu (shown while the browser is on), turning off Use your browser in the desktop app’s settings, and `cww browser stop` detach at once and refuse every browser call (`browser_stopped`) until the person resumes. Pausing the computer stops it too.
 - **Bots.** A bot's chats reach the browser only when the person shares it on the computer (`cww browser share <bot>`), like a folder, and only the sites allowed there.
 - **Audited** in the local audit log: the tool, tab, site (host only), outcome and duration, never page text.
+
+## By position and keyboard
+
+Most pages give `browser_read` an element to name for everything that matters, and refs stay the way to act there. Some don't: a canvas editor, a drawn calendar or grid, a custom slider, a board whose cards move by dragging. `browser_read` says so ("this page has … with no element references"), and the model then works from a picture:
+
+- `browser_screenshot` (from extension 0.1.5) answers with the picture and a `capture` id, which records where the page stood when it was taken: its address and document, its scroll, its size and its zoom.
+- `browser_click_at`, `browser_drag` and `browser_hover` take a point of that picture, in its pixels, with its `capture`. The extension refuses the call when the page navigated, scrolled, resized or zoomed since ("the page changed, look again"), maps the point to the page (device pixel ratio and browser zoom included), and checks what is under it with the same rules as a ref's element: password, payment and one-time code fields, file fields (that's `browser_upload`), download links (`browser_download`), links to sites that aren't allowed, and frames are refused, and something drawn over the point is reported, never clicked through.
+- What a click may do is read from the element under the point, as for a ref: a submit button, a form's last field, or a name like Send or Pay may submit, and so does anything the page draws itself (a canvas, a custom element with no role), since nothing tells what it does. `submits: false` is refused there (`would_submit`). The approval card shows the picture with the point marked; a drag shows both ends, joined.
+- The same control must still be under the point when the person approves; if something else is, nothing happens and the model is told to look again.
+- `browser_press` presses one key from a fixed list in whatever has focus, and answers what has focus after, so Tab moves through a page that gives no refs. Enter or Space in a form field or on a button may submit, and so does any key while nothing has focus; a sensitive field takes only Tab and Escape. `browser_type` without a `ref` types into what has focus, with the same refusals as a ref's field.
+- Every action answers with a fresh `look` (its own picture and `capture`), so the model always points at the page as it is now. One action per call: a sequence is several calls, each checked.
 
 ## Background and foreground
 

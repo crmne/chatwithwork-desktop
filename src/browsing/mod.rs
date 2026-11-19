@@ -28,3 +28,6 @@ pub fn host_if_invoked() {
 
 #[cfg(test)]
 mod upload_tests;
+
+#[cfg(test)]
+mod pointer_tests;
