@@ -303,26 +303,30 @@ async function holdStateProbe(ms: number): Promise<void> {
  await inWorker(setup.context,(ms:number)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armedAt:Date.now(),original:chrome.debugger.sendCommand};
   chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
    g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
+   // The command goes out first; only its answer is held, so nothing logged
+   // before a revocation is sent after it.
+   const answer=g.probeSpy.original(target,method,params);
    if(method==='Runtime.callFunctionOn'&&!g.probeSpy.held&&Date.now()-g.probeSpy.armedAt>1000&&String(params?.functionDeclaration??'').includes('that element is disabled')){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,ms));}
-   return g.probeSpy.original(target,method,params);
+   return answer;
   }) as typeof chrome.debugger.sendCommand;},ms);
 }
 // Every command sent after `since` that reads the page. Not counted: the
 // operation's own cleanup (removing its guard, released objects, stopped
-// interceptors), and setting up the extension's own isolated world, which
-// reads nothing by itself, unless what follows it does. A world the check
-// made for itself would be followed by its read (DOM.resolveNode,
-// Runtime.callFunctionOn), which still counts.
+// interceptors), and setting up the extension's own isolated world (the frame
+// tree read straight before Page.createIsolatedWorld, and the world itself),
+// which reads nothing by itself, unless what follows it does. A frame tree
+// read on its own, as the outcome check makes, always counts, and so does a
+// world followed by a read (DOM.resolveNode, Runtime.callFunctionOn).
 const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
  const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
   || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
- const prelude=(method:string)=>method==='Page.getFrameTree'||method==='Page.createIsolatedWorld';
+ const idleWorld=(index:number)=>log[index]?.method==='Page.createIsolatedWorld'&&(!log[index+1]||cleanup(log[index+1]));
  return log.filter((entry,index)=>{
   if(entry.at<=since||cleanup(entry)) return false;
-  if(!prelude(entry.method)) return true;
-  const next=log.slice(index+1).find(other=>!prelude(other.method));
-  return !!next&&!cleanup(next);
+  if(entry.method==='Page.createIsolatedWorld') return !idleWorld(index);
+  if(entry.method==='Page.getFrameTree'&&log[index+1]?.method==='Page.createIsolatedWorld') return !idleWorld(index+1);
+  return true;
  }).map(entry=>entry.method);
 };
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
@@ -369,8 +373,9 @@ test('site access revoked while the outcome check looks at the page after input 
   chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
    g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
    // The outcome check's own read of the frame tree, after the operation ended.
+   const sent=g.probeSpy.original(target,method,params);
    if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,500));}
-   const answer=await g.probeSpy.original(target,method,params);
+   const answer=await sent;
    // Once the real press reached the page the extension has nothing more to
    // send until its own timer ends the operation (the release is held).
    if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed') g.probeSpy.ended=true;

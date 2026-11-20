@@ -8,6 +8,7 @@ import { documentIdentity, requireRef, sameDocument, type DocumentIdentity } fro
 import { INSTALL_ENGINE_GUARD } from "./engine-guard.js";
 import { guardStatus, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT } from "./pointer.js";
 import { ToolError } from "./errors.js";
+import { sentFacts } from "./outcome.js";
 import { siteAllowed } from "./sites.js";
 
 interface Command { id: number; method: string; params?: Record<string, any>; sessionId?: string }
@@ -44,9 +45,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
 }
 
 async function outcomeOf(op: Operation): Promise<Outcome> {
-  const sent: Pick<Outcome, "dispatched" | "moved" | "complete"> = op.dispatched
-    ? { dispatched: true, complete: op.action === "click" ? op.released : op.action === "type" ? op.written : true }
-    : { dispatched: false, ...(op.moved ? { moved: true } : {}) };
+  const sent = sentFacts(op);
   // Asked before every read of the page: nothing more touches it after Stop,
   // with changes off, or once its site isn't allowed (or the tab is gone).
   // The deadline also stops checks the caller stopped waiting for. `guard` is
@@ -169,7 +168,7 @@ export async function cancelEngine(): Promise<void> {
   const op = active;
   if (!op) return;
   active = undefined; op.cancelled = true;
-  const outcome = within(outcomeOf(op), OUTCOME_TOTAL_MS).then((value) => value ?? { dispatched: op.dispatched });
+  const outcome = within(outcomeOf(op), OUTCOME_TOTAL_MS).then((value) => value ?? sentFacts(op));
   ended = { lease: op.lease, outcome };
   emit({ event: "engine", lease: op.lease, message: { method: "Cww.operationCancelled", params: {} } });
   await outcome;
