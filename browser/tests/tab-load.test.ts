@@ -34,10 +34,12 @@ test("waits while the new tab's blank page is loading, and ends when its load do
   assert.equal(listeners.size, 0);
 });
 
-test("a load that ended as unloaded ends the wait too", async () => {
-  const { tabs, update } = fakeTabs("loading");
+test("an unloaded tab isn't taken for a loaded one", async () => {
+  const { tabs, update } = fakeTabs("unloaded");
   const wait = loadEnded(tabs, 7, 60_000);
   update(7, { status: "unloaded" });
+  assert.equal(await settled(wait), false);
+  update(7, { status: "complete" });
   assert.equal(await settled(wait), true);
 });
 

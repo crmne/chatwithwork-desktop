@@ -9,9 +9,10 @@ export interface TabLoads {
   get(tabId: number): Promise<{ status?: string }>;
 }
 
-// Resolves once `tabId` isn't loading any more (complete, or unloaded), or
-// after `ms` at most, and stops listening either way. Never rejects: a tab
-// that's gone is left to whatever is done with it next.
+// Resolves once `tabId` has loaded (complete), or after `ms` at most, and
+// stops listening either way. "unloaded" doesn't count: it's what a tab
+// whose page lost to its own about:blank showed. Never rejects: a tab that's
+// gone is left to whatever is done with it next.
 export function loadEnded(tabs: TabLoads, tabId: number, ms: number): Promise<void> {
   return new Promise((resolve) => {
     const done = () => {
@@ -20,11 +21,11 @@ export function loadEnded(tabs: TabLoads, tabId: number, ms: number): Promise<vo
       resolve();
     };
     const changed = (id: number, change: { status?: string }) => {
-      if (id === tabId && change.status !== undefined && change.status !== "loading") done();
+      if (id === tabId && change.status === "complete") done();
     };
     const timer = setTimeout(done, ms);
     tabs.onUpdated.addListener(changed);
     // Asked after listening, so a load that ended meanwhile isn't missed.
-    void tabs.get(tabId).then((now) => { if (now.status !== "loading") done(); }, done);
+    void tabs.get(tabId).then((now) => { if (now.status === "complete") done(); }, done);
   });
 }
