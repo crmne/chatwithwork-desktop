@@ -1,7 +1,7 @@
 {
   "name": "chatwithwork-browser",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "The Chat with Work browser extension",
   "license": "GPL-3.0-only",
   "type": "module",
