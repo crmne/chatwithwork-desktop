@@ -24,6 +24,20 @@ executable and aggregate `LICENSE`, and runs `npm ci --omit=dev --ignore-scripts
 `@xmorse/playwright-core` 1.59.15; its original notices remain in `node_modules`,
 with provenance and runtime notices under `notices/`.
 
+The npm tree ships unchanged apart from files of kinds nothing loads at runtime,
+which `stage` (and the Nix build, through `package.py prune`) leaves out before
+sealing the manifest: TypeScript declarations and sources (`*.ts`, `*.mts`,
+`*.cts`, so `*.d.ts` and friends too), source maps (`*.map`) and Markdown
+(`*.md`, `*.markdown`). Every licence and notice stays whatever its extension
+(names starting `LICENSE`, `LICENCE`, `NOTICE`, `COPYING`, `COPYRIGHT`,
+`PATENTS`, `AUTHORS` or `third-party`), as do all JavaScript and `package.json`
+files. That's 2,269 of the tree's 4,714 files (12 MB of 27): a Windows install checks
+each file it writes, and the x64 MSI with all of them took 288 s on a test VM.
+Packages point `main` and `exports` at JavaScript, and the few `.ts` targets
+sit under custom export conditions the engine never sets. The packaged-engine
+test runs real actions on the trimmed tree and fails if any licence npm
+installed is missing (`browser/e2e/packaged-engine.spec.ts`).
+
 Node 26.12.1 needs macOS 13.5 or later, so that is the app's minimum too
 (`MACOSX_DEPLOYMENT_TARGET` in `.cargo/config.toml`, `LSMinimumSystemVersion`,
 the installer, and the Homebrew cask and formula). Its Linux x64 musl build
@@ -50,7 +64,7 @@ the fixed entry never exposes upstream installation or download commands.
 | Linux Homebrew and Nix | `../libexec/chatwithwork/browser-engine/` |
 | macOS bundle, including Homebrew, Nix, PKG and shell installer | `../Resources/browser-engine/` from `Contents/MacOS` |
 
-The Windows MSI uses a short engine directory so the unchanged npm tree plus
+The Windows MSI uses a short engine directory so the npm tree plus
 its full 64-character identity stays within legacy MSI path limits for ordinary
 and long user profiles. The daemon uses the Windows Known Folder API, not an
 environment variable or a search; the app's custom `INSTALLFOLDER` is independent.

@@ -99,3 +99,6 @@ outer Playwriter MIT text. Preserve that file as `LICENSE-REGISTRY-PACKAGE`,
 along with Playwriter's MIT license, the actual upstream Playwright Apache-2.0
 license and NOTICE. The packaging process also retains the complete official
 Node license and unchanged dependency notices. No upstream package is patched.
+Staging leaves out only files of kinds nothing loads (TypeScript declarations
+and sources, source maps, Markdown that isn't a licence or notice), which cuts
+the install's file count nearly in half; PACKAGING.md lists the exact patterns.

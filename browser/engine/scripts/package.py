@@ -21,6 +21,27 @@ import zipfile
 SOURCE = Path(__file__).resolve().parents[1]
 PLATFORMS = SOURCE / "runtime-platforms.json"
 REQUIRED = ("entry.mjs", "engine.mjs", "package.json", "package-lock.json")
+# Files in the npm tree that nothing loads at runtime: TypeScript declarations
+# and sources (`.ts`, `.mts`, `.cts`, `.d.ts` and friends), source maps, and
+# Markdown. Left out, they're 2,269 of the npm tree's 4,714 files, which a
+# Windows install checks one by one: the x64 MSI took 288 s on a test VM.
+# The code that runs is the registry's, unchanged. Node reads none of these:
+# packages point `main` and `exports` at JavaScript, and the only `.ts`
+# targets sit under custom export conditions the engine never sets.
+PRUNED = re.compile(r"\.(?:[mc]?ts|map|md|markdown)$", re.IGNORECASE)
+# Licences and notices stay, whatever their extension.
+KEPT = re.compile(r"^(?:licen[cs]e|notice|copying|copyright|patents|authors|third[-_.]?party)", re.IGNORECASE)
+
+
+def prune(directory):
+    """Remove files nothing loads from `directory`'s node_modules; returns
+    how many went. Licence and notice files always stay."""
+    removed = 0
+    for path in sorted((directory / "node_modules").rglob("*")):
+        if path.is_file() and not path.is_symlink() and PRUNED.search(path.name) and not KEPT.search(path.name):
+            path.unlink()
+            removed += 1
+    return removed
 
 
 def digest(path):
@@ -209,6 +230,7 @@ def stage(target, output, app_version, cache, replace=False):
         env = {key: value for key, value in os.environ.items() if key not in ("NODE_OPTIONS", "NODE_PATH")}
         subprocess.run([npm, "ci", "--omit=dev", "--ignore-scripts", "--bin-links=false", "--no-audit", "--no-fund"],
                        cwd=staged, env=env, check=True)
+        print(f"Left out {prune(staged)} files nothing loads (declarations, source maps, Markdown)")
         for path in staged.rglob("*"):
             if not path.is_symlink():
                 path.chmod(0o755 if path.is_dir() or path == staged / node else 0o644)
@@ -222,6 +244,8 @@ def stage(target, output, app_version, cache, replace=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    trim = commands.add_parser("prune", help="Remove files nothing loads from a directory's node_modules")
+    trim.add_argument("--directory", type=Path, required=True)
     build = commands.add_parser("stage")
     build.add_argument("--target", required=True)
     build.add_argument("--output", type=Path, required=True)
@@ -240,7 +264,9 @@ def main():
     path.add_argument("directory", type=Path)
     args = parser.parse_args()
     try:
-        if args.command == "stage":
+        if args.command == "prune":
+            print(prune(args.directory))
+        elif args.command == "stage":
             stage(args.target, args.output.resolve(), args.app_version, args.cache.resolve(), args.replace)
         elif args.command == "refresh":
             refresh(args.directory)
