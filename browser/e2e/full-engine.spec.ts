@@ -316,12 +316,13 @@ const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
   || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
  const prelude=(method:string)=>method==='Page.getFrameTree'||method==='Page.createIsolatedWorld';
- return log.filter((entry,index)=>{
-  if(entry.at<=since||cleanup(entry)) return false;
-  if(!prelude(entry.method)) return true;
-  const next=log.slice(index+1).find(other=>!prelude(other.method));
-  return !(next&&next.method==='Runtime.evaluate'&&next.detail.includes('__cwwEngine'));
- }).map(entry=>entry.method);
+ const removesGuard=(entry?:{method:string,detail:string})=>!!entry&&entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine');
+ // Exactly the world setup cleanup's evaluate makes: the frame tree, then the
+ // isolated world, then the guard's removal itself.
+ const cleanupPrelude=(index:number)=>log[index].method==='Page.getFrameTree'
+  ? log[index+1]?.method==='Page.createIsolatedWorld'&&removesGuard(log[index+2])
+  : log[index].method==='Page.createIsolatedWorld'&&log[index-1]?.method==='Page.getFrameTree'&&removesGuard(log[index+1]);
+ return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!(prelude(entry.method)&&cleanupPrelude(index))).map(entry=>entry.method);
 };
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
  return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
@@ -355,6 +356,7 @@ test('an outcome check past its own deadline stops, and no page reason comes bac
   const spy=await releaseStateProbe();
   expect(spy.held).toBe(true);
   expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (it may still have been moving or loading)"});
-  expect(sentAfter(spy.log,spy.heldAt+1200)).toEqual([]);
+  // From the held probe on, which is before the check's deadline.
+  expect(sentAfter(spy.log,spy.heldAt)).toEqual([]);
  } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });
