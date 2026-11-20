@@ -14,6 +14,9 @@ test("token-like segments: long hex, base64, JWT parts, UUIDs and over-long numb
     "dGhpcyBpcyBhIHNlY3JldA", // base64url without padding
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", // JWT
     "123e4567-e89b-12d3-a456-426614174000", // UUID
+    "invite-123e4567-e89b-12d3-a456-426614174000", // UUID behind a word
+    "123e4567-e89b-12d3-a456-426614174000.pdf", // UUID before an extension
+    "123e4567e89b12d3a456426614174000", // UUID without hyphens
     "12345678901234567890123", // longer than any record number
     "AbCdEfGhIjKlMnOpQrStUvWxYz", // mixed-case random letters
     "a8Kd93kfLq0Zm2Xp", // 16 random letters and digits
@@ -70,4 +73,8 @@ test("non-web links, and markup in a path, never come through", () => {
   assert.ok(!/[\[\]"]/.test(shown), shown);
   const long = linkTarget(`https://example.com/${"section/".repeat(60)}`, page, allowed)!;
   assert.ok(long.length <= LINK_TARGET_LIMIT && long.endsWith("…"), long);
+  // Markup encoded first, then cut, never inside an encoded character.
+  const marked = linkTarget(`https://example.com/${"[a]/".repeat(80)}`, page, allowed)!;
+  assert.ok(marked.length <= LINK_TARGET_LIMIT && marked.endsWith("…"), marked);
+  assert.ok(!/[\[\]]/.test(marked) && !/%[0-9A-F]?…$/.test(marked), marked);
 });

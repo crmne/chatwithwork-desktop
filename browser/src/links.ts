@@ -24,7 +24,8 @@ export function tokenLike(segment: string): boolean {
   try { text = decodeURIComponent(segment); } catch { /* shown as encoded */ }
   // UUIDs: often a record's id, but as often an unguessable share, invite or
   // reset link, which this can't tell apart; a click still follows one.
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return true;
+  // Anywhere in the segment, so a prefix (`invite-<uuid>`) doesn't hide one.
+  if (/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i.test(text)) return true;
   if (/^\d+$/.test(text)) return text.length > 19;
   // Base64's own characters (and padding) in a long segment.
   if (text.length >= 16 && /[+/=]/.test(text) && /^[A-Za-z0-9+/=_-]+$/.test(text)) return true;
@@ -51,9 +52,11 @@ export function linkTarget(href: string, page: string, sites: LinkSites): string
   try { origin = new URL(page).origin === url.origin ? "" : url.origin; } catch { origin = url.origin; }
   const segments = url.pathname.split("/").slice(1)
     .map((segment) => (tokenLike(segment) ? "…" : segment));
-  let path = "/" + segments.join("/");
-  if (path.length > LINK_TARGET_LIMIT) path = path.slice(0, LINK_TARGET_LIMIT - 1) + "…";
-  // Never anything the address bar would treat as markup in the read text.
-  path = path.replace(/[\s"\]\[<>\\`]/g, (c) => encodeURIComponent(c));
+  // Never anything that would read as markup in the read text; then the cap,
+  // which never splits an encoded character.
+  let path = ("/" + segments.join("/")).replace(/[\s"\]\[<>\\`]/g, (c) => encodeURIComponent(c));
+  if (path.length > LINK_TARGET_LIMIT) {
+    path = path.slice(0, LINK_TARGET_LIMIT - 1).replace(/%[0-9A-Fa-f]?$/, "") + "…";
+  }
   return origin + path;
 }
