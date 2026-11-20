@@ -24,6 +24,31 @@ export function visiblePoint(quads: number[][], width: number, height: number): 
   return undefined;
 }
 
+// Points to try inside an element when its centre is covered: the centre of
+// each visible fragment first, then a grid across it, kept a few pixels in
+// from its edges. A person clicks wherever the control shows; the hit test
+// still has to find the control itself at the chosen point.
+export function candidatePoints(quads: number[][], width: number, height: number): Point[] {
+  const points: Point[] = [];
+  for (const quad of quads) {
+    const centre = visiblePoint([quad], width, height);
+    if (!centre) continue;
+    points.push(centre);
+    const xs = [0, 2, 4, 6].map((i) => Math.min(Math.max(quad[i], 0), width));
+    const ys = [1, 3, 5, 7].map((i) => Math.min(Math.max(quad[i], 0), height));
+    const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
+    const inset = Math.min(3, (right - left) / 4, (bottom - top) / 4);
+    for (const fy of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+      for (const fx of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+        const x = Math.min(Math.max(left + (right - left) * fx, left + inset), right - inset);
+        const y = Math.min(Math.max(top + (bottom - top) * fy, top + inset), bottom - inset);
+        if (!points.some((p) => Math.abs(p.x - x) < 1 && Math.abs(p.y - y) < 1)) points.push({ x, y });
+      }
+    }
+  }
+  return points;
+}
+
 // Self-contained: this function is serialized into the extension's isolated
 // world. Its arguments and source are extension-owned, never model-supplied.
 // Adapted from Playwright's expectHitTarget. Walk roots outside-in, including

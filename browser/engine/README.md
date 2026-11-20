@@ -30,7 +30,10 @@ at the lesser of 14 seconds and the remaining native operation budget.
 
 Commands and events travel only through inherited pipes and the existing
 native-messaging connection. There is no socket listener, CDP endpoint, script
-path, selector, force flag or arbitrary-code tool. The private extension lease
+path, selector, force flag or arbitrary-code tool. A click's only extra input is
+the point to press within its target or label when the target's middle is
+covered: a position the extension found by its own hit test, checked by the
+helper to name only those elements and to lie inside them. The private extension lease
 binds the current connection, tab group, site, read ref and document identity.
 It rejects concurrent admission and validates local policy during execution.
 Input events retain engine order even when policy checks are asynchronous.
