@@ -30,19 +30,22 @@ export function visiblePoint(quads: number[][], width: number, height: number): 
 // still has to find the control itself at the chosen point.
 export function candidatePoints(quads: number[][], width: number, height: number): Point[] {
   const points: Point[] = [];
-  for (const quad of quads) {
-    const centre = visiblePoint([quad], width, height);
-    if (!centre) continue;
-    points.push(centre);
+  const add = (point: Point) => { if (!points.some((p) => Math.abs(p.x - point.x) < 1 && Math.abs(p.y - point.y) < 1)) points.push(point); };
+  const visible = quads.filter((quad) => visiblePoint([quad], width, height));
+  // Every fragment's centre comes first, so a wrapped link's later lines are
+  // tried before the grids that fill the list.
+  for (const quad of visible) add(visiblePoint([quad], width, height)!);
+  for (const quad of visible) {
     const xs = [0, 2, 4, 6].map((i) => Math.min(Math.max(quad[i], 0), width));
     const ys = [1, 3, 5, 7].map((i) => Math.min(Math.max(quad[i], 0), height));
     const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
     const inset = Math.min(3, (right - left) / 4, (bottom - top) / 4);
     for (const fy of [0.5, 0.25, 0.75, 0.1, 0.9]) {
       for (const fx of [0.5, 0.25, 0.75, 0.1, 0.9]) {
-        const x = Math.min(Math.max(left + (right - left) * fx, left + inset), right - inset);
-        const y = Math.min(Math.max(top + (bottom - top) * fy, top + inset), bottom - inset);
-        if (!points.some((p) => Math.abs(p.x - x) < 1 && Math.abs(p.y - y) < 1)) points.push({ x, y });
+        add({
+          x: Math.min(Math.max(left + (right - left) * fx, left + inset), right - inset),
+          y: Math.min(Math.max(top + (bottom - top) * fy, top + inset), bottom - inset),
+        });
       }
     }
   }
