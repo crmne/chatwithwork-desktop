@@ -222,12 +222,15 @@ test('navigation after completed typing and its requested Enter submission settl
  const result=await action('type',{tab,ref:ref('Message'),text:'Written before submit',submit:true});expect(result.error).toBeUndefined();expect(result.result.url).toContain(origin+'/next');await page.close();
 });
 test('engine cancellation after Stop never reattaches the debugger',async()=>{
- const {tab,page,ref}=await fixture();let actual=false,stopped=false;
+ const {tab,page,ref}=await fixture();let actual=false,stopped=false,stopping:Promise<void>|undefined;
  await inWorker(setup.context,async()=>{const original=chrome.debugger.attach.bind(chrome.debugger);(globalThis as any).engineAttachSpy={original,stopped:false,afterStop:0};chrome.debugger.attach=((...args:any[])=>{if((globalThis as any).engineAttachSpy.stopped)(globalThis as any).engineAttachSpy.afterStop++;return (original as any)(...args)}) as any});
  try {
  const result=await action('click',{tab,ref:ref('Continue'),submits:false},async command=>{
   if(command.method==='Cww.actionPhase') actual=true;
-  if(actual && !stopped && command.method==='Input.dispatchMouseEvent') {stopped=true;await inWorker(setup.context,()=>{(globalThis as any).engineAttachSpy.stopped=true});setup.daemon.setPolicy({stopped:true})}
+  // Playwright sends the press and release while the move's Stop is still
+  // being set up: they wait for it, or they'd reach the page before it.
+  if(actual && !stopping && command.method==='Input.dispatchMouseEvent') {stopped=true;stopping=inWorker(setup.context,()=>{(globalThis as any).engineAttachSpy.stopped=true}).then(()=>setup.daemon.setPolicy({stopped:true}))}
+  await stopping;
  });expect(stopped).toBe(true);expect(result.error).toBeTruthy();
  expect(await inWorker(setup.context,()=>(globalThis as any).engineAttachSpy.afterStop)).toBe(0);
  const cancelled=await setup.daemon.call('engine_cancel',{lease:'already-ended'});expect(cancelled.error).toBeUndefined();
