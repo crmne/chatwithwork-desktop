@@ -276,7 +276,7 @@ test('an operation that stopped after input left says what the page looks like',
    if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
   },8000);
   expect(run.error).toBeDefined();
-  expect(run.outcome).toEqual({dispatched:true,observed:{responding:true,navigated:false,address_changed:false,element_present:true}});
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,navigated:false,address_changed:false,element_present:true}});
  } finally { await page.close(); }
 });
 
@@ -290,6 +290,6 @@ test('an operation that stopped after its click opened a dialog says so',async()
    if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
   },8000);
   expect(run.error).toBeDefined();
-  expect(run.outcome).toEqual({dispatched:true,observed:{responding:true,navigated:false,address_changed:false,dialog:true,element_present:true}});
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,navigated:false,address_changed:false,dialog:true,element_present:true}});
  } finally { await page.close(); }
 });

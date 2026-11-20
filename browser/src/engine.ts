@@ -14,19 +14,22 @@ interface Operation {
   lease: string; tab: number; session: string; action: string; params: Params; policy: Policy;
   target: Target; document: DocumentIdentity; targetInfo: any; labels: number[];
   timer: ReturnType<typeof setTimeout>; started: number; surface: number; phase: boolean; trial: boolean;
-  dispatched: boolean; dialog: boolean; pressed: boolean; written: boolean; submitSent: boolean; navigated: boolean; cancelled: boolean; guard: string;
+  dispatched: boolean; moved: boolean; released: boolean; dialog: boolean; pressed: boolean; written: boolean; submitSent: boolean; navigated: boolean; cancelled: boolean; guard: string;
   inputQueue: Promise<unknown>; deadline: number; interceptors: Set<string>; commands: number; bytes: number;
 }
 let active: Operation | undefined;
 let acquiring = false;
 
 // How an operation that ended without success ended, from what the extension
-// itself recorded and can check: whether any input left for the page (set
-// before the first input event is sent), then either why the element wasn't
-// clickable, or what the page looks like afterwards. Fixed fields and the
-// extension's own sentences only, never engine text or page content.
+// itself recorded and can check: whether the action's input left for the page
+// (set before the first such event is sent) and whether all of it did, or
+// only a pointer move; then either why nothing was sent, or what the page
+// looks like afterwards. Fixed fields and the extension's own sentences only,
+// never engine text or page content.
 interface Outcome {
   dispatched: boolean;
+  moved?: boolean;
+  complete?: boolean;
   reason?: string;
   observed?: { responding: boolean; closed?: boolean; navigated?: boolean; address_changed?: boolean; dialog?: boolean; element_present?: boolean };
 }
@@ -40,36 +43,42 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
 }
 
 async function outcomeOf(op: Operation): Promise<Outcome> {
-  // After Stop or a halt nothing more touches the page.
-  if (isHalted() || op.policy.stopped) return op.dispatched ? { dispatched: true } : { dispatched: false, reason: "the browser was stopped" };
-  // Nor once changes are off or the tab's site is no longer allowed (or the
-  // tab is gone): only the tab list's own facts then.
-  const allowed = op.policy.changes && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS);
-  if (!allowed) {
-    if (!op.dispatched) return { dispatched: false, reason: op.policy.changes ? "the tab changed before anything was sent" : "changes were turned off before anything was sent" };
-    const tab = await chrome.tabs.get(op.tab).catch(() => undefined);
-    return { dispatched: true, observed: tab
-      ? { responding: true, address_changed: (tab.url ?? "") !== op.targetInfo.url, ...(op.dialog ? { dialog: true } : {}) }
-      : { responding: true, closed: true } };
-  }
+  const sent: Pick<Outcome, "dispatched" | "moved" | "complete"> = op.dispatched
+    ? { dispatched: true, complete: op.action === "click" ? op.released : op.action === "type" ? op.written : true }
+    : { dispatched: false, ...(op.moved ? { moved: true } : {}) };
+  // Asked before every read of the page: nothing more touches it after Stop,
+  // with changes off, or once its site isn't allowed (or the tab is gone).
+  const allowed = async () => !isHalted() && !op.policy.stopped && op.policy.changes
+    && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS) === true;
+  if (isHalted() || op.policy.stopped) return op.dispatched ? sent : { ...sent, reason: "the browser was stopped" };
   if (!op.dispatched) {
-    if (op.navigated) return { dispatched: false, reason: "the page changed before anything was sent" };
-    const reason = await within(whyNotClickable(op.target), OUTCOME_CHECK_MS);
-    return { dispatched: false, reason: reason
+    if (op.navigated) return { ...sent, reason: "the page changed before anything was sent" };
+    if (!await allowed()) return { ...sent, reason: op.policy.changes ? "the tab changed before anything was sent" : "changes were turned off before anything was sent" };
+    const reason = await within(whyNotClickable(op.target, allowed), OUTCOME_CHECK_MS * 2);
+    return { ...sent, reason: reason
       ? `the element didn't become ready in time (${reason.slice(0, 200)})`
       : "the element didn't become ready in time (it may still have been moving or loading)" };
   }
-  const tab = await chrome.tabs.get(op.tab).catch(() => undefined);
-  if (!tab) return { dispatched: true, observed: { responding: true, closed: true } };
+  const before = await chrome.tabs.get(op.tab).catch(() => undefined);
+  if (!before) return { ...sent, observed: { responding: true, closed: true } };
+  const dialog = op.dialog ? { dialog: true } : {};
+  // Without access, only the tab list's own facts.
+  if (!await allowed()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
   const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree"), OUTCOME_CHECK_MS);
-  if (!frame) return { dispatched: true, observed: { responding: false } };
-  const present = await within(send(op.tab, "DOM.describeNode", { backendNodeId: op.target.backendNodeId, depth: 0 }).then(() => true, () => false), OUTCOME_CHECK_MS);
-  return { dispatched: true, observed: {
-    responding: true,
-    navigated: frame.frameTree.frame.loaderId !== op.document.loader,
-    address_changed: (tab.url ?? "") !== op.targetInfo.url,
-    ...(op.dialog ? { dialog: true } : {}),
-    ...(present === undefined ? {} : { element_present: present }),
+  if (!frame) return { ...sent, observed: { responding: false } };
+  const after = await chrome.tabs.get(op.tab).catch(() => undefined);
+  if (!after) return { ...sent, observed: { responding: true, closed: true } };
+  // An address that moved while the frame tree was read is a navigation, so
+  // the two never describe different moments.
+  const moving = (before.url ?? "") !== (after.url ?? "");
+  const navigated = moving || frame.frameTree.frame.loaderId !== op.document.loader;
+  const present = navigated || !await allowed() ? undefined
+    : await within(callOn<boolean>(op.tab, op.target.backendNodeId, "function(){ return this.isConnected; }").then((value) => value === true, () => false), OUTCOME_CHECK_MS);
+  return { ...sent, observed: {
+    responding: true, navigated,
+    address_changed: (after.url ?? "") !== op.targetInfo.url,
+    ...dialog,
+    ...(navigated ? { element_present: false } : present === undefined ? {} : { element_present: present }),
   } };
 }
 let generation = 0;
@@ -178,7 +187,7 @@ const begin: Method = async (params, policy) => {
     const lease = crypto.randomUUID();
     const op: Operation = { lease, tab: t.tabId, session: `cww-engine-${lease}`, action: action as string, params: input, policy, target: t, document, targetInfo, labels,
       timer: setTimeout(() => { if (active?.lease === lease) void cancelEngine(); }, Math.max(1, deadline - Date.now())), inputQueue: Promise.resolve(), deadline, started, surface: t.backendNodeId, phase: false, trial: false,
-      dispatched: false, dialog: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
+      dispatched: false, moved: false, released: false, dialog: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
     if (generation !== admitted || isHalted() || policy.stopped) { clearTimeout(op.timer); fail("browser_stopped"); }
     active = op;
     // Where to press a surface whose centre something else covers.
@@ -290,6 +299,9 @@ async function commandResult(op: Operation, command: Command): Promise<unknown> 
   if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased" && !op.pressed) fail("invalid_argument");
   if (op.action === "type" && op.written && op.params.submit === true && method === "Input.dispatchKeyEvent" && params.type === "keyDown" && params.key === "Enter") op.submitSent = true;
   if (dispatch && !op.trial) op.dispatched = true;
+  // A real pointer move reaches the page (hover) without counting as the action.
+  if (input && !op.trial && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved") op.moved = true;
+  if (dispatch && !op.trial && method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") op.released = true;
   const result = await send(op.tab, method, params);
   if (method === "Runtime.releaseObject") op.interceptors.delete(params.objectId);
   if (interceptor && typeof result?.result?.objectId === "string") {

@@ -252,7 +252,10 @@ extension itself recorded and checked (`engine_cancel`'s `outcome`, extension
   covered, the page changed first, the browser was stopped, or changes were
   turned off), and that
   nothing was sent.
-- Input left: that the click, text or choice was sent, then what the page looks
+- Only the pointer moved: the same, saying the pointer moved over the element
+  but nothing was pressed or typed.
+- Input left: that the click, text or choice was sent (or only part of it: the
+  press without its release, keys without the text), then what the page looks
   like afterwards: same address and document, reloaded, gone to another page,
   closed, or not responding, whether a dialog opened (the extension dismisses
   every page dialog), and whether the element is still there.

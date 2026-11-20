@@ -736,8 +736,9 @@ fn is_uncertain(error: &ToolError) -> bool {
 
 /// A plain answer from how the extension says an operation ended
 /// (`engine_cancel`'s `outcome`), or None to keep "uncertain": an extension
-/// older than 0.1.6 sends no outcome. Only fixed fields are read, and the
-/// extension's reason is its own short sentence, trimmed again here.
+/// older than 0.1.6 sends no outcome, and one that couldn't look says too
+/// little. Only fixed fields are read, and the extension's reason is its own
+/// short sentence, trimmed again here.
 pub(crate) fn outcome_error(action: &str, answer: &Value) -> Option<ToolError> {
     let outcome = answer.get("outcome")?;
     let what = match action {
@@ -745,77 +746,77 @@ pub(crate) fn outcome_error(action: &str, answer: &Value) -> Option<ToolError> {
         "select" => "chosen",
         _ => "clicked",
     };
-    match outcome.get("dispatched")?.as_bool()? {
-        false => {
-            let reason = outcome
-                .get("reason")
-                .and_then(Value::as_str)
-                .map(|reason| {
-                    reason
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .take(300)
-                        .collect::<String>()
-                })
-                .filter(|reason| !reason.is_empty());
-            Some(ToolError::new(
-                ErrorCode::PageError,
-                match reason {
-                    Some(reason) => format!(
-                        "Nothing was {what}: {reason}. Nothing was sent to the page; read it again before another try."
-                    ),
-                    None => format!(
-                        "Nothing was {what}, and nothing was sent to the page; read it again before another try."
-                    ),
-                },
-            ))
-        }
-        true => {
-            let observed = outcome.get("observed")?;
-            let flag = |key: &str| observed.get(key).and_then(Value::as_bool);
-            let sent = match action {
-                "type" => "The text was sent",
-                "select" => "The choice was sent",
-                _ => "The click was sent",
-            };
-            let after = if flag("closed") == Some(true) {
-                "the tab was closed afterwards".to_string()
-            } else if flag("responding") == Some(false) {
-                "the page stopped responding, so what happened can't be checked".to_string()
-            } else {
-                let mut parts = vec![if flag("navigated") == Some(true) {
-                    if flag("address_changed") == Some(true) {
-                        "the tab went to another page"
-                    } else {
-                        "the page reloaded"
-                    }
-                } else if flag("address_changed") == Some(true) {
-                    "the page's address changed"
-                } else if flag("navigated") == Some(false) {
-                    "the page stayed on the same address and document"
-                } else {
-                    // Changes off or the site no longer allowed: the
-                    // extension looked only at the tab's address.
-                    "the page's address stayed the same"
-                }];
-                if flag("dialog") == Some(true) {
-                    parts.push("a dialog opened and was dismissed");
+    let message = if outcome.get("dispatched")?.as_bool()? {
+        let observed = outcome.get("observed")?;
+        let flag = |key: &str| observed.get(key).and_then(Value::as_bool);
+        let sent = match (action, outcome.get("complete").and_then(Value::as_bool)) {
+            ("select", _) => "The choice was sent",
+            ("type", Some(true)) => "The text was sent",
+            ("type", Some(false)) => "Some keys were sent, but not the text",
+            ("click", Some(true)) => "The click was sent",
+            ("click", Some(false)) => "The mouse press was sent, but not its release",
+            _ => "Input was sent",
+        };
+        let after = if flag("closed") == Some(true) {
+            "the tab was closed afterwards".to_string()
+        } else if flag("responding") == Some(false) {
+            "the page stopped responding, so what happened can't be checked".to_string()
+        } else {
+            let navigated = flag("navigated");
+            let address_changed = flag("address_changed");
+            let mut parts: Vec<&str> = match (navigated, address_changed) {
+                (Some(true), Some(true)) => vec!["the tab went to another page"],
+                (Some(true), _) => vec!["the page reloaded"],
+                (_, Some(true)) => vec!["the page's address changed"],
+                (Some(false), Some(false)) => {
+                    vec!["the page stayed on the same address and document"]
                 }
-                match flag("element_present") {
-                    Some(true) => parts.push("the element is still there"),
-                    Some(false) => parts.push("the element is gone"),
-                    None => {}
-                }
-                parts.join(", and ")
+                // Changes off or the site no longer allowed: the extension
+                // looked only at the tab's address.
+                (None, Some(false)) => vec!["the page's address stayed the same"],
+                _ => vec![],
             };
-            Some(ToolError::new(
-                ErrorCode::PageError,
-                format!(
-                    "{sent}, but the browser action didn't finish: {after}. Read the page to see the result before another try."
-                ),
-            ))
+            if flag("dialog") == Some(true) {
+                parts.push("a dialog opened and was dismissed");
+            }
+            match flag("element_present") {
+                Some(true) => parts.push("the element is still there"),
+                Some(false) => parts.push("the element is gone"),
+                None => {}
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            parts.join(", and ")
+        };
+        format!(
+            "{sent}, but the browser action didn't finish: {after}. Read the page to see the result before another try."
+        )
+    } else {
+        let reason = outcome
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(|reason| {
+                reason
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(300)
+                    .collect::<String>()
+            })
+            .filter(|reason| !reason.is_empty());
+        let head = match reason {
+            Some(reason) => format!("Nothing was {what}: {reason}."),
+            None => format!("Nothing was {what}."),
+        };
+        if outcome.get("moved").and_then(Value::as_bool) == Some(true) {
+            format!(
+                "{head} The pointer moved over the element, but nothing was pressed or typed; read the page again before another try."
+            )
+        } else {
+            format!("{head} Nothing was sent to the page; read it again before another try.")
         }
-    }
+    };
+    Some(ToolError::new(ErrorCode::PageError, message))
 }
 
 fn charge_frame(total: &mut usize, value: &Value) -> Result<(), ToolError> {

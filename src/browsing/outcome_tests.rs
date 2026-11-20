@@ -30,7 +30,7 @@ fn nothing_sent_is_said_plainly_with_the_extensions_reason() {
     assert!(
         typed
             .message
-            .starts_with("Nothing was typed, and nothing was sent"),
+            .starts_with("Nothing was typed. Nothing was sent"),
         "{}",
         typed.message
     );
@@ -50,7 +50,7 @@ fn a_reason_is_trimmed_and_stripped_of_control_characters() {
 
 #[test]
 fn something_sent_says_what_the_page_looks_like_afterwards() {
-    let same = outcome_error("click", &json!({ "outcome": { "dispatched": true, "observed": {
+    let same = outcome_error("click", &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
         "responding": true, "navigated": false, "address_changed": false, "element_present": true } } }))
     .unwrap();
     assert!(
@@ -61,7 +61,7 @@ fn something_sent_says_what_the_page_looks_like_afterwards() {
     assert!(same.message.contains(
         "the page stayed on the same address and document, and the element is still there"
     ));
-    let moved = outcome_error("click", &json!({ "outcome": { "dispatched": true, "observed": {
+    let moved = outcome_error("click", &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
         "responding": true, "navigated": true, "address_changed": true, "element_present": false } } }))
     .unwrap();
     assert!(
@@ -69,7 +69,7 @@ fn something_sent_says_what_the_page_looks_like_afterwards() {
             .message
             .contains("the tab went to another page, and the element is gone")
     );
-    let dialog = outcome_error("click", &json!({ "outcome": { "dispatched": true, "observed": {
+    let dialog = outcome_error("click", &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
         "responding": true, "navigated": false, "address_changed": false, "dialog": true, "element_present": true } } }))
     .unwrap();
     assert!(dialog.message.contains("same address and document, and a dialog opened and was dismissed, and the element is still there"), "{}", dialog.message);
@@ -88,7 +88,7 @@ fn something_sent_says_what_the_page_looks_like_afterwards() {
     assert!(!unread.message.contains("document"));
     let hung = outcome_error(
         "type",
-        &json!({ "outcome": { "dispatched": true, "observed": { "responding": false } } }),
+        &json!({ "outcome": { "dispatched": true, "complete": true, "observed": { "responding": false } } }),
     )
     .unwrap();
     assert!(hung.message.starts_with("The text was sent"));
@@ -103,4 +103,70 @@ fn an_older_extension_or_an_unreadable_outcome_keeps_the_uncertain_answer() {
     assert!(outcome_error("click", &json!({ "outcome": { "dispatched": "no" } })).is_none());
     // Something was sent but the extension couldn't look: nothing to say.
     assert!(outcome_error("click", &json!({ "outcome": { "dispatched": true } })).is_none());
+}
+
+#[test]
+fn partial_input_and_a_pointer_move_are_said_as_they_were() {
+    let press = outcome_error(
+        "click",
+        &json!({ "outcome": { "dispatched": true, "complete": false, "observed": {
+            "responding": true, "navigated": false, "address_changed": false, "element_present": true } } }),
+    )
+    .unwrap();
+    assert!(
+        press
+            .message
+            .starts_with("The mouse press was sent, but not its release"),
+        "{}",
+        press.message
+    );
+    let keys = outcome_error(
+        "type",
+        &json!({ "outcome": { "dispatched": true, "complete": false, "observed": { "responding": true, "closed": true } } }),
+    )
+    .unwrap();
+    assert!(
+        keys.message
+            .starts_with("Some keys were sent, but not the text"),
+        "{}",
+        keys.message
+    );
+    let hover = outcome_error(
+        "click",
+        &json!({ "outcome": { "dispatched": false, "moved": true, "reason": "the browser was stopped" } }),
+    )
+    .unwrap();
+    assert!(
+        hover
+            .message
+            .contains("The pointer moved over the element, but nothing was pressed"),
+        "{}",
+        hover.message
+    );
+    assert!(!hover.message.contains("Nothing was sent"));
+}
+
+#[test]
+fn an_observation_with_nothing_in_it_keeps_the_uncertain_answer() {
+    assert!(
+        outcome_error(
+            "click",
+            &json!({ "outcome": { "dispatched": true, "observed": {} } })
+        )
+        .is_none()
+    );
+    assert!(
+        outcome_error(
+            "click",
+            &json!({ "outcome": { "dispatched": true, "observed": { "responding": true } } })
+        )
+        .is_none()
+    );
+    assert!(
+        outcome_error(
+            "click",
+            &json!({ "outcome": { "dispatched": true, "observed": null } })
+        )
+        .is_none()
+    );
 }

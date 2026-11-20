@@ -201,15 +201,21 @@ async function uncoveredPoint(t: Target, surface: number, quads: number[][], wid
 }
 
 // Why a click wouldn't reach `t` right now, in the extension's own words, or
-// null when it would: the element's state (hidden, disabled, inert, gone),
-// then whether anything is drawn over all of it. For saying certainly why an
-// action that sent nothing didn't happen; never Playwright's text.
-export async function whyNotClickable(t: Target): Promise<string | null> {
+// null when it would or can't be told: the element's state (hidden, disabled,
+// inert, gone), then whether anything is drawn over all of it. `allowed` is
+// asked before each read, so a revocation meanwhile stops it. For saying
+// certainly why an action that sent nothing didn't happen; never Playwright's
+// text.
+export async function whyNotClickable(t: Target, allowed: () => Promise<boolean>): Promise<string | null> {
+  if (!await allowed()) return null;
   const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [t.backendNodeId]);
   if (state.reason) return state.reason;
+  if (!await allowed()) return null;
   const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: t.backendNodeId })
-    .then((answer) => answer.quads, () => []);
+    .then((answer) => answer.quads, () => null);
+  if (!quads) return null;
   if (!visiblePoint(quads, state.width, state.height)) return "that element isn't visible in the viewport";
+  if (!await allowed()) return null;
   return (await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height)).reason ?? null;
 }
 
