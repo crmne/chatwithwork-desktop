@@ -76,7 +76,9 @@ for(const revoke of ['stopped','changes','sites'] as const) test(`${revoke} revo
  await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
  const waiting=action('click',{tab,ref:ref('Continue'),submits:false});await page.waitForTimeout(300);
  setup.daemon.setPolicy(revoke==='sites'?{sites:[]}:revoke==='stopped'?{stopped:true}:{changes:false});
- expect((await waiting).error).toBeTruthy();
+ const interrupted=await waiting;expect(interrupted.error).toBeTruthy();
+ // Nothing was sent; after a revocation the extension doesn't look at the page to say why.
+ expect(interrupted.outcome).toEqual({dispatched:false,reason:revoke==='stopped'?'the browser was stopped':revoke==='changes'?'changes were turned off before anything was sent':'the tab changed before anything was sent'});
  await page.locator('#button').evaluate(el=>el.removeAttribute('disabled'));
  await page.locator('#button').click();await expect(page.locator('#result')).toHaveText('Count 1');await page.close();
 });
@@ -249,4 +251,45 @@ test('admission work consumes the native operation deadline before a lease can d
   expect(await inWorker(setup.context,()=>({delayed:(globalThis as any).admissionSpy.delayed,input:(globalThis as any).admissionSpy.input}))).toEqual({delayed:true,input:0});
   await expect(page.locator('#result')).toHaveText('Count 0');
  }finally{await inWorker(setup.context,()=>{chrome.debugger.sendCommand=(globalThis as any).admissionSpy.original;delete(globalThis as any).admissionSpy});await page.close()}
+});
+
+// #262: how an operation the engine couldn't finish ended, as engine_cancel
+// answers it: certain when nothing left, observations when something did.
+test('an operation that gave up before any input says nothing was sent, and why',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (that element is disabled)"});
+  expect(run.methods.some((method:string)=>method.startsWith('Input.'))).toBe(false);
+  await expect(page.locator('#result')).toHaveText('Count 0');
+ } finally { await page.close(); }
+});
+
+test('an operation that stopped after input left says what the page looks like',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false;
+ try {
+  // Hold the real release (after the trial) past the operation's deadline.
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:true,observed:{responding:true,navigated:false,address_changed:false,element_present:true}});
+ } finally { await page.close(); }
+});
+
+test('an operation that stopped after its click opened a dialog says so',async()=>{
+ const {tab,page,ref}=await fixture();
+ await page.evaluate(()=>{(document.querySelector('#button') as HTMLElement).onmousedown=()=>{alert('Saved')};});
+ let acting=false;
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:true,observed:{responding:true,navigated:false,address_changed:false,dialog:true,element_present:true}});
+ } finally { await page.close(); }
 });

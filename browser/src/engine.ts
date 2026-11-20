@@ -1,7 +1,7 @@
 // Private transport for the bundled, pinned engine. These are daemon methods,
 // never model tools. All browser authority still originates on this computer.
 import { about, integer, only, still, type Method, type Params, type Policy } from "./actions.js";
-import { allowedChanges, CHOOSE, clearOfOverlays, described, dryRun, editable, flag, preview, settle, target, type Target } from "./changes.js";
+import { allowedChanges, CHOOSE, clearOfOverlays, described, dryRun, editable, flag, preview, settle, target, whyNotClickable, type Target } from "./changes.js";
 import { callOn, evaluate, isAttached, isHalted, relatedNode, send } from "./cdp.js";
 import { isSensitiveField, submitReason } from "./classify.js";
 import { documentIdentity, requireRef, sameDocument, type DocumentIdentity } from "./engine-refs.js";
@@ -14,11 +14,64 @@ interface Operation {
   lease: string; tab: number; session: string; action: string; params: Params; policy: Policy;
   target: Target; document: DocumentIdentity; targetInfo: any; labels: number[];
   timer: ReturnType<typeof setTimeout>; started: number; surface: number; phase: boolean; trial: boolean;
-  dispatched: boolean; pressed: boolean; written: boolean; submitSent: boolean; navigated: boolean; cancelled: boolean; guard: string;
+  dispatched: boolean; dialog: boolean; pressed: boolean; written: boolean; submitSent: boolean; navigated: boolean; cancelled: boolean; guard: string;
   inputQueue: Promise<unknown>; deadline: number; interceptors: Set<string>; commands: number; bytes: number;
 }
 let active: Operation | undefined;
 let acquiring = false;
+
+// How an operation that ended without success ended, from what the extension
+// itself recorded and can check: whether any input left for the page (set
+// before the first input event is sent), then either why the element wasn't
+// clickable, or what the page looks like afterwards. Fixed fields and the
+// extension's own sentences only, never engine text or page content.
+interface Outcome {
+  dispatched: boolean;
+  reason?: string;
+  observed?: { responding: boolean; closed?: boolean; navigated?: boolean; address_changed?: boolean; dialog?: boolean; element_present?: boolean };
+}
+// Set before the cancellation is announced, so a daemon's engine_cancel that
+// follows the announcement always finds it.
+let ended: { lease: string; outcome: Promise<Outcome> } | undefined;
+const OUTCOME_CHECK_MS = 400, OUTCOME_TOTAL_MS = 1_000;
+
+function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([promise.catch(() => undefined), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))]);
+}
+
+async function outcomeOf(op: Operation): Promise<Outcome> {
+  // After Stop or a halt nothing more touches the page.
+  if (isHalted() || op.policy.stopped) return op.dispatched ? { dispatched: true } : { dispatched: false, reason: "the browser was stopped" };
+  // Nor once changes are off or the tab's site is no longer allowed (or the
+  // tab is gone): only the tab list's own facts then.
+  const allowed = op.policy.changes && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS);
+  if (!allowed) {
+    if (!op.dispatched) return { dispatched: false, reason: op.policy.changes ? "the tab changed before anything was sent" : "changes were turned off before anything was sent" };
+    const tab = await chrome.tabs.get(op.tab).catch(() => undefined);
+    return { dispatched: true, observed: tab
+      ? { responding: true, address_changed: (tab.url ?? "") !== op.targetInfo.url, ...(op.dialog ? { dialog: true } : {}) }
+      : { responding: true, closed: true } };
+  }
+  if (!op.dispatched) {
+    if (op.navigated) return { dispatched: false, reason: "the page changed before anything was sent" };
+    const reason = await within(whyNotClickable(op.target), OUTCOME_CHECK_MS);
+    return { dispatched: false, reason: reason
+      ? `the element didn't become ready in time (${reason.slice(0, 200)})`
+      : "the element didn't become ready in time (it may still have been moving or loading)" };
+  }
+  const tab = await chrome.tabs.get(op.tab).catch(() => undefined);
+  if (!tab) return { dispatched: true, observed: { responding: true, closed: true } };
+  const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree"), OUTCOME_CHECK_MS);
+  if (!frame) return { dispatched: true, observed: { responding: false } };
+  const present = await within(send(op.tab, "DOM.describeNode", { backendNodeId: op.target.backendNodeId, depth: 0 }).then(() => true, () => false), OUTCOME_CHECK_MS);
+  return { dispatched: true, observed: {
+    responding: true,
+    navigated: frame.frameTree.frame.loaderId !== op.document.loader,
+    address_changed: (tab.url ?? "") !== op.targetInfo.url,
+    ...(op.dialog ? { dialog: true } : {}),
+    ...(present === undefined ? {} : { element_present: present }),
+  } };
+}
 let generation = 0;
 let emit: (event: unknown) => void = () => {};
 export function engineEvents(callback: (event: unknown) => void): void { emit = callback; }
@@ -83,7 +136,10 @@ export async function cancelEngine(): Promise<void> {
   const op = active;
   if (!op) return;
   active = undefined; op.cancelled = true;
+  const outcome = within(outcomeOf(op), OUTCOME_TOTAL_MS).then((value) => value ?? { dispatched: op.dispatched });
+  ended = { lease: op.lease, outcome };
   emit({ event: "engine", lease: op.lease, message: { method: "Cww.operationCancelled", params: {} } });
+  await outcome;
   await cleanup(op);
 }
 function operation(params: Params): Operation {
@@ -122,7 +178,7 @@ const begin: Method = async (params, policy) => {
     const lease = crypto.randomUUID();
     const op: Operation = { lease, tab: t.tabId, session: `cww-engine-${lease}`, action: action as string, params: input, policy, target: t, document, targetInfo, labels,
       timer: setTimeout(() => { if (active?.lease === lease) void cancelEngine(); }, Math.max(1, deadline - Date.now())), inputQueue: Promise.resolve(), deadline, started, surface: t.backendNodeId, phase: false, trial: false,
-      dispatched: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
+      dispatched: false, dialog: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
     if (generation !== admitted || isHalted() || policy.stopped) { clearTimeout(op.timer); fail("browser_stopped"); }
     active = op;
     // Where to press a surface whose centre something else covers.
@@ -292,17 +348,25 @@ const finish: Method = async (params) => {
     return { dry_run: false, ...what, ...(await settle(op.tab, op.policy, op.started)) };
   } finally { if (active === op) active = undefined; await cleanup(op); }
 };
+// The daemon cancels an operation the engine couldn't finish, and gets how it
+// ended, even when the extension had already cancelled it itself (its timer,
+// a navigation).
 const cancel: Method = async (params) => {
   only(params, ["lease"]);
   if (active?.lease === params.lease) await cancelEngine();
-  return {};
+  const last = ended;
+  return last && last.lease === params.lease ? { outcome: await last.outcome } : {};
 };
 export const engineMethods: Record<string, Method> = { engine_begin: begin, engine_command: command, engine_finish: finish, engine_cancel: cancel };
 
 const EVENTS = new Set(["Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Page.frameAttached", "Page.frameDetached", "Page.frameNavigated", "Page.frameStartedLoading", "Page.frameStoppedLoading", "Page.lifecycleEvent", "Page.navigatedWithinDocument", "DOM.documentUpdated", "Inspector.detached"]);
 chrome.debugger.onEvent.addListener((source, method, params: any) => {
   const op = active;
-  if (!op || source.tabId !== op.tab || source.sessionId || !EVENTS.has(method)) return;
+  if (!op || source.tabId !== op.tab || source.sessionId) return;
+  // cdp.ts dismisses every page dialog; an operation only notes that one
+  // opened after its input left, for how it ended.
+  if (method === "Page.javascriptDialogOpening") { if (op.dispatched) op.dialog = true; return; }
+  if (!EVENTS.has(method)) return;
   // Navigation is a terminal boundary. No destination DOM, execution context,
   // network payload or event is passed to the old operation, even if allowed.
   if (method === "Page.frameNavigated" && !params.frame?.parentId && params.frame?.loaderId !== op.document.loader) { navigation(op); return; }

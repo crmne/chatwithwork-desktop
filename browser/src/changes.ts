@@ -200,6 +200,19 @@ async function uncoveredPoint(t: Target, surface: number, quads: number[][], wid
   return { reason: reason ?? "that element isn't visible in the viewport" };
 }
 
+// Why a click wouldn't reach `t` right now, in the extension's own words, or
+// null when it would: the element's state (hidden, disabled, inert, gone),
+// then whether anything is drawn over all of it. For saying certainly why an
+// action that sent nothing didn't happen; never Playwright's text.
+export async function whyNotClickable(t: Target): Promise<string | null> {
+  const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [t.backendNodeId]);
+  if (state.reason) return state.reason;
+  const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: t.backendNodeId })
+    .then((answer) => answer.quads, () => []);
+  if (!visiblePoint(quads, state.width, state.height)) return "that element isn't visible in the viewport";
+  return (await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height)).reason ?? null;
+}
+
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
