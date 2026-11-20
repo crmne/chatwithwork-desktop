@@ -48,13 +48,18 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
     : { dispatched: false, ...(op.moved ? { moved: true } : {}) };
   // Asked before every read of the page: nothing more touches it after Stop,
   // with changes off, or once its site isn't allowed (or the tab is gone).
-  const allowed = async () => !isHalted() && !op.policy.stopped && op.policy.changes
+  // The deadline also stops checks the caller stopped waiting for.
+  const until = Date.now() + OUTCOME_TOTAL_MS;
+  const allowed = async () => Date.now() < until && !isHalted() && !op.policy.stopped && op.policy.changes
     && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS) === true;
   if (isHalted() || op.policy.stopped) return op.dispatched ? sent : { ...sent, reason: "the browser was stopped" };
   if (!op.dispatched) {
     if (op.navigated) return { ...sent, reason: "the page changed before anything was sent" };
     if (!await allowed()) return { ...sent, reason: op.policy.changes ? "the tab changed before anything was sent" : "changes were turned off before anything was sent" };
     const reason = await within(whyNotClickable(op.target, allowed), OUTCOME_CHECK_MS * 2);
+    // Revoked meanwhile: say that, not what the page showed.
+    if (isHalted() || op.policy.stopped) return { ...sent, reason: "the browser was stopped" };
+    if (!op.policy.changes) return { ...sent, reason: "changes were turned off before anything was sent" };
     return { ...sent, reason: reason
       ? `the element didn't become ready in time (${reason.slice(0, 200)})`
       : "the element didn't become ready in time (it may still have been moving or loading)" };

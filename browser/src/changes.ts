@@ -189,10 +189,11 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // something else is drawn over the centre (a dock's own handle over its
 // links), another visible part of it. Answers why not when no point works,
 // with the centre's reason, which names what covers it.
-async function uncoveredPoint(t: Target, surface: number, quads: number[][], width: number, height: number): Promise<{ point?: Point; centre?: boolean; reason?: string }> {
+async function uncoveredPoint(t: Target, surface: number, quads: number[][], width: number, height: number, allowed?: () => Promise<boolean>): Promise<{ point?: Point; centre?: boolean; reason?: string; stopped?: boolean }> {
   let reason: string | undefined;
   const points = candidatePoints(quads, width, height).slice(0, 40);
   for (const [index, candidate] of points.entries()) {
+    if (allowed && !await allowed()) return { stopped: true };
     const obstruction = await surfaceObstruction(t, surface, candidate);
     if (!obstruction) return { point: candidate, centre: index === 0 };
     reason ??= obstruction;
@@ -203,20 +204,23 @@ async function uncoveredPoint(t: Target, surface: number, quads: number[][], wid
 // Why a click wouldn't reach `t` right now, in the extension's own words, or
 // null when it would or can't be told: the element's state (hidden, disabled,
 // inert, gone), then whether anything is drawn over all of it. `allowed` is
-// asked before each read, so a revocation meanwhile stops it. For saying
+// asked before each read, every hit test included, and again before a reason
+// read from the page is returned, so a revocation or the caller's deadline
+// meanwhile stops it and nothing it found leaves. For saying
 // certainly why an action that sent nothing didn't happen; never Playwright's
 // text.
 export async function whyNotClickable(t: Target, allowed: () => Promise<boolean>): Promise<string | null> {
   if (!await allowed()) return null;
   const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [t.backendNodeId]);
-  if (state.reason) return state.reason;
+  if (state.reason) return await allowed() ? state.reason : null;
   if (!await allowed()) return null;
   const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: t.backendNodeId })
     .then((answer) => answer.quads, () => null);
   if (!quads) return null;
   if (!visiblePoint(quads, state.width, state.height)) return "that element isn't visible in the viewport";
-  if (!await allowed()) return null;
-  return (await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height)).reason ?? null;
+  const covered = await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height, allowed);
+  if (covered.stopped || !covered.reason) return null;
+  return await allowed() ? covered.reason : null;
 }
 
 // Adapt Playwright's finite actionability retry and alternating scroll
