@@ -297,50 +297,76 @@ test('an operation that stopped after its click opened a dialog says so',async()
 // The outcome's checks stop the moment access is revoked or their time runs
 // out: no page command after, and no reason read from the page. The
 // extension's own element-state probe (it says "that element is disabled")
-// is held to make the moment; engine_begin's own use of it, at the start,
-// is let through.
-async function holdStateProbe(ms: number): Promise<void> {
- await inWorker(setup.context,(ms:number)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armedAt:Date.now(),original:chrome.debugger.sendCommand};
+// is held to make the moment, once the spy is armed: engine_begin's own uses
+// of it come before its answer, so the first engine command arms it. Held
+// for `ms`, or without, until the test lets it go.
+async function holdStateProbe(ms?: number): Promise<void> {
+ await inWorker(setup.context,(ms:number|undefined)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armed:false,original:chrome.debugger.sendCommand};
   chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
    g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
    // The command goes out first; only its answer is held, so nothing logged
    // before a revocation is sent after it.
    const answer=g.probeSpy.original(target,method,params);
-   if(method==='Runtime.callFunctionOn'&&!g.probeSpy.held&&Date.now()-g.probeSpy.armedAt>1000&&String(params?.functionDeclaration??'').includes('that element is disabled')){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,ms));}
+   if(method==='Runtime.callFunctionOn'&&g.probeSpy.armed&&!g.probeSpy.held&&String(params?.functionDeclaration??'').includes('that element is disabled')){
+    g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();
+    await new Promise(done=>{g.probeSpy.release=done;setTimeout(done,ms??5000);});
+   }
    return answer;
   }) as typeof chrome.debugger.sendCommand;},ms);
 }
+const armStateProbe=async()=>{await inWorker(setup.context,()=>{const g=globalThis as any;if(g.probeSpy)g.probeSpy.armed=true;});};
 // Every command sent after `since` that reads the page. Not counted: the
 // operation's own cleanup (removing its guard, released objects, stopped
-// interceptors), and setting up the extension's own isolated world (the frame
-// tree read straight before Page.createIsolatedWorld, and the world itself),
-// which reads nothing by itself, unless what follows it does. A frame tree
-// read on its own, as the outcome check makes, always counts, and so does a
-// world followed by a read (DOM.resolveNode, Runtime.callFunctionOn).
+// interceptors), and setting up the extension's own isolated world:
+// Page.createIsolatedWorld, which reads nothing by itself, and the frame tree
+// read for it, the last one before it not already taken by another world. An
+// operation can be cleaned up twice at once (once more by an engine command
+// that was in flight when it was cancelled), so the two setups interleave.
+// What runs in a world counts by itself (DOM.resolveNode,
+// Runtime.callFunctionOn), and so does a frame tree read on its own, as the
+// outcome check makes.
 const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
  const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
   || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
- const idleWorld=(index:number)=>log[index]?.method==='Page.createIsolatedWorld'&&(!log[index+1]||cleanup(log[index+1]));
- return log.filter((entry,index)=>{
-  if(entry.at<=since||cleanup(entry)) return false;
-  if(entry.method==='Page.createIsolatedWorld') return !idleWorld(index);
-  if(entry.method==='Page.getFrameTree'&&log[index+1]?.method==='Page.createIsolatedWorld') return !idleWorld(index+1);
-  return true;
- }).map(entry=>entry.method);
+ const setup=new Set<number>();
+ log.forEach((entry,index)=>{
+  if(entry.method!=='Page.createIsolatedWorld') return;
+  setup.add(index);
+  for(let before=index-1;before>=0;before--) if(log[before].method==='Page.getFrameTree'&&!setup.has(before)){setup.add(before);break;}
+ });
+ return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!setup.has(index)).map(entry=>entry.method);
 };
+// Puts the extension's sendCommand back, once no isolated world is half set
+// up (a frame tree read or a world as the last command): a log cut between a
+// cleanup's frame tree read and its world would count the read. Lets a held
+// probe go.
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
- return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
+ for(let attempt=0;;attempt++){
+  const spy=await inWorker(setup.context,(force:boolean)=>{const g=globalThis as any;
+   const last=g.probeSpy.log.at(-1)?.method;
+   if(!force&&(last==='Page.getFrameTree'||last==='Page.createIsolatedWorld')) return null;
+   chrome.debugger.sendCommand=g.probeSpy.original;g.probeSpy.release?.();
+   const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};},attempt>=40);
+  if(spy) return spy;
+  await new Promise(done=>setTimeout(done,25));
+ }
 }
 
 test('site access revoked during the outcome check stops it, and no page reason comes back',async()=>{
  const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
- await holdStateProbe(500);
+ await holdStateProbe();
  try {
-  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  let armed=false;
+  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async()=>{if(!armed){armed=true;await armStateProbe();}},1500);
   let revokedAt=0;
   for(let i=0;i<200&&!revokedAt;i++){
-   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){setup.daemon.setPolicy({sites:[]});revokedAt=await inWorker(setup.context,()=>Date.now());}
+   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){
+    setup.daemon.setPolicy({sites:[]});
+    // Answered after the extension took the policy sent before it.
+    await setup.daemon.call('tabs');
+    revokedAt=await inWorker(setup.context,()=>{const g=globalThis as any;g.probeSpy.release();return Date.now();});
+   }
    else await page.waitForTimeout(25);
   }
   const run=await running;
@@ -355,7 +381,8 @@ test('an outcome check past its own deadline stops, and no page reason comes bac
  const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
  await holdStateProbe(1200);
  try {
-  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  let armed=false;
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async()=>{if(!armed){armed=true;await armStateProbe();}},1500);
   // Wait out the held probe, then look at what was sent after it.
   await page.waitForTimeout(1300);
   const spy=await releaseStateProbe();
