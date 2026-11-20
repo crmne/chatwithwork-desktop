@@ -27,8 +27,12 @@ export function tokenLike(segment: string): boolean {
   // Anywhere in the segment, so a prefix (`invite-<uuid>`) doesn't hide one.
   if (/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i.test(text)) return true;
   if (/^\d+$/.test(text)) return text.length > 19;
-  // Base64's own characters (and padding) in a long segment.
+  // Base64's own characters (and padding) in a long segment; a `/` only
+  // when encoded, since a literal one splits the path into segments.
   if (text.length >= 16 && /[+/=]/.test(text) && /^[A-Za-z0-9+/=_-]+$/.test(text)) return true;
+  // Base64url (`-` and `_`, no padding) before it's split at them: a long run
+  // mixing upper and lower case with digits. Word slugs don't.
+  if (text.length >= 20 && /^[A-Za-z0-9_-]+$/.test(text) && /[a-z]/.test(text) && /[A-Z]/.test(text) && /[0-9]/.test(text)) return true;
   for (const part of text.split(/[-_.~:,;!@$&'()*]+/)) {
     if (/^\d+$/.test(part)) { if (part.length > 19) return true; continue; }
     if (part.length >= 16 && /[0-9]/.test(part) && /[A-Za-z]/.test(part)) return true;

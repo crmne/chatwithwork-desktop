@@ -21,6 +21,10 @@ test("token-like segments: long hex, base64, JWT parts, UUIDs and over-long numb
     "AbCdEfGhIjKlMnOpQrStUvWxYz", // mixed-case random letters
     "a8Kd93kfLq0Zm2Xp", // 16 random letters and digits
     "reset-Zx81kQm2Lp0Wn4Rt", // a token behind a word
+    "a8Kd93kf_Lq0Zm2Xp_Q7Rt6VnB_y9Cs3HdE_W2j5Nk0", // base64url split by _ into short parts
+    "Zx8-1kQm-2Lp0-Wn4R-t9Qa", // base64url split by -
+    "dGhpcyBpcy9hIHRlc3Q%3D", // base64 with its padding encoded
+    "dGhpcyBp%2FcyBhIHRlc3Q", // base64 with an encoded /
     "abcdefghijklmnopqrstuvwxyzabcdefgh", // 34 letters in one run
   ]) assert.equal(tokenLike(token), true, token);
 });
@@ -31,6 +35,13 @@ test("names, slugs, dates and record numbers stay", () => {
     "12345", "9007199254740991", "v2", "README.md", "a1b2c3d4", "cus_NffrFeUfNV2Hib",
     "Q3-2026", "page-17", "en-US", "settings.json", "%E2%9C%93-done",
   ]) assert.equal(tokenLike(name), false, name);
+});
+
+test("a literal / splits a path, and each segment is judged on its own", () => {
+  // Two short segments: neither looks like a token by itself, so both show.
+  assert.equal(linkTarget("https://example.com/abcDEF12/ghIJ34k", page, allowed), "/abcDEF12/ghIJ34k");
+  // The same with its / encoded is one segment, judged whole.
+  assert.equal(linkTarget("https://example.com/abcDEF12%2FghIJ34kLm", page, allowed), "/…");
 });
 
 test("a link on the page's own site shows its path only", () => {
