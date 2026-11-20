@@ -339,12 +339,30 @@ const sentAfter=(log:{at:number,method:string,detail:string,failed?:boolean}[],s
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
  const setup=new Set<number>();
  log.forEach((entry,index)=>{
-  if(entry.method!=='Page.createIsolatedWorld'||entry.failed) return;
+  // A world Chrome refused still claims the frame tree read made for it.
+  if(entry.method!=='Page.createIsolatedWorld') return;
   setup.add(index);
   for(let before=index-1;before>=0;before--) if(log[before].method==='Page.getFrameTree'&&!log[before].failed&&!setup.has(before)){setup.add(before);break;}
  });
  return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!setup.has(index)&&!(SETUP.has(entry.method)&&entry.failed)).map(entry=>entry.method);
 };
+test('the page-read filter tells world setup from the outcome check\'s own frame tree read',()=>{
+ const t=(method:string,extra:object={})=>({at:10,method,detail:'',...extra});
+ const cleanupEval={at:10,method:'Runtime.evaluate',detail:'__cwwEngine_x'};
+ // Two cleanups setting up their worlds at once.
+ expect(sentAfter([t('Page.getFrameTree'),t('Page.createIsolatedWorld'),t('Page.getFrameTree'),cleanupEval,t('Page.createIsolatedWorld'),cleanupEval],0)).toEqual([]);
+ // A world Chrome refused, after a frame tree read that succeeded.
+ expect(sentAfter([t('Page.getFrameTree'),t('Page.createIsolatedWorld',{failed:true})],0)).toEqual([]);
+ // A frame tree read that failed.
+ expect(sentAfter([t('Page.getFrameTree',{failed:true})],0)).toEqual([]);
+ // The outcome check's own read still counts, alone or beside a cleanup.
+ expect(sentAfter([t('Page.getFrameTree')],0)).toEqual(['Page.getFrameTree']);
+ expect(sentAfter([t('Page.getFrameTree'),t('Page.getFrameTree'),t('Page.createIsolatedWorld',{failed:true}),cleanupEval],0)).toEqual(['Page.getFrameTree']);
+ // And what runs in a world counts.
+ expect(sentAfter([t('Page.getFrameTree'),t('Page.createIsolatedWorld'),t('DOM.resolveNode')],0)).toEqual(['DOM.resolveNode']);
+ // Nothing before the moment counts.
+ expect(sentAfter([{at:5,method:'DOM.resolveNode',detail:''}],5)).toEqual([]);
+});
 // Puts the extension's sendCommand back once no isolated world is half set
 // up, so a log cut between a cleanup's frame tree read and its world can't
 // count the read. While a frame tree read or a world is still waiting for
