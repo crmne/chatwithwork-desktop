@@ -3213,6 +3213,30 @@ impl App {
             let selected = self.chat.picker.as_ref().map_or(0, |p| p.selected);
             return self.pick(selected);
         }
+        // Down on a project's last chat reads its next page, which joins
+        // the list below, rather than wrapping round.
+        if key.code == KeyCode::Down
+            && let Some(Picker {
+                kind: PickerKind::ProjectChats(id),
+                selected,
+                ..
+            }) = self.chat.picker.as_ref()
+            && *selected + 1 >= len
+            && let Some(before) = self.chat.tree.cursors.get(id).cloned()
+            && let Some(number) = self
+                .chat
+                .list
+                .projects
+                .iter()
+                .find(|p| p.id == *id)
+                .and_then(|p| p.number)
+        {
+            return vec![Effect::Chat(ChatCommand::ProjectChats {
+                project: *id,
+                number,
+                before: Some(before),
+            })];
+        }
         let Some(picker) = self.chat.picker.as_mut() else {
             return Vec::new();
         };

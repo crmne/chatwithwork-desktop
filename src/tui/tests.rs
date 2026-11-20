@@ -4906,6 +4906,22 @@ fn without_the_sidebar_slash_commands_drive_it() {
             |i| matches!(i, PickItem::Chat(c) if c.project.as_ref().is_some_and(|p| p.id == 3))
         )
     );
+    // Its next page, from the last row.
+    app.update(Msg::Chat(ChatMsg::ProjectChats {
+        project: 3,
+        result: Ok((vec![], Some("cursor-2".into()))),
+    }));
+    for _ in 0..6 {
+        app.update(key(KeyCode::Down));
+    }
+    assert_eq!(
+        app.update(key(KeyCode::Down)),
+        vec![Effect::Chat(ChatCommand::ProjectChats {
+            project: 3,
+            number: 3,
+            before: Some("cursor-2".into())
+        })]
+    );
     // /open by number, and by a name only one thing has.
     let effects = run(&mut app, "/open 41");
     assert!(effects.contains(&Effect::Chat(ChatCommand::Open(41))));
