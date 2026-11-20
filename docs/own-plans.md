@@ -59,6 +59,7 @@ chats = false
 
 - `cww plans` (or `--json`) says what this computer has for each: installed, signed in, who pays, and the yes.
 - `cww plans allow <codex|claude> [--bot 42] [--off]` gives or takes back a yes. The control API's `plans_allow` (CONTROL.md) is the same, for the app's window.
+- Chat with Work can take a yes back (`withdraw_plan`, from 0.19.0: its Settings row's Disconnect), as `cww plans allow --off` does, never give one.
 - Chat with Work can ask (`ask_plan`), never allow: the app asks in its own dialog, "Let Chat with Work use your ChatGPT plan for your chats?" or "...for Issue fixer?", saying that answers count toward the plan's limits and that what the person asks, the chat so far and what tools read for them go to OpenAI, outside the EU, under their own account, with Allow and Deny, named from this computer's own settings. Without the app, a system notification says to open it, and `cww roots requests` lists what waits.
 
 Every change is audited (`plan_asked`, `plan_allowed`, `plan_declined`, `plan_withdrawn`), and so is every step (`think`: the agent, chat, bot, how it ended, how many calls, sizes; never the instructions, the conversation, the text or the arguments). Turning a yes off takes effect at the next step; pausing the computer stops a step at once.
@@ -79,7 +80,7 @@ What the agent's own program does with the sign-in it's lent is as for bots' cod
 
 - `real_agent_thinks_from_the_sandbox` (`CWW_TEST_AGENT`, `CWW_TEST_PERSON_HOME`, `CWW_TEST_CWW`, `CWW_TEST_PROGRAM`, `CWW_TEST_MODEL`): a real Codex 0.167.0 through `codex app-server` answered a step in text, called a tool and was stopped with the call returned, and, asked to run `ls -la ~` and print its own sign-in, said it had no tool for it; no token appeared in anything a step returned. The test home's `config.toml` named instructions and an MCP server that would have left a file, and it had an `AGENTS.md`: none was read.
 - In Seatbelt, Codex still exits at once, as for bots' runs ([coding-computers.md](coding-computers.md#codexs-sign-in)), so on macOS it's `unavailable`.
-- The unit tests (both parsers on captured streams, the app-server's handshake, the yes, arguments, command lines, progress, the MCP shim), a sandbox test with a stand-in agent (stopped at its calls, token taken out, folder removed, raw output), and an end-to-end test through the tunnel (`plans`, `ask_plan` and its answer, `think` with progress, the yes turned off).
+- The unit tests (both parsers on captured streams, the app-server's handshake, the yes, arguments, command lines, progress, the MCP shim), a sandbox test with a stand-in agent (stopped at its calls, token taken out, folder removed, raw output), and an end-to-end test through the tunnel (`plans`, `ask_plan` and its answer, `think` with progress, the yes turned off, and `withdraw_plan` taking the owner's and a bot's yes back).
 
 **2026-11-08, Claude Code (off, see above):** a real Claude Code 2.1.319 (chalk) and 2.1.299 (Mac mini, Seatbelt) did the same from the sandbox; a hook and a `CLAUDE.md` in the test home didn't run.
 

@@ -688,6 +688,92 @@ async fn only_a_bot_may_ask_and_only_for_its_folders_with_commands() {
     assert!(asks.pending().is_empty());
 }
 
+/// The server takes back a yes to think with a plan (`withdraw_plan`): the
+/// daemon hears which agent and whose yes, the answer says whether there was
+/// one, it's never listed, and only a real agent and bot ID reach it.
+#[tokio::test]
+async fn the_server_takes_back_a_plans_yes_through_the_daemon() {
+    let (_tmp, _audit, files, _asks) = ask_fixture(false, false);
+    let (withdrawals, mut withdrawn) = tokio::sync::mpsc::unbounded_channel();
+    let files = files
+        .with_runner(crate::commands::Runner::Off("not here".into()))
+        .with_plan_withdrawals(withdrawals);
+    assert!(
+        !files.tools().iter().any(|t| t.name == WITHDRAW_PLAN),
+        "never listed"
+    );
+
+    let answering = tokio::spawn(async move {
+        let first = withdrawn.recv().await.unwrap();
+        assert_eq!(
+            (first.agent, first.bot.as_deref()),
+            (crate::coding::Agent::Codex, None)
+        );
+        first.done.send(Ok(true)).unwrap();
+        let second = withdrawn.recv().await.unwrap();
+        assert_eq!(second.bot.as_deref(), Some("7"));
+        second.done.send(Ok(false)).unwrap();
+        let third = withdrawn.recv().await.unwrap();
+        third
+            .done
+            .send(Err("config unwritable at /home/x".into()))
+            .unwrap();
+    });
+    let call = |args: Value, caller: Caller| {
+        let files = files.clone();
+        async move {
+            let Value::Object(args) = args else {
+                unreachable!()
+            };
+            files
+                .call_as(
+                    WITHDRAW_PLAN,
+                    Some(args),
+                    Some("1".into()),
+                    "r".into(),
+                    None,
+                    caller,
+                )
+                .await
+                .expect("a known tool")
+        }
+    };
+    let person = call(json!({ "agent": "codex" }), Caller::Person).await;
+    assert_eq!(
+        person.structured_content.unwrap(),
+        json!({ "status": "withdrawn" })
+    );
+    let bots = call(json!({ "agent": "codex" }), bot()).await;
+    assert_eq!(
+        bots.structured_content.unwrap(),
+        json!({ "status": "already" })
+    );
+    let failed = call(json!({ "agent": "codex" }), Caller::Person).await;
+    assert_eq!(failed.is_error, Some(true));
+    assert!(
+        !serde_json::to_string(&failed).unwrap().contains("/home/x"),
+        "no path reaches the server"
+    );
+    answering.await.unwrap();
+
+    for refused in [json!({ "agent": "claude" }), json!({ "agent": "gemini" })] {
+        assert_eq!(
+            call(refused, Caller::Person).await.is_error,
+            Some(true),
+            "not an agent's wire name"
+        );
+    }
+    let odd_bot = Caller::Bot {
+        id: "7 8".into(),
+        unattended: false,
+    };
+    assert_eq!(
+        call(json!({ "agent": "codex" }), odd_bot).await.is_error,
+        Some(true),
+        "not a bot's ID"
+    );
+}
+
 async fn allow(files: &LocalFiles, root: &str, caller: Caller) -> rmcp::model::CallToolResult {
     let Value::Object(args) = json!({ "root": root }) else {
         unreachable!()
