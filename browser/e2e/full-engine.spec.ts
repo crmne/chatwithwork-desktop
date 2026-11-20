@@ -306,10 +306,14 @@ test('an operation that stopped after its click opened a dialog says so',async()
 async function holdStateProbe(ms?: number): Promise<void> {
  await inWorker(setup.context,(ms:number|undefined)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armed:false,original:chrome.debugger.sendCommand};
   chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
-   g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
+   const entry={at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200),pending:true,failed:false};
+   g.probeSpy.log.push(entry);
    // The command goes out first; only its answer is held, so nothing logged
    // before a revocation is sent after it.
    const answer=g.probeSpy.original(target,method,params);
+   // When Chrome answered, apart from the hold: a world setup still waiting
+   // for its frame tree, or one whose command failed, is told apart below.
+   Promise.resolve(answer).then(()=>{entry.pending=false;},()=>{entry.pending=false;entry.failed=true;});
    if(method==='Runtime.callFunctionOn'&&g.probeSpy.armed&&!g.probeSpy.held&&String(params?.functionDeclaration??'').includes('that element is disabled')){
     g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();
     await new Promise(done=>{g.probeSpy.release=done;setTimeout(done,ms??5000);});
@@ -325,34 +329,45 @@ const armStateProbe=async()=>{await inWorker(setup.context,()=>{const g=globalTh
 // read for it, the last one before it not already taken by another world. An
 // operation can be cleaned up twice at once (once more by an engine command
 // that was in flight when it was cancelled), so the two setups interleave.
-// What runs in a world counts by itself (DOM.resolveNode,
-// Runtime.callFunctionOn), and so does a frame tree read on its own, as the
-// outcome check makes.
-const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
+// A frame tree read or world Chrome refused read nothing either. What runs
+// in a world counts by itself (DOM.resolveNode, Runtime.callFunctionOn), and
+// so does a frame tree read on its own, as the outcome check makes.
+const SETUP=new Set(['Page.getFrameTree','Page.createIsolatedWorld']);
+const sentAfter=(log:{at:number,method:string,detail:string,failed?:boolean}[],since:number)=>{
  const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
   || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
  const setup=new Set<number>();
  log.forEach((entry,index)=>{
-  if(entry.method!=='Page.createIsolatedWorld') return;
+  if(entry.method!=='Page.createIsolatedWorld'||entry.failed) return;
   setup.add(index);
-  for(let before=index-1;before>=0;before--) if(log[before].method==='Page.getFrameTree'&&!setup.has(before)){setup.add(before);break;}
+  for(let before=index-1;before>=0;before--) if(log[before].method==='Page.getFrameTree'&&!log[before].failed&&!setup.has(before)){setup.add(before);break;}
  });
- return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!setup.has(index)).map(entry=>entry.method);
+ return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!setup.has(index)&&!(SETUP.has(entry.method)&&entry.failed)).map(entry=>entry.method);
 };
-// Puts the extension's sendCommand back, once no isolated world is half set
-// up (a frame tree read or a world as the last command): a log cut between a
-// cleanup's frame tree read and its world would count the read. After five
-// seconds the log is taken as it is, so a frame tree read the outcome check
-// made on its own still fails the test. Lets a held probe go.
-async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
- for(let attempt=0;;attempt++){
-  const spy=await inWorker(setup.context,(force:boolean)=>{const g=globalThis as any;
-   const last=g.probeSpy.log.at(-1)?.method;
-   if(!force&&(last==='Page.getFrameTree'||last==='Page.createIsolatedWorld')) return null;
+// Puts the extension's sendCommand back once no isolated world is half set
+// up, so a log cut between a cleanup's frame tree read and its world can't
+// count the read. While a frame tree read or a world is still waiting for
+// Chrome's answer, it waits for that answer (20 seconds at most: the
+// extension gives up on a command after 15). Once answered, a cleanup's next
+// command follows at once, so a frame tree read still last after five more
+// seconds is one the outcome check made on its own, and the log is taken with
+// it, to fail the test. Lets a held probe go.
+async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string,failed?:boolean}[],held:boolean,heldAt:number}> {
+ const started=Date.now();
+ let answeredAt:number|undefined;
+ for(;;){
+  const state=await inWorker(setup.context,(waited:{pending:boolean,answered:boolean})=>{const g=globalThis as any;
+   const setupMethods=['Page.getFrameTree','Page.createIsolatedWorld'];
+   const pending=g.probeSpy.log.some((entry:any)=>entry.pending&&setupMethods.includes(entry.method));
+   const last=g.probeSpy.log.at(-1);
+   const halfSetUp=last&&setupMethods.includes(last.method)&&!last.failed;
+   if((pending&&!waited.pending)||(!pending&&halfSetUp&&!waited.answered)) return {pending,spy:null};
    chrome.debugger.sendCommand=g.probeSpy.original;g.probeSpy.release?.();
-   const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};},attempt>=200);
-  if(spy) return spy;
+   const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {pending,spy:{log,held,heldAt}};
+  },{pending:Date.now()-started>=20_000,answered:answeredAt!==undefined&&Date.now()-answeredAt>=5_000});
+  if(state.spy) return state.spy;
+  if(state.pending) answeredAt=undefined; else answeredAt??=Date.now();
   await new Promise(done=>setTimeout(done,25));
  }
 }
