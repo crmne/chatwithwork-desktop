@@ -361,3 +361,41 @@ test('an outcome check past its own deadline stops, and no page reason comes bac
   expect(sentAfter(spy.log,spy.heldAt)).toEqual([]);
  } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });
+
+test('site access revoked while the outcome check looks at the page after input stops it there',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false, armed=false;
+ const arm=()=>inWorker(setup.context,()=>{const g=globalThis as any;g.probeSpy={log:[],held:false,original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
+   // The outcome check's own read of the frame tree, after the operation ended.
+   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,500));}
+   const answer=await g.probeSpy.original(target,method,params);
+   // Once the real press reached the page the extension has nothing more to
+   // send until its own timer ends the operation (the release is held).
+   if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed') g.probeSpy.ended=true;
+   return answer;
+  }) as typeof chrome.debugger.sendCommand;});
+ try {
+  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mousePressed'&&!armed){armed=true;await arm();}
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased'){
+    if(!armed){armed=true;await arm();}
+    await new Promise(done=>setTimeout(done,10000));
+   }
+  },8000);
+  let revokedAt=0;
+  for(let i=0;i<500&&!revokedAt;i++){
+   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){setup.daemon.setPolicy({sites:[]});revokedAt=await inWorker(setup.context,()=>Date.now());}
+   else await page.waitForTimeout(25);
+  }
+  const run=await running;
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome.dispatched).toBe(true);
+  // What was read before the removal may be said; nothing after it.
+  expect(run.outcome.observed.element_present).toBeUndefined();
+  expect(sentAfter(spy.log,revokedAt)).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
