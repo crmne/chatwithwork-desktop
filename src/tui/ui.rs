@@ -37,7 +37,8 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 const MARK: &str = "◆";
 /// A bot, as the web's bot mark: a little screen with eyes.
 pub(super) const BOT: &str = "◙";
-/// Decisions, as the web's seal with a question.
+/// Decisions, as the web's signpost. No signpost glyph renders reliably in
+/// common terminal fonts (U+1FAA7 is an emoji), so a diamond stands in.
 const DECISIONS: &str = "◇";
 /// A project, HQ, and a project only you are on (the web's lock).
 const FOLDER: &str = "□";
@@ -2185,11 +2186,19 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
         rows: Vec::new(),
     };
 
-    if let Some(picker) = pane.picker.as_ref().filter(|_| usable) {
+    // A picker navigates, so it works while asking is locked (out of
+    // credits, say): only sending is refused.
+    if let Some(picker) = pane.picker.as_ref().filter(|_| pane.ready()) {
+        let focused = pane.ready() && app.focus == Focus::Composer && app.modal.is_none();
         let label = match picker.kind {
             PickerKind::Chats => "Resume a chat: ",
             PickerKind::Models => "Model: ",
             PickerKind::Projects => "Project: ",
+            PickerKind::Bots => "Open a bot: ",
+            PickerKind::Orgs => "Organization: ",
+            PickerKind::Places => "Look in a project: ",
+            PickerKind::ProjectChats(_) => "A chat in it: ",
+            PickerKind::Search => "Open: ",
         };
         let query = tail(&picker.query, room.saturating_sub(label.chars().count()));
         view.cursor = focused.then_some((
@@ -2453,6 +2462,34 @@ fn picker_rows(view: &mut ComposerView, app: &App, theme: &Theme, width: usize) 
                     ));
                 }
             }
+            PickItem::Bot(bot) => {
+                spans.push(Span::styled(format!("{BOT} "), theme.strong()));
+                spans.push(Span::styled(
+                    ellipsize(&bot.name, width.saturating_sub(4)),
+                    name_style,
+                ));
+                if let Some(label) = &bot.state_label {
+                    spans.push(Span::styled(format!(" · {label}"), theme.faint()));
+                }
+            }
+            PickItem::Org(org) => {
+                spans.push(Span::styled(
+                    ellipsize(&org.name, width.saturating_sub(12)),
+                    name_style,
+                ));
+                if org.id == pane.current_org {
+                    spans.push(Span::styled(
+                        "  current",
+                        theme.signal_ink(Signal::Positive),
+                    ));
+                }
+            }
+            PickItem::Place(project) => {
+                spans.push(Span::styled(
+                    ellipsize(&project.name, width.saturating_sub(2)),
+                    name_style,
+                ));
+            }
             PickItem::Project(project) => {
                 let name = project.map_or("No project", |p| p.name.as_str());
                 spans.push(Span::styled(
@@ -2494,20 +2531,30 @@ fn composer_box(
     let block = Block::bordered().border_type(BorderType::Rounded);
     let inner = pad(block.inner(area), 1, 0);
     frame.render_widget(block, area);
-    let phase = if pane.working() {
+    // The rainbow always, as the web's composer wears it: still at rest,
+    // flowing while an answer is written (still with reduced motion), dim
+    // while it can't send, and amber while a change or a question waits.
+    let flowing = pane.working() && !app.reduce_motion;
+    let phase = if flowing {
         // One trip around every two seconds.
         (now.unix_timestamp_nanos() % 2_000_000_000) as f32 / 2_000_000_000.0
     } else {
         0.0
     };
-    let edge = if !usable {
-        Edge::Plain(theme.line())
-    } else if pane.pending_decision().is_some() || pane.pending_question().is_some() {
+    let edge = if pane.pending_decision().is_some() || pane.pending_question().is_some() {
         Edge::Plain(theme.edge(Signal::Attention))
-    } else if phase > 0.0 {
-        Edge::Rainbow(phase)
-    } else {
+    } else if !usable && theme.mono() {
         Edge::Plain(theme.line())
+    } else if !usable {
+        Edge::Rainbow {
+            phase: 0.0,
+            dim: true,
+        }
+    } else if theme.mono() && !pane.working() {
+        // Without colour a still rainbow is just the edge; bold says work.
+        Edge::Plain(theme.ink())
+    } else {
+        Edge::Rainbow { phase, dim: false }
     };
     composer_edge(frame.buffer_mut(), area, theme, edge);
     // The model, on the bottom edge, where the desktop app shows it.
@@ -2541,8 +2588,12 @@ fn composer_box(
 
 enum Edge {
     Plain(Style),
-    /// Flowing, shifted by this much of the way round.
-    Rainbow(f32),
+    /// Shifted by this much of the way round (0 is still), dimmed while
+    /// the composer can't send.
+    Rainbow {
+        phase: f32,
+        dim: bool,
+    },
 }
 
 /// Draws the composer's edge in `edge`'s colours, foreground only.
@@ -2562,11 +2613,21 @@ fn composer_edge(buf: &mut Buffer, area: Rect, theme: &Theme, edge: Edge) {
             }
             let style = match edge {
                 Edge::Plain(style) => style,
-                Edge::Rainbow(phase) => {
-                    // The gradient runs there and back so it never jumps.
+                Edge::Rainbow { phase, dim } => {
                     let along = (x - area.left()) as f32 / span;
-                    let shifted = (along + phase) % 1.0;
-                    theme.rainbow(1.0 - (2.0 * shifted - 1.0).abs())
+                    let style = if phase > 0.0 {
+                        // Flowing, the gradient runs there and back so it
+                        // never jumps.
+                        let shifted = (along + phase) % 1.0;
+                        theme.rainbow(1.0 - (2.0 * shifted - 1.0).abs())
+                    } else {
+                        theme.rainbow(along)
+                    };
+                    if dim {
+                        style.add_modifier(Modifier::DIM)
+                    } else {
+                        style
+                    }
                 }
             };
             if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
@@ -3079,7 +3140,7 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 ("+", "new chat in the selected project"),
                 ("/", "search chats and bots"),
                 ("f", "show all, only chats, or only bots"),
-                ("[", "hide or show the sidebar"),
+                ("[", "hide or show the sidebar (/sidebar), remembered"),
                 ("tab", "move between the sidebar and the chat"),
             ],
         ));
@@ -3090,6 +3151,7 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 ("g s", "settings"),
                 ("g c  g b  g a", "show only chats, only bots, or all"),
                 ("g l", "the activity log"),
+                ("/org", "another organization you're signed in to"),
             ],
         ));
         groups.push((
@@ -3167,7 +3229,10 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
         ("ACCOUNT", vec![("d", "disconnect this computer")]),
         (
             "ANYWHERE ELSE",
-            vec![("r", "look for the daemon and read the chats again")],
+            vec![(
+                "r",
+                "read what's on screen again (/refresh), and look for the daemon",
+            )],
         ),
         (
             "ANYWHERE",

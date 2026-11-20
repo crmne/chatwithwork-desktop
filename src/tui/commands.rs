@@ -5,6 +5,13 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     New,
+    Org,
+    Decisions,
+    Bots,
+    Projects,
+    Refresh,
+    Sidebar,
+    Pin,
     NewBot,
     MakeBot,
     TryBot,
@@ -76,6 +83,30 @@ const fn command(
 pub const COMMANDS: &[Command] = &[
     command(Cmd::New, "new", &["clear"], "", false, "Start a new chat"),
     command(
+        Cmd::Decisions,
+        "decisions",
+        &[],
+        "",
+        false,
+        "What waits for you, to decide",
+    ),
+    command(
+        Cmd::Bots,
+        "bots",
+        &[],
+        "[name]",
+        false,
+        "Pick a bot to open",
+    ),
+    command(
+        Cmd::Projects,
+        "projects",
+        &[],
+        "[name]",
+        false,
+        "Pick a project, then one of its chats",
+    ),
+    command(
         Cmd::NewBot,
         "new-bot",
         &[],
@@ -121,7 +152,7 @@ pub const COMMANDS: &[Command] = &[
         &[],
         "<text>",
         true,
-        "Search your chats",
+        "Search your chats and bots",
     ),
     command(
         Cmd::Model,
@@ -192,9 +223,9 @@ pub const COMMANDS: &[Command] = &[
         Cmd::Open,
         "open",
         &[],
-        "",
+        "[number or name]",
         false,
-        "Open the chat in the browser",
+        "Open a chat or bot here, or this chat in the browser",
     ),
     command(
         Cmd::Retry,
@@ -326,6 +357,38 @@ pub const COMMANDS: &[Command] = &[
         false,
         "Disconnect this computer, forgetting its pairing",
     ),
+    command(
+        Cmd::Sidebar,
+        "sidebar",
+        &[],
+        "[show|hide]",
+        false,
+        "Hide or show the sidebar ([)",
+    ),
+    command(
+        Cmd::Refresh,
+        "refresh",
+        &["reload"],
+        "",
+        false,
+        "Read what's on screen again (r)",
+    ),
+    command(
+        Cmd::Pin,
+        "pin",
+        &["unpin"],
+        "",
+        false,
+        "Pin or unpin this chat",
+    ),
+    command(
+        Cmd::Org,
+        "org",
+        &["organization"],
+        "[name or number]",
+        false,
+        "Switch to another organization you're signed in to",
+    ),
     command(Cmd::Help, "help", &["?"], "", false, "Commands and keys"),
     command(Cmd::Exit, "exit", &["quit"], "", false, "Quit"),
 ];
@@ -387,7 +450,10 @@ mod tests {
                 .map(|c| c.name)
                 .collect()
         };
-        assert_eq!(names("re"), ["resume", "retry", "rename", "resume-sharing"]);
+        assert_eq!(
+            names("re"),
+            ["resume", "retry", "rename", "resume-sharing", "refresh"]
+        );
         assert_eq!(names("cl"), ["new"], "by its alias");
         assert_eq!(names("qu"), ["exit"]);
         assert!(names("zz").is_empty());

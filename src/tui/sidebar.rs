@@ -217,6 +217,29 @@ pub fn save_filter(path: &Path, filter: Filter) -> std::io::Result<()> {
     std::fs::write(path, format!("{}\n", filter.key()))
 }
 
+/// Where hiding the sidebar is kept: one word beside the filter.
+pub fn hidden_path(history: &Path) -> PathBuf {
+    history.with_file_name("sidebar-hidden")
+}
+
+pub fn load_hidden(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| text.trim() == "hidden")
+}
+
+pub fn save_hidden(path: &Path, hidden: bool) -> std::io::Result<()> {
+    if hidden {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, "hidden\n")
+    } else {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// What the person opened and closed here, over what the server says.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tree {
@@ -606,6 +629,13 @@ mod tests {
         assert_eq!(load_filter(&path), Filter::Bots);
         std::fs::write(&path, "nonsense").unwrap();
         assert_eq!(load_filter(&path), Filter::All);
+        let hidden = hidden_path(&dir.path().join("history"));
+        assert!(!load_hidden(&hidden), "shown at first");
+        save_hidden(&hidden, true).unwrap();
+        assert!(load_hidden(&hidden));
+        save_hidden(&hidden, false).unwrap();
+        assert!(!load_hidden(&hidden));
+        save_hidden(&hidden, false).unwrap();
     }
 
     #[test]

@@ -554,6 +554,8 @@ pub enum ChatCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatAction {
+    /// Pinned (true) or unpinned in the sidebar.
+    Pin(bool),
     /// The latest question, answered again.
     Retry,
     /// The whole conversation, in a new chat.
@@ -570,6 +572,7 @@ pub enum Acted {
     Chat(ChatSummary),
     Deleted,
     Shared(Shared),
+    Pins(super::chat::Pins),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,6 +593,11 @@ pub enum Effect {
     CrashReports(bool),
     /// Keep the sidebar's filter for the next run.
     RememberFilter(super::sidebar::Filter),
+    /// Keep the sidebar hidden (true) or shown for the next run.
+    RememberSidebar(bool),
+    /// Start again in another organization: a saved sign-in by its ID, or
+    /// this computer's own (`None`).
+    SwitchOrganization(Option<String>),
     Quit,
 }
 
@@ -791,6 +799,10 @@ pub struct ChatPane {
     pub bot_page: Option<BotPage>,
     /// New bot, while it's open.
     pub new_bot: Option<super::newbot::NewBot>,
+    /// The organizations this computer is signed in to, for `/org`.
+    pub orgs: Vec<OrgChoice>,
+    /// The saved sign-in the chats are from; `None` is the computer's own.
+    pub current_org: Option<String>,
     /// What trying or making the open chat's proposed bot said.
     pub draft_result: Vec<String>,
     pub draft_busy: Option<&'static str>,
@@ -875,6 +887,8 @@ impl Default for ChatPane {
             decision_row: 0,
             bot_page: None,
             new_bot: None,
+            orgs: Vec::new(),
+            current_org: None,
             draft_result: Vec::new(),
             draft_busy: None,
             open: None,
@@ -938,6 +952,14 @@ pub enum SideItem {
     MoreProjects,
 }
 
+/// An organization this computer is signed in to: its own pairing (`id`
+/// `None`), or a saved sign-in (`cww login --organization`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgChoice {
+    pub id: Option<String>,
+    pub name: String,
+}
+
 /// A bot's page: what the server said of it, and the runs listed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BotPage {
@@ -950,6 +972,8 @@ pub struct BotPage {
     pub error: Option<String>,
     /// The selected run.
     pub selected: usize,
+    /// It changed again while it was read: read it once more after.
+    pub again: bool,
 }
 
 impl BotPage {
@@ -1055,7 +1079,18 @@ pub struct Picker {
 pub enum PickerKind {
     Chats,
     Models,
+    /// The project the next new chat starts in.
     Projects,
+    /// A bot to open.
+    Bots,
+    /// An organization to switch to.
+    Orgs,
+    /// A project whose chats to pick from.
+    Places,
+    /// The chats of the project by this id.
+    ProjectChats(u64),
+    /// Chats and bots by name, for `/search` and `/open`.
+    Search,
 }
 
 /// One row of a picker.
@@ -1065,6 +1100,10 @@ pub enum PickItem<'a> {
     Model(&'a Model),
     /// `None` is "no project".
     Project(Option<&'a Project>),
+    Bot(&'a super::sidebar::BotRow),
+    Org(&'a OrgChoice),
+    /// A project to look into.
+    Place(&'a Project),
 }
 
 /// The answers to a change waiting for approval, as the prompt lists them.
@@ -1462,6 +1501,60 @@ impl ChatPane {
                     .collect(),
                 _ => Vec::new(),
             },
+            PickerKind::Orgs => self
+                .orgs
+                .iter()
+                .filter(|o| has(&o.name))
+                .map(PickItem::Org)
+                .collect(),
+            PickerKind::Bots => self
+                .sidebar()
+                .map(|s| {
+                    s.bots
+                        .iter()
+                        .filter(|b| has(&b.name))
+                        .map(PickItem::Bot)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            PickerKind::ProjectChats(id) => self
+                .list
+                .chats
+                .iter()
+                .filter(|c| c.project.as_ref().is_some_and(|p| p.id == id))
+                .filter(|c| has(&c.title) || c.number.to_string() == query.trim_start_matches('#'))
+                .map(PickItem::Chat)
+                .collect(),
+            PickerKind::Places => self
+                .list
+                .projects
+                .iter()
+                .filter(|p| has(&p.name))
+                .map(PickItem::Place)
+                .collect(),
+            PickerKind::Search => {
+                let mut items: Vec<PickItem> = self
+                    .list
+                    .chats
+                    .iter()
+                    .filter(|c| {
+                        has(&c.title)
+                            || c.number.to_string() == query.trim_start_matches('#')
+                            || c.project.as_ref().is_some_and(|p| has(&p.name))
+                    })
+                    .map(PickItem::Chat)
+                    .collect();
+                if let Some(sidebar) = self.sidebar() {
+                    items.extend(
+                        sidebar
+                            .bots
+                            .iter()
+                            .filter(|b| has(&b.name))
+                            .map(PickItem::Bot),
+                    );
+                }
+                items
+            }
             PickerKind::Projects => {
                 let mut items = Vec::new();
                 if query.is_empty() || "no project".contains(&query) {
@@ -1568,8 +1661,11 @@ pub struct App {
     pub commands: crate::commands::follow::Snapshot,
     /// Whether crash reports are sent, as the General page shows it.
     pub crash_reports: crate::crash_reports::Consent,
-    /// `[` hid the sidebar.
+    /// `[` or `/sidebar` hid the sidebar; kept between runs.
     pub sidebar_hidden: bool,
+    /// The desktop app's reduce motion setting: the composer's rainbow
+    /// holds still while an answer is written.
+    pub reduce_motion: bool,
     /// `g` was pressed: the next key says where to go.
     pub go: bool,
 }
@@ -1605,8 +1701,25 @@ impl App {
             commands: crate::commands::follow::Snapshot::default(),
             crash_reports: crate::crash_reports::Consent::default(),
             sidebar_hidden: false,
+            reduce_motion: false,
             go: false,
         }
+    }
+
+    /// With the sidebar shown or hidden as the person left it, and the
+    /// desktop app's reduce motion setting.
+    pub fn with_layout(mut self, sidebar_hidden: bool, reduce_motion: bool) -> Self {
+        self.sidebar_hidden = sidebar_hidden;
+        self.reduce_motion = reduce_motion;
+        self
+    }
+
+    /// With the organizations this computer is signed in to, and which one
+    /// the chats are from.
+    pub fn with_organizations(mut self, orgs: Vec<OrgChoice>, current: Option<String>) -> Self {
+        self.chat.orgs = orgs;
+        self.chat.current_org = current;
+        self
     }
 
     /// With the sidebar's filter as the person left it.
@@ -1927,7 +2040,7 @@ impl App {
                 self.go = true;
                 self.notice(super::theme::Signal::Idle, GO_HINT);
             }
-            KeyCode::Char('[') if side => self.sidebar_hidden = !self.sidebar_hidden,
+            KeyCode::Char('[') if side => return self.show_sidebar(self.sidebar_hidden),
             KeyCode::Char('f') if side && self.chat.ready() => return self.next_filter(),
             KeyCode::Right | KeyCode::Char('l') if side && self.chat.ready() => {
                 return self.tree_right();
@@ -1991,17 +2104,19 @@ impl App {
                 if self.paired() && !matches!(self.chat.access, Access::Loading) {
                     if !self.chat.ready() {
                         self.chat.access = Access::Loading;
-                    }
-                    effects.push(Effect::Chat(ChatCommand::List));
-                    if let Some(open) = self.chat.open {
-                        if matches!(
-                            self.chat.following,
-                            Following::Refused | Following::Unsupported
-                        ) {
+                        effects.push(Effect::Chat(ChatCommand::List));
+                    } else {
+                        if let Some(open) = self.chat.open
+                            && matches!(
+                                self.chat.following,
+                                Following::Refused | Following::Unsupported
+                            )
+                        {
                             self.chat.following = Following::Starting;
                             effects.push(Effect::Chat(ChatCommand::Follow(Some(open))));
                         }
-                        effects.extend(self.refresh_chat(open));
+                        // The list, and whatever the screen shows.
+                        effects.extend(self.refresh_view());
                     }
                 }
                 return effects;
@@ -2611,7 +2726,7 @@ impl App {
             Cmd::Delete => can(|c| c.delete),
             Cmd::ShareChat => can(|c| c.share),
             Cmd::UnshareChat => open.is_some_and(|c| c.share.is_some()),
-            Cmd::Copy | Cmd::Open => open.is_some(),
+            Cmd::Copy => open.is_some(),
             Cmd::Detach => !self.chat.attachments.is_empty(),
             Cmd::Unqueue => self.chat.last_unqueueable().is_some(),
             Cmd::Login => self.can_pair(),
@@ -2620,6 +2735,11 @@ impl App {
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
             Cmd::NewBot => self.chat.can_make_bots(),
+            // Any bot they read, whether or not they make bots.
+            Cmd::Bots => self.chat.sidebar().is_some_and(|s| !s.bots.is_empty()),
+            Cmd::Org => true,
+            Cmd::Decisions => self.chat.sidebar().is_some(),
+            Cmd::Pin => open.is_some_and(|c| c.can(|can| can.pin)),
             Cmd::MakeBot | Cmd::TryBot => self.open_draft().is_some_and(|d| d.made.is_none()),
             Cmd::OpenBot => self.open_draft().is_some_and(|d| d.made.is_some()),
             Cmd::Commands => !self.commands.commands.is_empty(),
@@ -2765,6 +2885,24 @@ impl App {
                 return self.new_chat();
             }
             Cmd::Resume => self.open_picker(PickerKind::Chats, args),
+            Cmd::Decisions => return self.open_decisions(),
+            Cmd::Bots => self.open_picker(PickerKind::Bots, args),
+            Cmd::Projects => self.open_picker(PickerKind::Places, args),
+            Cmd::Refresh => return self.refresh_view(),
+            Cmd::Sidebar => {
+                let show = match args.trim() {
+                    "show" | "on" => true,
+                    "hide" | "off" => false,
+                    _ => self.sidebar_hidden,
+                };
+                return self.show_sidebar(show);
+            }
+            Cmd::Pin => return self.pin_open_chat(),
+            Cmd::Org => return self.org(args),
+            // Without the sidebar on screen, its search is a picker.
+            Cmd::Search if !self.hits.0.iter().any(|(_, hit)| *hit == Hit::Search) => {
+                self.open_picker(PickerKind::Search, args);
+            }
             Cmd::Search => {
                 self.focus = Focus::Chats;
                 self.view = View::Chat;
@@ -2843,6 +2981,7 @@ impl App {
                 }
                 None => self.notice(Signal::Idle, "There's no answer to copy yet."),
             },
+            Cmd::Open if !args.trim().is_empty() => return self.open_named(args),
             Cmd::Open => return self.open_in_browser(),
             Cmd::Retry
             | Cmd::Branch
@@ -3074,6 +3213,30 @@ impl App {
             let selected = self.chat.picker.as_ref().map_or(0, |p| p.selected);
             return self.pick(selected);
         }
+        // Down on a project's last chat reads its next page, which joins
+        // the list below, rather than wrapping round.
+        if key.code == KeyCode::Down
+            && let Some(Picker {
+                kind: PickerKind::ProjectChats(id),
+                selected,
+                ..
+            }) = self.chat.picker.as_ref()
+            && *selected + 1 >= len
+            && let Some(before) = self.chat.tree.cursors.get(id).cloned()
+            && let Some(number) = self
+                .chat
+                .list
+                .projects
+                .iter()
+                .find(|p| p.id == *id)
+                .and_then(|p| p.number)
+        {
+            return vec![Effect::Chat(ChatCommand::ProjectChats {
+                project: *id,
+                number,
+                before: Some(before),
+            })];
+        }
         let Some(picker) = self.chat.picker.as_mut() else {
             return Vec::new();
         };
@@ -3119,6 +3282,31 @@ impl App {
             Some(PickItem::Project(project)) => {
                 let project = project.cloned();
                 self.choose_project(project)
+            }
+            Some(PickItem::Org(org)) => {
+                let org = org.clone();
+                self.chat.picker = None;
+                self.switch_organization(org)
+            }
+            Some(PickItem::Bot(bot)) => {
+                let id = bot.id;
+                self.chat.picker = None;
+                self.chat.select(SideItem::Bot(id));
+                self.open_bot(id)
+            }
+            // Its chats next, that project's alone.
+            Some(PickItem::Place(project)) => {
+                let (id, number) = (project.id, project.number);
+                self.open_picker(PickerKind::ProjectChats(id), "");
+                // Its older chats too, past those the list holds.
+                match number {
+                    Some(number) => vec![Effect::Chat(ChatCommand::ProjectChats {
+                        project: id,
+                        number,
+                        before: None,
+                    })],
+                    None => Vec::new(),
+                }
             }
             None => {
                 if kind != Some(PickerKind::Models)
@@ -4413,6 +4601,7 @@ impl App {
             loading: true,
             error: None,
             selected: 0,
+            again: false,
         });
         vec![Effect::Chat(ChatCommand::Bot { id, filter })]
     }
@@ -4484,7 +4673,7 @@ impl App {
                 })],
                 None => Vec::new(),
             },
-            KeyCode::Char('r') => self.open_decisions(),
+            KeyCode::Char('r') => self.refresh_view(),
             _ => return None,
         })
     }
@@ -4535,7 +4724,7 @@ impl App {
                     .or_else(|| self.chat.bot(id).and_then(|b| b.url.clone()));
                 self.open_page(url)
             }
-            KeyCode::Char('r') => self.open_bot(id),
+            KeyCode::Char('r') => self.refresh_view(),
             _ => return None,
         })
     }
@@ -4993,8 +5182,12 @@ impl App {
 
     fn reset_chat_scope(&mut self) -> Vec<Effect> {
         let mut effects = self.cancel_dictation();
+        // The sign-ins on this computer, and which one the chats come
+        // from, don't change with what the chats say.
         self.chat = ChatPane {
             history: self.chat.history.clone(),
+            orgs: std::mem::take(&mut self.chat.orgs),
+            current_org: self.chat.current_org.take(),
             ..ChatPane::default()
         };
         self.chat_generation = self.chat_generation.wrapping_add(1);
@@ -5425,12 +5618,27 @@ impl App {
                     page.loading = false;
                     match result {
                         Ok(data) => {
+                            // The same run stays chosen when a newer one
+                            // arrives above it.
+                            let chosen = page
+                                .runs()
+                                .get(page.selected)
+                                .and_then(|run| run["number"].as_u64());
                             page.data = Some(data);
                             page.error = None;
-                            let len = page.runs().len();
-                            page.selected = page.selected.min(len.saturating_sub(1));
+                            let runs = page.runs();
+                            page.selected = chosen
+                                .and_then(|n| {
+                                    runs.iter().position(|r| r["number"].as_u64() == Some(n))
+                                })
+                                .unwrap_or(page.selected)
+                                .min(runs.len().saturating_sub(1));
                         }
                         Err(failure) => page.error = Some(failure.message),
+                    }
+                    // Shown, then read once more for what changed meanwhile.
+                    if std::mem::take(&mut page.again) {
+                        return self.bot_again();
                     }
                 }
             }
@@ -5619,7 +5827,189 @@ impl App {
             effects.push(Effect::Chat(ChatCommand::List));
         }
         effects.extend(self.decisions_again());
+        effects.extend(self.bot_again());
         effects
+    }
+
+    /// Changes may have been missed (a reconnect, waking up): the list read
+    /// whatever reads are out, and the page shown with it.
+    fn catch_up(&mut self) -> Vec<Effect> {
+        let mut effects = self.relist();
+        effects.extend(self.decisions_again());
+        effects.extend(self.bot_again());
+        effects
+    }
+
+    /// The bot shown read again, keeping its filter and selection: a run
+    /// started, ended or asks something. One read at a time.
+    fn bot_again(&mut self) -> Vec<Effect> {
+        let View::Bot(id) = self.view else {
+            return Vec::new();
+        };
+        let Some(page) = self.chat.bot_page.as_mut().filter(|p| p.id == id) else {
+            return Vec::new();
+        };
+        if std::mem::replace(&mut page.loading, true) {
+            page.again = true;
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::Bot {
+                id,
+                filter: page.filter.clone(),
+            })]
+        }
+    }
+
+    /// `r` and `/refresh`: the view shown, read again from the server, for
+    /// when live updates didn't reach it.
+    pub fn refresh_view(&mut self) -> Vec<Effect> {
+        if !self.chat.ready() {
+            return Vec::new();
+        }
+        let mut effects = self.relist();
+        match self.view {
+            View::Decisions => effects.extend(self.read_decisions()),
+            View::Bot(_) => effects.extend(self.bot_again()),
+            View::NewBot => {
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    match new_bot.form.as_mut() {
+                        Some(form) => {
+                            form.loading = true;
+                            effects.push(Effect::Chat(ChatCommand::Recipe {
+                                key: form.key.clone(),
+                                tools: form.tools(),
+                            }));
+                        }
+                        None => effects.push(Effect::Chat(ChatCommand::Recipes)),
+                    }
+                }
+            }
+            View::Chat | View::Settings(_) => {
+                if let Some(open) = self.chat.open {
+                    effects.extend(self.refresh_chat(open));
+                }
+            }
+        }
+        effects
+    }
+
+    /// `/org`: the organizations this computer is signed in to, or the one
+    /// named (or numbered, as the picker lists them) switched to at once.
+    fn org(&mut self, args: &str) -> Vec<Effect> {
+        use super::theme::Signal;
+        // The one open now, by the name its chats came with.
+        let current = self.current_org_name();
+        let open = self.chat.current_org.clone();
+        if let Some(choice) = self.chat.orgs.iter_mut().find(|o| o.id == open) {
+            choice.name = current;
+        }
+        if self.chat.orgs.len() < 2 {
+            let name = self.current_org_name();
+            self.notice(Signal::Idle, &format!("You're only in {name}."));
+            return Vec::new();
+        }
+        let query = args.trim();
+        if query.is_empty() {
+            self.open_picker(PickerKind::Orgs, "");
+            return Vec::new();
+        }
+        let lower = query.to_lowercase();
+        let chosen = match query.parse::<usize>() {
+            Ok(n) if (1..=self.chat.orgs.len()).contains(&n) => Some(self.chat.orgs[n - 1].clone()),
+            _ => {
+                let fits: Vec<&OrgChoice> = self
+                    .chat
+                    .orgs
+                    .iter()
+                    .filter(|o| {
+                        o.name.to_lowercase().contains(&lower) || o.id.as_deref() == Some(query)
+                    })
+                    .collect();
+                match fits[..] {
+                    [one] => Some(one.clone()),
+                    _ => None,
+                }
+            }
+        };
+        match chosen {
+            Some(org) => self.switch_organization(org),
+            None => {
+                self.open_picker(PickerKind::Orgs, query);
+                Vec::new()
+            }
+        }
+    }
+
+    fn switch_organization(&mut self, org: OrgChoice) -> Vec<Effect> {
+        use super::theme::Signal;
+        if org.id == self.chat.current_org {
+            self.notice(Signal::Idle, &format!("You're in {} already.", org.name));
+            return Vec::new();
+        }
+        vec![Effect::SwitchOrganization(org.id)]
+    }
+
+    /// The organization the chats are from, by name.
+    pub fn current_org_name(&self) -> String {
+        let listed = self.chat.list.account.name.trim();
+        if !listed.is_empty() {
+            return listed.to_string();
+        }
+        self.chat
+            .orgs
+            .iter()
+            .find(|o| o.id == self.chat.current_org)
+            .map(|o| o.name.clone())
+            .unwrap_or_else(|| "this organization".into())
+    }
+
+    /// `/pin`: the open chat pinned in the sidebar, or unpinned.
+    fn pin_open_chat(&mut self) -> Vec<Effect> {
+        use super::theme::Signal;
+        let Some(chat) = self.chat.open else {
+            self.notice(Signal::Idle, "Open a chat to pin it.");
+            return Vec::new();
+        };
+        let pinned = !self.chat.list.pins.chats.contains(&chat);
+        vec![Effect::Chat(ChatCommand::Act {
+            chat,
+            action: ChatAction::Pin(pinned),
+        })]
+    }
+
+    /// `/open 42` or `/open budget`: that chat or bot here; a name that
+    /// fits several opens the picker on them.
+    fn open_named(&mut self, args: &str) -> Vec<Effect> {
+        let query = args.trim().trim_start_matches('#');
+        if let Ok(number) = query.parse::<u64>()
+            && self.chat.chat(number).is_some()
+        {
+            self.select_chat(number);
+            return self.open_chat(number);
+        }
+        self.open_picker(PickerKind::Search, query);
+        if self.chat.pick_items().len() == 1 {
+            return self.pick(0);
+        }
+        Vec::new()
+    }
+
+    /// Show or hide the sidebar, the chat taking the whole width; kept for
+    /// the next run.
+    fn show_sidebar(&mut self, show: bool) -> Vec<Effect> {
+        self.sidebar_hidden = !show;
+        vec![Effect::RememberSidebar(!show)]
+    }
+
+    /// The list read again, one read at a time: with one out, once more
+    /// after it, so an older answer never lands last.
+    fn relist(&mut self) -> Vec<Effect> {
+        if std::mem::replace(&mut self.chat.relisting, true) {
+            self.chat.relist_again = true;
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::List)]
+        }
     }
 
     /// Decisions read again while they show.
@@ -5656,12 +6046,14 @@ impl App {
         match live {
             ListLive::Watching => {
                 self.chat.list_live = true;
-                // Catch up on what changed before the subscription.
+                // Catch up on what changed before the subscription (a
+                // reconnect, or waking from sleep): the list, and the page
+                // that shows.
                 if !matches!(self.chat.access, Access::Unknown | Access::Loading) {
-                    return vec![Effect::Chat(ChatCommand::List)];
+                    return self.catch_up();
                 }
             }
-            ListLive::Missed => return vec![Effect::Chat(ChatCommand::List)],
+            ListLive::Missed => return self.catch_up(),
             ListLive::Refused | ListLive::Unsupported | ListLive::Offline => {
                 self.chat.list_live = false;
             }
@@ -5763,6 +6155,15 @@ impl App {
                 if self.chat.open == Some(chat) {
                     return self.new_chat();
                 }
+                Vec::new()
+            }
+            (action, Acted::Pins(pins)) => {
+                let pinned = action == ChatAction::Pin(true);
+                self.chat.keep_selection(|pane| pane.list.pins = pins);
+                self.notice(
+                    Signal::Positive,
+                    if pinned { "Pinned." } else { "Unpinned." },
+                );
                 Vec::new()
             }
             (_, Acted::Shared(shared)) => {

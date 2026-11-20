@@ -21,10 +21,10 @@
                                │
                                │
                                │
-                               │
                                │ ╭────────────────────────────────────────────────────────────────╮
                                │ │ ❯ /re                                                          │
                                │ │ ▌/resume [search]      Pick a recent chat                      │
                                │ │  /retry                Answer the last question again          │
                                │ │  /rename [title]       Rename this chat                        │
+                               │ │  /refresh              Read what's on screen again (r)         │
  (C) Carmine                   │ ╰───────────────────────────────────────────── Gemini 3.8 Flash ─╯
