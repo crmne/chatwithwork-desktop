@@ -374,7 +374,8 @@ test('site access revoked while the outcome check looks at the page after input 
    g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
    // The outcome check's own read of the frame tree, after the operation ended.
    const sent=g.probeSpy.original(target,method,params);
-   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,500));}
+   // Held less than the check's own 400 ms frame timeout, so its answer is used.
+   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,300));}
    const answer=await sent;
    // Once the real press reached the page the extension has nothing more to
    // send until its own timer ends the operation (the release is held).
@@ -399,8 +400,34 @@ test('site access revoked while the outcome check looks at the page after input 
   const spy=await releaseStateProbe();
   expect(spy.held).toBe(true);
   expect(run.outcome.dispatched).toBe(true);
-  // What was read before the removal may be said; nothing after it.
+  // The frame tree's answer, sent before the removal, was used; nothing after
+  // it was read. A policy update that arrived late could only fail this.
+  expect(run.outcome.observed.navigated).toBe(false);
   expect(run.outcome.observed.element_present).toBeUndefined();
   expect(sentAfter(spy.log,revokedAt)).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
+
+test('a debugger attachment lost during the outcome check is not a page that stopped responding',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false, armed=false;
+ const arm=()=>inWorker(setup.context,()=>{const g=globalThis as any;g.probeSpy={log:[],held:false,original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method,detail:''});
+   // The outcome check's own frame tree read fails as a lost attachment does.
+   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();throw new Error('Debugger is not attached to the tab');}
+   const answer=await g.probeSpy.original(target,method,params);
+   if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed') g.probeSpy.ended=true;
+   return answer;
+  }) as typeof chrome.debugger.sendCommand;});
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mousePressed'&&!armed){armed=true;await arm();}
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,address_changed:false}});
  } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });

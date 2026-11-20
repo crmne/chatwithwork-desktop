@@ -79,11 +79,18 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
   const dialog = op.dialog ? { dialog: true } : {};
   // Without access, only the tab list's own facts.
   if (!await allowed()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
-  const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree", {}, options), OUTCOME_CHECK_MS);
-  // Refused because access went or the time ran out: that isn't a page that
-  // stopped answering, so only the tab list's own facts.
-  if (!frame && !guard()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
-  if (!frame) return { ...sent, observed: { responding: false } };
+  // Only no answer in time is a page that stopped answering. Refused (access
+  // went, the time ran out) or failed (the attachment ended): only the tab
+  // list's own facts.
+  const read = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree", {}, options)
+    .then((answer) => ({ answer }), (error: unknown) => ({ error })), OUTCOME_CHECK_MS);
+  const tabFacts = { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
+  if (!read) return guard() ? { ...sent, observed: { responding: false } } : tabFacts;
+  if ("error" in read) {
+    const timedOut = read.error instanceof ToolError && read.error.code === "timeout";
+    return timedOut && guard() ? { ...sent, observed: { responding: false } } : tabFacts;
+  }
+  const frame = read.answer;
   const after = await chrome.tabs.get(op.tab).catch(() => undefined);
   if (!after) return { ...sent, observed: { responding: true, closed: true } };
   // Only a new loader means the document was replaced; a fragment or
