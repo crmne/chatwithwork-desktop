@@ -342,15 +342,16 @@ const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
 };
 // Puts the extension's sendCommand back, once no isolated world is half set
 // up (a frame tree read or a world as the last command): a log cut between a
-// cleanup's frame tree read and its world would count the read. Lets a held
-// probe go.
+// cleanup's frame tree read and its world would count the read. After five
+// seconds the log is taken as it is, so a frame tree read the outcome check
+// made on its own still fails the test. Lets a held probe go.
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
  for(let attempt=0;;attempt++){
   const spy=await inWorker(setup.context,(force:boolean)=>{const g=globalThis as any;
    const last=g.probeSpy.log.at(-1)?.method;
    if(!force&&(last==='Page.getFrameTree'||last==='Page.createIsolatedWorld')) return null;
    chrome.debugger.sendCommand=g.probeSpy.original;g.probeSpy.release?.();
-   const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};},attempt>=40);
+   const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};},attempt>=200);
   if(spy) return spy;
   await new Promise(done=>setTimeout(done,25));
  }

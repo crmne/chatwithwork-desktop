@@ -3,6 +3,7 @@
 // them, and out to take them back.
 
 import { ToolError } from "./errors.js";
+import { loadEnded } from "./tab-load.js";
 
 export const GROUP_TITLE = "Chat with Work";
 
@@ -60,7 +61,7 @@ export async function openInGroup(url: string): Promise<chrome.tabs.Tab> {
   const tab = await chrome.tabs.create({ url: "about:blank", active: false, ...(windowId !== undefined ? { windowId } : {}) });
   try {
     await addToGroup(tab.id!, groups[0]?.id);
-    await blankLoaded(tab.id!);
+    await loadEnded(chrome.tabs, tab.id!, BLANK_LOAD_MS);
     await chrome.tabs.update(tab.id!, { url });
     return await chrome.tabs.get(tab.id!);
   } catch (error) {
@@ -76,22 +77,6 @@ export async function openInGroup(url: string): Promise<chrome.tabs.Tab> {
 // busy computer). So the page is asked for once the blank one has loaded,
 // or after a short wait at most.
 const BLANK_LOAD_MS = 2_000;
-function blankLoaded(tabId: number): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(changed);
-      resolve();
-    };
-    const changed = (id: number, change: chrome.tabs.OnUpdatedInfo) => {
-      if (id === tabId && change.status !== undefined && change.status !== "loading") done();
-    };
-    const timer = setTimeout(done, BLANK_LOAD_MS);
-    chrome.tabs.onUpdated.addListener(changed);
-    // Asked after listening, so a load that ended meanwhile isn't missed.
-    void chrome.tabs.get(tabId).then((now) => { if (now.status !== "loading") done(); }, done);
-  });
-}
 
 export async function addToGroup(tabId: number, groupId?: number): Promise<void> {
   if (groupId !== undefined) {

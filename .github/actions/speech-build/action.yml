@@ -33,8 +33,11 @@ runs:
     - shell: bash
       run: |
         [ -d target ] || exit 0
-        find -L target -maxdepth 9 \( -name deps -o -name incremental -o -name .fingerprint \) -prune \
-          -o -name CMakeCache.txt -print | while IFS= read -r cache; do
+        # Listed in full first: find mustn't walk into a folder removed below.
+        caches=$(find -L target -maxdepth 9 \( -name deps -o -name incremental -o -name .fingerprint \) -prune \
+          -o -name CMakeCache.txt -print)
+        [ -n "$caches" ] || exit 0
+        while IFS= read -r cache; do
           sed -n -E 's/^[A-Za-z0-9_.-]+:(FILEPATH|INTERNAL)=(([A-Za-z]:)?\/.*)$/\2/p' "$cache" | while IFS= read -r tool; do
             if [ ! -e "$tool" ]; then
               echo "CMake's cache in ${cache%/*} names $tool, which this runner doesn't have: configuring it again"
@@ -42,4 +45,4 @@ runs:
               break
             fi
           done
-        done
+        done <<< "$caches"
