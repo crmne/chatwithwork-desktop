@@ -277,17 +277,22 @@ export async function clearOfOverlays(t: Target, policy: Policy, surfaces: numbe
         .then((answer) => answer.quads, () => []);
       if (!visiblePoint(quads, state.width, state.height)) continue;
       ready = true;
+      // The padding box the engine measures a position from, read with the
+      // quads and again after the search: a surface that moved meanwhile is
+      // tried again rather than given an offset from two layouts.
+      const padding = () => send<{ model: { padding: number[] } }>(t.tabId, "DOM.getBoxModel", { backendNodeId: surface })
+        .then((answer) => answer.model.padding, () => null);
+      const before = await padding();
       const found = await uncoveredPoint(t, surface, quads, state.width, state.height);
       if (found.point) {
         // The centre is clear: the engine clicks it, as upstream does.
         if (found.centre) return {};
-        // Otherwise where on the surface the engine should press: relative to
-        // its padding box, which is what the engine's position is measured from.
-        const box = await send<{ model: { padding: number[] } }>(t.tabId, "DOM.getBoxModel", { backendNodeId: surface })
-          .then((answer) => answer.model.padding, () => null);
-        if (!box) return {};
+        const box = await padding();
+        if (!box || !before || JSON.stringify(box) !== JSON.stringify(before)) { covered = "that element is still moving"; continue; }
         const x0 = Math.min(box[0], box[2], box[4], box[6]), y0 = Math.min(box[1], box[3], box[5], box[7]);
-        return { [surface]: { x: found.point.x - x0, y: found.point.y - y0 } };
+        const position = { x: found.point.x - x0, y: found.point.y - y0 };
+        if (position.x < 0 || position.y < 0) { covered = "that element is still moving"; continue; }
+        return { [surface]: position };
       }
       covered = found.reason!;
     }
