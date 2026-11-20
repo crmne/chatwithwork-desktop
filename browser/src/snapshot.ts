@@ -65,6 +65,9 @@ export interface SnapshotOptions {
   // with them, shown with `[upload]`. File fields the tree leaves out
   // (hidden ones, those in frames) are listed after the page.
   uploads?: ReadonlyMap<number, UploadMark>;
+  // Backend node IDs of links, with where each goes as far as it may be
+  // shown (links.ts): `[to=/admin/theme]` after the link's ref.
+  links?: ReadonlyMap<number, string>;
 }
 
 const MEANINGFUL = /[\p{L}\p{N}].*[\p{L}\p{N}]/u;
@@ -148,6 +151,8 @@ function visit(
   const upload = backend !== undefined ? options.uploads?.get(backend) : undefined;
   if (backend !== undefined && (INTERACTIVE.has(role) || focusable || clickable || upload)) {
     line += ` [ref=e${backend}]`;
+    const to = role === "link" ? options.links?.get(backend) : undefined;
+    if (to) line += ` [to=${to}]`;
   }
   if (upload && !sensitive) {
     line += uploadNote(upload);

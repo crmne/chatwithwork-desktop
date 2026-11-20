@@ -7,6 +7,7 @@ import { isSensitiveField, SENSITIVE_PATTERNS, type ElementFacts } from "./class
 import { ToolError } from "./errors.js";
 import { groupTabs, resolveTab } from "./group.js";
 import { afterCapture, indicate, prepareForCapture } from "./page.js";
+import { linkTarget } from "./links.js";
 import { hostOfUrl, siteAllowed } from "./sites.js";
 import { documentIdentity, rememberRefs, sameDocument } from "./engine-refs.js";
 import { page, snapshotText, type AXNode } from "./snapshot.js";
@@ -115,11 +116,17 @@ const read: Method = async (params, policy) => {
   const tabId = tab.id!;
   const document = await documentIdentity(tabId);
   const { nodes, sensitive } = await sensitiveFields(tabId);
-  const clickable = await clickableElements(tabId);
+  const { clickable, hrefs } = await clickableElements(tabId);
   const uploads = await pageUploads(tabId);
   const regions = await unreferenced(tabId);
-  const text = snapshotText(nodes, { sensitive, clickable, uploads }) + (regions ? `\n- note: ${regions}` : "");
   const now = await still(tabId, policy);
+  // Where links go, only as far as browser_open could go anyway (links.ts).
+  const links = new Map<number, string>();
+  for (const [backend, href] of hrefs) {
+    const target = linkTarget(href, now.url ?? "", policy);
+    if (target) links.set(backend, target);
+  }
+  const text = snapshotText(nodes, { sensitive, clickable, uploads, links }) + (regions ? `\n- note: ${regions}` : "");
   const current = await documentIdentity(tabId);
   if (!sameDocument(document, current)) throw new ToolError("page_error", "the page changed while reading; read it again");
   const slice = page(text, offset, maxChars);
@@ -271,6 +278,8 @@ interface DomSnapshot {
       attributes?: number[][];
       isClickable?: { index: number[] };
     };
+    baseURL?: number;
+    documentURL?: number;
     layout: { nodeIndex: number[]; styles: number[][]; bounds: number[][] };
   }[];
 }
@@ -293,8 +302,12 @@ const CLICKABLE_LIMIT = 2_000;
 // Controls, what's inside one, and wrappers around one are left to the
 // accessibility tree. Read from a DOM snapshot: no page script runs and
 // nothing on the page changes. A page this can't read gets no extra refs.
-async function clickableElements(tabId: number): Promise<Set<number>> {
+// Elements a page made clickable without a role, and every link's address
+// in the page's own document, resolved against its base (never shown as is:
+// linkTarget decides what of it is).
+async function clickableElements(tabId: number): Promise<{ clickable: Set<number>; hrefs: Map<number, string> }> {
   const found = new Set<number>();
+  const hrefs = new Map<number, string>();
   const snapshot = await send<DomSnapshot>(tabId, "DOMSnapshot.captureSnapshot", {
     computedStyles: ["cursor", "visibility"],
   }).catch((error) => {
@@ -302,7 +315,7 @@ async function clickableElements(tabId: number): Promise<Set<number>> {
     return undefined;
   });
   const doc = snapshot?.documents[0];
-  if (!snapshot || !doc) return found;
+  if (!snapshot || !doc) return { clickable: found, hrefs };
   const { strings } = snapshot;
   const nodes = doc.nodes;
   const parents = nodes.parentIndex ?? [];
@@ -336,6 +349,10 @@ async function clickableElements(tabId: number): Promise<Set<number>> {
     if (name === "input" && (a.type ?? "").trim().toLowerCase() === "hidden") continue;
     control[i] = CONTROL_TAGS.has(name) || (name === "a" && a.href !== undefined) || CONTROL_ROLES.has(role) ||
       (a.contenteditable !== undefined && a.contenteditable !== "false");
+    const backend = nodes.backendNodeId?.[i];
+    if ((name === "a" || name === "area") && a.href !== undefined && backend !== undefined && hrefs.size < LINK_LIMIT) {
+      try { hrefs.set(backend, new URL(a.href.trim(), strings[doc.baseURL ?? -1] || strings[doc.documentURL ?? -1] || undefined).href); } catch { /* not an address */ }
+    }
   }
   // Inside a control, or around one.
   const insideControl = new Array<boolean>(count).fill(false);
@@ -364,8 +381,9 @@ async function clickableElements(tabId: number): Promise<Set<number>> {
       if (backend !== undefined) found.add(backend);
     }
   }
-  return found;
+  return { clickable: found, hrefs };
 }
+const LINK_LIMIT = 5_000;
 
 // One field's blur, marked with the capture's token like blurSensitive's.
 const BLUR = `function (on, token) {
