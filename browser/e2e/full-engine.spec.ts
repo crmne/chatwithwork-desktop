@@ -307,14 +307,22 @@ async function holdStateProbe(ms: number): Promise<void> {
    return g.probeSpy.original(target,method,params);
   }) as typeof chrome.debugger.sendCommand;},ms);
 }
-// Every command sent after `since`, except the operation's own cleanup (its
-// guard's removal, with the extension's own isolated world it runs in,
-// released objects, stopped interceptors). None of those reads the page.
-const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>log.filter(entry=>entry.at>since
- && entry.method!=='Runtime.releaseObject'
- && entry.method!=='Page.getFrameTree' && entry.method!=='Page.createIsolatedWorld'
- && !(entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
- && !(entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'))).map(entry=>entry.method);
+// Every command sent after `since`, except the operation's own cleanup:
+// removing its guard (a Runtime.evaluate naming it, with the extension's own
+// isolated world set up just before it for that), released objects and
+// stopped interceptors. None of those reads the page.
+const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
+ const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
+  || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
+  || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
+ const prelude=(method:string)=>method==='Page.getFrameTree'||method==='Page.createIsolatedWorld';
+ return log.filter((entry,index)=>{
+  if(entry.at<=since||cleanup(entry)) return false;
+  if(!prelude(entry.method)) return true;
+  const next=log.slice(index+1).find(other=>!prelude(other.method));
+  return !(next&&next.method==='Runtime.evaluate'&&next.detail.includes('__cwwEngine'));
+ }).map(entry=>entry.method);
+};
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
  return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
 }

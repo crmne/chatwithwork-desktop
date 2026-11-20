@@ -241,7 +241,9 @@ export async function send<T = any>(
   }
   await attach(tabId, options);
   touch(tabId);
-  await responding(tabId);
+  // Checked above for a guarded call, which never probes.
+  if (!options.guard) await responding(tabId);
+  else if (responsiveness.verdict(tabId) !== "send") throw new ToolError("timeout", NOT_RESPONDING);
   if (options.guard && !options.guard()) throw refused();
   try {
     return (await within(
