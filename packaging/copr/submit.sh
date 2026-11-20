@@ -59,7 +59,10 @@ spec_in="$out/chatwithwork-desktop.spec.in"
 if ! gh api -H "Accept: application/vnd.github.raw" \
     "repos/$repo/contents/packaging/copr/chatwithwork-desktop.spec.in?ref=v$version" > "$spec_in" 2>/dev/null; then
   echo "v$version has no packaging/copr spec; using this checkout's" >&2
-  cp "$root/packaging/copr/chatwithwork-desktop.spec.in" "$spec_in"
+  # Its sources by the names that release has.
+  sed -e "s|/Chat-with-Work-Desktop-%{version}-Linux-x86_64.tar.gz|/$(archive x86_64 | sed "s/$version/%{version}/g")|" \
+      -e "s|/Chat-with-Work-Desktop-%{version}-Linux-aarch64.tar.gz|/$(archive aarch64 | sed "s/$version/%{version}/g")|" \
+      "$root/packaging/copr/chatwithwork-desktop.spec.in" > "$spec_in"
 fi
 postinstall="$out/postinstall.sh"
 gh api -H "Accept: application/vnd.github.raw" \

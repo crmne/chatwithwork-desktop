@@ -29,7 +29,8 @@ for option in "$@"; do
     *) usage ;;
   esac
 done
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a plain version: $version" >&2; exit 2; }
+# X.Y.Z, or a prerelease's X.Y.Z-beta.1.
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || { echo "not a version: $version" >&2; exit 2; }
 [ -d "$directory" ] || { echo "no directory $directory" >&2; exit 2; }
 
 name=Chat-with-Work-Desktop

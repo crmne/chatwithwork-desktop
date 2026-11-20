@@ -686,7 +686,7 @@ jobs:
           # This run's packages under their names people read, a copy without
           # the version for releases/latest/download/, and the old names.
           mkdir linux
-          find built -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.flatpak' \) \
+          find built -type f \( -name '*.AppImage' -o -name '*.AppImage.zsync' -o -name '*.deb' -o -name '*.rpm' -o -name '*.flatpak' \) \
             -exec cp -p {} linux/ \;
           ls linux > native-names.txt
           bash packaging/release-names.sh linux "$VERSION" --stable --legacy
