@@ -1087,6 +1087,8 @@ pub enum PickerKind {
     Orgs,
     /// A project whose chats to pick from.
     Places,
+    /// The chats of the project by this id.
+    ProjectChats(u64),
     /// Chats and bots by name, for `/search` and `/open`.
     Search,
 }
@@ -1515,6 +1517,14 @@ impl ChatPane {
                         .collect()
                 })
                 .unwrap_or_default(),
+            PickerKind::ProjectChats(id) => self
+                .list
+                .chats
+                .iter()
+                .filter(|c| c.project.as_ref().is_some_and(|p| p.id == id))
+                .filter(|c| has(&c.title) || c.number.to_string() == query.trim_start_matches('#'))
+                .map(PickItem::Chat)
+                .collect(),
             PickerKind::Places => self
                 .list
                 .projects
@@ -2724,7 +2734,9 @@ impl App {
             Cmd::Pause => self.daemon.paused() == Some(false),
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
-            Cmd::NewBot | Cmd::Bots => self.chat.can_make_bots(),
+            Cmd::NewBot => self.chat.can_make_bots(),
+            // Any bot they read, whether or not they make bots.
+            Cmd::Bots => self.chat.sidebar().is_some_and(|s| !s.bots.is_empty()),
             Cmd::Org => true,
             Cmd::Decisions => self.chat.sidebar().is_some(),
             Cmd::Pin => open.is_some_and(|c| c.can(|can| can.pin)),
@@ -3258,10 +3270,10 @@ impl App {
                 self.chat.select(SideItem::Bot(id));
                 self.open_bot(id)
             }
-            // Its chats next: the chat picker narrowed to its name.
+            // Its chats next, that project's alone.
             Some(PickItem::Place(project)) => {
-                let name = project.name.clone();
-                self.open_picker(PickerKind::Chats, &name);
+                let id = project.id;
+                self.open_picker(PickerKind::ProjectChats(id), "");
                 Vec::new()
             }
             None => {
@@ -5568,17 +5580,29 @@ impl App {
                     .filter(|p| p.id == id && p.filter == filter)
                 {
                     page.loading = false;
-                    if std::mem::take(&mut page.again) {
-                        return self.bot_again();
-                    }
                     match result {
                         Ok(data) => {
+                            // The same run stays chosen when a newer one
+                            // arrives above it.
+                            let chosen = page
+                                .runs()
+                                .get(page.selected)
+                                .and_then(|run| run["number"].as_u64());
                             page.data = Some(data);
                             page.error = None;
-                            let len = page.runs().len();
-                            page.selected = page.selected.min(len.saturating_sub(1));
+                            let runs = page.runs();
+                            page.selected = chosen
+                                .and_then(|n| {
+                                    runs.iter().position(|r| r["number"].as_u64() == Some(n))
+                                })
+                                .unwrap_or(page.selected)
+                                .min(runs.len().saturating_sub(1));
                         }
                         Err(failure) => page.error = Some(failure.message),
+                    }
+                    // Shown, then read once more for what changed meanwhile.
+                    if std::mem::take(&mut page.again) {
+                        return self.bot_again();
                     }
                 }
             }

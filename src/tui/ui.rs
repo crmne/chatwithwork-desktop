@@ -2194,6 +2194,7 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
             PickerKind::Bots => "Open a bot: ",
             PickerKind::Orgs => "Organization: ",
             PickerKind::Places => "Look in a project: ",
+            PickerKind::ProjectChats(_) => "A chat in it: ",
             PickerKind::Search => "Open: ",
         };
         let query = tail(&picker.query, room.saturating_sub(label.chars().count()));

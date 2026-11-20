@@ -4769,16 +4769,22 @@ fn a_bots_page_follows_its_runs_and_catches_up_after_a_reconnect() {
         0,
         serde_json::json!({"number": 64, "title": "A new run", "state": "processing"}),
     );
+    let mut first = bot_json();
+    first["bot"]["runs"][1]["title"] = serde_json::json!("Shown while busy");
     assert_eq!(
         app.update(Msg::Chat(ChatMsg::Bot {
             id: 9,
             filter: None,
-            result: Ok(bot_json()),
+            result: Ok(first),
         })),
         vec![Effect::Chat(ChatCommand::Bot {
             id: 9,
             filter: None
         })]
+    );
+    assert!(
+        render_to_string(&app, 100, 30).contains("Shown while busy"),
+        "a reply is shown even when another read follows it"
     );
     app.update(Msg::Chat(ChatMsg::Bot {
         id: 9,
@@ -4788,8 +4794,8 @@ fn a_bots_page_follows_its_runs_and_catches_up_after_a_reconnect() {
     assert!(render_to_string(&app, 100, 30).contains("A new run"));
     assert_eq!(
         app.chat.bot_page.as_ref().unwrap().selected,
-        1,
-        "selection kept"
+        2,
+        "the same run stays chosen, a row lower now"
     );
     // After a reconnect or waking up, the list and the page catch up.
     app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
@@ -4882,9 +4888,15 @@ fn without_the_sidebar_slash_commands_drive_it() {
     app.update(key(KeyCode::Enter));
     assert_eq!(
         app.chat.picker.as_ref().map(|p| p.kind),
-        Some(PickerKind::Chats)
+        Some(PickerKind::ProjectChats(3))
     );
-    assert!(app.chat.pick_items().len() >= 7, "Falcon's chats");
+    let items = app.chat.pick_items();
+    assert_eq!(items.len(), 7, "Falcon's chats, and only those");
+    assert!(
+        items.iter().all(
+            |i| matches!(i, PickItem::Chat(c) if c.project.as_ref().is_some_and(|p| p.id == 3))
+        )
+    );
     // /open by number, and by a name only one thing has.
     let effects = run(&mut app, "/open 41");
     assert!(effects.contains(&Effect::Chat(ChatCommand::Open(41))));
