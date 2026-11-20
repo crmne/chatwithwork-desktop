@@ -240,8 +240,30 @@ environment. There is no PATH lookup, runtime download, public evaluation API or
 new network endpoint. Its raw protocol, page events and upstream errors never
 become tool results. Events and commands are bound to the current native
 connection and operation lease; Stop, policy changes and disconnect cancel
-the operation. An uncertain result asks the assistant to read the page before
-deciding what to do next, never to repeat a possibly completed action blindly.
+the operation.
+
+When the engine can't finish, the answer says what is known, from what the
+extension itself recorded and checked (`engine_cancel`'s `outcome`, extension
+0.1.6 and later), never the engine's own text:
+
+- No input left (the extension marks the operation before its first input
+  event goes to the page): "Nothing was clicked", with the extension's reason
+  (the element didn't become ready in time because it was disabled, hidden or
+  covered, the page changed first, the browser was stopped, changes were turned
+  off, or the site was no longer allowed), and that
+  nothing was sent.
+- Only the pointer moved: the same, saying the pointer moved over the element
+  but nothing was pressed or typed.
+- Input left: that the click, text or choice was sent (or only part of it: the
+  press without its release, or typing whose text isn't confirmed), then what the page looks
+  like afterwards: same address and document, reloaded, gone to another page,
+  closed, or not responding, whether a dialog opened (the extension dismisses
+  every page dialog), and whether the element is still there.
+- An older extension, or one that couldn't look: the old answer, that the
+  result is uncertain.
+
+Every answer asks the assistant to read the page before deciding what to do
+next, never to repeat a possibly completed action blindly.
 
 ## Why its own extension
 

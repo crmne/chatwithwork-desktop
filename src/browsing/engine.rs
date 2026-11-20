@@ -37,7 +37,9 @@ const MAX_TOTAL: usize = 16 * 1024 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(14);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(18);
-const CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+// Reserved after the operation for `engine_cancel`, which also answers how
+// the operation ended (the extension spends at most 1 s checking).
+const CLEANUP_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 static INSTALLATION: OnceLock<Option<Arc<Installation>>> = OnceLock::new();
 
@@ -708,15 +710,119 @@ pub(crate) async fn execute(
             }
         }
     }).await.unwrap_or_else(|_| Err(failed()));
+    let mut result = result;
     if result.is_err() {
-        let _ = tokio::time::timeout_at(
+        let cancelled = tokio::time::timeout_at(
             request_deadline.min(tokio::time::Instant::now() + CLEANUP_TIMEOUT),
             bridge.call_in_session(session.id, "engine_cancel", json!({"lease":lease})),
         )
         .await;
+        // The extension says how the operation ended; only the generic
+        // "uncertain" answer is replaced, never a refusal it made itself.
+        if let (Err(error), Ok(Ok(answer))) = (&result, &cancelled)
+            && is_uncertain(error)
+            && let Some(plain) = outcome_error(action, answer)
+        {
+            result = Err(plain);
+        }
     }
     cleanup.finished = true;
     result
+}
+
+fn is_uncertain(error: &ToolError) -> bool {
+    error.code == ErrorCode::PageError && error.message == failed().message
+}
+
+/// A plain answer from how the extension says an operation ended
+/// (`engine_cancel`'s `outcome`), or None to keep "uncertain": an extension
+/// older than 0.1.6 sends no outcome, and one that couldn't look says too
+/// little. Only fixed fields are read, and the extension's reason is its own
+/// short sentence, trimmed again here.
+pub(crate) fn outcome_error(action: &str, answer: &Value) -> Option<ToolError> {
+    let outcome = answer.get("outcome")?;
+    let what = match action {
+        "type" => "typed",
+        "select" => "chosen",
+        _ => "clicked",
+    };
+    let message = if outcome.get("dispatched")?.as_bool()? {
+        let observed = outcome.get("observed")?;
+        let flag = |key: &str| observed.get(key).and_then(Value::as_bool);
+        let sent = match (action, outcome.get("complete").and_then(Value::as_bool)) {
+            ("select", _) => "The choice was sent",
+            ("type", Some(true)) => "The text was sent",
+            // The text may be on the page before the extension hears it was
+            // written, so this never says it wasn't.
+            ("type", Some(false)) => {
+                "Input was sent, but whether all of the text arrived is unconfirmed"
+            }
+            ("click", Some(true)) => "The click was sent",
+            ("click", Some(false)) => "The mouse press was sent, but not its release",
+            _ => "Input was sent",
+        };
+        let after = if flag("closed") == Some(true) {
+            "the tab was closed afterwards".to_string()
+        } else if flag("responding") == Some(false) {
+            "the page stopped responding, so what happened can't be checked".to_string()
+        } else {
+            let navigated = flag("navigated");
+            let address_changed = flag("address_changed");
+            let mut parts: Vec<&str> = match (navigated, address_changed) {
+                (Some(true), Some(true)) => vec!["the tab went to another page"],
+                (Some(true), Some(false)) => vec!["the page reloaded"],
+                // The address moved while the extension looked.
+                (Some(true), None) => vec!["the page's document was replaced"],
+                (_, Some(true)) => vec!["the page's address changed"],
+                (Some(false), Some(false)) => {
+                    vec!["the page stayed on the same address and document"]
+                }
+                // Changes off or the site no longer allowed: the extension
+                // looked only at the tab's address.
+                (None, Some(false)) => vec!["the page's address stayed the same"],
+                _ => vec![],
+            };
+            if flag("dialog") == Some(true) {
+                parts.push("a dialog opened and was dismissed");
+            }
+            match flag("element_present") {
+                Some(true) => parts.push("the element is still there"),
+                Some(false) => parts.push("the element is gone"),
+                None => {}
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            parts.join(", and ")
+        };
+        format!(
+            "{sent}, but the browser action didn't finish: {after}. Read the page to see the result before another try."
+        )
+    } else {
+        let reason = outcome
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(|reason| {
+                reason
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(300)
+                    .collect::<String>()
+            })
+            .filter(|reason| !reason.is_empty());
+        let head = match reason {
+            Some(reason) => format!("Nothing was {what}: {reason}."),
+            None => format!("Nothing was {what}."),
+        };
+        if outcome.get("moved").and_then(Value::as_bool) == Some(true) {
+            format!(
+                "{head} The pointer moved over the element, but nothing was pressed or typed; read the page again before another try."
+            )
+        } else {
+            format!("{head} Nothing was sent to the page; read it again before another try.")
+        }
+    };
+    Some(ToolError::new(ErrorCode::PageError, message))
 }
 
 fn charge_frame(total: &mut usize, value: &Value) -> Result<(), ToolError> {

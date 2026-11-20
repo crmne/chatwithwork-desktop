@@ -25,3 +25,25 @@ test('oversized and malformed frames cannot start the browser engine',async()=>{
 test('cancel before a call exits without issuing a browser command',async()=>{
  await childTest({type:'cancel'},messages=>{assert.equal(messages.at(-1).error.code,'browser_stopped');assert.ok(!messages.some(m=>m.type==='command'))});
 });
+// #262: the extension cancelling mid-call (its own deadline, a navigation
+// before input) must end the helper with a bare error, never a result, so the
+// daemon asks engine_cancel how the operation ended. No page text comes back.
+test('the extension cancelling during a call ends it with a bare error the daemon can ask about',async()=>{
+ const child=spawn(process.execPath,[entry],{stdio:['pipe','pipe','pipe'],env:{}});
+ const messages=[];let raw='',cancelled=false;
+ const timer=setTimeout(()=>child.kill(),10000);
+ child.stdin.on('error',()=>{});
+ const ended=new Promise(resolve=>child.stdout.on('data',chunk=>{raw+=chunk;let newline;while((newline=raw.indexOf('\n'))>=0){
+  const value=JSON.parse(raw.slice(0,newline));raw=raw.slice(newline+1);messages.push(value);
+  if(value.type==='ready') child.stdin.write(JSON.stringify({type:'call',operation:{action:'click',backendNodeId:7,session:'s',params:{tab:1,ref:'e7',submits:false},labelBackendNodeIds:[]}})+'\n');
+  else if(value.type==='command'&&!cancelled){cancelled=true;child.stdin.write(JSON.stringify({type:'event',message:{method:'Cww.operationCancelled',params:{secret:'private marker'}}})+'\n');}
+  else if(value.type==='error'||value.type==='result') resolve(value);
+ }}));
+ try {
+  const last=await ended;
+  assert.ok(cancelled);
+  assert.equal(last.type,'error');
+  assert.ok(typeof last.error.code==='string');
+  assert.ok(!JSON.stringify(messages).includes('private marker'));
+ } finally {clearTimeout(timer);child.stdin.end();if(child.exitCode===null)child.kill()}
+});

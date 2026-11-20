@@ -76,7 +76,9 @@ for(const revoke of ['stopped','changes','sites'] as const) test(`${revoke} revo
  await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
  const waiting=action('click',{tab,ref:ref('Continue'),submits:false});await page.waitForTimeout(300);
  setup.daemon.setPolicy(revoke==='sites'?{sites:[]}:revoke==='stopped'?{stopped:true}:{changes:false});
- expect((await waiting).error).toBeTruthy();
+ const interrupted=await waiting;expect(interrupted.error).toBeTruthy();
+ // Nothing was sent; after a revocation the extension doesn't look at the page to say why.
+ expect(interrupted.outcome).toEqual({dispatched:false,reason:revoke==='stopped'?'the browser was stopped':revoke==='changes'?'changes were turned off before anything was sent':'the site was no longer allowed before anything was sent'});
  await page.locator('#button').evaluate(el=>el.removeAttribute('disabled'));
  await page.locator('#button').click();await expect(page.locator('#result')).toHaveText('Count 1');await page.close();
 });
@@ -249,4 +251,183 @@ test('admission work consumes the native operation deadline before a lease can d
   expect(await inWorker(setup.context,()=>({delayed:(globalThis as any).admissionSpy.delayed,input:(globalThis as any).admissionSpy.input}))).toEqual({delayed:true,input:0});
   await expect(page.locator('#result')).toHaveText('Count 0');
  }finally{await inWorker(setup.context,()=>{chrome.debugger.sendCommand=(globalThis as any).admissionSpy.original;delete(globalThis as any).admissionSpy});await page.close()}
+});
+
+// #262: how an operation the engine couldn't finish ended, as engine_cancel
+// answers it: certain when nothing left, observations when something did.
+test('an operation that gave up before any input says nothing was sent, and why',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (that element is disabled)"});
+  expect(run.methods.some((method:string)=>method.startsWith('Input.'))).toBe(false);
+  await expect(page.locator('#result')).toHaveText('Count 0');
+ } finally { await page.close(); }
+});
+
+test('an operation that stopped after input left says what the page looks like',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false;
+ try {
+  // Hold the real release (after the trial) past the operation's deadline.
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,navigated:false,address_changed:false,element_present:true}});
+ } finally { await page.close(); }
+});
+
+test('an operation that stopped after its click opened a dialog says so',async()=>{
+ const {tab,page,ref}=await fixture();
+ await page.evaluate(()=>{(document.querySelector('#button') as HTMLElement).onmousedown=()=>{alert('Saved')};});
+ let acting=false;
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  expect(run.error).toBeDefined();
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,navigated:false,address_changed:false,dialog:true,element_present:true}});
+ } finally { await page.close(); }
+});
+
+// The outcome's checks stop the moment access is revoked or their time runs
+// out: no page command after, and no reason read from the page. The
+// extension's own element-state probe (it says "that element is disabled")
+// is held to make the moment; engine_begin's own use of it, at the start,
+// is let through.
+async function holdStateProbe(ms: number): Promise<void> {
+ await inWorker(setup.context,(ms:number)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armedAt:Date.now(),original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
+   // The command goes out first; only its answer is held, so nothing logged
+   // before a revocation is sent after it.
+   const answer=g.probeSpy.original(target,method,params);
+   if(method==='Runtime.callFunctionOn'&&!g.probeSpy.held&&Date.now()-g.probeSpy.armedAt>1000&&String(params?.functionDeclaration??'').includes('that element is disabled')){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,ms));}
+   return answer;
+  }) as typeof chrome.debugger.sendCommand;},ms);
+}
+// Every command sent after `since` that reads the page. Not counted: the
+// operation's own cleanup (removing its guard, released objects, stopped
+// interceptors), and setting up the extension's own isolated world (the frame
+// tree read straight before Page.createIsolatedWorld, and the world itself),
+// which reads nothing by itself, unless what follows it does. A frame tree
+// read on its own, as the outcome check makes, always counts, and so does a
+// world followed by a read (DOM.resolveNode, Runtime.callFunctionOn).
+const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
+ const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
+  || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
+  || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
+ const idleWorld=(index:number)=>log[index]?.method==='Page.createIsolatedWorld'&&(!log[index+1]||cleanup(log[index+1]));
+ return log.filter((entry,index)=>{
+  if(entry.at<=since||cleanup(entry)) return false;
+  if(entry.method==='Page.createIsolatedWorld') return !idleWorld(index);
+  if(entry.method==='Page.getFrameTree'&&log[index+1]?.method==='Page.createIsolatedWorld') return !idleWorld(index+1);
+  return true;
+ }).map(entry=>entry.method);
+};
+async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
+ return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
+}
+
+test('site access revoked during the outcome check stops it, and no page reason comes back',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ await holdStateProbe(500);
+ try {
+  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  let revokedAt=0;
+  for(let i=0;i<200&&!revokedAt;i++){
+   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){setup.daemon.setPolicy({sites:[]});revokedAt=await inWorker(setup.context,()=>Date.now());}
+   else await page.waitForTimeout(25);
+  }
+  const run=await running;
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:false,reason:'the site was no longer allowed before anything was sent'});
+  expect(sentAfter(spy.log,revokedAt)).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
+
+test('an outcome check past its own deadline stops, and no page reason comes back',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ await holdStateProbe(1200);
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  // Wait out the held probe, then look at what was sent after it.
+  await page.waitForTimeout(1300);
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (it may still have been moving or loading)"});
+  // From the held probe on, which is before the check's deadline.
+  expect(sentAfter(spy.log,spy.heldAt)).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
+
+test('site access revoked while the outcome check looks at the page after input stops it there',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false, armed=false;
+ const arm=()=>inWorker(setup.context,()=>{const g=globalThis as any;g.probeSpy={log:[],held:false,original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
+   // The outcome check's own read of the frame tree, after the operation ended.
+   const sent=g.probeSpy.original(target,method,params);
+   // Held less than the check's own 400 ms frame timeout, so its answer is used.
+   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,300));}
+   const answer=await sent;
+   // Once the real press reached the page the extension has nothing more to
+   // send until its own timer ends the operation (the release is held).
+   if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed') g.probeSpy.ended=true;
+   return answer;
+  }) as typeof chrome.debugger.sendCommand;});
+ try {
+  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mousePressed'&&!armed){armed=true;await arm();}
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased'){
+    if(!armed){armed=true;await arm();}
+    await new Promise(done=>setTimeout(done,10000));
+   }
+  },8000);
+  let revokedAt=0;
+  for(let i=0;i<500&&!revokedAt;i++){
+   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){setup.daemon.setPolicy({sites:[]});revokedAt=await inWorker(setup.context,()=>Date.now());}
+   else await page.waitForTimeout(25);
+  }
+  const run=await running;
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome.dispatched).toBe(true);
+  // The frame tree's answer, sent before the removal, was used; nothing after
+  // it was read. A policy update that arrived late could only fail this.
+  expect(run.outcome.observed.navigated).toBe(false);
+  expect(run.outcome.observed.element_present).toBeUndefined();
+  expect(sentAfter(spy.log,revokedAt)).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
+
+test('a debugger attachment lost during the outcome check is not a page that stopped responding',async()=>{
+ const {tab,page,ref}=await fixture();
+ let acting=false, armed=false;
+ const arm=()=>inWorker(setup.context,()=>{const g=globalThis as any;g.probeSpy={log:[],held:false,original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method,detail:''});
+   // The outcome check's own frame tree read fails as a lost attachment does.
+   if(method==='Page.getFrameTree'&&!g.probeSpy.held&&g.probeSpy.ended){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();throw new Error('Debugger is not attached to the tab');}
+   const answer=await g.probeSpy.original(target,method,params);
+   if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed') g.probeSpy.ended=true;
+   return answer;
+  }) as typeof chrome.debugger.sendCommand;});
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},async command=>{
+   if(command.method==='Cww.actionPhase') acting=true;
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mousePressed'&&!armed){armed=true;await arm();}
+   if(acting&&command.method==='Input.dispatchMouseEvent'&&command.params?.type==='mouseReleased') await new Promise(done=>setTimeout(done,10000));
+  },8000);
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,address_changed:false}});
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });

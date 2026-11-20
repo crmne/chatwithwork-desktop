@@ -38,6 +38,20 @@ binds the current connection, tab group, site, read ref and document identity.
 It rejects concurrent admission and validates local policy during execution.
 Input events retain engine order even when policy checks are asynchronous.
 
+An operation the helper couldn't finish ends with the daemon's
+`engine_cancel`, which the extension answers with how it ended, even when it
+had already cancelled it itself: `{outcome:{dispatched:false, moved?, reason}}` when
+no input left (its reason a sentence of its own: not ready in time because
+disabled, hidden or covered, the page changed first, or Stop), or
+`{outcome:{dispatched:true, complete, observed:{responding, closed?, navigated?,
+address_changed?, dialog?, element_present?}}}` from fixed checks of the tab afterwards,
+at most a second in all, with access checked again before every read and
+just before every DevTools command they send.
+`moved` says a real pointer move reached the page; `complete` whether all of
+the action's input did (a click's release, a type's text). After Stop, or once changes are off or the site is
+no longer allowed, it doesn't look at the page again: only the tab's address. The helper's error code still never reaches the
+answer; the daemon words it from these fields alone.
+
 CWW refs are backend DOM node IDs in their observed document, not Playwright
 `aria-ref` IDs. The fixed bridge adopts the validated backend node. Main-frame
 shadow roots and slots are supported; subframe actions remain refused.

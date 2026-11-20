@@ -31,3 +31,6 @@ mod upload_tests;
 
 #[cfg(test)]
 mod pointer_tests;
+
+#[cfg(test)]
+mod outcome_tests;

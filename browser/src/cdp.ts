@@ -38,6 +38,9 @@ export interface SendOptions {
   cleanup?: boolean;
   // Engine cleanup must never recreate an attachment after Stop.
   existingOnly?: boolean;
+  // Asked just before the command goes out; false refuses it. For checks
+  // that must stop the moment access is revoked or their time runs out.
+  guard?: () => boolean;
 }
 
 const sessions = new Map<number, Session>();
@@ -227,9 +230,21 @@ export async function send<T = any>(
 ): Promise<T> {
   if (halted && !options.cleanup) throw browserStopped();
   if (responsiveness.verdict(tabId) === "fail") throw new ToolError("timeout", NOT_RESPONDING);
+  // A guarded call sends nothing but its own command: no new attachment
+  // (Page.enable and the rest) and no responsiveness probe; a tab that would
+  // need one counts as not answering.
+  const refused = () => new ToolError("browser_stopped", "the check stopped: access changed or its time ran out");
+  if (options.guard) {
+    if (!options.guard()) throw refused();
+    if (!sessions.has(tabId)) throw new ToolError("unavailable", "the browser attachment ended");
+    if (responsiveness.verdict(tabId) !== "send") throw new ToolError("timeout", NOT_RESPONDING);
+  }
   await attach(tabId, options);
   touch(tabId);
-  await responding(tabId);
+  // Checked above for a guarded call, which never probes.
+  if (!options.guard) await responding(tabId);
+  else if (responsiveness.verdict(tabId) !== "send") throw new ToolError("timeout", NOT_RESPONDING);
+  if (options.guard && !options.guard()) throw refused();
   try {
     return (await within(
       chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>,

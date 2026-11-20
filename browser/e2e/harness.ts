@@ -233,8 +233,8 @@ export async function inWorker<T>(context: BrowserContext, fn: (arg: any) => Pro
 
 // One click, type or select through the real bundled engine helper, the way
 // the daemon drives it: begin, relay its commands and events, then finish.
-export async function engineAction(setup: Setup, action: string, params: Record<string, unknown>, beforeCommand?: (command: any) => Promise<void>): Promise<any> {
-  const start = await setup.daemon.call('engine_begin', { action, params });
+export async function engineAction(setup: Setup, action: string, params: Record<string, unknown>, beforeCommand?: (command: any) => Promise<void>, timeoutMs?: number, beforeCancel?: () => Promise<void>): Promise<any> {
+  const start = await setup.daemon.call('engine_begin', { action, params, ...(timeoutMs ? { timeout_ms: timeoutMs } : {}) });
   if (start.error) return start;
   const operation = start.result;
   const child = spawn(process.execPath, [resolve('engine/entry.mjs')], { stdio: ['pipe','pipe','pipe'], env: { PATH: process.env.PATH } });
@@ -263,7 +263,7 @@ export async function engineAction(setup: Setup, action: string, params: Record<
     child.once('error',reject); child.once('exit',code=>{if(code)reject(Error(`helper exited ${code}`))});
     child.stdin.write(JSON.stringify({type:'call',operation})+'\n');
   }).finally(()=>{clearInterval(timer);child.stdin.end();});
-  if(result.type==='error') { await setup.daemon.call('engine_cancel',{lease:operation.lease}); return {error:result.error, methods}; }
+  if(result.type==='error') { await beforeCancel?.(); const cancelled = await setup.daemon.call('engine_cancel',{lease:operation.lease}); return {error:result.error, outcome:cancelled.result?.outcome, methods}; }
   const finished = await setup.daemon.call('engine_finish',{lease:operation.lease,...result.result});
   return {...finished,methods};
 }
