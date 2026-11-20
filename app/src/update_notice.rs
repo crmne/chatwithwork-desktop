@@ -315,7 +315,9 @@ pub fn notice_from(
         Installed::Pkg => (
             "Installed with the .pkg installer. Download the new one and open it.",
             None,
-            Some(file(format!("Chat-with-Work-Desktop-{version}-macOS-universal.pkg"))),
+            Some(file(format!(
+                "Chat-with-Work-Desktop-{version}-macOS-universal.pkg"
+            ))),
         ),
         Installed::Other(Unsupported::SystemDirectory) => (
             "Installed system-wide. Update it with the package manager that installed it.",

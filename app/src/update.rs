@@ -966,11 +966,26 @@ mod tests {
     #[test]
     fn downloads_are_named_as_the_release_names_them() {
         for (target, name) in [
-            ("macos-universal", "Chat-with-Work-Desktop-0.20.0-macOS-universal"),
-            ("x86_64-pc-windows-msvc", "Chat-with-Work-Desktop-0.20.0-Windows-x64"),
-            ("aarch64-pc-windows-msvc", "Chat-with-Work-Desktop-0.20.0-Windows-arm64"),
-            ("x86_64-unknown-linux-gnu", "Chat-with-Work-Desktop-0.20.0-Linux-x86_64"),
-            ("aarch64-unknown-linux-gnu", "Chat-with-Work-Desktop-0.20.0-Linux-aarch64"),
+            (
+                "macos-universal",
+                "Chat-with-Work-Desktop-0.20.0-macOS-universal",
+            ),
+            (
+                "x86_64-pc-windows-msvc",
+                "Chat-with-Work-Desktop-0.20.0-Windows-x64",
+            ),
+            (
+                "aarch64-pc-windows-msvc",
+                "Chat-with-Work-Desktop-0.20.0-Windows-arm64",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "Chat-with-Work-Desktop-0.20.0-Linux-x86_64",
+            ),
+            (
+                "aarch64-unknown-linux-gnu",
+                "Chat-with-Work-Desktop-0.20.0-Linux-aarch64",
+            ),
         ] {
             assert_eq!(asset_stem("0.20.0", target), name);
         }
