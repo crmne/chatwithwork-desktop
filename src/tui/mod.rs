@@ -79,6 +79,7 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     let theme = Theme::detect();
     let history_file = history::path(&chat_paths);
     let filter_file = sidebar::filter_path(&history_file);
+    let hidden_file = sidebar::hidden_path(&history_file);
     let mut app = App::new(utc_offset)
         .with_history(history::load(&history_file))
         .with_filter(sidebar::load_filter(&filter_file));
@@ -86,6 +87,10 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
         app = app.with_organization(profile.account.id.clone());
     }
     let config = Config::load(&paths).ok();
+    app = app.with_layout(
+        sidebar::load_hidden(&hidden_file),
+        config.as_ref().and_then(|c| c.desktop.reduce_motion) == Some(true),
+    );
     let mouse = config.as_ref().is_none_or(|c| c.tui.mouse);
     app = app.with_crash_reports(crate::crash_reports::Consent::read(config.as_ref()));
 
@@ -128,6 +133,7 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
         chats,
         history: history_file,
         filter: filter_file,
+        hidden: hidden_file,
         presence,
         commands,
         tx: tx.clone(),
@@ -206,6 +212,7 @@ struct Outputs {
     chats: ChatRunner,
     history: PathBuf,
     filter: PathBuf,
+    hidden: PathBuf,
     presence: Presence,
     commands: Arc<Follow>,
     paths: Paths,
@@ -234,6 +241,11 @@ impl Outputs {
                 Effect::CrashReports(on) => {
                     if let Err(e) = crate::crash_reports::set(&self.paths, on) {
                         let _ = self.tx.send(Msg::CrashReportsNotSaved(format!("{e:#}")));
+                    }
+                }
+                Effect::RememberSidebar(hidden) => {
+                    if let Err(e) = sidebar::save_hidden(&self.hidden, hidden) {
+                        tracing::debug!("keeping the sidebar hidden or shown: {e:#}");
                     }
                 }
                 Effect::RememberFilter(filter) => {
@@ -521,6 +533,7 @@ impl ChatRunner {
             ChatCommand::Act { chat, action } => {
                 thread::spawn(move || {
                     let result = match &action {
+                        ChatAction::Pin(pinned) => chats.pin(chat, *pinned).map(Acted::Pins),
                         ChatAction::Retry => chats.retry(chat, None).map(Acted::Chat),
                         ChatAction::Branch => chats.branch(chat, None).map(Acted::Chat),
                         ChatAction::Rename(title) => chats.rename(chat, title).map(Acted::Chat),

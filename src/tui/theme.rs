@@ -4,8 +4,8 @@
 //! the selection is reverse video, the terminal's own highlight; signal
 //! colours mark state only, through the 16 ANSI colours a theme restyles:
 //! green done, blue working, yellow waiting for someone, red failed. The
-//! rainbow is only for the composer while an answer is written, and only in
-//! the foreground.
+//! rainbow is the composer's edge, always, as on the web: still at rest,
+//! flowing while an answer is written, and only in the foreground.
 //!
 //! With `NO_COLOR` set (or `TERM=dumb`) there is no colour at all, only bold,
 //! dim and reverse.
@@ -32,13 +32,14 @@ pub enum Depth {
 }
 
 /// The rainbow's hues in ANSI colours, in the web's order: green, blue,
-/// violet, orange, lime.
+/// violet, orange, then cyan for its lime, so it never ends in the yellow
+/// that means something waits (and stays readable on light terminals).
 const RAINBOW: [Color; 5] = [
     Color::Green,
     Color::Blue,
     Color::Magenta,
     Color::Red,
-    Color::Yellow,
+    Color::Cyan,
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +62,8 @@ impl Theme {
         }
     }
 
-    fn mono(&self) -> bool {
+    /// `NO_COLOR`: no colour at all.
+    pub fn mono(&self) -> bool {
         self.depth == Depth::Mono
     }
 
@@ -217,7 +219,7 @@ mod tests {
     fn the_rainbow_runs_through_ansi_colours() {
         assert_eq!(rainbow_at(0.0), Color::Green);
         assert_eq!(rainbow_at(0.5), Color::Magenta);
-        assert_eq!(rainbow_at(1.0), Color::Yellow);
+        assert_eq!(rainbow_at(1.0), Color::Cyan);
     }
 
     #[test]

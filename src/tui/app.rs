@@ -554,6 +554,8 @@ pub enum ChatCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatAction {
+    /// Pinned (true) or unpinned in the sidebar.
+    Pin(bool),
     /// The latest question, answered again.
     Retry,
     /// The whole conversation, in a new chat.
@@ -570,6 +572,7 @@ pub enum Acted {
     Chat(ChatSummary),
     Deleted,
     Shared(Shared),
+    Pins(super::chat::Pins),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,6 +593,8 @@ pub enum Effect {
     CrashReports(bool),
     /// Keep the sidebar's filter for the next run.
     RememberFilter(super::sidebar::Filter),
+    /// Keep the sidebar hidden (true) or shown for the next run.
+    RememberSidebar(bool),
     Quit,
 }
 
@@ -950,6 +955,8 @@ pub struct BotPage {
     pub error: Option<String>,
     /// The selected run.
     pub selected: usize,
+    /// It changed again while it was read: read it once more after.
+    pub again: bool,
 }
 
 impl BotPage {
@@ -1055,7 +1062,14 @@ pub struct Picker {
 pub enum PickerKind {
     Chats,
     Models,
+    /// The project the next new chat starts in.
     Projects,
+    /// A bot to open.
+    Bots,
+    /// A project whose chats to pick from.
+    Places,
+    /// Chats and bots by name, for `/search` and `/open`.
+    Search,
 }
 
 /// One row of a picker.
@@ -1065,6 +1079,9 @@ pub enum PickItem<'a> {
     Model(&'a Model),
     /// `None` is "no project".
     Project(Option<&'a Project>),
+    Bot(&'a super::sidebar::BotRow),
+    /// A project to look into.
+    Place(&'a Project),
 }
 
 /// The answers to a change waiting for approval, as the prompt lists them.
@@ -1462,6 +1479,46 @@ impl ChatPane {
                     .collect(),
                 _ => Vec::new(),
             },
+            PickerKind::Bots => self
+                .sidebar()
+                .map(|s| {
+                    s.bots
+                        .iter()
+                        .filter(|b| has(&b.name))
+                        .map(PickItem::Bot)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            PickerKind::Places => self
+                .list
+                .projects
+                .iter()
+                .filter(|p| has(&p.name))
+                .map(PickItem::Place)
+                .collect(),
+            PickerKind::Search => {
+                let mut items: Vec<PickItem> = self
+                    .list
+                    .chats
+                    .iter()
+                    .filter(|c| {
+                        has(&c.title)
+                            || c.number.to_string() == query.trim_start_matches('#')
+                            || c.project.as_ref().is_some_and(|p| has(&p.name))
+                    })
+                    .map(PickItem::Chat)
+                    .collect();
+                if let Some(sidebar) = self.sidebar() {
+                    items.extend(
+                        sidebar
+                            .bots
+                            .iter()
+                            .filter(|b| has(&b.name))
+                            .map(PickItem::Bot),
+                    );
+                }
+                items
+            }
             PickerKind::Projects => {
                 let mut items = Vec::new();
                 if query.is_empty() || "no project".contains(&query) {
@@ -1568,8 +1625,11 @@ pub struct App {
     pub commands: crate::commands::follow::Snapshot,
     /// Whether crash reports are sent, as the General page shows it.
     pub crash_reports: crate::crash_reports::Consent,
-    /// `[` hid the sidebar.
+    /// `[` or `/sidebar` hid the sidebar; kept between runs.
     pub sidebar_hidden: bool,
+    /// The desktop app's reduce motion setting: the composer's rainbow
+    /// holds still while an answer is written.
+    pub reduce_motion: bool,
     /// `g` was pressed: the next key says where to go.
     pub go: bool,
 }
@@ -1605,8 +1665,17 @@ impl App {
             commands: crate::commands::follow::Snapshot::default(),
             crash_reports: crate::crash_reports::Consent::default(),
             sidebar_hidden: false,
+            reduce_motion: false,
             go: false,
         }
+    }
+
+    /// With the sidebar shown or hidden as the person left it, and the
+    /// desktop app's reduce motion setting.
+    pub fn with_layout(mut self, sidebar_hidden: bool, reduce_motion: bool) -> Self {
+        self.sidebar_hidden = sidebar_hidden;
+        self.reduce_motion = reduce_motion;
+        self
     }
 
     /// With the sidebar's filter as the person left it.
@@ -1927,7 +1996,7 @@ impl App {
                 self.go = true;
                 self.notice(super::theme::Signal::Idle, GO_HINT);
             }
-            KeyCode::Char('[') if side => self.sidebar_hidden = !self.sidebar_hidden,
+            KeyCode::Char('[') if side => return self.show_sidebar(self.sidebar_hidden),
             KeyCode::Char('f') if side && self.chat.ready() => return self.next_filter(),
             KeyCode::Right | KeyCode::Char('l') if side && self.chat.ready() => {
                 return self.tree_right();
@@ -1991,17 +2060,19 @@ impl App {
                 if self.paired() && !matches!(self.chat.access, Access::Loading) {
                     if !self.chat.ready() {
                         self.chat.access = Access::Loading;
-                    }
-                    effects.push(Effect::Chat(ChatCommand::List));
-                    if let Some(open) = self.chat.open {
-                        if matches!(
-                            self.chat.following,
-                            Following::Refused | Following::Unsupported
-                        ) {
+                        effects.push(Effect::Chat(ChatCommand::List));
+                    } else {
+                        if let Some(open) = self.chat.open
+                            && matches!(
+                                self.chat.following,
+                                Following::Refused | Following::Unsupported
+                            )
+                        {
                             self.chat.following = Following::Starting;
                             effects.push(Effect::Chat(ChatCommand::Follow(Some(open))));
                         }
-                        effects.extend(self.refresh_chat(open));
+                        // The list, and whatever the screen shows.
+                        effects.extend(self.refresh_view());
                     }
                 }
                 return effects;
@@ -2611,7 +2682,7 @@ impl App {
             Cmd::Delete => can(|c| c.delete),
             Cmd::ShareChat => can(|c| c.share),
             Cmd::UnshareChat => open.is_some_and(|c| c.share.is_some()),
-            Cmd::Copy | Cmd::Open => open.is_some(),
+            Cmd::Copy => open.is_some(),
             Cmd::Detach => !self.chat.attachments.is_empty(),
             Cmd::Unqueue => self.chat.last_unqueueable().is_some(),
             Cmd::Login => self.can_pair(),
@@ -2619,7 +2690,9 @@ impl App {
             Cmd::Pause => self.daemon.paused() == Some(false),
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
-            Cmd::NewBot => self.chat.can_make_bots(),
+            Cmd::NewBot | Cmd::Bots => self.chat.can_make_bots(),
+            Cmd::Decisions => self.chat.sidebar().is_some(),
+            Cmd::Pin => open.is_some_and(|c| c.can(|can| can.pin)),
             Cmd::MakeBot | Cmd::TryBot => self.open_draft().is_some_and(|d| d.made.is_none()),
             Cmd::OpenBot => self.open_draft().is_some_and(|d| d.made.is_some()),
             Cmd::Commands => !self.commands.commands.is_empty(),
@@ -2765,6 +2838,23 @@ impl App {
                 return self.new_chat();
             }
             Cmd::Resume => self.open_picker(PickerKind::Chats, args),
+            Cmd::Decisions => return self.open_decisions(),
+            Cmd::Bots => self.open_picker(PickerKind::Bots, args),
+            Cmd::Projects => self.open_picker(PickerKind::Places, args),
+            Cmd::Refresh => return self.refresh_view(),
+            Cmd::Sidebar => {
+                let show = match args.trim() {
+                    "show" | "on" => true,
+                    "hide" | "off" => false,
+                    _ => self.sidebar_hidden,
+                };
+                return self.show_sidebar(show);
+            }
+            Cmd::Pin => return self.pin_open_chat(),
+            // Without the sidebar on screen, its search is a picker.
+            Cmd::Search if !self.hits.0.iter().any(|(_, hit)| *hit == Hit::Search) => {
+                self.open_picker(PickerKind::Search, args);
+            }
             Cmd::Search => {
                 self.focus = Focus::Chats;
                 self.view = View::Chat;
@@ -2843,6 +2933,7 @@ impl App {
                 }
                 None => self.notice(Signal::Idle, "There's no answer to copy yet."),
             },
+            Cmd::Open if !args.trim().is_empty() => return self.open_named(args),
             Cmd::Open => return self.open_in_browser(),
             Cmd::Retry
             | Cmd::Branch
@@ -3119,6 +3210,18 @@ impl App {
             Some(PickItem::Project(project)) => {
                 let project = project.cloned();
                 self.choose_project(project)
+            }
+            Some(PickItem::Bot(bot)) => {
+                let id = bot.id;
+                self.chat.picker = None;
+                self.chat.select(SideItem::Bot(id));
+                self.open_bot(id)
+            }
+            // Its chats next: the chat picker narrowed to its name.
+            Some(PickItem::Place(project)) => {
+                let name = project.name.clone();
+                self.open_picker(PickerKind::Chats, &name);
+                Vec::new()
             }
             None => {
                 if kind != Some(PickerKind::Models)
@@ -4413,6 +4516,7 @@ impl App {
             loading: true,
             error: None,
             selected: 0,
+            again: false,
         });
         vec![Effect::Chat(ChatCommand::Bot { id, filter })]
     }
@@ -5423,6 +5527,9 @@ impl App {
                     .filter(|p| p.id == id && p.filter == filter)
                 {
                     page.loading = false;
+                    if std::mem::take(&mut page.again) {
+                        return self.bot_again();
+                    }
                     match result {
                         Ok(data) => {
                             page.data = Some(data);
@@ -5619,7 +5726,110 @@ impl App {
             effects.push(Effect::Chat(ChatCommand::List));
         }
         effects.extend(self.decisions_again());
+        effects.extend(self.bot_again());
         effects
+    }
+
+    /// Changes may have been missed (a reconnect, waking up): the list read
+    /// whatever reads are out, and the page shown with it.
+    fn catch_up(&mut self) -> Vec<Effect> {
+        self.chat.relisting = true;
+        let mut effects = vec![Effect::Chat(ChatCommand::List)];
+        effects.extend(self.decisions_again());
+        effects.extend(self.bot_again());
+        effects
+    }
+
+    /// The bot shown read again, keeping its filter and selection: a run
+    /// started, ended or asks something. One read at a time.
+    fn bot_again(&mut self) -> Vec<Effect> {
+        let View::Bot(id) = self.view else {
+            return Vec::new();
+        };
+        let Some(page) = self.chat.bot_page.as_mut().filter(|p| p.id == id) else {
+            return Vec::new();
+        };
+        if std::mem::replace(&mut page.loading, true) {
+            page.again = true;
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::Bot {
+                id,
+                filter: page.filter.clone(),
+            })]
+        }
+    }
+
+    /// `r` and `/refresh`: the view shown, read again from the server, for
+    /// when live updates didn't reach it.
+    pub fn refresh_view(&mut self) -> Vec<Effect> {
+        if !self.chat.ready() {
+            return Vec::new();
+        }
+        let mut effects = vec![Effect::Chat(ChatCommand::List)];
+        self.chat.relisting = true;
+        match self.view {
+            View::Decisions => effects.extend(self.read_decisions()),
+            View::Bot(_) => effects.extend(self.bot_again()),
+            View::NewBot => {
+                if let Some(new_bot) = self.chat.new_bot.as_mut() {
+                    match new_bot.form.as_mut() {
+                        Some(form) => {
+                            form.loading = true;
+                            effects.push(Effect::Chat(ChatCommand::Recipe {
+                                key: form.key.clone(),
+                                tools: form.tools(),
+                            }));
+                        }
+                        None => effects.push(Effect::Chat(ChatCommand::Recipes)),
+                    }
+                }
+            }
+            View::Chat | View::Settings(_) => {
+                if let Some(open) = self.chat.open {
+                    effects.extend(self.refresh_chat(open));
+                }
+            }
+        }
+        effects
+    }
+
+    /// `/pin`: the open chat pinned in the sidebar, or unpinned.
+    fn pin_open_chat(&mut self) -> Vec<Effect> {
+        use super::theme::Signal;
+        let Some(chat) = self.chat.open else {
+            self.notice(Signal::Idle, "Open a chat to pin it.");
+            return Vec::new();
+        };
+        let pinned = !self.chat.list.pins.chats.contains(&chat);
+        vec![Effect::Chat(ChatCommand::Act {
+            chat,
+            action: ChatAction::Pin(pinned),
+        })]
+    }
+
+    /// `/open 42` or `/open budget`: that chat or bot here; a name that
+    /// fits several opens the picker on them.
+    fn open_named(&mut self, args: &str) -> Vec<Effect> {
+        let query = args.trim().trim_start_matches('#');
+        if let Ok(number) = query.parse::<u64>()
+            && self.chat.chat(number).is_some()
+        {
+            self.select_chat(number);
+            return self.open_chat(number);
+        }
+        self.open_picker(PickerKind::Search, query);
+        if self.chat.pick_items().len() == 1 {
+            return self.pick(0);
+        }
+        Vec::new()
+    }
+
+    /// Show or hide the sidebar, the chat taking the whole width; kept for
+    /// the next run.
+    fn show_sidebar(&mut self, show: bool) -> Vec<Effect> {
+        self.sidebar_hidden = !show;
+        vec![Effect::RememberSidebar(!show)]
     }
 
     /// Decisions read again while they show.
@@ -5656,12 +5866,14 @@ impl App {
         match live {
             ListLive::Watching => {
                 self.chat.list_live = true;
-                // Catch up on what changed before the subscription.
+                // Catch up on what changed before the subscription (a
+                // reconnect, or waking from sleep): the list, and the page
+                // that shows.
                 if !matches!(self.chat.access, Access::Unknown | Access::Loading) {
-                    return vec![Effect::Chat(ChatCommand::List)];
+                    return self.catch_up();
                 }
             }
-            ListLive::Missed => return vec![Effect::Chat(ChatCommand::List)],
+            ListLive::Missed => return self.catch_up(),
             ListLive::Refused | ListLive::Unsupported | ListLive::Offline => {
                 self.chat.list_live = false;
             }
@@ -5763,6 +5975,15 @@ impl App {
                 if self.chat.open == Some(chat) {
                     return self.new_chat();
                 }
+                Vec::new()
+            }
+            (action, Acted::Pins(pins)) => {
+                let pinned = action == ChatAction::Pin(true);
+                self.chat.keep_selection(|pane| pane.list.pins = pins);
+                self.notice(
+                    Signal::Positive,
+                    if pinned { "Pinned." } else { "Unpinned." },
+                );
                 Vec::new()
             }
             (_, Acted::Shared(shared)) => {

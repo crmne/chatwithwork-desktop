@@ -2347,7 +2347,11 @@ fn snapshot_chat_slash_menu() {
     budget_open(&mut app, every_action());
     type_text(&mut app, "/re");
     let names: Vec<&str> = app.menu().iter().map(|c| c.name).collect();
-    assert_eq!(names, ["resume", "retry", "rename"], "what fits here");
+    assert_eq!(
+        names,
+        ["resume", "retry", "rename", "refresh"],
+        "what fits here"
+    );
     assert_snapshot("chat_slash_menu", &app);
 
     // Down, then Tab completes; Enter on one that needs a title leaves room.
@@ -2378,7 +2382,7 @@ fn commands_run_from_the_composer() {
     // Not offered on an older server, and says so when typed.
     type_text(&mut app, "/re");
     let names: Vec<&str> = app.menu().iter().map(|c| c.name).collect();
-    assert_eq!(names, ["resume"]);
+    assert_eq!(names, ["resume", "refresh"]);
     app.chat.input.clear();
     type_text(&mut app, "/retry");
     assert_eq!(
@@ -2413,6 +2417,8 @@ fn commands_run_from_the_composer() {
 
     let mut app = self::app();
     chats_ready(&mut app);
+    // The sidebar is on screen, so its search is where /search types.
+    draw(&mut app);
     app.update(char('i'));
     type_text(&mut app, "/search pla");
     let effects = app.update(key(KeyCode::Enter));
@@ -4667,6 +4673,245 @@ fn the_sidebar_hides_and_shows() {
     assert!(render_to_string(&app, 100, 30).contains("PROJECTS"));
 }
 
+// ------------------------------------------------- composer, live, sidebar
+
+/// The composer's bottom edge as the colours each of its cells has.
+fn composer_edge_colours(
+    app: &App,
+    theme: Theme,
+    now: OffsetDateTime,
+) -> Vec<ratatui::style::Color> {
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| render(frame, app, &theme, now))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let y = (0..30)
+        .rev()
+        .find(|&y| buffer[(33, y)].symbol() == "╰")
+        .expect("the composer's bottom edge");
+    (34..60).map(|x| buffer[(x, y)].fg).collect()
+}
+
+#[test]
+fn the_composer_wears_the_rainbow_always() {
+    use ratatui::style::Color;
+    let rainbow = |colours: &[Color]| {
+        let distinct: std::collections::HashSet<_> = colours.iter().collect();
+        distinct.len() >= 3 && !colours.contains(&Color::Reset)
+    };
+    // At rest: still.
+    let mut app = app();
+    budget_open(&mut app, every_action());
+    let rest = composer_edge_colours(&app, Theme::new(Depth::Ansi), NOW);
+    assert!(rainbow(&rest), "{rest:?}");
+    let later = NOW + time::Duration::milliseconds(700);
+    assert_eq!(
+        rest,
+        composer_edge_colours(&app, Theme::new(Depth::Ansi), later),
+        "still at rest"
+    );
+    // Working: it flows.
+    let mut working = app.clone();
+    working.update(Msg::Chat(ChatMsg::Shown {
+        chat: 42,
+        result: Ok(budget_transcript("processing")),
+    }));
+    let a = composer_edge_colours(&working, Theme::new(Depth::Ansi), NOW);
+    let b = composer_edge_colours(&working, Theme::new(Depth::Ansi), later);
+    assert!(rainbow(&a) && a != b, "flowing");
+    // Reduced motion: still while it works.
+    working.reduce_motion = true;
+    assert_eq!(
+        composer_edge_colours(&working, Theme::new(Depth::Ansi), NOW),
+        composer_edge_colours(&working, Theme::new(Depth::Ansi), later)
+    );
+    // A change waits: amber.
+    let mut waiting_app = self::app();
+    waiting(&mut waiting_app, vec![approval()], vec![]);
+    let amber = composer_edge_colours(&waiting_app, Theme::new(Depth::Ansi), NOW);
+    assert!(amber.iter().all(|c| *c == Color::Yellow), "{amber:?}");
+    // NO_COLOR: no colour at all.
+    let mono = composer_edge_colours(&app, Theme::new(Depth::Mono), NOW);
+    assert!(mono.iter().all(|c| *c == Color::Reset), "{mono:?}");
+}
+
+#[test]
+fn a_bots_page_follows_its_runs_and_catches_up_after_a_reconnect() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::Bot(9)));
+    app.update(key(KeyCode::Enter));
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 9,
+        filter: None,
+        result: Ok(bot_json()),
+    }));
+    app.update(char('j'));
+    // A run starts: the server says the sidebar changed, and the page is
+    // read again, keeping its filter and selection.
+    let effects = app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar)));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Bot {
+        id: 9,
+        filter: None
+    })));
+    // Another change while that read is out: one more read after it.
+    assert!(
+        !app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Sidebar)))
+            .contains(&Effect::Chat(ChatCommand::Bot {
+                id: 9,
+                filter: None
+            }))
+    );
+    let mut newer = bot_json();
+    newer["bot"]["runs"].as_array_mut().unwrap().insert(
+        0,
+        serde_json::json!({"number": 64, "title": "A new run", "state": "processing"}),
+    );
+    assert_eq!(
+        app.update(Msg::Chat(ChatMsg::Bot {
+            id: 9,
+            filter: None,
+            result: Ok(bot_json()),
+        })),
+        vec![Effect::Chat(ChatCommand::Bot {
+            id: 9,
+            filter: None
+        })]
+    );
+    app.update(Msg::Chat(ChatMsg::Bot {
+        id: 9,
+        filter: None,
+        result: Ok(newer),
+    }));
+    assert!(render_to_string(&app, 100, 30).contains("A new run"));
+    assert_eq!(
+        app.chat.bot_page.as_ref().unwrap().selected,
+        1,
+        "selection kept"
+    );
+    // After a reconnect or waking up, the list and the page catch up.
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list()))));
+    let effects = app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Watching)));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Bot {
+        id: 9,
+        filter: None
+    })));
+}
+
+#[test]
+fn r_and_slash_refresh_read_the_screen_again_but_never_while_typing() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert!(app.chat.select(SideItem::Decisions));
+    app.update(key(KeyCode::Enter));
+    app.update(Msg::Chat(ChatMsg::Decisions(Ok(decisions_json()))));
+    app.update(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Chats);
+    let effects = app.update(char('r'));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::List)));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Decisions)));
+    // In the composer, r is a letter.
+    let mut app = self::app();
+    budget_open(&mut app, every_action());
+    assert_eq!(app.focus, Focus::Composer);
+    assert!(app.update(char('r')).is_empty());
+    assert_eq!(app.chat.input.text(), "r");
+    app.update(ctrl('c'));
+    type_text(&mut app, "/refresh");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects.contains(&Effect::Chat(ChatCommand::List)),
+        "{effects:?}"
+    );
+    assert!(
+        effects.contains(&Effect::Chat(ChatCommand::Open(42))),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn the_sidebar_hides_with_a_key_or_a_command_and_is_remembered() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert_eq!(app.update(char('[')), vec![Effect::RememberSidebar(true)]);
+    assert!(!render_to_string(&app, 100, 30).contains("PROJECTS"));
+    assert_snapshot("sidebar_hidden", &app);
+    app.focus = Focus::Composer;
+    type_text(&mut app, "/sidebar show");
+    assert!(
+        app.update(key(KeyCode::Enter))
+            .contains(&Effect::RememberSidebar(false))
+    );
+    assert!(render_to_string(&app, 100, 30).contains("PROJECTS"));
+    let app = self::app().with_layout(true, false);
+    assert!(app.sidebar_hidden, "as the last run left it");
+}
+
+#[test]
+fn without_the_sidebar_slash_commands_drive_it() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    app.update(char('['));
+    draw(&mut app);
+    app.focus = Focus::Composer;
+    let run = |app: &mut App, text: &str| {
+        app.update(ctrl('c'));
+        app.focus = Focus::Composer;
+        app.view = View::Chat;
+        type_text(app, text);
+        let effects = app.update(key(KeyCode::Enter));
+        draw(app);
+        effects
+    };
+    // Decisions.
+    assert!(run(&mut app, "/decisions").contains(&Effect::Chat(ChatCommand::Decisions)));
+    assert_eq!(app.view, View::Decisions);
+    // A bot, from its picker.
+    run(&mut app, "/bots");
+    assert_eq!(app.chat.pick_items().len(), 3);
+    type_text(&mut app, "fix");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Bot {
+        id: 9,
+        filter: None
+    })));
+    // A project, then one of its chats.
+    run(&mut app, "/projects falcon");
+    app.update(key(KeyCode::Enter));
+    assert_eq!(
+        app.chat.picker.as_ref().map(|p| p.kind),
+        Some(PickerKind::Chats)
+    );
+    assert!(app.chat.pick_items().len() >= 7, "Falcon's chats");
+    // /open by number, and by a name only one thing has.
+    let effects = run(&mut app, "/open 41");
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Open(41))));
+    let effects = run(&mut app, "/open inbox");
+    assert!(effects.contains(&Effect::Chat(ChatCommand::Bot {
+        id: 11,
+        filter: None
+    })));
+    // /search, with no sidebar to search in, is a picker of chats and bots.
+    run(&mut app, "/search fi");
+    assert_eq!(
+        app.chat.picker.as_ref().map(|p| p.kind),
+        Some(PickerKind::Search)
+    );
+    // /pin the open chat.
+    let mut app = self::app();
+    budget_open(&mut app, every_action());
+    type_text(&mut app, "/pin");
+    assert!(
+        app.update(key(KeyCode::Enter))
+            .contains(&Effect::Chat(ChatCommand::Act {
+                chat: 42,
+                action: ChatAction::Pin(true)
+            }))
+    );
+}
+
 // ---------------------------------------------------------------- new bot
 
 fn recipes() -> Vec<super::newbot::Recipe> {
@@ -5140,6 +5385,30 @@ fn evidence() {
         app.update(key(KeyCode::Down));
         app.update(key(KeyCode::Right));
         screens.push(("new_bot_form", app));
+    }
+    {
+        let mut app = app();
+        sidebar_ready(&mut app);
+        assert!(app.chat.select(SideItem::Chat(42)));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Shown {
+            chat: 42,
+            result: Ok(budget_transcript("processing")),
+        }));
+        screens.push(("working", app));
+    }
+    {
+        let mut app = app();
+        sidebar_ready(&mut app);
+        assert!(app.chat.select(SideItem::Chat(42)));
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::Chat(ChatMsg::Shown {
+            chat: 42,
+            result: Ok(budget_transcript("idle")),
+        }));
+        app.update(key(KeyCode::Esc));
+        app.update(char('['));
+        screens.push(("sidebar_hidden", app));
     }
     for (name, app) in &screens {
         for (depth_name, theme) in evidence_themes() {
