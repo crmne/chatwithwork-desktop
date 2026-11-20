@@ -65,3 +65,9 @@ test("unlabelled clickable elements get a ref, named by their text or what's bes
   // Without the page's clickables, the same tree reads as before.
   assert.equal(snapshotText(tree), "- text: Row 3 × X");
 });
+
+test("a link shows where it goes only when the reader was given it (#261)", () => {
+  const text = snapshotText(nodes, { links: new Map([[41, "/compose"]]) });
+  assert.match(text, /- link "Compose" \[ref=e41\] \[to=\/compose\]/);
+  assert.doesNotMatch(snapshotText(nodes), /\[to=/);
+});

@@ -19,6 +19,7 @@ We will acknowledge your report within 3 working days, keep you updated, and cre
 - Getting the daemon to write, move or delete anything outside a folder where the user allowed changes, or on the deny list or the never-changed list there; to delete anything without it going to the system trash; to write anything that runs (a program, a launcher, an execute bit); to execute anything; or to open network connections other than its own tunnel (and, only when the user turned them on, its crash reports).
 - Turning on changes for a folder from the server, or keeping them after the user turned them off.
 - Getting the browser extension or the daemon to act on a tab outside the "Chat with Work" tab group or on a site the user didn't allow, to type into or read a password, payment or one-time code field, to act while stopped, to run code a server sends in a page, or to let another extension or a web page drive it.
+- Getting `browser_read` to show more of a link's address than its path on a site the user allowed: its query, fragment or credentials, a path segment it shows as `…`, or anything at all of a link to another site.
 - Bypassing a rate or volume limit the owner set, or the daemon's pause or audit log.
 - Dispatching non-browser tools through the local browser-call adapter,
   changing its fixed read-budget scope, or bypassing its per-action approval

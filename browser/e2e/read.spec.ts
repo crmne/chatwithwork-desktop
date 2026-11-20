@@ -28,6 +28,22 @@ const PLAN = `<!doctype html><html><head><title>Falcon plan</title></head><body>
 </script>
 </body></html>`;
 
+// #261: where links go, as far as browser_open could go anyway.
+const LINKS = `<!doctype html><html><head><title>Links</title><base href="/docs/"></head><body>
+<a href="/admin/theme/style?token=querysecret#fragsecret">Style</a>
+<a href="reset/a8Kd93kfLq0Zm2XpQ7?email=ana%40example.com">Reset</a>
+<a href="https://payroll.invalid/salaries/2026?id=7">Payroll</a>
+<a href="javascript:void(0)">Script</a>
+<a href="mailto:ana@example.com">Mail</a>
+<a href="/share/123e4567-e89b-12d3-a456-426614174000/view">Shared</a>
+<shadow-links></shadow-links>
+<script>
+  customElements.define("shadow-links", class extends HTMLElement {
+    connectedCallback() { this.attachShadow({ mode: "open" }).innerHTML = '<a href="/orders/12345/edit">Order</a>'; }
+  });
+</script>
+</body></html>`;
+
 let setup: Setup;
 let allowed: string;
 let other: string;
@@ -61,7 +77,7 @@ async function groupTab(url: string, grouped = true): Promise<number> {
 }
 
 test.beforeAll(async () => {
-  const a = await serve({ "/": PLAN, "/two": "<title>Two</title><h1>Second page</h1>" });
+  const a = await serve({ "/": PLAN, "/two": "<title>Two</title><h1>Second page</h1>", "/links": LINKS });
   const b = await serve({ "/": "<title>Payroll</title><h1>Salaries</h1>" });
   servers.push(a.server, b.server);
   allowed = a.origin;
@@ -224,4 +240,24 @@ test("Stop in the extension's menu refuses every call until Resume", async () =>
   await expect(popup.locator("#state-text")).toHaveText("Ready");
   expect((await setup.daemon.call("tabs")).error).toBeUndefined();
   await popup.close();
+});
+
+test("links to allowed sites show their path, with tokens, queries and other sites left out (#261)", async () => {
+  const tab = await groupTab(`${allowed}/links`);
+  const reply = await setup.daemon.call("read", { tab });
+  expect(reply.error).toBeUndefined();
+  const text: string = reply.result.text;
+  expect(text).toMatch(/- link "Style" \[ref=e\d+\] \[to=\/admin\/theme\/style\]/);
+  // Relative to the page's <base>, its token segment as …
+  expect(text).toMatch(/- link "Reset" \[ref=e\d+\] \[to=\/docs\/reset\/…\]/);
+  expect(text).toMatch(/- link "Shared" \[ref=e\d+\] \[to=\/share\/…\/view\]/);
+  expect(text).toMatch(/- link "Order" \[ref=e\d+\] \[to=\/orders\/12345\/edit\]/);
+  for (const name of ["Payroll", "Script", "Mail"]) {
+    const line = text.split("\n").find((l) => l.includes(`"${name}"`));
+    expect(line, name).toBeTruthy();
+    expect(line, name).not.toContain("[to=");
+  }
+  for (const secret of ["querysecret", "fragsecret", "a8Kd93", "ana%40", "ana@example.com", "payroll.invalid", "salaries", "id=7", "javascript", "mailto", "123e4567", "?", "#"]) {
+    expect(text.toLowerCase(), secret).not.toContain(secret.toLowerCase());
+  }
 });
