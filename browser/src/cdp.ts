@@ -230,10 +230,19 @@ export async function send<T = any>(
 ): Promise<T> {
   if (halted && !options.cleanup) throw browserStopped();
   if (responsiveness.verdict(tabId) === "fail") throw new ToolError("timeout", NOT_RESPONDING);
+  // A guarded call sends nothing but its own command: no new attachment
+  // (Page.enable and the rest) and no responsiveness probe; a tab that would
+  // need one counts as not answering.
+  const refused = () => new ToolError("browser_stopped", "the check stopped: access changed or its time ran out");
+  if (options.guard) {
+    if (!options.guard()) throw refused();
+    if (!sessions.has(tabId)) throw new ToolError("unavailable", "the browser attachment ended");
+    if (responsiveness.verdict(tabId) !== "send") throw new ToolError("timeout", NOT_RESPONDING);
+  }
   await attach(tabId, options);
   touch(tabId);
   await responding(tabId);
-  if (options.guard && !options.guard()) throw new ToolError("browser_stopped", "the check stopped: access changed or its time ran out");
+  if (options.guard && !options.guard()) throw refused();
   try {
     return (await within(
       chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>,

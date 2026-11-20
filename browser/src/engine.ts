@@ -81,6 +81,9 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
   // Without access, only the tab list's own facts.
   if (!await allowed()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
   const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree", {}, options), OUTCOME_CHECK_MS);
+  // Refused because access went or the time ran out: that isn't a page that
+  // stopped answering, so only the tab list's own facts.
+  if (!frame && !guard()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
   if (!frame) return { ...sent, observed: { responding: false } };
   const after = await chrome.tabs.get(op.tab).catch(() => undefined);
   if (!after) return { ...sent, observed: { responding: true, closed: true } };

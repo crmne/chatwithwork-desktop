@@ -302,12 +302,20 @@ test('an operation that stopped after its click opened a dialog says so',async()
 async function holdStateProbe(ms: number): Promise<void> {
  await inWorker(setup.context,(ms:number)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armedAt:Date.now(),original:chrome.debugger.sendCommand};
   chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
-   g.probeSpy.log.push({at:Date.now(),method});
+   g.probeSpy.log.push({at:Date.now(),method,detail:String(params?.expression??params?.functionDeclaration??'').slice(0,200)});
    if(method==='Runtime.callFunctionOn'&&!g.probeSpy.held&&Date.now()-g.probeSpy.armedAt>1000&&String(params?.functionDeclaration??'').includes('that element is disabled')){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,ms));}
    return g.probeSpy.original(target,method,params);
   }) as typeof chrome.debugger.sendCommand;},ms);
 }
-async function releaseStateProbe(): Promise<{log:{at:number,method:string}[],held:boolean,heldAt:number}> {
+// Every command sent after `since`, except the operation's own cleanup (its
+// guard's removal, with the extension's own isolated world it runs in,
+// released objects, stopped interceptors). None of those reads the page.
+const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>log.filter(entry=>entry.at>since
+ && entry.method!=='Runtime.releaseObject'
+ && entry.method!=='Page.getFrameTree' && entry.method!=='Page.createIsolatedWorld'
+ && !(entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
+ && !(entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'))).map(entry=>entry.method);
+async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
  return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
 }
 
@@ -325,7 +333,7 @@ test('site access revoked during the outcome check stops it, and no page reason 
   const spy=await releaseStateProbe();
   expect(spy.held).toBe(true);
   expect(run.outcome).toEqual({dispatched:false,reason:'the site was no longer allowed before anything was sent'});
-  expect(spy.log.filter(entry=>entry.at>revokedAt&&['DOM.getContentQuads','Runtime.callFunctionOn','DOM.resolveNode'].includes(entry.method))).toEqual([]);
+  expect(sentAfter(spy.log,revokedAt)).toEqual([]);
  } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });
 
@@ -339,6 +347,6 @@ test('an outcome check past its own deadline stops, and no page reason comes bac
   const spy=await releaseStateProbe();
   expect(spy.held).toBe(true);
   expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (it may still have been moving or loading)"});
-  expect(spy.log.filter(entry=>entry.at>spy.heldAt&&['DOM.getContentQuads','Runtime.callFunctionOn','DOM.resolveNode'].includes(entry.method))).toEqual([]);
+  expect(sentAfter(spy.log,spy.heldAt+1200)).toEqual([]);
  } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });
