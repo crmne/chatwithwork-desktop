@@ -307,22 +307,23 @@ async function holdStateProbe(ms: number): Promise<void> {
    return g.probeSpy.original(target,method,params);
   }) as typeof chrome.debugger.sendCommand;},ms);
 }
-// Every command sent after `since`, except the operation's own cleanup:
-// removing its guard (a Runtime.evaluate naming it, with the extension's own
-// isolated world set up just before it for that), released objects and
-// stopped interceptors. None of those reads the page.
+// Every command sent after `since` that reads the page. Not counted: the
+// operation's own cleanup (removing its guard, released objects, stopped
+// interceptors), and setting up the extension's own isolated world, which
+// reads nothing by itself, unless what follows it does. A world the check
+// made for itself would be followed by its read (DOM.resolveNode,
+// Runtime.callFunctionOn), which still counts.
 const sentAfter=(log:{at:number,method:string,detail:string}[],since:number)=>{
  const cleanup=(entry:{method:string,detail:string})=>entry.method==='Runtime.releaseObject'
   || (entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine'))
   || (entry.method==='Runtime.callFunctionOn'&&entry.detail.includes('this.stop()'));
  const prelude=(method:string)=>method==='Page.getFrameTree'||method==='Page.createIsolatedWorld';
- const removesGuard=(entry?:{method:string,detail:string})=>!!entry&&entry.method==='Runtime.evaluate'&&entry.detail.includes('__cwwEngine');
- // Exactly the world setup cleanup's evaluate makes: the frame tree, then the
- // isolated world, then the guard's removal itself.
- const cleanupPrelude=(index:number)=>log[index].method==='Page.getFrameTree'
-  ? log[index+1]?.method==='Page.createIsolatedWorld'&&removesGuard(log[index+2])
-  : log[index].method==='Page.createIsolatedWorld'&&log[index-1]?.method==='Page.getFrameTree'&&removesGuard(log[index+1]);
- return log.filter((entry,index)=>entry.at>since&&!cleanup(entry)&&!(prelude(entry.method)&&cleanupPrelude(index))).map(entry=>entry.method);
+ return log.filter((entry,index)=>{
+  if(entry.at<=since||cleanup(entry)) return false;
+  if(!prelude(entry.method)) return true;
+  const next=log.slice(index+1).find(other=>!prelude(other.method));
+  return !!next&&!cleanup(next);
+ }).map(entry=>entry.method);
 };
 async function releaseStateProbe(): Promise<{log:{at:number,method:string,detail:string}[],held:boolean,heldAt:number}> {
  return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
