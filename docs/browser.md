@@ -206,7 +206,11 @@ operations do not activate the tab or change the page clock.
 Before the engine starts a click, the extension runs the overlay part of the
 checks above for up to four seconds: it scrolls the control, or one of its
 labels, until a click at its point would reach it, clear of fixed and sticky
-layers. One still covered is refused then, before any input, with the same
+layers. Where something else is drawn over the control's middle but part of
+it shows (a fixed bar's own handle across its links), the click goes to a
+visible point of the control instead, found by the same hit test, as a person
+would click it; the engine presses that point. One still covered everywhere is
+refused then, before any input, with the same
 certain "Nothing was clicked" error naming what covers it. The engine's own
 retries would only have ended in the uncertain "did not finish" answer. A
 control that is hidden, disabled or moving is left to the engine's own waits.

@@ -22,7 +22,7 @@ import { isSensitiveField, plainClickable, submitReason, type ElementFacts } fro
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
 import { indicate } from "./page.js";
-import { guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
+import { candidatePoints, guardStatus, HIT_TARGET, INSTALL_POINTER_GUARD, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT, POINTER_STATE, SCROLL_TARGET, visiblePoint, type Point, type PointerState } from "./pointer.js";
 import { fileName, hostOfUrl, siteAllowed } from "./sites.js";
 import { after, focused, sameAsShown, showed } from "./positional.js";
 
@@ -185,6 +185,21 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
     : null;
 }
 
+// A point inside `surface` where a click reaches it: its centre, or, when
+// something else is drawn over the centre (a dock's own handle over its
+// links), another visible part of it. Answers why not when no point works,
+// with the centre's reason, which names what covers it.
+async function uncoveredPoint(t: Target, surface: number, quads: number[][], width: number, height: number): Promise<{ point?: Point; centre?: boolean; reason?: string }> {
+  let reason: string | undefined;
+  const points = candidatePoints(quads, width, height).slice(0, 40);
+  for (const [index, candidate] of points.entries()) {
+    const obstruction = await surfaceObstruction(t, surface, candidate);
+    if (!obstruction) return { point: candidate, centre: index === 0 };
+    reason ??= obstruction;
+  }
+  return { reason: reason ?? "that element isn't visible in the viewport" };
+}
+
 // Adapt Playwright's finite actionability retry and alternating scroll
 // alignments (sticky headers), using timer samples instead of rAF, which
 // background tabs can suspend. Never retry after dispatching a press.
@@ -222,13 +237,13 @@ export async function point(t: Target, policy: Policy): Promise<Point & { surfac
       if (!candidate) reason = "that element isn't visible in the viewport";
       else if (JSON.stringify(before) !== JSON.stringify(after)) reason = "that element is still moving";
       else {
-        const obstruction = await surfaceObstruction(t, surface, candidate);
-        if (!obstruction) {
+        const found = await uncoveredPoint(t, surface, after, state.width, state.height);
+        if (found.point) {
           allowedChanges(policy);
           await still(t.tabId, policy);
-          return { ...candidate, surface };
+          return { ...found.point, surface };
         }
-        reason = obstruction;
+        reason = found.reason!;
       }
     }
     await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
@@ -244,7 +259,7 @@ export async function point(t: Target, policy: Policy): Promise<Point & { surfac
 // the answer is certain and names what covers it; the engine's own retries
 // would only end in an uncertain timeout. A control that isn't ready for
 // another reason (hidden, disabled, moving) is left to the engine's waits.
-export async function clearOfOverlays(t: Target, policy: Policy, surfaces: number[], until: number): Promise<void> {
+export async function clearOfOverlays(t: Target, policy: Policy, surfaces: number[], until: number): Promise<Record<number, Point>> {
   const alignments = [null, "center", "end", "start"];
   let covered: string | null = null;
   // At least one full check runs, however short the budget.
@@ -260,17 +275,32 @@ export async function clearOfOverlays(t: Target, policy: Policy, surfaces: numbe
       else await send(t.tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId: surface }).catch(() => {});
       const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: surface })
         .then((answer) => answer.quads, () => []);
-      const location = visiblePoint(quads, state.width, state.height);
-      if (!location) continue;
+      if (!visiblePoint(quads, state.width, state.height)) continue;
       ready = true;
-      const obstruction = await surfaceObstruction(t, surface, location);
-      if (!obstruction) return;
-      covered = obstruction;
+      // The padding box the engine measures a position from, read with the
+      // quads and again after the search: a surface that moved meanwhile is
+      // tried again rather than given an offset from two layouts.
+      const padding = () => send<{ model: { padding: number[] } }>(t.tabId, "DOM.getBoxModel", { backendNodeId: surface })
+        .then((answer) => answer.model.padding, () => null);
+      const before = await padding();
+      const found = await uncoveredPoint(t, surface, quads, state.width, state.height);
+      if (found.point) {
+        // The centre is clear: the engine clicks it, as upstream does.
+        if (found.centre) return {};
+        const box = await padding();
+        if (!box || !before || JSON.stringify(box) !== JSON.stringify(before)) { covered = "that element is still moving"; continue; }
+        const x0 = Math.min(box[0], box[2], box[4], box[6]), y0 = Math.min(box[1], box[3], box[5], box[7]);
+        const position = { x: found.point.x - x0, y: found.point.y - y0 };
+        if (position.x < 0 || position.y < 0) { covered = "that element is still moving"; continue; }
+        return { [surface]: position };
+      }
+      covered = found.reason!;
     }
-    if (!ready) return;
+    if (!ready) return {};
     await new Promise((resolve) => setTimeout(resolve, attempt < 2 ? 100 : 250));
   }
   if (covered) throw new ToolError("page_error", `Nothing was clicked. ${covered}`);
+  return {};
 }
 
 const open: Method = async (params, policy) => {

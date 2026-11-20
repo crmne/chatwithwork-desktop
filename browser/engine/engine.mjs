@@ -23,6 +23,16 @@ export function validate(operation) {
   if (operation.action === 'type' && (typeof p.text !== 'string' || [...p.text].length > 10_000)) throw Error('invalid_operation');
   if (operation.action === 'select' && (!Array.isArray(p.values) || !p.values.length || p.values.length > 50 || p.values.some(value => typeof value !== 'string'))) throw Error('invalid_operation');
   if (!Array.isArray(operation.labelBackendNodeIds) || operation.labelBackendNodeIds.length > 8 || !operation.labelBackendNodeIds.every(integer)) throw Error('invalid_operation');
+  // Where to press a surface whose centre is covered, found by the extension's
+  // hit test: only for the target and its labels, inside the element's box.
+  if (operation.positions !== undefined) {
+    const surfaces = [operation.backendNodeId, ...operation.labelBackendNodeIds].map(String);
+    if (!operation.positions || typeof operation.positions !== 'object' || Array.isArray(operation.positions)) throw Error('invalid_operation');
+    for (const [key, position] of Object.entries(operation.positions)) {
+      if (!surfaces.includes(key) || !position || !Number.isFinite(position.x) || !Number.isFinite(position.y) ||
+          position.x < 0 || position.y < 0 || position.x > 10_000 || position.y > 10_000 || Object.keys(position).length !== 2) throw Error('invalid_operation');
+    }
+  }
 }
 
 export async function execute(operation, wire, signal) {
@@ -69,6 +79,8 @@ export async function execute(operation, wire, signal) {
     const page = browser._defaultContext.pages()[0];
     if (!page || browser._defaultContext.pages().length !== 1) throw Error('invalid_target');
     const adopt = async id => page.delegate._mainFrameSession._adoptBackendNodeId(id, await page.mainFrame()._utilityContext());
+    // A covered centre: press the visible part the extension found instead.
+    const at = id => { const position = operation.positions?.[String(id)]; return position ? { position: { x: position.x, y: position.y } } : {}; };
     const params = operation.params;
     const trial = params.dry_run === true;
     let handle;
@@ -83,14 +95,14 @@ export async function execute(operation, wire, signal) {
           try {
             const trialPhase = await wire.command({id: 0, method: 'Cww.trialPhase', params: {surfaceBackendNodeId: candidate}, sessionId: operation.session});
             if (trialPhase.error) throw Error(trialPhase.error.code);
-            await run(progress => next.click(progress, { trial: true }), candidate === operation.backendNodeId && candidates.length > 1 ? 1_000 : 4_000);
+            await run(progress => next.click(progress, { trial: true, ...at(candidate) }), candidate === operation.backendNodeId && candidates.length > 1 ? 1_000 : 4_000);
             handle = next; surface = candidate; break;
           } catch (error) { last = error; await next.dispose(); if (signal.aborted || navigated) throw error; }
         }
         if (!handle) throw last || Error('not_actionable');
         const phase = await wire.command({ id: 0, method: 'Cww.actionPhase', params: { surfaceBackendNodeId: surface }, sessionId: operation.session });
         if (phase.error) throw Error(phase.error.code);
-        if (!trial) await run(progress => handle.click(progress, {}));
+        if (!trial) await run(progress => handle.click(progress, at(surface)));
       } else {
         handle = await adopt(surface);
         const phase = await wire.command({ id: 0, method: 'Cww.actionPhase', params: { surfaceBackendNodeId: surface }, sessionId: operation.session });

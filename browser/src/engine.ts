@@ -125,15 +125,17 @@ const begin: Method = async (params, policy) => {
       dispatched: false, pressed: false, written: false, submitSent: false, navigated: false, cancelled: false, guard: `__cwwEngine_${lease}`, interceptors: new Set(), commands: 0, bytes: 0 };
     if (generation !== admitted || isHalted() || policy.stopped) { clearTimeout(op.timer); fail("browser_stopped"); }
     active = op;
+    // Where to press a surface whose centre something else covers.
+    let positions: Record<number, { x: number; y: number }> = {};
     try {
       await current(op); await semantic(op);
       // A covered click is refused here, certainly and by name, before the
       // engine starts; otherwise its retries end in an uncertain timeout.
-      if (action === "click") await clearOfOverlays(t, policy, [t.backendNodeId, ...labels], Date.now() + Math.min(OVERLAY_WAIT_MS, Math.max(0, (deadline - Date.now()) / 2)));
+      if (action === "click") positions = await clearOfOverlays(t, policy, [t.backendNodeId, ...labels], Date.now() + Math.min(OVERLAY_WAIT_MS, Math.max(0, (deadline - Date.now()) / 2)));
       await current(op);
     }
     catch (error) { await cancelEngine(); throw error; }
-    return { lease, timeout_ms: Math.max(1, op.deadline - Date.now()), tab: op.tab, session: op.session, action, params: input, document, targetInfo, backendNodeId: t.backendNodeId, labelBackendNodeIds: labels, facts: t.facts };
+    return { lease, timeout_ms: Math.max(1, op.deadline - Date.now()), tab: op.tab, session: op.session, action, params: input, document, targetInfo, backendNodeId: t.backendNodeId, labelBackendNodeIds: labels, facts: t.facts, positions };
   } finally { acquiring = false; }
 };
 
