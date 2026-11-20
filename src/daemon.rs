@@ -94,6 +94,9 @@ struct Daemon {
     asks: Arc<crate::unattended_asks::Asks>,
     /// Always allow pressed on a bot's command card (`allow_unattended`).
     unattended_grants: tokio::sync::mpsc::UnboundedSender<crate::tools::UnattendedGrant>,
+    /// Yeses to think with an agent's sign-in taken back from the server
+    /// (`withdraw_plan`).
+    plan_withdrawals: tokio::sync::mpsc::UnboundedSender<crate::tools::PlanWithdrawal>,
     /// Subscribers that answer those requests in a dialog of their own (the
     /// desktop app). While there are none, a system notification tells
     /// the person instead.
@@ -606,6 +609,7 @@ async fn run_with_notifications(
     };
     let reader = Arc::new(reader);
     let (unattended_grants, granted) = tokio::sync::mpsc::unbounded_channel();
+    let (plan_withdrawals, withdrawn) = tokio::sync::mpsc::unbounded_channel();
     let asks = {
         let file = paths.state_dir.join("unattended-asks.json");
         let pairing = crate::unattended_asks::pairing(&config);
@@ -675,11 +679,13 @@ async fn run_with_notifications(
         shutdown: shutdown.clone(),
         asks: Arc::new(asks),
         unattended_grants,
+        plan_withdrawals,
         answering: std::sync::atomic::AtomicUsize::new(0),
         paths,
     });
     tokio::spawn(Arc::clone(&daemon).tell_of_asks(shutdown.clone()));
     tokio::spawn(Arc::clone(&daemon).apply_unattended_grants(granted, shutdown.clone()));
+    tokio::spawn(Arc::clone(&daemon).apply_plan_withdrawals(withdrawn, shutdown.clone()));
     tokio::spawn(Arc::clone(&daemon).publish_status(shutdown.clone()));
     tokio::spawn(crate::printing::purge_print_files(
         daemon.paths.state_dir.join("printing"),
@@ -732,6 +738,7 @@ impl Daemon {
         )
         .with_asks(Arc::clone(&self.asks))
         .with_unattended_grants(self.unattended_grants.clone())
+        .with_plan_withdrawals(self.plan_withdrawals.clone())
         .with_printing(crate::printing::tools::PrintTools {
             runner: self.runner.clone(),
             printers: crate::printing::settings::offered(&config),
@@ -770,6 +777,27 @@ impl Daemon {
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = grant.done.send(answer);
+        }
+    }
+
+    /// Yeses to think with an agent's sign-in, taken back from the server,
+    /// one at a time: as `cww plans allow --off` does.
+    async fn apply_plan_withdrawals(
+        self: Arc<Self>,
+        mut withdrawn: tokio::sync::mpsc::UnboundedReceiver<crate::tools::PlanWithdrawal>,
+        shutdown: CancellationToken,
+    ) {
+        loop {
+            let withdrawal = tokio::select! {
+                () = shutdown.cancelled() => return,
+                withdrawal = withdrawn.recv() => withdrawal,
+            };
+            let Some(withdrawal) = withdrawal else { return };
+            let answer = self
+                .set_plan(withdrawal.agent, withdrawal.bot, false)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = withdrawal.done.send(answer);
         }
     }
 
@@ -959,6 +987,18 @@ impl Daemon {
         bot: Option<String>,
         allow: bool,
     ) -> Result<Value> {
+        self.set_plan(agent, bot.clone(), allow).await?;
+        Ok(json!({ "agent": agent.key(), "bot": bot, "allowed": allow }))
+    }
+
+    /// Give or take back the yes, and a request for it still waiting when
+    /// it's taken back. Returns whether the yes changed.
+    async fn set_plan(
+        &self,
+        agent: crate::coding::Agent,
+        bot: Option<String>,
+        allow: bool,
+    ) -> Result<bool> {
         if let Some(bot) = &bot
             && !crate::plans::valid_bot(bot)
         {
@@ -1010,7 +1050,7 @@ impl Daemon {
             self.reload().await?;
         }
         self.changes.bump();
-        Ok(json!({ "agent": agent.key(), "bot": bot, "allowed": allow }))
+        Ok(changed)
     }
 
     /// The person's answer to a bot's request, from this computer: allowing
