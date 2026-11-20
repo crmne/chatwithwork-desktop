@@ -3,6 +3,7 @@
 // them, and out to take them back.
 
 import { ToolError } from "./errors.js";
+import { loadEnded } from "./tab-load.js";
 
 export const GROUP_TITLE = "Chat with Work";
 
@@ -60,6 +61,7 @@ export async function openInGroup(url: string): Promise<chrome.tabs.Tab> {
   const tab = await chrome.tabs.create({ url: "about:blank", active: false, ...(windowId !== undefined ? { windowId } : {}) });
   try {
     await addToGroup(tab.id!, groups[0]?.id);
+    await loadEnded(chrome.tabs, tab.id!, BLANK_LOAD_MS);
     await chrome.tabs.update(tab.id!, { url });
     return await chrome.tabs.get(tab.id!);
   } catch (error) {
@@ -68,6 +70,13 @@ export async function openInGroup(url: string): Promise<chrome.tabs.Tab> {
     throw error;
   }
 }
+
+// A new tab loads its about:blank as a navigation of its own, and one asked
+// for before that finishes can lose to it: the tab stayed blank and
+// browser_open said it went to a site the person didn't allow (seen on a
+// busy computer). So the page is asked for once the blank one has loaded,
+// or after a short wait at most.
+const BLANK_LOAD_MS = 2_000;
 
 export async function addToGroup(tabId: number, groupId?: number): Promise<void> {
   if (groupId !== undefined) {

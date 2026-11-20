@@ -23,3 +23,26 @@ runs:
         $clang = 'C:\Program Files\LLVM\bin'
         if (!(Test-Path "$clang\libclang.dll")) { throw 'The runner needs LLVM with libclang.dll' }
         "LIBCLANG_PATH=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    # A restored build cache keeps whisper.cpp's CMake build folder, and
+    # CMake keeps the tools it found there in its cache. When the runner
+    # image brings another Visual Studio or Xcode, those paths are gone and
+    # the next configure stops: "The CMAKE_ASM_COMPILER: ... is not a full
+    # path to an existing compiler tool". Forget what CMake found in such a
+    # folder, so it looks again; the libraries already built stay for a
+    # build script that doesn't run again.
+    - shell: bash
+      run: |
+        [ -d target ] || exit 0
+        # Listed in full first: find mustn't walk into a folder removed below.
+        caches=$(find -L target -maxdepth 9 \( -name deps -o -name incremental -o -name .fingerprint \) -prune \
+          -o -name CMakeCache.txt -print)
+        [ -n "$caches" ] || exit 0
+        while IFS= read -r cache; do
+          sed -n -E 's/^[A-Za-z0-9_.-]+:(FILEPATH|INTERNAL)=(([A-Za-z]:)?\/.*)$/\2/p' "$cache" | while IFS= read -r tool; do
+            if [ ! -e "$tool" ]; then
+              echo "CMake's cache in ${cache%/*} names $tool, which this runner doesn't have: configuring it again"
+              rm -rf "$cache" "${cache%/*}/CMakeFiles"
+              break
+            fi
+          done
+        done <<< "$caches"
