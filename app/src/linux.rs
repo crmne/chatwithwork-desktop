@@ -131,6 +131,17 @@ mod tests {
         assert!(!needs_older_compositor(true));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_tray_is_named_once_by_the_product_name() {
+        name_application("Chat with Work");
+        name_application("cww-app");
+        assert_eq!(
+            gtk::glib::application_name().as_deref(),
+            Some("Chat with Work")
+        );
+    }
+
     #[test]
     fn no_display_says_whether_one_was_named() {
         assert!(no_display(false, false).contains("WAYLAND_DISPLAY"));
