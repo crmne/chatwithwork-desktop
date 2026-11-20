@@ -147,6 +147,46 @@ fn partial_input_and_a_pointer_move_are_said_as_they_were() {
 }
 
 #[test]
+fn a_replaced_document_is_a_reload_only_when_the_address_is_known_to_be_the_same() {
+    let reloaded = outcome_error(
+        "click",
+        &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
+            "responding": true, "navigated": true, "address_changed": false } } }),
+    )
+    .unwrap();
+    assert!(
+        reloaded.message.contains("the page reloaded"),
+        "{}",
+        reloaded.message
+    );
+    let replaced = outcome_error(
+        "click",
+        &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
+            "responding": true, "navigated": true } } }),
+    )
+    .unwrap();
+    assert!(
+        replaced
+            .message
+            .contains("the page's document was replaced"),
+        "{}",
+        replaced.message
+    );
+    assert!(!replaced.message.contains("reloaded"));
+    let moving = outcome_error(
+        "click",
+        &json!({ "outcome": { "dispatched": true, "complete": true, "observed": {
+            "responding": true, "address_changed": true } } }),
+    )
+    .unwrap();
+    assert!(
+        moving.message.contains("the page's address changed."),
+        "{}",
+        moving.message
+    );
+}
+
+#[test]
 fn an_observation_with_nothing_in_it_keeps_the_uncertain_answer() {
     assert!(
         outcome_error(

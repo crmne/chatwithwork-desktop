@@ -38,6 +38,9 @@ export interface SendOptions {
   cleanup?: boolean;
   // Engine cleanup must never recreate an attachment after Stop.
   existingOnly?: boolean;
+  // Asked just before the command goes out; false refuses it. For checks
+  // that must stop the moment access is revoked or their time runs out.
+  guard?: () => boolean;
 }
 
 const sessions = new Map<number, Session>();
@@ -230,6 +233,7 @@ export async function send<T = any>(
   await attach(tabId, options);
   touch(tabId);
   await responding(tabId);
+  if (options.guard && !options.guard()) throw new ToolError("browser_stopped", "the check stopped: access changed or its time ran out");
   try {
     return (await within(
       chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>,

@@ -78,7 +78,7 @@ for(const revoke of ['stopped','changes','sites'] as const) test(`${revoke} revo
  setup.daemon.setPolicy(revoke==='sites'?{sites:[]}:revoke==='stopped'?{stopped:true}:{changes:false});
  const interrupted=await waiting;expect(interrupted.error).toBeTruthy();
  // Nothing was sent; after a revocation the extension doesn't look at the page to say why.
- expect(interrupted.outcome).toEqual({dispatched:false,reason:revoke==='stopped'?'the browser was stopped':revoke==='changes'?'changes were turned off before anything was sent':'the tab changed before anything was sent'});
+ expect(interrupted.outcome).toEqual({dispatched:false,reason:revoke==='stopped'?'the browser was stopped':revoke==='changes'?'changes were turned off before anything was sent':'the site was no longer allowed before anything was sent'});
  await page.locator('#button').evaluate(el=>el.removeAttribute('disabled'));
  await page.locator('#button').click();await expect(page.locator('#result')).toHaveText('Count 1');await page.close();
 });
@@ -292,4 +292,53 @@ test('an operation that stopped after its click opened a dialog says so',async()
   expect(run.error).toBeDefined();
   expect(run.outcome).toEqual({dispatched:true,complete:false,observed:{responding:true,navigated:false,address_changed:false,dialog:true,element_present:true}});
  } finally { await page.close(); }
+});
+
+// The outcome's checks stop the moment access is revoked or their time runs
+// out: no page command after, and no reason read from the page. The
+// extension's own element-state probe (it says "that element is disabled")
+// is held to make the moment; engine_begin's own use of it, at the start,
+// is let through.
+async function holdStateProbe(ms: number): Promise<void> {
+ await inWorker(setup.context,(ms:number)=>{const g=globalThis as any;g.probeSpy={log:[],held:false,armedAt:Date.now(),original:chrome.debugger.sendCommand};
+  chrome.debugger.sendCommand=(async(target:any,method:string,params:any)=>{
+   g.probeSpy.log.push({at:Date.now(),method});
+   if(method==='Runtime.callFunctionOn'&&!g.probeSpy.held&&Date.now()-g.probeSpy.armedAt>1000&&String(params?.functionDeclaration??'').includes('that element is disabled')){g.probeSpy.held=true;g.probeSpy.heldAt=Date.now();await new Promise(done=>setTimeout(done,ms));}
+   return g.probeSpy.original(target,method,params);
+  }) as typeof chrome.debugger.sendCommand;},ms);
+}
+async function releaseStateProbe(): Promise<{log:{at:number,method:string}[],held:boolean,heldAt:number}> {
+ return inWorker(setup.context,()=>{const g=globalThis as any;chrome.debugger.sendCommand=g.probeSpy.original;const {log,held,heldAt}=g.probeSpy;delete g.probeSpy;return {log,held,heldAt};});
+}
+
+test('site access revoked during the outcome check stops it, and no page reason comes back',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ await holdStateProbe(500);
+ try {
+  const running=engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  let revokedAt=0;
+  for(let i=0;i<200&&!revokedAt;i++){
+   if(await inWorker(setup.context,()=>(globalThis as any).probeSpy?.held===true)){setup.daemon.setPolicy({sites:[]});revokedAt=await inWorker(setup.context,()=>Date.now());}
+   else await page.waitForTimeout(25);
+  }
+  const run=await running;
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:false,reason:'the site was no longer allowed before anything was sent'});
+  expect(spy.log.filter(entry=>entry.at>revokedAt&&['DOM.getContentQuads','Runtime.callFunctionOn','DOM.resolveNode'].includes(entry.method))).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
+});
+
+test('an outcome check past its own deadline stops, and no page reason comes back',async()=>{
+ const {tab,page,ref}=await fixture();await page.locator('#button').evaluate(el=>el.setAttribute('disabled',''));
+ await holdStateProbe(1200);
+ try {
+  const run=await engineAction(setup,'click',{tab,ref:ref('Continue'),submits:false},undefined,1500);
+  // Wait out the held probe, then look at what was sent after it.
+  await page.waitForTimeout(1300);
+  const spy=await releaseStateProbe();
+  expect(spy.held).toBe(true);
+  expect(run.outcome).toEqual({dispatched:false,reason:"the element didn't become ready in time (it may still have been moving or loading)"});
+  expect(spy.log.filter(entry=>entry.at>spy.heldAt&&['DOM.getContentQuads','Runtime.callFunctionOn','DOM.resolveNode'].includes(entry.method))).toEqual([]);
+ } finally { await releaseStateProbe().catch(()=>{}); await page.close(); }
 });

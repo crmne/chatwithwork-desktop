@@ -249,8 +249,8 @@ extension itself recorded and checked (`engine_cancel`'s `outcome`, extension
 - No input left (the extension marks the operation before its first input
   event goes to the page): "Nothing was clicked", with the extension's reason
   (the element didn't become ready in time because it was disabled, hidden or
-  covered, the page changed first, the browser was stopped, or changes were
-  turned off), and that
+  covered, the page changed first, the browser was stopped, changes were turned
+  off, or the site was no longer allowed), and that
   nothing was sent.
 - Only the pointer moved: the same, saying the pointer moved over the element
   but nothing was pressed or typed.

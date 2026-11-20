@@ -45,7 +45,8 @@ no input left (its reason a sentence of its own: not ready in time because
 disabled, hidden or covered, the page changed first, or Stop), or
 `{outcome:{dispatched:true, complete, observed:{responding, closed?, navigated?,
 address_changed?, dialog?, element_present?}}}` from fixed checks of the tab afterwards,
-at most a second in all, with access checked again before every read.
+at most a second in all, with access checked again before every read and
+just before every DevTools command they send.
 `moved` says a real pointer move reached the page; `complete` whether all of
 the action's input did (a click's release, a type's text). After Stop, or once changes are off or the site is
 no longer allowed, it doesn't look at the page again: only the tab's address. The helper's error code still never reaches the

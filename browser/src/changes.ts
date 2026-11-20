@@ -17,7 +17,7 @@ import {
   type Params,
   type Policy,
 } from "./actions.js";
-import { callOn, cleanUp, evaluateInContext, isolatedContext, relatedNode, send } from "./cdp.js";
+import { callOn, cleanUp, evaluateInContext, isolatedContext, relatedNode, send, type SendOptions } from "./cdp.js";
 import { isSensitiveField, plainClickable, submitReason, type ElementFacts } from "./classify.js";
 import { ToolError } from "./errors.js";
 import { openInGroup, resolveTab } from "./group.js";
@@ -172,14 +172,14 @@ export async function preview(t: Target, scroll = true): Promise<object> {
 // Check the logical target and, only for alternate labels, refuse a painted
 // descendant shadow host. Its closed root can hide a different interactive
 // control from DOM hit testing; CDP exposes root metadata without page code.
-async function surfaceObstruction(t: Target, surface: number, location: Point): Promise<string | null> {
-  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location], [surface]);
+async function surfaceObstruction(t: Target, surface: number, location: Point, options: SendOptions = {}): Promise<string | null> {
+  const obstruction = await callOn<string | null>(t.tabId, t.backendNodeId, HIT_TARGET, [location], [surface], options);
   if (obstruction || surface === t.backendNodeId) return obstruction;
   const hit = await relatedNode(t.tabId, surface, LABEL_DESCENDANT_AT_POINT, [location]);
   if (!hit) return null;
   const { node } = await send<{ node: { shadowRoots?: unknown[] } }>(t.tabId, "DOM.describeNode", {
     backendNodeId: hit, depth: 0,
-  });
+  }, options);
   return node.shadowRoots?.length
     ? "shadow content is drawn over that control's label; read the page again and target the control directly"
     : null;
@@ -189,12 +189,12 @@ async function surfaceObstruction(t: Target, surface: number, location: Point): 
 // something else is drawn over the centre (a dock's own handle over its
 // links), another visible part of it. Answers why not when no point works,
 // with the centre's reason, which names what covers it.
-async function uncoveredPoint(t: Target, surface: number, quads: number[][], width: number, height: number, allowed?: () => Promise<boolean>): Promise<{ point?: Point; centre?: boolean; reason?: string; stopped?: boolean }> {
+async function uncoveredPoint(t: Target, surface: number, quads: number[][], width: number, height: number, allowed?: () => Promise<boolean>, options: SendOptions = {}): Promise<{ point?: Point; centre?: boolean; reason?: string; stopped?: boolean }> {
   let reason: string | undefined;
   const points = candidatePoints(quads, width, height).slice(0, 40);
   for (const [index, candidate] of points.entries()) {
     if (allowed && !await allowed()) return { stopped: true };
-    const obstruction = await surfaceObstruction(t, surface, candidate);
+    const obstruction = await surfaceObstruction(t, surface, candidate, options);
     if (!obstruction) return { point: candidate, centre: index === 0 };
     reason ??= obstruction;
   }
@@ -209,16 +209,16 @@ async function uncoveredPoint(t: Target, surface: number, quads: number[][], wid
 // meanwhile stops it and nothing it found leaves. For saying
 // certainly why an action that sent nothing didn't happen; never Playwright's
 // text.
-export async function whyNotClickable(t: Target, allowed: () => Promise<boolean>): Promise<string | null> {
+export async function whyNotClickable(t: Target, allowed: () => Promise<boolean>, options: SendOptions = {}): Promise<string | null> {
   if (!await allowed()) return null;
-  const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [t.backendNodeId]);
+  const state = await callOn<PointerState>(t.tabId, t.backendNodeId, POINTER_STATE, [], [t.backendNodeId], options);
   if (state.reason) return await allowed() ? state.reason : null;
   if (!await allowed()) return null;
-  const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: t.backendNodeId })
+  const quads = await send<{ quads: number[][] }>(t.tabId, "DOM.getContentQuads", { backendNodeId: t.backendNodeId }, options)
     .then((answer) => answer.quads, () => null);
   if (!quads) return null;
-  if (!visiblePoint(quads, state.width, state.height)) return "that element isn't visible in the viewport";
-  const covered = await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height, allowed);
+  if (!visiblePoint(quads, state.width, state.height)) return await allowed() ? "that element isn't visible in the viewport" : null;
+  const covered = await uncoveredPoint(t, t.backendNodeId, quads, state.width, state.height, allowed, options);
   if (covered.stopped || !covered.reason) return null;
   return await allowed() ? covered.reason : null;
 }

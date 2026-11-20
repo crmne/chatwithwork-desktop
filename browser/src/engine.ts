@@ -8,6 +8,7 @@ import { documentIdentity, requireRef, sameDocument, type DocumentIdentity } fro
 import { INSTALL_ENGINE_GUARD } from "./engine-guard.js";
 import { guardStatus, LABEL_AT, LABEL_COUNT, LABEL_DESCENDANT_AT_POINT } from "./pointer.js";
 import { ToolError } from "./errors.js";
+import { siteAllowed } from "./sites.js";
 
 interface Command { id: number; method: string; params?: Record<string, any>; sessionId?: string }
 interface Operation {
@@ -48,18 +49,28 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
     : { dispatched: false, ...(op.moved ? { moved: true } : {}) };
   // Asked before every read of the page: nothing more touches it after Stop,
   // with changes off, or once its site isn't allowed (or the tab is gone).
-  // The deadline also stops checks the caller stopped waiting for.
+  // The deadline also stops checks the caller stopped waiting for. `guard` is
+  // asked just before every command the checks send (cdp.ts), with the policy
+  // as it is that moment; `allowed` adds the tab's own address.
   const until = Date.now() + OUTCOME_TOTAL_MS;
-  const allowed = async () => Date.now() < until && !isHalted() && !op.policy.stopped && op.policy.changes
-    && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS) === true;
+  const siteStillAllowed = () => siteAllowed(op.targetInfo.url ?? "", op.policy.sites, op.policy.all_sites, op.policy.blocked_sites);
+  const guard = () => Date.now() < until && !isHalted() && !op.policy.stopped && op.policy.changes && siteStillAllowed();
+  const options = { guard };
+  const allowed = async () => guard()
+    && await within(still(op.tab, op.policy).then(() => true, () => false), OUTCOME_CHECK_MS) === true
+    && guard();
+  const revoked = () => isHalted() || op.policy.stopped ? "the browser was stopped"
+    : !op.policy.changes ? "changes were turned off before anything was sent"
+    : !siteStillAllowed() ? "the site was no longer allowed before anything was sent"
+    : undefined;
   if (isHalted() || op.policy.stopped) return op.dispatched ? sent : { ...sent, reason: "the browser was stopped" };
   if (!op.dispatched) {
     if (op.navigated) return { ...sent, reason: "the page changed before anything was sent" };
-    if (!await allowed()) return { ...sent, reason: op.policy.changes ? "the tab changed before anything was sent" : "changes were turned off before anything was sent" };
-    const reason = await within(whyNotClickable(op.target, allowed), OUTCOME_CHECK_MS * 2);
+    if (!await allowed()) return { ...sent, reason: revoked() ?? "the tab changed before anything was sent" };
+    const reason = await within(whyNotClickable(op.target, allowed, options), OUTCOME_CHECK_MS * 2);
     // Revoked meanwhile: say that, not what the page showed.
-    if (isHalted() || op.policy.stopped) return { ...sent, reason: "the browser was stopped" };
-    if (!op.policy.changes) return { ...sent, reason: "changes were turned off before anything was sent" };
+    const gone = revoked();
+    if (gone) return { ...sent, reason: gone };
     return { ...sent, reason: reason
       ? `the element didn't become ready in time (${reason.slice(0, 200)})`
       : "the element didn't become ready in time (it may still have been moving or loading)" };
@@ -69,20 +80,26 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
   const dialog = op.dialog ? { dialog: true } : {};
   // Without access, only the tab list's own facts.
   if (!await allowed()) return { ...sent, observed: { responding: true, address_changed: (before.url ?? "") !== op.targetInfo.url, ...dialog } };
-  const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree"), OUTCOME_CHECK_MS);
+  const frame = await within(send<{ frameTree: { frame: { loaderId: string } } }>(op.tab, "Page.getFrameTree", {}, options), OUTCOME_CHECK_MS);
   if (!frame) return { ...sent, observed: { responding: false } };
   const after = await chrome.tabs.get(op.tab).catch(() => undefined);
   if (!after) return { ...sent, observed: { responding: true, closed: true } };
   // Only a new loader means the document was replaced; a fragment or
   // history.pushState changes the address alone, which address_changed says.
-  const navigated = frame.frameTree.frame.loaderId !== op.document.loader;
-  const present = navigated || !await allowed() ? undefined
-    : await within(callOn<boolean>(op.tab, op.target.backendNodeId, "function(){ return this.isConnected; }").then((value) => value === true, () => false), OUTCOME_CHECK_MS);
+  // An address that moved while the frame tree was read may belong to another
+  // document than the loader read: then whether it was replaced, and whether
+  // the element is there, stay unknown.
+  const settled = (before.url ?? "") === (after.url ?? "");
+  const navigated = settled ? frame.frameTree.frame.loaderId !== op.document.loader : undefined;
+  // Only an observed isConnected says whether the element is there; a lookup
+  // that failed leaves it unknown.
+  const present = navigated !== false || !await allowed() ? undefined
+    : await within(callOn<boolean>(op.tab, op.target.backendNodeId, "function(){ return this.isConnected; }", [], [], options).then((value) => value === true, () => undefined), OUTCOME_CHECK_MS);
   return { ...sent, observed: {
-    responding: true, navigated,
+    responding: true, ...(navigated === undefined ? {} : { navigated }),
     address_changed: (after.url ?? "") !== op.targetInfo.url,
     ...dialog,
-    ...(navigated ? { element_present: false } : present === undefined ? {} : { element_present: present }),
+    ...(navigated === true ? { element_present: false } : present === undefined ? {} : { element_present: present }),
   } };
 }
 let generation = 0;

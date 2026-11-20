@@ -770,7 +770,9 @@ pub(crate) fn outcome_error(action: &str, answer: &Value) -> Option<ToolError> {
             let address_changed = flag("address_changed");
             let mut parts: Vec<&str> = match (navigated, address_changed) {
                 (Some(true), Some(true)) => vec!["the tab went to another page"],
-                (Some(true), _) => vec!["the page reloaded"],
+                (Some(true), Some(false)) => vec!["the page reloaded"],
+                // The address moved while the extension looked.
+                (Some(true), None) => vec!["the page's document was replaced"],
                 (_, Some(true)) => vec!["the page's address changed"],
                 (Some(false), Some(false)) => {
                     vec!["the page stayed on the same address and document"]
