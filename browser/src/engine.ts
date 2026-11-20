@@ -68,10 +68,9 @@ async function outcomeOf(op: Operation): Promise<Outcome> {
   if (!frame) return { ...sent, observed: { responding: false } };
   const after = await chrome.tabs.get(op.tab).catch(() => undefined);
   if (!after) return { ...sent, observed: { responding: true, closed: true } };
-  // An address that moved while the frame tree was read is a navigation, so
-  // the two never describe different moments.
-  const moving = (before.url ?? "") !== (after.url ?? "");
-  const navigated = moving || frame.frameTree.frame.loaderId !== op.document.loader;
+  // Only a new loader means the document was replaced; a fragment or
+  // history.pushState changes the address alone, which address_changed says.
+  const navigated = frame.frameTree.frame.loaderId !== op.document.loader;
   const present = navigated || !await allowed() ? undefined
     : await within(callOn<boolean>(op.tab, op.target.backendNodeId, "function(){ return this.isConnected; }").then((value) => value === true, () => false), OUTCOME_CHECK_MS);
   return { ...sent, observed: {

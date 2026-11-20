@@ -127,7 +127,7 @@ fn partial_input_and_a_pointer_move_are_said_as_they_were() {
     .unwrap();
     assert!(
         keys.message
-            .starts_with("Some keys were sent, but not the text"),
+            .starts_with("Input was sent, but whether all of the text arrived is unconfirmed"),
         "{}",
         keys.message
     );

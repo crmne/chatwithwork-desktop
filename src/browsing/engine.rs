@@ -752,7 +752,11 @@ pub(crate) fn outcome_error(action: &str, answer: &Value) -> Option<ToolError> {
         let sent = match (action, outcome.get("complete").and_then(Value::as_bool)) {
             ("select", _) => "The choice was sent",
             ("type", Some(true)) => "The text was sent",
-            ("type", Some(false)) => "Some keys were sent, but not the text",
+            // The text may be on the page before the extension hears it was
+            // written, so this never says it wasn't.
+            ("type", Some(false)) => {
+                "Input was sent, but whether all of the text arrived is unconfirmed"
+            }
             ("click", Some(true)) => "The click was sent",
             ("click", Some(false)) => "The mouse press was sent, but not its release",
             _ => "Input was sent",
