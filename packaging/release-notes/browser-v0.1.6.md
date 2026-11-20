@@ -5,7 +5,7 @@ The Chrome Web Store updates the extension by itself. For a manual installation,
 
 ## New
 
-- **Where a link goes, as far as Chat with Work could go anyway.** On a site you allowed, a page reading now shows a link's path, such as `link "Style" [to=/admin/theme/style]`, so when a click fails Chat with Work can open the address instead. Never the query, the fragment or a login; parts that look like tokens or ids show as `…`; a link to a site you didn't allow, or one that isn't a web address, shows nothing, not even its host. Addresses never leave the extension in full: only that shortened path does. By @crmne in [#267](https://github.com/crmne/chatwithwork-desktop/pull/267).
+- **Where a link goes, as far as Chat with Work could go anyway.** When a link goes to a site you allowed, a page reading now shows its path, such as `link "Style" [to=/admin/theme/style]`, with the site in front when it's another one (`[to=https://docs.example.com/guide]`), so when a click fails Chat with Work can open the address instead. Never the query, the fragment or a login; parts that look like tokens or ids show as `…`; a link to a site you didn't allow, or one that isn't a web address, shows nothing, not even its host. Addresses never leave the extension in full: only that shortened form does. By @crmne in [#267](https://github.com/crmne/chatwithwork-desktop/pull/267).
 
 ## Fixed
 
