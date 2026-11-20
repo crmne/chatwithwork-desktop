@@ -62,39 +62,23 @@ const ACCESS_POLL: Duration = Duration::from_secs(5);
 const ACCESS_WAIT: Duration = Duration::from_secs(15 * 60);
 
 pub fn run(paths: Paths) -> Result<()> {
-    run_organization(paths, None)
+    // The organization chosen with /org last time, while its sign-in lasts.
+    let remembered = remembered_organization(&paths)
+        .filter(|id| crate::auth::organizations::resolve(&paths, id).is_ok());
+    run_organization(paths, remembered.as_deref())
 }
 
 pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
-    let profile = selector
-        .map(|selector| crate::auth::organizations::resolve(&paths, selector))
-        .transpose()?;
-    let chat_paths = profile
-        .as_ref()
-        .map(|profile| profile.runtime_paths(&paths))
-        .transpose()?
-        .unwrap_or_else(|| paths.clone());
+    // A selector that names no sign-in fails before the screen changes.
+    if let Some(selector) = selector {
+        crate::auth::organizations::resolve(&paths, selector)?;
+    }
     // Only safe to ask before any thread starts.
     let utc_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let theme = Theme::detect();
-    let history_file = history::path(&chat_paths);
-    let filter_file = sidebar::filter_path(&history_file);
-    let hidden_file = sidebar::hidden_path(&history_file);
-    let mut app = App::new(utc_offset)
-        .with_history(history::load(&history_file))
-        .with_filter(sidebar::load_filter(&filter_file));
-    if let Some(profile) = &profile {
-        app = app.with_organization(profile.account.id.clone());
-    }
     let config = Config::load(&paths).ok();
-    app = app.with_layout(
-        sidebar::load_hidden(&hidden_file),
-        config.as_ref().and_then(|c| c.desktop.reduce_motion) == Some(true),
-    );
     let mouse = config.as_ref().is_none_or(|c| c.tui.mouse);
-    app = app.with_crash_reports(crate::crash_reports::Consent::read(config.as_ref()));
 
-    let (tx, rx) = mpsc::channel();
     let mut terminal = ratatui::init();
     let _ = execute!(stdout(), EnableBracketedPaste, EnableFocusChange);
     // Shift-Enter, told apart from Enter where the terminal can.
@@ -107,47 +91,29 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     if mouse {
         let _ = execute!(stdout(), EnableMouseCapture);
     }
-    spawn_input(tx.clone());
-    let mut chats = ChatRunner::new(Chats::new(&chat_paths.socket_path()), tx.clone());
-    // Bots are read with the computer's own sign-in, as `cww bots` reads them.
-    chats.bots = Some(BotsAccess {
-        paths: paths.clone(),
-        organization: selector.map(str::to_string),
-        client: Arc::default(),
-    });
-    let presence = Presence::new(chat_paths.socket_path());
-    let _organization =
-        profile.map(|profile| organizations::Watcher::spawn(paths.clone(), profile, tx.clone()));
-    // Commands run in the computer's own daemon, whichever organization's
-    // chats are open.
-    let commands = {
-        let tx = tx.clone();
-        Arc::new(Follow::spawn(paths.socket_path(), move |snapshot| {
-            let _ = tx.send(Msg::Commands(snapshot));
-        }))
+    let input = Input::spawn();
+    let mut selector = selector.map(str::to_string);
+    let session = Session {
+        paths: &paths,
+        utc_offset,
+        theme: &theme,
+        config: config.as_ref(),
+        input: &input,
     };
-    let link = daemon::Link::spawn(paths.clone(), tx.clone());
-    let out = Outputs {
-        link,
-        paths,
-        chats,
-        history: history_file,
-        filter: filter_file,
-        hidden: hidden_file,
-        presence,
-        commands,
-        tx: tx.clone(),
+    let result = loop {
+        match session.run(&mut terminal, selector.as_deref()) {
+            // Another organization: everything of this one is dropped (its
+            // chat runtime's streams, followers and watcher), and a new
+            // session starts on a channel of its own, so nothing the old one
+            // still sends reaches the new view.
+            Ok(Ended::Switch(next)) => {
+                remember_organization(&paths, next.as_deref());
+                selector = next;
+            }
+            Ok(Ended::Quit) => break Ok(()),
+            Err(error) => break Err(error),
+        }
     };
-
-    let effects = app.start();
-    let mut result = Ok(());
-    if out.run(effects).is_some() {
-        result = event_loop(&mut terminal, &mut app, &theme, &rx, &out);
-    }
-    out.chats.follow(None);
-    out.chats.follow_list(false);
-    out.chats.recording.lock().expect("recording").take();
-    out.presence.set(None);
     if mouse {
         let _ = execute!(stdout(), DisableMouseCapture);
     }
@@ -159,13 +125,166 @@ pub fn run_organization(paths: Paths, selector: Option<&str>) -> Result<()> {
     result
 }
 
+/// How a session ended.
+enum Ended {
+    Quit,
+    /// Into this saved sign-in, or the computer's own (`None`).
+    Switch(Option<String>),
+}
+
+/// What every session shares: the terminal's settings and its input.
+struct Session<'a> {
+    paths: &'a Paths,
+    utc_offset: UtcOffset,
+    theme: &'a Theme,
+    config: Option<&'a Config>,
+    input: &'a Input,
+}
+
+impl Session<'_> {
+    /// The chats of one organization, until quitting or switching.
+    fn run(&self, terminal: &mut DefaultTerminal, selector: Option<&str>) -> Result<Ended> {
+        let paths = self.paths.clone();
+        let profile = selector
+            .map(|selector| crate::auth::organizations::resolve(&paths, selector))
+            .transpose()?;
+        let chat_paths = profile
+            .as_ref()
+            .map(|profile| profile.runtime_paths(&paths))
+            .transpose()?
+            .unwrap_or_else(|| paths.clone());
+        let history_file = history::path(&chat_paths);
+        let filter_file = sidebar::filter_path(&history_file);
+        let hidden_file = sidebar::hidden_path(&history_file);
+        let mut app = App::new(self.utc_offset)
+            .with_history(history::load(&history_file))
+            .with_filter(sidebar::load_filter(&filter_file))
+            .with_organizations(
+                organization_choices(&paths, self.config),
+                profile.as_ref().map(|p| p.id.clone()),
+            );
+        if let Some(profile) = &profile {
+            app = app.with_organization(profile.account.id.clone());
+        }
+        app = app.with_layout(
+            sidebar::load_hidden(&hidden_file),
+            self.config.and_then(|c| c.desktop.reduce_motion) == Some(true),
+        );
+        app = app.with_crash_reports(crate::crash_reports::Consent::read(self.config));
+
+        let (tx, rx) = mpsc::channel();
+        self.input.route(tx.clone());
+        let mut chats = ChatRunner::new(Chats::new(&chat_paths.socket_path()), tx.clone());
+        // Bots are read with the computer's own sign-in, as `cww bots` reads them.
+        chats.bots = Some(BotsAccess {
+            paths: paths.clone(),
+            organization: selector.map(str::to_string),
+            client: Arc::default(),
+        });
+        let presence = Presence::new(chat_paths.socket_path());
+        let _organization = profile
+            .clone()
+            .map(|profile| organizations::Watcher::spawn(paths.clone(), profile, tx.clone()));
+        // Commands run in the computer's own daemon, whichever organization's
+        // chats are open.
+        let commands = {
+            let tx = tx.clone();
+            Arc::new(Follow::spawn(paths.socket_path(), move |snapshot| {
+                let _ = tx.send(Msg::Commands(snapshot));
+            }))
+        };
+        let link = daemon::Link::spawn(paths.clone(), tx.clone());
+        let out = Outputs {
+            link,
+            paths: paths.clone(),
+            chats,
+            history: history_file,
+            filter: filter_file,
+            hidden: hidden_file,
+            presence,
+            commands,
+            tx: tx.clone(),
+        };
+
+        let effects = app.start();
+        let ended = match out.run(effects) {
+            Flow::Go(_) => event_loop(terminal, &mut app, self.theme, &rx, &out),
+            Flow::Quit => Ok(Ended::Quit),
+            Flow::Switch(next) => Ok(Ended::Switch(next)),
+        };
+        // The computer's own organization, by name, for /org from another.
+        if profile.is_none() && !app.chat.list.account.name.is_empty() {
+            let _ = crate::paths::write_private_file(
+                &primary_name_path(&paths),
+                app.chat.list.account.name.as_bytes(),
+            );
+        }
+        out.chats.follow(None);
+        out.chats.follow_list(false);
+        out.chats.recording.lock().expect("recording").take();
+        out.presence.set(None);
+        ended
+    }
+}
+
+/// The organizations `/org` offers: the computer's own pairing, then each
+/// saved sign-in.
+fn organization_choices(paths: &Paths, config: Option<&Config>) -> Vec<app::OrgChoice> {
+    let mut choices = Vec::new();
+    if config.is_some_and(|c| c.server.is_some()) {
+        let name = std::fs::read_to_string(primary_name_path(paths))
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "This computer's organization".into());
+        choices.push(app::OrgChoice { id: None, name });
+    }
+    for saved in crate::auth::organizations::list(paths).unwrap_or_default() {
+        choices.push(app::OrgChoice {
+            id: Some(saved.id.clone()),
+            name: saved.account.name.clone(),
+        });
+    }
+    choices
+}
+
+fn primary_name_path(paths: &Paths) -> PathBuf {
+    paths.state_dir.join("tui-organization-name")
+}
+
+fn organization_path(paths: &Paths) -> PathBuf {
+    paths.state_dir.join("tui-organization")
+}
+
+/// The saved sign-in `/org` switched to last, if any.
+fn remembered_organization(paths: &Paths) -> Option<String> {
+    std::fs::read_to_string(organization_path(paths))
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+fn remember_organization(paths: &Paths, id: Option<&str>) {
+    let path = organization_path(paths);
+    let result = match id {
+        Some(id) => crate::paths::write_private_file(&path, id.as_bytes()),
+        None => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        },
+    };
+    if let Err(e) = result {
+        tracing::debug!("remembering the organization: {e:#}");
+    }
+}
+
 fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     theme: &Theme,
     rx: &mpsc::Receiver<Msg>,
     out: &Outputs,
-) -> Result<()> {
+) -> Result<Ended> {
     let mut redraw = false;
     loop {
         let now = OffsetDateTime::now_utc();
@@ -180,11 +299,11 @@ fn event_loop(
             Some(wait) => match rx.recv_timeout(wait) {
                 Ok(msg) => Some(msg),
                 Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                Err(RecvTimeoutError::Disconnected) => return Ok(Ended::Quit),
             },
             None => match rx.recv() {
                 Ok(msg) => Some(msg),
-                Err(_) => return Ok(()),
+                Err(_) => return Ok(Ended::Quit),
             },
         };
         // Apply a burst of messages before drawing again.
@@ -199,8 +318,9 @@ fn event_loop(
                 out.presence.set(None);
             }
             match out.run(effects) {
-                None => return Ok(()),
-                Some(again) => redraw |= again,
+                Flow::Quit => return Ok(Ended::Quit),
+                Flow::Switch(next) => return Ok(Ended::Switch(next)),
+                Flow::Go(again) => redraw |= again,
             }
         }
     }
@@ -219,14 +339,21 @@ struct Outputs {
     tx: Sender<Msg>,
 }
 
+/// What running effects says next.
+enum Flow {
+    /// Carry on, drawing the whole screen again when true.
+    Go(bool),
+    Quit,
+    Switch(Option<String>),
+}
+
 impl Outputs {
-    /// Run effects: `None` when it's time to quit, else whether to draw
-    /// the whole screen again.
-    fn run(&self, effects: Vec<Effect>) -> Option<bool> {
+    fn run(&self, effects: Vec<Effect>) -> Flow {
         let mut redraw = false;
         for effect in effects {
             match effect {
-                Effect::Quit => return None,
+                Effect::Quit => return Flow::Quit,
+                Effect::SwitchOrganization(next) => return Flow::Switch(next),
                 Effect::Daemon(command) => self.link.send(command),
                 Effect::Chat(command) => self.chats.run(command),
                 Effect::Copy(text) => copy(&text),
@@ -260,7 +387,7 @@ impl Outputs {
                 }
             }
         }
-        Some(redraw)
+        Flow::Go(redraw)
     }
 }
 
@@ -274,35 +401,49 @@ fn copy(text: &str) {
     let _ = out.flush();
 }
 
-fn spawn_input(tx: Sender<Msg>) {
-    thread::spawn(move || {
-        loop {
-            let msg = match event::read() {
-                // Windows also reports releases.
-                Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => Msg::Key(key),
-                // Clicks and the wheel; moves and drags would only wake it.
-                Ok(Event::Mouse(mouse))
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::Down(MouseButton::Left)
-                            | MouseEventKind::ScrollUp
-                            | MouseEventKind::ScrollDown
-                    ) =>
-                {
-                    Msg::Mouse(mouse)
+/// Keys, the mouse and pastes, read by one thread for the whole run and
+/// sent to the session open now.
+struct Input(Arc<Mutex<Option<Sender<Msg>>>>);
+
+impl Input {
+    fn spawn() -> Self {
+        let route: Arc<Mutex<Option<Sender<Msg>>>> = Arc::default();
+        let to = Arc::clone(&route);
+        thread::spawn(move || {
+            loop {
+                let msg = match event::read() {
+                    // Windows also reports releases.
+                    Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => Msg::Key(key),
+                    // Clicks and the wheel; moves and drags would only wake it.
+                    Ok(Event::Mouse(mouse))
+                        if matches!(
+                            mouse.kind,
+                            MouseEventKind::Down(MouseButton::Left)
+                                | MouseEventKind::ScrollUp
+                                | MouseEventKind::ScrollDown
+                        ) =>
+                    {
+                        Msg::Mouse(mouse)
+                    }
+                    Ok(Event::Paste(text)) => Msg::Paste(text),
+                    Ok(Event::Resize(..)) => Msg::Resize,
+                    Ok(Event::FocusGained) => Msg::WindowFocus(true),
+                    Ok(Event::FocusLost) => Msg::WindowFocus(false),
+                    Ok(_) => continue,
+                    Err(_) => return,
+                };
+                if let Some(tx) = to.lock().expect("input route").as_ref() {
+                    let _ = tx.send(msg);
                 }
-                Ok(Event::Paste(text)) => Msg::Paste(text),
-                Ok(Event::Resize(..)) => Msg::Resize,
-                Ok(Event::FocusGained) => Msg::WindowFocus(true),
-                Ok(Event::FocusLost) => Msg::WindowFocus(false),
-                Ok(_) => continue,
-                Err(_) => return,
-            };
-            if tx.send(msg).is_err() {
-                return;
             }
-        }
-    });
+        });
+        Self(route)
+    }
+
+    /// From now on, to this session.
+    fn route(&self, tx: Sender<Msg>) {
+        *self.0.lock().expect("input route") = Some(tx);
+    }
 }
 
 /// The chat pane's calls to the daemon. Each blocks, so each gets a thread.

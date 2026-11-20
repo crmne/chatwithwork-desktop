@@ -806,9 +806,11 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     };
     match command {
-        Command::Tui { organization } => {
-            cww::tui::run_organization(paths, organization.as_deref())?
-        }
+        Command::Tui { organization } => match organization {
+            Some(organization) => cww::tui::run_organization(paths, Some(&organization))?,
+            // The organization chosen with /org last time.
+            None => cww::tui::run(paths)?,
+        },
         Command::Browser { command } => browser(&paths, command)?,
         Command::Organizations { json } => {
             let profiles = auth::organizations::list(&paths)?;

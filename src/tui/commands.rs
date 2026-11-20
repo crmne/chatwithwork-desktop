@@ -5,6 +5,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     New,
+    Org,
     Decisions,
     Bots,
     Projects,
@@ -379,6 +380,14 @@ pub const COMMANDS: &[Command] = &[
         "",
         false,
         "Pin or unpin this chat",
+    ),
+    command(
+        Cmd::Org,
+        "org",
+        &["organization"],
+        "[name or number]",
+        false,
+        "Switch to another organization you're signed in to",
     ),
     command(Cmd::Help, "help", &["?"], "", false, "Commands and keys"),
     command(Cmd::Exit, "exit", &["quit"], "", false, "Quit"),

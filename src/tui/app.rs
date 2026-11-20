@@ -595,6 +595,9 @@ pub enum Effect {
     RememberFilter(super::sidebar::Filter),
     /// Keep the sidebar hidden (true) or shown for the next run.
     RememberSidebar(bool),
+    /// Start again in another organization: a saved sign-in by its ID, or
+    /// this computer's own (`None`).
+    SwitchOrganization(Option<String>),
     Quit,
 }
 
@@ -796,6 +799,10 @@ pub struct ChatPane {
     pub bot_page: Option<BotPage>,
     /// New bot, while it's open.
     pub new_bot: Option<super::newbot::NewBot>,
+    /// The organizations this computer is signed in to, for `/org`.
+    pub orgs: Vec<OrgChoice>,
+    /// The saved sign-in the chats are from; `None` is the computer's own.
+    pub current_org: Option<String>,
     /// What trying or making the open chat's proposed bot said.
     pub draft_result: Vec<String>,
     pub draft_busy: Option<&'static str>,
@@ -880,6 +887,8 @@ impl Default for ChatPane {
             decision_row: 0,
             bot_page: None,
             new_bot: None,
+            orgs: Vec::new(),
+            current_org: None,
             draft_result: Vec::new(),
             draft_busy: None,
             open: None,
@@ -941,6 +950,14 @@ pub enum SideItem {
     Fewer(u64),
     /// "N more" under the top-level projects.
     MoreProjects,
+}
+
+/// An organization this computer is signed in to: its own pairing (`id`
+/// `None`), or a saved sign-in (`cww login --organization`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgChoice {
+    pub id: Option<String>,
+    pub name: String,
 }
 
 /// A bot's page: what the server said of it, and the runs listed.
@@ -1066,6 +1083,8 @@ pub enum PickerKind {
     Projects,
     /// A bot to open.
     Bots,
+    /// An organization to switch to.
+    Orgs,
     /// A project whose chats to pick from.
     Places,
     /// Chats and bots by name, for `/search` and `/open`.
@@ -1080,6 +1099,7 @@ pub enum PickItem<'a> {
     /// `None` is "no project".
     Project(Option<&'a Project>),
     Bot(&'a super::sidebar::BotRow),
+    Org(&'a OrgChoice),
     /// A project to look into.
     Place(&'a Project),
 }
@@ -1479,6 +1499,12 @@ impl ChatPane {
                     .collect(),
                 _ => Vec::new(),
             },
+            PickerKind::Orgs => self
+                .orgs
+                .iter()
+                .filter(|o| has(&o.name))
+                .map(PickItem::Org)
+                .collect(),
             PickerKind::Bots => self
                 .sidebar()
                 .map(|s| {
@@ -1675,6 +1701,14 @@ impl App {
     pub fn with_layout(mut self, sidebar_hidden: bool, reduce_motion: bool) -> Self {
         self.sidebar_hidden = sidebar_hidden;
         self.reduce_motion = reduce_motion;
+        self
+    }
+
+    /// With the organizations this computer is signed in to, and which one
+    /// the chats are from.
+    pub fn with_organizations(mut self, orgs: Vec<OrgChoice>, current: Option<String>) -> Self {
+        self.chat.orgs = orgs;
+        self.chat.current_org = current;
         self
     }
 
@@ -2691,6 +2725,7 @@ impl App {
             Cmd::ResumeSharing => self.daemon.paused() == Some(true),
             Cmd::Project => !self.chat.list.projects.is_empty(),
             Cmd::NewBot | Cmd::Bots => self.chat.can_make_bots(),
+            Cmd::Org => true,
             Cmd::Decisions => self.chat.sidebar().is_some(),
             Cmd::Pin => open.is_some_and(|c| c.can(|can| can.pin)),
             Cmd::MakeBot | Cmd::TryBot => self.open_draft().is_some_and(|d| d.made.is_none()),
@@ -2851,6 +2886,7 @@ impl App {
                 return self.show_sidebar(show);
             }
             Cmd::Pin => return self.pin_open_chat(),
+            Cmd::Org => return self.org(args),
             // Without the sidebar on screen, its search is a picker.
             Cmd::Search if !self.hits.0.iter().any(|(_, hit)| *hit == Hit::Search) => {
                 self.open_picker(PickerKind::Search, args);
@@ -3210,6 +3246,11 @@ impl App {
             Some(PickItem::Project(project)) => {
                 let project = project.cloned();
                 self.choose_project(project)
+            }
+            Some(PickItem::Org(org)) => {
+                let org = org.clone();
+                self.chat.picker = None;
+                self.switch_organization(org)
             }
             Some(PickItem::Bot(bot)) => {
                 let id = bot.id;
@@ -5792,6 +5833,76 @@ impl App {
             }
         }
         effects
+    }
+
+    /// `/org`: the organizations this computer is signed in to, or the one
+    /// named (or numbered, as the picker lists them) switched to at once.
+    fn org(&mut self, args: &str) -> Vec<Effect> {
+        use super::theme::Signal;
+        // The one open now, by the name its chats came with.
+        let current = self.current_org_name();
+        let open = self.chat.current_org.clone();
+        if let Some(choice) = self.chat.orgs.iter_mut().find(|o| o.id == open) {
+            choice.name = current;
+        }
+        if self.chat.orgs.len() < 2 {
+            let name = self.current_org_name();
+            self.notice(Signal::Idle, &format!("You're only in {name}."));
+            return Vec::new();
+        }
+        let query = args.trim();
+        if query.is_empty() {
+            self.open_picker(PickerKind::Orgs, "");
+            return Vec::new();
+        }
+        let lower = query.to_lowercase();
+        let chosen = match query.parse::<usize>() {
+            Ok(n) if (1..=self.chat.orgs.len()).contains(&n) => Some(self.chat.orgs[n - 1].clone()),
+            _ => {
+                let fits: Vec<&OrgChoice> = self
+                    .chat
+                    .orgs
+                    .iter()
+                    .filter(|o| {
+                        o.name.to_lowercase().contains(&lower) || o.id.as_deref() == Some(query)
+                    })
+                    .collect();
+                match fits[..] {
+                    [one] => Some(one.clone()),
+                    _ => None,
+                }
+            }
+        };
+        match chosen {
+            Some(org) => self.switch_organization(org),
+            None => {
+                self.open_picker(PickerKind::Orgs, query);
+                Vec::new()
+            }
+        }
+    }
+
+    fn switch_organization(&mut self, org: OrgChoice) -> Vec<Effect> {
+        use super::theme::Signal;
+        if org.id == self.chat.current_org {
+            self.notice(Signal::Idle, &format!("You're in {} already.", org.name));
+            return Vec::new();
+        }
+        vec![Effect::SwitchOrganization(org.id)]
+    }
+
+    /// The organization the chats are from, by name.
+    pub fn current_org_name(&self) -> String {
+        let listed = self.chat.list.account.name.trim();
+        if !listed.is_empty() {
+            return listed.to_string();
+        }
+        self.chat
+            .orgs
+            .iter()
+            .find(|o| o.id == self.chat.current_org)
+            .map(|o| o.name.clone())
+            .unwrap_or_else(|| "this organization".into())
     }
 
     /// `/pin`: the open chat pinned in the sidebar, or unpinned.

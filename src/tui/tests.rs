@@ -4912,6 +4912,72 @@ fn without_the_sidebar_slash_commands_drive_it() {
     );
 }
 
+#[test]
+fn slash_org_switches_between_the_organizations_signed_in_here() {
+    let orgs = || {
+        vec![
+            OrgChoice {
+                id: None,
+                name: "This computer's organization".into(),
+            },
+            OrgChoice {
+                id: Some("k1".into()),
+                name: "Akamai Robotics".into(),
+            },
+        ]
+    };
+    let run = |app: &mut App, text: &str| {
+        app.update(ctrl('c'));
+        app.focus = Focus::Composer;
+        type_text(app, text);
+        app.update(key(KeyCode::Enter))
+    };
+    // One organization: a plain sentence.
+    let mut alone = app();
+    chats_ready(&mut alone);
+    run(&mut alone, "/org");
+    assert_eq!(
+        alone.notice.as_ref().unwrap().text,
+        "You're only in Plenty."
+    );
+    // A picker of them, the open one marked by its own name.
+    let mut app = app().with_organizations(orgs(), None);
+    chats_ready(&mut app);
+    run(&mut app, "/org");
+    assert_eq!(
+        app.chat.picker.as_ref().map(|p| p.kind),
+        Some(PickerKind::Orgs)
+    );
+    let screen = render_to_string(&app, 100, 30);
+    assert!(
+        screen.contains("Plenty") && screen.contains("current"),
+        "{screen}"
+    );
+    assert!(screen.contains("Akamai Robotics"), "{screen}");
+    app.update(key(KeyCode::Down));
+    assert_eq!(
+        app.update(key(KeyCode::Enter)),
+        vec![Effect::SwitchOrganization(Some("k1".into()))]
+    );
+    // By name or number, at once; the open one says so.
+    assert!(
+        run(&mut app, "/organization akamai")
+            .contains(&Effect::SwitchOrganization(Some("k1".into())))
+    );
+    assert!(
+        !run(&mut app, "/org 1")
+            .iter()
+            .any(|e| matches!(e, Effect::SwitchOrganization(_)))
+    );
+    assert_eq!(
+        app.notice.as_ref().unwrap().text,
+        "You're in Plenty already."
+    );
+    let mut there = self::app().with_organizations(orgs(), Some("k1".into()));
+    chats_ready(&mut there);
+    assert!(run(&mut there, "/org 1").contains(&Effect::SwitchOrganization(None)));
+}
+
 // ---------------------------------------------------------------- new bot
 
 fn recipes() -> Vec<super::newbot::Recipe> {

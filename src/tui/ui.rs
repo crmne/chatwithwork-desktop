@@ -2192,6 +2192,7 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
             PickerKind::Models => "Model: ",
             PickerKind::Projects => "Project: ",
             PickerKind::Bots => "Open a bot: ",
+            PickerKind::Orgs => "Organization: ",
             PickerKind::Places => "Look in a project: ",
             PickerKind::Search => "Open: ",
         };
@@ -2465,6 +2466,18 @@ fn picker_rows(view: &mut ComposerView, app: &App, theme: &Theme, width: usize) 
                 ));
                 if let Some(label) = &bot.state_label {
                     spans.push(Span::styled(format!(" · {label}"), theme.faint()));
+                }
+            }
+            PickItem::Org(org) => {
+                spans.push(Span::styled(
+                    ellipsize(&org.name, width.saturating_sub(12)),
+                    name_style,
+                ));
+                if org.id == pane.current_org {
+                    spans.push(Span::styled(
+                        "  current",
+                        theme.signal_ink(Signal::Positive),
+                    ));
                 }
             }
             PickItem::Place(project) => {
@@ -3134,6 +3147,7 @@ fn help_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 ("g s", "settings"),
                 ("g c  g b  g a", "show only chats, only bots, or all"),
                 ("g l", "the activity log"),
+                ("/org", "another organization you're signed in to"),
             ],
         ));
         groups.push((
