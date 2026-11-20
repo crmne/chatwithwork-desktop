@@ -3272,9 +3272,17 @@ impl App {
             }
             // Its chats next, that project's alone.
             Some(PickItem::Place(project)) => {
-                let id = project.id;
+                let (id, number) = (project.id, project.number);
                 self.open_picker(PickerKind::ProjectChats(id), "");
-                Vec::new()
+                // Its older chats too, past those the list holds.
+                match number {
+                    Some(number) => vec![Effect::Chat(ChatCommand::ProjectChats {
+                        project: id,
+                        number,
+                        before: None,
+                    })],
+                    None => Vec::new(),
+                }
             }
             None => {
                 if kind != Some(PickerKind::Models)
@@ -4641,7 +4649,7 @@ impl App {
                 })],
                 None => Vec::new(),
             },
-            KeyCode::Char('r') => self.open_decisions(),
+            KeyCode::Char('r') => self.refresh_view(),
             _ => return None,
         })
     }
@@ -4692,7 +4700,7 @@ impl App {
                     .or_else(|| self.chat.bot(id).and_then(|b| b.url.clone()));
                 self.open_page(url)
             }
-            KeyCode::Char('r') => self.open_bot(id),
+            KeyCode::Char('r') => self.refresh_view(),
             _ => return None,
         })
     }
@@ -5150,8 +5158,12 @@ impl App {
 
     fn reset_chat_scope(&mut self) -> Vec<Effect> {
         let mut effects = self.cancel_dictation();
+        // The sign-ins on this computer, and which one the chats come
+        // from, don't change with what the chats say.
         self.chat = ChatPane {
             history: self.chat.history.clone(),
+            orgs: std::mem::take(&mut self.chat.orgs),
+            current_org: self.chat.current_org.take(),
             ..ChatPane::default()
         };
         self.chat_generation = self.chat_generation.wrapping_add(1);
@@ -5798,8 +5810,7 @@ impl App {
     /// Changes may have been missed (a reconnect, waking up): the list read
     /// whatever reads are out, and the page shown with it.
     fn catch_up(&mut self) -> Vec<Effect> {
-        self.chat.relisting = true;
-        let mut effects = vec![Effect::Chat(ChatCommand::List)];
+        let mut effects = self.relist();
         effects.extend(self.decisions_again());
         effects.extend(self.bot_again());
         effects
@@ -5831,8 +5842,7 @@ impl App {
         if !self.chat.ready() {
             return Vec::new();
         }
-        let mut effects = vec![Effect::Chat(ChatCommand::List)];
-        self.chat.relisting = true;
+        let mut effects = self.relist();
         match self.view {
             View::Decisions => effects.extend(self.read_decisions()),
             View::Bot(_) => effects.extend(self.bot_again()),
@@ -5965,6 +5975,17 @@ impl App {
     fn show_sidebar(&mut self, show: bool) -> Vec<Effect> {
         self.sidebar_hidden = !show;
         vec![Effect::RememberSidebar(!show)]
+    }
+
+    /// The list read again, one read at a time: with one out, once more
+    /// after it, so an older answer never lands last.
+    fn relist(&mut self) -> Vec<Effect> {
+        if std::mem::replace(&mut self.chat.relisting, true) {
+            self.chat.relist_again = true;
+            Vec::new()
+        } else {
+            vec![Effect::Chat(ChatCommand::List)]
+        }
     }
 
     /// Decisions read again while they show.

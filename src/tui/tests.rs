@@ -3376,6 +3376,7 @@ fn the_list_stays_current_over_the_daemons_socket() {
     assert!(app.chat.list.chats.iter().all(|c| c.number != 42));
 
     // Offline: changes are read again after each action, until it's back.
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(chat_list()))));
     app.update(Msg::Chat(ChatMsg::ListLive(ListLive::Offline)));
     assert!(!app.chat.list_live);
     assert_eq!(
@@ -4885,7 +4886,15 @@ fn without_the_sidebar_slash_commands_drive_it() {
     })));
     // A project, then one of its chats.
     run(&mut app, "/projects falcon");
-    app.update(key(KeyCode::Enter));
+    // Its older chats are read too.
+    assert!(
+        app.update(key(KeyCode::Enter))
+            .contains(&Effect::Chat(ChatCommand::ProjectChats {
+                project: 3,
+                number: 3,
+                before: None
+            }))
+    );
     assert_eq!(
         app.chat.picker.as_ref().map(|p| p.kind),
         Some(PickerKind::ProjectChats(3))
@@ -4922,6 +4931,56 @@ fn without_the_sidebar_slash_commands_drive_it() {
                 action: ChatAction::Pin(true)
             }))
     );
+}
+
+#[test]
+fn a_refresh_waits_for_the_read_out_and_pickers_work_while_asking_is_locked() {
+    let mut app = app();
+    sidebar_ready(&mut app);
+    assert_eq!(app.focus, Focus::Chats);
+    assert!(
+        app.update(char('r'))
+            .contains(&Effect::Chat(ChatCommand::List))
+    );
+    assert!(
+        !app.update(char('r'))
+            .contains(&Effect::Chat(ChatCommand::List)),
+        "one read at a time"
+    );
+    assert_eq!(
+        app.update(Msg::Chat(ChatMsg::Listed(Ok(sidebar_list())))),
+        vec![Effect::Chat(ChatCommand::List)],
+        "then once more"
+    );
+    // Out of credits: the bots picker still shows and takes keys.
+    let mut list = sidebar_list();
+    list.locked_reason = Some("You're out of credits.".into());
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(list))));
+    app.focus = Focus::Composer;
+    app.view = View::Chat;
+    type_text(&mut app, "/bots");
+    app.update(key(KeyCode::Enter));
+    let screen = render_to_string(&app, 100, 30);
+    assert!(screen.contains("Open a bot"), "{screen}");
+    // The organizations survive the chats starting over.
+    let mut app = self::app().with_organizations(
+        vec![
+            OrgChoice {
+                id: None,
+                name: "Plenty".into(),
+            },
+            OrgChoice {
+                id: Some("k1".into()),
+                name: "Akamai Robotics".into(),
+            },
+        ],
+        None,
+    );
+    chats_ready(&mut app);
+    let mut other = chat_list();
+    other.account.id = "918273645".into();
+    app.update(Msg::Chat(ChatMsg::Listed(Ok(other))));
+    assert_eq!(app.chat.orgs.len(), 2);
 }
 
 #[test]

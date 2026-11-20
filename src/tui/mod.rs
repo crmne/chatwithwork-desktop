@@ -171,6 +171,8 @@ impl Session<'_> {
             self.config.and_then(|c| c.desktop.reduce_motion) == Some(true),
         );
         app = app.with_crash_reports(crate::crash_reports::Consent::read(self.config));
+        // The terminal keeps its focus across a switch.
+        app.window_focused = self.input.focused();
 
         let (tx, rx) = mpsc::channel();
         self.input.route(tx.clone());
@@ -402,13 +404,16 @@ fn copy(text: &str) {
 }
 
 /// Keys, the mouse and pastes, read by one thread for the whole run and
-/// sent to the session open now.
-struct Input(Arc<Mutex<Option<Sender<Msg>>>>);
+/// sent to the session open now, and whether the terminal has focus, which
+/// a new session starts from.
+struct Input(Arc<Mutex<Option<Sender<Msg>>>>, Arc<AtomicBool>);
 
 impl Input {
     fn spawn() -> Self {
         let route: Arc<Mutex<Option<Sender<Msg>>>> = Arc::default();
         let to = Arc::clone(&route);
+        let focused = Arc::new(AtomicBool::new(false));
+        let focus = Arc::clone(&focused);
         thread::spawn(move || {
             loop {
                 let msg = match event::read() {
@@ -432,12 +437,19 @@ impl Input {
                     Ok(_) => continue,
                     Err(_) => return,
                 };
+                if let Msg::WindowFocus(on) = msg {
+                    focus.store(on, Ordering::SeqCst);
+                }
                 if let Some(tx) = to.lock().expect("input route").as_ref() {
                     let _ = tx.send(msg);
                 }
             }
         });
-        Self(route)
+        Self(route, focused)
+    }
+
+    fn focused(&self) -> bool {
+        self.1.load(Ordering::SeqCst)
     }
 
     /// From now on, to this session.

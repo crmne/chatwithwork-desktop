@@ -2186,7 +2186,10 @@ fn composer_view(app: &App, theme: &Theme, width: usize, now: OffsetDateTime) ->
         rows: Vec::new(),
     };
 
-    if let Some(picker) = pane.picker.as_ref().filter(|_| usable) {
+    // A picker navigates, so it works while asking is locked (out of
+    // credits, say): only sending is refused.
+    if let Some(picker) = pane.picker.as_ref().filter(|_| pane.ready()) {
+        let focused = pane.ready() && app.focus == Focus::Composer && app.modal.is_none();
         let label = match picker.kind {
             PickerKind::Chats => "Resume a chat: ",
             PickerKind::Models => "Model: ",
