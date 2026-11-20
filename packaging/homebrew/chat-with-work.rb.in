@@ -2,7 +2,7 @@ cask "chat-with-work" do
   version "@VERSION@"
   sha256 "@MACOS_APP_SHA256@"
 
-  url "https://github.com/crmne/chatwithwork-desktop/releases/download/v#{version}/chat-with-work-v#{version}-macos-universal.dmg"
+  url "https://github.com/crmne/chatwithwork-desktop/releases/download/v#{version}/Chat-with-Work-Desktop-#{version}-macOS-universal.dmg"
   name "Chat with Work Desktop"
   name "Chat with Work"
   desc "Desktop app for chatting and sharing folders with Chat with Work"

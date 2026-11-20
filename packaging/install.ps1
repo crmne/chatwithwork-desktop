@@ -1,7 +1,7 @@
 # Install Chat with Work Desktop (cww) on Windows from the latest
 # GitHub release, without administrator rights.
 #
-#   powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-install.ps1 | iex"
 #
 # Downloads the MSI for this machine (x64 or arm64), checks it against the
 # release's checksums.txt, and installs it for the current user: cww.exe on
@@ -12,8 +12,8 @@ $ErrorActionPreference = "Stop"
 $repo = "crmne/chatwithwork-desktop"
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-  "AMD64" { "x86_64-pc-windows-msvc" }
-  "ARM64" { "aarch64-pc-windows-msvc" }
+  "AMD64" { @{ Target = "x86_64-pc-windows-msvc"; System = "Windows-x64" } }
+  "ARM64" { @{ Target = "aarch64-pc-windows-msvc"; System = "Windows-arm64" } }
   default { throw "No build for $($env:PROCESSOR_ARCHITECTURE) Windows" }
 }
 if ($env:CWW_DOWNLOAD_BASE) {
@@ -32,8 +32,13 @@ try {
   $ProgressPreference = "SilentlyContinue"
   $sums = Join-Path $tmp "checksums.txt"
   Invoke-WebRequest -UseBasicParsing "$base/checksums.txt" -OutFile $sums
-  $line = Select-String -Path $sums -Pattern "cww-v\S+-$arch\.msi$" | Select-Object -First 1
-  if (-not $line) { throw "The release has no installer for $arch" }
+  # Chat-with-Work-Desktop-<version>-<system>.msi from 0.20.0; earlier
+  # releases (CWW_VERSION) named it cww-v<version>-<target>.msi.
+  $line = Select-String -CaseSensitive -Path $sums -Pattern "[ *]Chat-with-Work-Desktop-[0-9]\S*-$($arch.System)\.msi$" | Select-Object -First 1
+  if (-not $line) {
+    $line = Select-String -Path $sums -Pattern "cww-v\S+-$($arch.Target)\.msi$" | Select-Object -First 1
+  }
+  if (-not $line) { throw "The release has no installer for $($arch.System)" }
   $expected, $asset = ($line.Line -split "\s+", 2)
   $asset = $asset.Trim()
   Write-Host "Downloading $asset"

@@ -2,7 +2,7 @@
 # Install Chat with Work Desktop (cww) from the latest GitHub release.
 #
 #   curl --proto '=https' --tlsv1.2 -LsSf \
-#     https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.sh | sh
+#     https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-install.sh | sh
 #
 # Linux (x86_64, arm64; glibc 2.39+) and macOS (universal, signed and
 # notarized). Installs the GUI, terminal interface and daemon. Commands go
@@ -42,12 +42,12 @@ case "$platform" in
   Linux)
     prefix=cww-app
     case "$(uname -m)" in
-      x86_64 | amd64) target=x86_64-unknown-linux-gnu ;;
-      aarch64 | arm64) target=aarch64-unknown-linux-gnu ;;
+      x86_64 | amd64) target=x86_64-unknown-linux-gnu; system=Linux-x86_64 ;;
+      aarch64 | arm64) target=aarch64-unknown-linux-gnu; system=Linux-aarch64 ;;
       *) fail "no build for $(uname -m) Linux" ;;
     esac ;;
-  Darwin) target=macos-universal; prefix=cww; need ditto ;;
-  *) fail "no build for $(uname -s); on Windows use cww-installer.ps1 or the MSI" ;;
+  Darwin) target=macos-universal; system=macOS-universal; prefix=cww; need ditto ;;
+  *) fail "no build for $(uname -s); on Windows use Chat-with-Work-Desktop-install.ps1 or the MSI" ;;
 esac
 
 if [ -n "${CWW_DOWNLOAD_BASE:-}" ]; then
@@ -67,7 +67,11 @@ tmp=$(mktemp -d "$cache_dir/download.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 fetch "$base/checksums.txt" "$tmp/checksums.txt" || fail "can't download checksums.txt from $base"
-asset=$(awk -v pattern="^${prefix}-v[^ ]*-${target}\\.tar\\.gz$" '$2 ~ pattern { print $2; exit }' "$tmp/checksums.txt")
+# Chat-with-Work-Desktop-<version>-<system>.tar.gz from 0.20.0; earlier
+# releases (CWW_VERSION) named it <prefix>-v<version>-<target>.tar.gz.
+asset=$(awk -v pattern="^Chat-with-Work-Desktop-[0-9][^ ]*-${system}\\.tar\\.gz$" '$2 ~ pattern { print $2; exit }' "$tmp/checksums.txt")
+[ -n "$asset" ] ||
+  asset=$(awk -v pattern="^${prefix}-v[^ ]*-${target}\\.tar\\.gz$" '$2 ~ pattern { print $2; exit }' "$tmp/checksums.txt")
 [ -n "$asset" ] || fail "the release has no build for $target"
 say "Downloading $asset"
 fetch "$base/$asset" "$tmp/$asset" || fail "can't download $asset"
@@ -76,8 +80,14 @@ expected=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1 | head -n 1)
 actual=$(sha256 "$tmp/$asset")
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset"
 
+# The folder inside keeps the build's name (<prefix>-v<version>-<target>).
+folder=$(tar -tzf "$tmp/$asset" | head -n 1 | cut -d/ -f1)
+case "$folder" in
+  "$prefix"-v*-"$target") ;;
+  *) fail "$asset has an unexpected layout" ;;
+esac
 tar -xzf "$tmp/$asset" -C "$tmp"
-dir="$tmp/${asset%.tar.gz}"
+dir="$tmp/$folder"
 [ -f "$dir/cww" ] || fail "$asset has no cww binary"
 if [ "$platform" = Linux ]; then
   [ -f "$dir/cww-app.desktop" ] && [ -f "$dir/cww-app.svg" ] || fail "$asset has no desktop launcher or icon"

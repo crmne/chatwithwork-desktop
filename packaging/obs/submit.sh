@@ -61,10 +61,10 @@ rm -rf "$out" && mkdir -p "$out"
 (cd "$out" && osc checkout --output-dir "$package" "$project" "$package" >/dev/null) ||
   { echo "couldn't check out $project/$package from $apiurl" >&2; exit 1; }
 work="$out/$package"
-find "$work" -maxdepth 1 -name 'cww-app-v*-unknown-linux-gnu.tar.gz' -delete
+find "$work" -maxdepth 1 \( -name 'cww-app-v*-unknown-linux-gnu.tar.gz' -o -name 'Chat-with-Work-Desktop-*-Linux-*.tar.gz' \) -delete
 cp "$copr/SPECS/$package.spec" "$work/"
-cp "$copr/SOURCES/cww-app-v$version-x86_64-unknown-linux-gnu.tar.gz" \
-   "$copr/SOURCES/cww-app-v$version-aarch64-unknown-linux-gnu.tar.gz" "$work/"
+# The two Linux app archives COPR's script downloaded, as the release names them.
+cp "$copr"/SOURCES/*.tar.gz "$work/"
 (cd "$work" && osc addremove >/dev/null && osc status)
 
 if $submit; then

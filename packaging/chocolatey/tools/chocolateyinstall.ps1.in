@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $packageArgs = @{
   packageName    = $env:ChocolateyPackageName
   fileType       = 'msi'
-  url64bit       = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-x86_64-pc-windows-msvc.msi'
+  url64bit       = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/Chat-with-Work-Desktop-@VERSION@-Windows-x64.msi'
   checksum64     = '@WINDOWS_X64_MSI_SHA256@'
   checksumType64 = 'sha256'
   silentArgs     = "/qn /norestart /l*v `"$($env:TEMP)\$($env:ChocolateyPackageName).$($env:ChocolateyPackageVersion).MsiInstall.log`""
@@ -13,7 +13,7 @@ $packageArgs = @{
 # The OS's architecture, even when Chocolatey runs emulated on Windows on Arm.
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if ($arch -eq 'ARM64') {
-  $packageArgs.url64bit = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.msi'
+  $packageArgs.url64bit = 'https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/Chat-with-Work-Desktop-@VERSION@-Windows-arm64.msi'
   $packageArgs.checksum64 = '@WINDOWS_ARM64_MSI_SHA256@'
 }
 # The app updates itself, so the installed copy can be newer than this

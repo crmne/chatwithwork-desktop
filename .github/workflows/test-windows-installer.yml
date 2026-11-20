@@ -41,7 +41,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release-tag }}
         run: |
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern '*-x86_64-pc-windows-msvc.msi' --dir dist
+          # Named Chat-with-Work-Desktop-<version>-Windows-x64.msi from 0.20.0.
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'Chat-with-Work-Desktop-[0-9]*-Windows-x64.msi' --dir dist
+          if (-not (Test-Path dist/*.msi)) {
+            gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'cww-v*-x86_64-pc-windows-msvc.msi' --dir dist
+          }
           Get-ChildItem dist/*.msi | Rename-Item -NewName cww-test.msi
       - uses: dtolnay/rust-toolchain@stable
         if: inputs.rebuild-agent

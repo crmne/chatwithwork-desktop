@@ -575,6 +575,16 @@ jobs:
         run: |
           cp packaging/install.sh dist/cww-installer.sh
           cp packaging/install.ps1 dist/cww-installer.ps1
+      # The names people read, a copy without the version of each download
+      # people pick (releases/latest/download/...), and, until the release
+      # that drops them, the old names installed apps look for
+      # (PACKAGING.md, "Renaming the downloads").
+      - name: Name the downloads
+        env:
+          VERSION: ${{ needs.release-source.outputs.version }}
+        run: |
+          bash packaging/release-names.sh dist "$VERSION" --stable --legacy
+          ls -l dist
       - name: Checksums
         run: |
           cd dist
@@ -631,20 +641,23 @@ jobs:
       version: ${{ github.ref_name }}
     secrets: inherit
 
-  # packaging.yml builds the AppImages from the published archives, after
-  # checksums.txt was signed. Add them to the signed checksums.txt, so the
-  # desktop app's AppImage updates itself (fastframe-update refuses an
+  # packaging.yml builds the Linux packages from the published archives,
+  # after checksums.txt was signed, and attaches them under native-packages'
+  # names, which installed apps (0.19.0 and older) look for. Give them the
+  # names people read too (packaging/release-names.sh), with a new .zsync for
+  # each renamed AppImage, and add them all to the signed checksums.txt, so
+  # the desktop app's AppImage updates itself (fastframe-update refuses an
   # AppImage its release doesn't sign, and tells people to update by hand).
-  # Only AppImages identical to the ones this run built (its native-packages
+  # Only packages identical to the ones this run built (its native-packages
   # artifact, which release-asset writers can't change) are signed. The rest
   # of checksums.txt is kept as published: its signature is checked first,
-  # and only the AppImages' lines are added before signing it again.
+  # and only the Linux packages' lines are added before signing it again.
   sign-appimages:
-    name: Sign the AppImages
+    name: Name and sign the Linux packages
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
-    needs: packaging
+    needs: [release-source, packaging]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     # Only this job and publish can read the release signing key.
     environment: release-signing
     permissions:
@@ -660,40 +673,62 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '4.0'
-      - name: Add the AppImages to checksums.txt and sign it again
+      - run: sudo apt-get update && sudo apt-get install -y zsync
+      - name: Name the Linux packages, add them to checksums.txt and sign it again
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.release-source.outputs.version }}
           CWW_UPDATE_SIGNING_KEY: ${{ secrets.CWW_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           gem install native-packages --version 0.12.0 --no-document
-          mkdir -p appimages
+          # This run's packages under their names people read, a copy without
+          # the version for releases/latest/download/, and the old names.
+          mkdir linux
+          find built -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.flatpak' \) \
+            -exec cp -p {} linux/ \;
+          ls linux > native-names.txt
+          bash packaging/release-names.sh linux "$VERSION" --stable --legacy
+          (
+            cd linux
+            for image in Chat-with-Work-Desktop-"$VERSION"-Linux-*.AppImage; do
+              zsyncmake -u "$image" -o "$image.zsync" "$image"
+            done
+          )
+          ls -l linux
+          mkdir -p release
           # Every file checksums.txt lists: signing it hashes each of them.
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir appimages
-          cd appimages
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
+          cd release
           if ! bash ../packaging/verify-checksums.sh .; then
             # A run that stopped between uploading checksums.txt and its
             # signature left new lines under the old signature: drop the
-            # AppImage lines and check that against it.
-            grep -v -E '\.AppImage$' checksums.txt > checksums.base
+            # Linux packages' lines and check that against it.
+            grep -v -E '\.(AppImage|deb|rpm|flatpak|zsync)$' checksums.txt > checksums.base
             mv checksums.base checksums.txt
             bash ../packaging/verify-checksums.sh .
           fi
-          shopt -s nullglob
-          images=(*.AppImage)
-          [ "${#images[@]}" -gt 0 ] || { echo "::error::The release has no AppImage to sign"; exit 1; }
-          for image in "${images[@]}"; do
-            built=$(find ../built -type f -name "$image" | head -n 1)
-            [ -n "$built" ] || { echo "::error::$image isn't one this run built"; exit 1; }
-            [ "$(sha256sum < "$built")" = "$(sha256sum < "$image")" ] ||
-              { echo "::error::$image on the release isn't the one this run built"; exit 1; }
-            # A rerun of packaging rebuilds the AppImages: replace any line
-            # an earlier run signed for this name.
-            awk -v name="$image" '$2 != name' checksums.txt > checksums.next
+          added=()
+          for file in ../linux/*; do
+            name=$(basename "$file")
+            if grep -qxF "$name" ../native-names.txt; then
+              # native-packages attached it: it must be the one this run built.
+              [ "$(sha256sum < "$name")" = "$(sha256sum < "$file")" ] ||
+                { echo "::error::$name on the release isn't the one this run built"; exit 1; }
+            else
+              # Ours to attach, replacing an earlier run's.
+              cp -p "$file" "$name"
+              added+=("$name")
+            fi
+            # A rerun of packaging rebuilds the packages: replace any line an
+            # earlier run signed for this name.
+            awk -v name="$name" '$2 != name' checksums.txt > checksums.next
             mv checksums.next checksums.txt
-            sha256sum -- "$image" >> checksums.txt
+            sha256sum -- "$name" >> checksums.txt
           done
+          ls Chat-with-Work-Desktop-*-Linux-*.AppImage > /dev/null ||
+            { echo "::error::The release has no AppImage to sign"; exit 1; }
           cat checksums.txt
           # The download brought the old signature, checked above, and
           # sign-checksums never overwrites a file.
@@ -702,6 +737,10 @@ jobs:
             --public-key ../app/assets/update-public-key.hex \
             --key-env CWW_UPDATE_SIGNING_KEY
           bash ../packaging/verify-checksums.sh .
-          grep -E '\.AppImage$' checksums.txt | sha256sum -c -
-          # Both in one upload; a rerun after a partial one recovers above.
+          grep -E '\.(AppImage|deb|rpm|flatpak|zsync)$' checksums.txt | sha256sum -c -
+          # The renamed packages first, then the checksums that list them; a
+          # rerun after a partial upload recovers above.
+          if [ "${#added[@]}" -gt 0 ]; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${added[@]}"
+          fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber checksums.txt checksums.txt.sig
