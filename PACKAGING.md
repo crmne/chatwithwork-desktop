@@ -143,10 +143,13 @@ the public-key-preserving manual installation ZIP and must use
 [`browser/README.md`](browser/README.md#releasing-the-extension).
 `keep-desktop-latest.yml` enforces it: whenever a `browser-v*` release is
 published or edited, it marks that release not latest and the newest stable
-`v*` release (`vX.Y.Z`, not a prerelease) latest again
-(`packaging/keep-desktop-latest.sh`; `DRY_RUN=1` says what it would change).
-It changes no tag, asset, or note, so a browser release made without
-`--latest=false` is put right within a minute rather than left as latest.
+`v*` release (`vX.Y.Z`, not a draft or prerelease) latest again
+(`packaging/keep-desktop-latest.sh`; `DRY_RUN=1` says what it would change,
+`packaging/test-keep-desktop-latest.sh` tests it). A release event runs the
+workflow as the release's own tag has it, which a browser tag older than the
+workflow doesn't, so it also runs from main once a day and by hand, putting
+the newest Desktop release back as latest whatever moved it. It changes no
+tag, asset, or note.
 The AUR development recipe matches only `v[0-9]*` when deriving its version;
 an independent `browser-v*` tag must not become the Desktop package version.
 

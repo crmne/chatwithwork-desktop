@@ -3,37 +3,59 @@ name: Keep Desktop the latest release
 # The stable download links (releases/latest/download/...) and Desktop's
 # updater read the repository's latest release. Browser extension releases
 # (browser-v*) are made by hand and must be created with --latest=false;
-# this enforces it: whenever one is published or edited, it's marked not
-# latest and the newest stable v* Desktop release is marked latest again
-# (packaging/keep-desktop-latest.sh). Its own edits use GITHUB_TOKEN, which
-# starts no workflow, so it never runs itself again. It changes no tag,
-# asset, or note.
+# this enforces it (packaging/keep-desktop-latest.sh): when one is published
+# or edited it's marked not latest, and the newest stable vX.Y.Z Desktop
+# release is marked latest again. A release event runs the workflow file of
+# the release's own tag, which an older browser tag doesn't have, so a daily
+# run from main puts Desktop back as latest whatever made it not. The script
+# always comes from main. Its edits use GITHUB_TOKEN, which starts no
+# workflow, so it never runs itself again. It changes no tag, asset, or note.
+# A pull request that changes the script runs its tests.
 on:
   release:
     types: [published, edited]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packaging/keep-desktop-latest.sh
+      - packaging/test-keep-desktop-latest.sh
+      - .github/workflows/keep-desktop-latest.yml
 
 permissions:
   contents: read
 
-concurrency:
-  group: keep-desktop-latest
-  cancel-in-progress: false
-
 jobs:
-  keep-desktop-latest:
-    name: keep Desktop latest
-    if: startsWith(github.event.release.tag_name, 'browser-v') && !github.event.release.draft
+  test:
+    name: test keep-desktop-latest
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/test-keep-desktop-latest.sh
+
+  keep-desktop-latest:
+    name: keep Desktop latest
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'browser-v') && !github.event.release.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: keep-desktop-latest
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: packaging/keep-desktop-latest.sh
           sparse-checkout-cone-mode: false
       - name: Mark the browser release not latest and Desktop latest
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: packaging/keep-desktop-latest.sh "$TAG"
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: packaging/keep-desktop-latest.sh ${TAG:+"$TAG"}
