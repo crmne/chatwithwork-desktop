@@ -138,8 +138,15 @@ Release-note screenshots and videos are synthetic app captures. From 0.20.0 they
 
 The browser extension is versioned separately. Its `browser-v*` releases carry
 the public-key-preserving manual installation ZIP and must use
-`--latest=false`, so Desktop's updater still sees a Desktop release. See
+`--latest=false`, so Desktop's updater and the stable download links
+(`releases/latest/download/...`) still see a Desktop release. See
 [`browser/README.md`](browser/README.md#releasing-the-extension).
+`keep-desktop-latest.yml` enforces it: whenever a `browser-v*` release is
+published or edited, it marks that release not latest and the newest stable
+`v*` release (`vX.Y.Z`, not a prerelease) latest again
+(`packaging/keep-desktop-latest.sh`; `DRY_RUN=1` says what it would change).
+It changes no tag, asset, or note, so a browser release made without
+`--latest=false` is put right within a minute rather than left as latest.
 The AUR development recipe matches only `v[0-9]*` when deriving its version;
 an independent `browser-v*` tag must not become the Desktop package version.
 

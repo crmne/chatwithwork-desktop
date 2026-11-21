@@ -1,0 +1,39 @@
+name: Keep Desktop the latest release
+
+# The stable download links (releases/latest/download/...) and Desktop's
+# updater read the repository's latest release. Browser extension releases
+# (browser-v*) are made by hand and must be created with --latest=false;
+# this enforces it: whenever one is published or edited, it's marked not
+# latest and the newest stable v* Desktop release is marked latest again
+# (packaging/keep-desktop-latest.sh). Its own edits use GITHUB_TOKEN, which
+# starts no workflow, so it never runs itself again. It changes no tag,
+# asset, or note.
+on:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-desktop-latest
+  cancel-in-progress: false
+
+jobs:
+  keep-desktop-latest:
+    name: keep Desktop latest
+    if: startsWith(github.event.release.tag_name, 'browser-v') && !github.event.release.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: packaging/keep-desktop-latest.sh
+          sparse-checkout-cone-mode: false
+      - name: Mark the browser release not latest and Desktop latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: packaging/keep-desktop-latest.sh "$TAG"
