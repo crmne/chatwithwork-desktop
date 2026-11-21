@@ -373,28 +373,36 @@ pub fn keep_registered(paths: Paths) {
 }
 
 fn pass(paths: &Paths, was_on: &mut bool) -> Result<Vec<Registered>> {
-    let on = crate::config::Config::load(paths)?.browser.enabled;
-    if turned_off(was_on, on) {
-        unregister(paths)?;
-    }
-    refresh_if_on(paths)
-}
-
-/// Whether the browser was on at the last pass and is off now.
-fn turned_off(was_on: &mut bool, on: bool) -> bool {
-    std::mem::replace(was_on, on) && !on
-}
-
-fn refresh_if_on(paths: &Paths) -> Result<Vec<Registered>> {
+    // One read decides both: a pass that registers marks it for removal.
     let config = crate::config::Config::load(paths)?;
-    if !config.browser.enabled {
-        return Ok(Vec::new());
-    }
-    refresh(
-        paths,
-        &host_exe()?,
-        &crate::browsing::bridge::origins(&config.browser.extension_ids),
+    step(
+        was_on,
+        config.browser.enabled,
+        || unregister(paths),
+        || {
+            refresh(
+                paths,
+                &host_exe()?,
+                &crate::browsing::bridge::origins(&config.browser.extension_ids),
+            )
+        },
     )
+}
+
+/// One pass, given whether the browser is on: remove the registrations
+/// when it was on at the last pass and is off now (a pass may have
+/// written one just after `cww browser disable` removed them), and
+/// register while it is on.
+fn step(
+    was_on: &mut bool,
+    on: bool,
+    remove: impl FnOnce() -> Result<()>,
+    register: impl FnOnce() -> Result<Vec<Registered>>,
+) -> Result<Vec<Registered>> {
+    if std::mem::replace(was_on, on) && !on {
+        remove()?;
+    }
+    if on { register() } else { Ok(Vec::new()) }
 }
 
 /// Remove every registration `register` made.
@@ -606,13 +614,33 @@ mod tests {
     }
 
     #[test]
-    fn removes_the_registrations_once_when_it_sees_the_browser_turned_off() {
+    fn a_registration_written_just_after_disable_is_removed_on_the_next_pass() {
+        use std::cell::Cell;
+        let registered = Cell::new(false);
+        let removed = Cell::new(0);
+        let remove = || {
+            registered.set(false);
+            removed.set(removed.get() + 1);
+            Ok(())
+        };
         let mut was_on = false;
-        assert!(!turned_off(&mut was_on, false), "never on: nothing to undo");
-        assert!(!turned_off(&mut was_on, true));
-        assert!(!turned_off(&mut was_on, true));
-        assert!(turned_off(&mut was_on, false));
-        assert!(!turned_off(&mut was_on, false), "only once");
+        // Off: nothing is written, nothing to undo.
+        step(&mut was_on, false, remove, || unreachable!()).unwrap();
+        assert_eq!(removed.get(), 0);
+        // On, and `cww browser disable` removes the manifests while this
+        // pass is between reading the setting and writing.
+        step(&mut was_on, true, remove, || {
+            registered.set(false);
+            registered.set(true);
+            Ok(Vec::new())
+        })
+        .unwrap();
+        assert!(registered.get());
+        // The next pass reads the setting off and removes it, once.
+        step(&mut was_on, false, remove, || unreachable!()).unwrap();
+        assert!(!registered.get());
+        step(&mut was_on, false, remove, || unreachable!()).unwrap();
+        assert_eq!(removed.get(), 1);
     }
 
     #[test]
