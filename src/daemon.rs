@@ -185,6 +185,7 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         && config.sandbox.enabled
         && cfg!(any(target_os = "linux", target_os = "macos"));
     if sandboxed && !options.worker {
+        keep_browsers_registered(&paths, options);
         return supervise_worker(&paths, options);
     }
     #[cfg(unix)]
@@ -204,6 +205,7 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     // Trash records use local times; `time` only finds the offset while
     // the process has one thread.
     crate::trash::remember_local_offset();
+    keep_browsers_registered(&paths, options);
     if sandboxed {
         confine(&config, &paths);
     } else {
@@ -261,6 +263,23 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
         std::process::exit(crate::sandbox::RESTART_CODE);
     }
     Ok(())
+}
+
+/// Keep the browsers' registration from the daemon's unconfined side (it
+/// writes in their folders, which the confined worker can't): the
+/// supervisor, or the daemon itself without a sandbox. Call it only once
+/// the process needs no more single-threaded setup (`trash::
+/// remember_local_offset`).
+fn keep_browsers_registered(paths: &Paths, options: &Foreground) {
+    if options.worker
+        || !crate::browsing::install::keeps_registration(std::env::var_os("CWW_HOME").as_deref())
+    {
+        return;
+    }
+    let paths = paths.clone();
+    let _ = std::thread::Builder::new()
+        .name("browser-registration".into())
+        .spawn(move || crate::browsing::install::keep_registered(paths));
 }
 
 /// Confine this process as the daemon would, for `cww debug`. `keychain`
