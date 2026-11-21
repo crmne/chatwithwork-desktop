@@ -399,9 +399,11 @@ fn step(
     remove: impl FnOnce() -> Result<()>,
     register: impl FnOnce() -> Result<Vec<Registered>>,
 ) -> Result<Vec<Registered>> {
-    if std::mem::replace(was_on, on) && !on {
+    // A removal that fails stays pending, and the next pass tries again.
+    if *was_on && !on {
         remove()?;
     }
+    *was_on = on;
     if on { register() } else { Ok(Vec::new()) }
 }
 
@@ -641,6 +643,31 @@ mod tests {
         assert!(!registered.get());
         step(&mut was_on, false, remove, || unreachable!()).unwrap();
         assert_eq!(removed.get(), 1);
+    }
+
+    #[test]
+    fn a_removal_that_fails_is_tried_again_on_the_next_pass() {
+        let mut was_on = true;
+        let failed = step(
+            &mut was_on,
+            false,
+            || anyhow::bail!("busy"),
+            || unreachable!(),
+        );
+        assert!(failed.is_err());
+        let mut retried = false;
+        step(
+            &mut was_on,
+            false,
+            || {
+                retried = true;
+                Ok(())
+            },
+            || unreachable!(),
+        )
+        .unwrap();
+        assert!(retried);
+        assert!(!was_on);
     }
 
     #[test]
