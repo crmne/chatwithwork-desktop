@@ -37,7 +37,8 @@ fi
 
 # A Desktop release published meanwhile is newer than the one chosen: choose
 # again until the newest is the latest, so this never puts an older one back.
-for _ in 1 2 3; do
+# Three tries, then a last look that only checks.
+for round in 1 2 3 4; do
   desktop="$(newest_desktop <<< "$listed")"
   [ -n "$desktop" ] || { echo "no published Desktop vX.Y.Z release to keep latest" >&2; exit 1; }
   desktop_tag="${desktop%%$'\t'*}"
@@ -46,6 +47,7 @@ for _ in 1 2 3; do
     echo "$desktop_tag is the latest release"
     exit 0
   fi
+  [ "$round" -lt 4 ] || break
   echo "$latest is the latest release; marking $desktop_tag latest"
   run gh api --method PATCH "repos/$repo/releases/${desktop##*$'\t'}" -f make_latest=true
   [ -z "${DRY_RUN:-}" ] || exit 0

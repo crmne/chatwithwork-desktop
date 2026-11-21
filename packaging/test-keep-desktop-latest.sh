@@ -10,8 +10,8 @@ cat > "$work/bin/gh" <<'GH'
 #!/usr/bin/env bash
 # A fake gh api: GET releases lists $FAKE/releases.tsv (id, tag, prerelease,
 # draft), GET releases/latest prints $FAKE/latest, PATCH make_latest=true sets
-# it, and every PATCH is logged. A release in $FAKE/publish_on_patch is added
-# by the first PATCH, as if release.yml published it meanwhile.
+# it, and every PATCH is logged. Each PATCH adds the next release listed in
+# $FAKE/publish_on_patch, as if release.yml published it meanwhile.
 set -euo pipefail
 args="$*"
 case "$args" in
@@ -19,7 +19,7 @@ case "$args" in
     echo "$args" >> "$FAKE/patches"
     id="$(sed -E 's|.*releases/([0-9]+).*|\1|' <<< "$args")"
     if [[ "$args" == *make_latest=true* ]]; then awk -F '\t' -v id="$id" '$1 == id { print $2 }' "$FAKE/releases.tsv" > "$FAKE/latest"; fi
-    if [ -s "$FAKE/publish_on_patch" ]; then cat "$FAKE/publish_on_patch" >> "$FAKE/releases.tsv"; : > "$FAKE/publish_on_patch"; fi
+    if [ -s "$FAKE/publish_on_patch" ]; then head -n 1 "$FAKE/publish_on_patch" >> "$FAKE/releases.tsv"; sed -i 1d "$FAKE/publish_on_patch"; fi
     ;;
   *releases/latest*) cat "$FAKE/latest" ;;
   *"releases?per_page"*) awk -F '\t' '$4 == "false" { print $1 "\t" $2 "\t" $3 }' "$FAKE/releases.tsv" ;;
@@ -63,6 +63,15 @@ setup browser-v0.1.6 "${RELEASES[@]}"
 echo $'6\tv0.13.0\tfalse\tfalse' > "$FAKE/publish_on_patch"
 "$script" browser-v0.1.6 > /dev/null
 check "a Desktop release published meanwhile ends latest, never the older one" v0.13.0 3
+
+setup browser-v0.1.6 "${RELEASES[@]}"
+printf '6\tv0.13.0\tfalse\tfalse\n7\tv0.14.0\tfalse\tfalse\n' > "$FAKE/publish_on_patch"
+"$script" > /dev/null
+check "its third try is checked too: it ends with the newest latest" v0.14.0 3
+
+setup browser-v0.1.6 "${RELEASES[@]}"
+printf '6\tv0.13.0\tfalse\tfalse\n7\tv0.14.0\tfalse\tfalse\n8\tv0.15.0\tfalse\tfalse\n' > "$FAKE/publish_on_patch"
+if "$script" > /dev/null 2>&1; then echo "FAIL: a newer release after every try passed"; failures=$((failures + 1)); else echo "ok: a newer release after every try fails the run, for the next run to put right"; fi
 
 setup browser-v0.1.6 "${RELEASES[@]}"
 "$script" v0.10.0 > /dev/null
