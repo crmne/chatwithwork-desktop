@@ -23,12 +23,12 @@ gh release download "v$version" -R "$repo" -p checksums.txt -p checksums.txt.sig
 sums="$(cat "$work/checksums.txt")"
 msi_sha256() {
   local sha
-  sha="$(awk -v name="cww-v$version-$1.msi" '$2 == name { print $1 }' <<<"$sums")"
+  sha="$(awk -v name="Chat-with-Work-Desktop-$version-$1.msi" '$2 == name { print $1 }' <<<"$sums")"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "checksums.txt has no $1 MSI" >&2; exit 1; }
   printf '%s' "$sha"
 }
-x64="$(msi_sha256 x86_64-pc-windows-msvc)"
-arm64="$(msi_sha256 aarch64-pc-windows-msvc)"
+x64="$(msi_sha256 Windows-x64)"
+arm64="$(msi_sha256 Windows-arm64)"
 rm -rf "$out" && mkdir -p "$out/tools"
 render() {
   sed -e "s/@VERSION@/$version/g" -e "s/@WINDOWS_X64_MSI_SHA256@/$x64/g" \

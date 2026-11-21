@@ -128,11 +128,12 @@ jobs:
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             git archive --format=tar.gz --prefix="chatwithwork-desktop-${VERSION}/" \
               -o "dist/chatwithwork-desktop-${VERSION}.tar.gz" HEAD
-            for stand_in in macos-universal.tar.gz x86_64-pc-windows-msvc.msi aarch64-pc-windows-msvc.msi; do
-              echo "stand-in for packaging tests" > "dist/cww-v${VERSION}-${stand_in}"
+            for stand_in in macOS-universal.tar.gz Windows-x64.msi Windows-arm64.msi macOS-universal.dmg; do
+              echo "stand-in for packaging tests" > "dist/Chat-with-Work-Desktop-${VERSION}-${stand_in}"
             done
-            echo "stand-in for packaging tests" > "dist/chat-with-work-v${VERSION}-macos-universal.dmg"
           fi
+          # The names a release gives them (packaging/release-names.sh).
+          bash packaging/release-names.sh dist "$VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: packaging-inputs-${{ matrix.target }}
@@ -159,14 +160,13 @@ jobs:
           mkdir -p dist
           gh release download "v$version" --repo "${{ github.repository }}" --dir dist \
             --pattern checksums.txt --pattern checksums.txt.sig \
-            --pattern "cww-app-v$version-*-unknown-linux-gnu.tar.gz" \
-            --pattern "cww-v$version-*-unknown-linux-musl.tar.gz" \
-            --pattern "cww-v$version-macos-universal.tar.gz" \
-            --pattern "chat-with-work-v$version-macos-universal.dmg" \
-            --pattern "cww-v$version-*-pc-windows-msvc.msi"
+            --pattern "Chat-with-Work-Desktop-$version-Linux-*.tar.gz" \
+            --pattern "Chat-with-Work-Desktop-$version-macOS-universal.tar.gz" \
+            --pattern "Chat-with-Work-Desktop-$version-macOS-universal.dmg" \
+            --pattern "Chat-with-Work-Desktop-$version-Windows-*.msi"
           bash packaging/verify-checksums.sh dist
           (cd dist && grep -v -E '\.(deb|rpm)$' checksums.txt | sha256sum -c --ignore-missing -)
-          for file in dist/cww-* dist/chat-with-work-*; do
+          for file in dist/Chat-with-Work-Desktop-*; do
             grep -q " $(basename "$file")$" dist/checksums.txt || { echo "::error::$file isn't in checksums.txt"; exit 1; }
           done
           curl -fsSL -o "dist/chatwithwork-desktop-$version.tar.gz" \

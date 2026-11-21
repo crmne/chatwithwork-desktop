@@ -42,10 +42,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Where a person downloads a release by hand.
 pub const RELEASES: &str = "https://github.com/crmne/chatwithwork-desktop/releases/latest";
 
-/// The release assets' name on this platform: `chat-with-work-v<version>-
-/// macos-universal.dmg`, `cww-v<version>-<target>.msi`, and on Linux the
-/// `cww-app-v<version>-<target>.tar.gz` archive (which never updates
-/// itself; see the module's note).
+/// The slug fastframe-update knows this app by on this platform: marker
+/// files, staging folders, the `--version` probe and the folder inside the
+/// Linux archive. Releases before 0.20.0 named their downloads after it too
+/// (`chat-with-work-v<version>-macos-universal.dmg`,
+/// `cww-v<version>-<target>.msi`, `cww-app-v<version>-<target>.tar.gz`),
+/// and copies installed from them still look for those names.
 const SLUG: &str = if cfg!(target_os = "macos") {
     "chat-with-work"
 } else if cfg!(windows) {
@@ -79,6 +81,9 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
     // themselves once a release lists it in the signed checksums.txt;
     // until then they get the notice (update_notice.rs).
     appimage_name: Some("chatwithwork-desktop"),
+    // The names people read, from 0.20.0 (packaging/release-names.sh); the
+    // earlier names above are still taken from a release without these.
+    asset_stem: Some(asset_stem),
     ..UpdateConfig::new(
         "crmne/chatwithwork-desktop",
         "Chat with Work",
@@ -86,6 +91,22 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
         VERSION,
     )
 };
+
+/// `Chat-with-Work-Desktop-<version>-<system>`: what a release calls its
+/// downloads, without the extension (`.dmg`, `.msi`, `.AppImage`,
+/// `.tar.gz`). packaging/release-names.sh gives them these names.
+fn asset_stem(version: &str, target: &str) -> String {
+    let system = match target {
+        "macos-universal" => "macOS-universal",
+        "macos-arm64" => "macOS-arm64",
+        "x86_64-pc-windows-msvc" => "Windows-x64",
+        "aarch64-pc-windows-msvc" => "Windows-arm64",
+        "x86_64-unknown-linux-gnu" => "Linux-x86_64",
+        "aarch64-unknown-linux-gnu" => "Linux-aarch64",
+        other => other,
+    };
+    format!("Chat-with-Work-Desktop-{version}-{system}")
+}
 
 /// What `--version` prints. Before installing a Mac update (and a Linux
 /// archive's), the running version's helper runs the downloaded app with
@@ -939,6 +960,45 @@ mod tests {
             assert_eq!(CONFIG.slug, "cww-app");
         }
         assert_eq!(CONFIG.publisher_key.unwrap().len(), 64);
+    }
+
+    /// The names packaging/release-names.sh gives a release's downloads.
+    #[test]
+    fn downloads_are_named_as_the_release_names_them() {
+        for (target, name) in [
+            (
+                "macos-universal",
+                "Chat-with-Work-Desktop-0.20.0-macOS-universal",
+            ),
+            (
+                "x86_64-pc-windows-msvc",
+                "Chat-with-Work-Desktop-0.20.0-Windows-x64",
+            ),
+            (
+                "aarch64-pc-windows-msvc",
+                "Chat-with-Work-Desktop-0.20.0-Windows-arm64",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "Chat-with-Work-Desktop-0.20.0-Linux-x86_64",
+            ),
+            (
+                "aarch64-unknown-linux-gnu",
+                "Chat-with-Work-Desktop-0.20.0-Linux-aarch64",
+            ),
+        ] {
+            assert_eq!(asset_stem("0.20.0", target), name);
+        }
+        let script = include_str!("../../packaging/release-names.sh");
+        for name in [
+            "$name-$v-macOS-universal.dmg",
+            "$name-$v-Windows-x64.msi",
+            "$name-$v-Windows-arm64.msi",
+            "$name-$v-Linux-x86_64.AppImage",
+            "$name-$v-Linux-aarch64.AppImage",
+        ] {
+            assert!(script.contains(name), "{name}");
+        }
     }
 
     #[test]

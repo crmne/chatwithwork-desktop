@@ -156,10 +156,10 @@ targets:
     - flatpak
     - appimage
     appimage:
-      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|chatwithwork-desktop-*-x86_64.AppImage.zsync
+      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|*-x86_64.AppImage.zsync
     input:
-      local: dist/cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
-      release_asset: cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+      local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-x86_64.tar.gz
+      release_asset: Chat-with-Work-Desktop-@VERSION@-Linux-x86_64.tar.gz
   linux-arm64:
     platform: linux
     arch: arm64
@@ -171,10 +171,10 @@ targets:
     - flatpak
     - appimage
     appimage:
-      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|chatwithwork-desktop-*-aarch64.AppImage.zsync
+      update_information: gh-releases-zsync|crmne|chatwithwork-desktop|latest|*-aarch64.AppImage.zsync
     input:
-      local: dist/cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
-      release_asset: cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+      local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-aarch64.tar.gz
+      release_asset: Chat-with-Work-Desktop-@VERSION@-Linux-aarch64.tar.gz
 # The packages that provide the libraries the app links (WebKitGTK and GTK
 # for its windows, D-Bus for single instance); ELF inspection adds them.
 libraries:
@@ -197,33 +197,33 @@ release:
   prereleases: true
 assets:
   LINUX_APP_AMD64:
-    file: cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
-    local: dist/cww-app-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+    file: Chat-with-Work-Desktop-@VERSION@-Linux-x86_64.tar.gz
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-x86_64.tar.gz
   LINUX_APP_ARM64:
-    file: cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
-    local: dist/cww-app-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+    file: Chat-with-Work-Desktop-@VERSION@-Linux-aarch64.tar.gz
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-aarch64.tar.gz
   AMD64:
-    file: cww-v@VERSION@-x86_64-unknown-linux-musl.tar.gz
-    local: dist/cww-v@VERSION@-x86_64-unknown-linux-musl.tar.gz
+    file: Chat-with-Work-Desktop-@VERSION@-Linux-x86_64-terminal-only.tar.gz
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-x86_64-terminal-only.tar.gz
   ARM64:
-    file: cww-v@VERSION@-aarch64-unknown-linux-musl.tar.gz
-    local: dist/cww-v@VERSION@-aarch64-unknown-linux-musl.tar.gz
+    file: Chat-with-Work-Desktop-@VERSION@-Linux-aarch64-terminal-only.tar.gz
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Linux-aarch64-terminal-only.tar.gz
   # Built, signed and notarized by the release workflow's macOS job.
   MACOS:
-    file: cww-v@VERSION@-macos-universal.tar.gz
-    local: dist/cww-v@VERSION@-macos-universal.tar.gz
+    file: Chat-with-Work-Desktop-@VERSION@-macOS-universal.tar.gz
+    local: dist/Chat-with-Work-Desktop-@VERSION@-macOS-universal.tar.gz
   # The desktop app's notarized disk image, for the Homebrew cask.
   MACOS_APP:
-    file: chat-with-work-v@VERSION@-macos-universal.dmg
-    local: dist/chat-with-work-v@VERSION@-macos-universal.dmg
+    file: Chat-with-Work-Desktop-@VERSION@-macOS-universal.dmg
+    local: dist/Chat-with-Work-Desktop-@VERSION@-macOS-universal.dmg
   # Built (and signed, when the Windows secrets exist) by the release
   # workflow's Windows jobs.
   WINDOWS_X64_MSI:
-    file: cww-v@VERSION@-x86_64-pc-windows-msvc.msi
-    local: dist/cww-v@VERSION@-x86_64-pc-windows-msvc.msi
+    file: Chat-with-Work-Desktop-@VERSION@-Windows-x64.msi
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Windows-x64.msi
   WINDOWS_ARM64_MSI:
-    file: cww-v@VERSION@-aarch64-pc-windows-msvc.msi
-    local: dist/cww-v@VERSION@-aarch64-pc-windows-msvc.msi
+    file: Chat-with-Work-Desktop-@VERSION@-Windows-arm64.msi
+    local: dist/Chat-with-Work-Desktop-@VERSION@-Windows-arm64.msi
   SOURCE:
     file: chatwithwork-desktop-@VERSION@.tar.gz
     url: https://github.com/crmne/chatwithwork-desktop/archive/refs/tags/v@VERSION@.tar.gz

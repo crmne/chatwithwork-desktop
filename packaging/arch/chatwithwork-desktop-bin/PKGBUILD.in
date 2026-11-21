@@ -18,8 +18,8 @@ provides=('cww' 'cww-app' 'chatwithwork-desktop')
 conflicts=('cww' 'chatwithwork-desktop' 'chatwithwork-desktop-git')
 options=('!debug' '!strip')
 _repo="https://github.com/crmne/chatwithwork-desktop"
-source_x86_64=("${_repo}/releases/download/v${pkgver}/cww-app-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-source_aarch64=("${_repo}/releases/download/v${pkgver}/cww-app-v${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+source_x86_64=("${_repo}/releases/download/v${pkgver}/Chat-with-Work-Desktop-${pkgver}-Linux-x86_64.tar.gz")
+source_aarch64=("${_repo}/releases/download/v${pkgver}/Chat-with-Work-Desktop-${pkgver}-Linux-aarch64.tar.gz")
 sha256sums_x86_64=('@LINUX_APP_AMD64_SHA256@')
 sha256sums_aarch64=('@LINUX_APP_ARM64_SHA256@')
 
@@ -29,6 +29,7 @@ package() {
     x86_64) target="x86_64-unknown-linux-gnu" ;;
     aarch64) target="aarch64-unknown-linux-gnu" ;;
   esac
+  # The folder inside keeps the build's name.
   local dir="${srcdir}/cww-app-v${pkgver}-${target}"
   install -dm755 "${pkgdir}/usr/lib/chatwithwork"
   cp -R "${dir}/browser-engine" "${pkgdir}/usr/lib/chatwithwork/"

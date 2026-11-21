@@ -20,12 +20,12 @@ gh release view "v$version" -R "$repo" >/dev/null || { echo "v$version isn't rel
 gh release download "v$version" -R "$repo" -p checksums.txt -D "$work"
 msi_sha256() {
   local sha
-  sha="$(awk -v name="cww-v$version-$1.msi" '$2 == name { print $1 }' "$work/checksums.txt")"
+  sha="$(awk -v name="Chat-with-Work-Desktop-$version-$1.msi" '$2 == name { print $1 }' "$work/checksums.txt")"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "checksums.txt has no $1 MSI" >&2; exit 1; }
   printf '%s' "$sha"
 }
-x64="$(msi_sha256 x86_64-pc-windows-msvc)"
-arm64="$(msi_sha256 aarch64-pc-windows-msvc)"
+x64="$(msi_sha256 Windows-x64)"
+arm64="$(msi_sha256 Windows-arm64)"
 recipes="$work/recipes"
 mkdir "$recipes"
 for manifest in "$id.yaml" "$id.installer.yaml" "$id.locale.en-US.yaml"; do

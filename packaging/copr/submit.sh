@@ -27,18 +27,27 @@ engine="$(command -v podman || command -v docker)"
 platform="linux/$(uname -m | sed -e s/x86_64/amd64/ -e s/aarch64/arm64/)"
 rm -rf "$out" && mkdir -p "$out/SOURCES" "$out/SPECS"
 
+# The Linux app archive, as the release names it: Chat-with-Work-Desktop-
+# <version>-Linux-<arch>.tar.gz from 0.20.0, cww-app-v<version>-<target>
+# before (packaging/release-names.sh).
+archive() {
+  if [ "$(printf '%s\n' 0.20.0 "$version" | sort -V | head -n 1)" = 0.20.0 ]; then
+    echo "Chat-with-Work-Desktop-$version-Linux-$1.tar.gz"
+  else
+    echo "cww-app-v$version-$1-unknown-linux-gnu.tar.gz"
+  fi
+}
 gh release download "v$version" -R "$repo" -D "$out/SOURCES" -p checksums.txt -p checksums.txt.sig \
-  -p "cww-app-v$version-x86_64-unknown-linux-gnu.tar.gz" \
-  -p "cww-app-v$version-aarch64-unknown-linux-gnu.tar.gz"
+  -p "$(archive x86_64)" -p "$(archive aarch64)"
 "$root/packaging/verify-checksums.sh" "$out/SOURCES"
-(cd "$out/SOURCES" && grep -E " cww-app-v$version-(x86_64|aarch64)-unknown-linux-gnu\.tar\.gz$" checksums.txt | sha256sum -c -)
+(cd "$out/SOURCES" && grep -E " ($(archive x86_64)|$(archive aarch64))$" checksums.txt | sha256sum -c -)
 rm "$out/SOURCES/checksums.txt.sig"
 sha256() {
-  awk -v name="cww-app-v$version-$1-unknown-linux-gnu.tar.gz" '$2 == name { print $1 }' "$out/SOURCES/checksums.txt"
+  awk -v name="$(archive "$1")" '$2 == name { print $1 }' "$out/SOURCES/checksums.txt"
 }
 # The spec installs the browser engine, which archives before 0.8 don't carry.
 for arch in x86_64 aarch64; do
-  listing="$(tar -tzf "$out/SOURCES/cww-app-v$version-$arch-unknown-linux-gnu.tar.gz")"
+  listing="$(tar -tzf "$out/SOURCES/$(archive $arch)")"
   grep -q "^cww-app-v$version-$arch-unknown-linux-gnu/browser-engine/" <<<"$listing" ||
     { echo "the $arch archive has no browser-engine/; this spec can't package v$version" >&2; exit 1; }
 done
@@ -50,7 +59,10 @@ spec_in="$out/chatwithwork-desktop.spec.in"
 if ! gh api -H "Accept: application/vnd.github.raw" \
     "repos/$repo/contents/packaging/copr/chatwithwork-desktop.spec.in?ref=v$version" > "$spec_in" 2>/dev/null; then
   echo "v$version has no packaging/copr spec; using this checkout's" >&2
-  cp "$root/packaging/copr/chatwithwork-desktop.spec.in" "$spec_in"
+  # Its sources by the names that release has.
+  sed -e "s|/Chat-with-Work-Desktop-%{version}-Linux-x86_64.tar.gz|/$(archive x86_64 | sed "s/$version/%{version}/g")|" \
+      -e "s|/Chat-with-Work-Desktop-%{version}-Linux-aarch64.tar.gz|/$(archive aarch64 | sed "s/$version/%{version}/g")|" \
+      "$root/packaging/copr/chatwithwork-desktop.spec.in" > "$spec_in"
 fi
 postinstall="$out/postinstall.sh"
 gh api -H "Accept: application/vnd.github.raw" \

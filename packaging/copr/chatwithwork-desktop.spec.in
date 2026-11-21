@@ -16,8 +16,8 @@ Release:        @PKGREL@%{?dist}
 Summary:        Chat with Work Desktop: the desktop app, terminal interface and background agent
 License:        GPL-3.0-only
 URL:            https://chatwithwork.com
-Source0:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/cww-app-v%{version}-x86_64-unknown-linux-gnu.tar.gz
-Source1:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/cww-app-v%{version}-aarch64-unknown-linux-gnu.tar.gz
+Source0:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/Chat-with-Work-Desktop-%{version}-Linux-x86_64.tar.gz
+Source1:        https://github.com/crmne/chatwithwork-desktop/releases/download/v%{version}/Chat-with-Work-Desktop-%{version}-Linux-aarch64.tar.gz
 ExclusiveArch:  x86_64 aarch64
 
 BuildRequires:  coreutils
@@ -72,6 +72,7 @@ tar -xzf %{archive_source}
 %build
 
 %install
+# The folder inside keeps the build's name.
 dir=cww-app-v%{version}-%{target}
 install -dm755 %{buildroot}/usr/lib/chatwithwork
 cp -R "$dir/browser-engine" %{buildroot}/usr/lib/chatwithwork/

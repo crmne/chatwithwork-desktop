@@ -12,23 +12,35 @@ Chat with Work Desktop is the open-source desktop app for [Chat with Work](https
 
 The desktop packages include **Chat with Work**, the desktop app, **`cww`**, the terminal interface, and the background agent. Nothing is shared until you pair the computer and choose a folder. Linux and macOS run the daemon as `cww daemon run`; Windows also includes `cww-agent.exe` so the daemon runs without a console window.
 
+These links always download the latest version:
+
+| Your computer | Download |
+|---|---|
+| Mac (Apple silicon or Intel) | [Chat-with-Work-Desktop-macOS-universal.dmg](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-macOS-universal.dmg) |
+| Windows | [Chat-with-Work-Desktop-Windows-x64.msi](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Windows-x64.msi), on Arm [Chat-with-Work-Desktop-Windows-arm64.msi](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Windows-arm64.msi) |
+| Debian, Ubuntu | [Chat-with-Work-Desktop-Linux-x86_64.deb](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-x86_64.deb), on Arm [Chat-with-Work-Desktop-Linux-aarch64.deb](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-aarch64.deb) |
+| Fedora | [Chat-with-Work-Desktop-Linux-x86_64.rpm](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-x86_64.rpm), on Arm [Chat-with-Work-Desktop-Linux-aarch64.rpm](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-aarch64.rpm), or COPR below |
+| Any Linux | [Chat-with-Work-Desktop-Linux-x86_64.AppImage](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-x86_64.AppImage), on Arm [Chat-with-Work-Desktop-Linux-aarch64.AppImage](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Linux-aarch64.AppImage) |
+
+Each release also has these files with their version in the name (`Chat-with-Work-Desktop-X.Y.Z-macOS-universal.dmg`), which package managers and the app's updater use. Package managers and the one-line installers:
+
 | Platform | Install | Open |
 |---|---|---|
-| macOS 13.5 or later | `brew install --cask crmne/tap/chat-with-work`, or download the `.pkg` or `.dmg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
-| Windows 10 and 11 | Download the installer from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest): `cww-vX.Y.Z-x86_64-pc-windows-msvc.msi`, or `cww-vX.Y.Z-aarch64-pc-windows-msvc.msi` on Arm. Or run the PowerShell one-liner below. WinGet (`ChatWithWork.Desktop`) is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095) and isn't available yet. | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
+| macOS 13.5 or later | `brew install --cask crmne/tap/chat-with-work`, or download the [`.dmg`](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-macOS-universal.dmg) or the `.pkg` from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest) | **Chat with Work** in Applications. With the `.dmg`, drag the app to Applications first; its `cww` command is inside `Chat with Work.app/Contents/MacOS/`. |
+| Windows 10 and 11 | Download the installer from the [latest release](https://github.com/crmne/chatwithwork-desktop/releases/latest): [`Chat-with-Work-Desktop-Windows-x64.msi`](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Windows-x64.msi), or [`Chat-with-Work-Desktop-Windows-arm64.msi`](https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-Windows-arm64.msi) on Arm. Or run the PowerShell one-liner below. WinGet (`ChatWithWork.Desktop`) is [waiting for review](https://github.com/microsoft/winget-pkgs/pull/460095) and isn't available yet. | **Chat with Work** or **Chat with Work (Terminal)** in the Start menu. `cww` is also on your PATH. |
 | Arch | `yay -S chatwithwork-desktop-bin` (or `chatwithwork-desktop` to build from source, `chatwithwork-desktop-git` for development builds) | **Chat with Work** in the applications menu, or `cww` in a terminal. |
-| Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./chatwithwork-desktop_*.deb` | **Chat with Work** in the applications menu, or `cww`. |
-| Fedora | `sudo dnf copr enable paolino/chatwithwork-desktop`, then `sudo dnf install chatwithwork-desktop` ([COPR](https://copr.fedorainfracloud.org/coprs/paolino/chatwithwork-desktop/), updated with `dnf upgrade`), or download the `.rpm` and `sudo dnf install ./chatwithwork-desktop-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
+| Debian, Ubuntu | Download the `.deb`, then `sudo apt install ./Chat-with-Work-Desktop-*.deb` | **Chat with Work** in the applications menu, or `cww`. |
+| Fedora | `sudo dnf copr enable paolino/chatwithwork-desktop`, then `sudo dnf install chatwithwork-desktop` ([COPR](https://copr.fedorainfracloud.org/coprs/paolino/chatwithwork-desktop/), updated with `dnf upgrade`), or download the `.rpm` and `sudo dnf install ./Chat-with-Work-Desktop-*.rpm` | **Chat with Work** in the applications menu, or `cww`. |
 | openSUSE Tumbleweed, Slowroll, Leap 16.0 | `sudo zypper addrepo https://download.opensuse.org/repositories/home:/plenty/openSUSE_Tumbleweed/home:plenty.repo` (or `.../openSUSE_Slowroll/...`, `.../16.0/...`), then `sudo zypper install chatwithwork-desktop` ([Open Build Service](https://build.opensuse.org/package/show/home:plenty/chatwithwork-desktop), updated with `zypper up`). The release's `.rpm` names Fedora's packages, so zypper can't install it. | **Chat with Work** in the applications menu, or `cww`. |
 | Other Linux | The one-line installer below, or the portable app archive. | **Chat with Work** in the applications menu, or `cww`. |
-| Any Linux, AppImage | Download `chatwithwork-desktop-X.Y.Z-x86_64.AppImage` (or `-aarch64`), make it executable and run it. It uses your system's WebKitGTK 4.1 and GTK 3, and AppIndicator for its tray item when it's installed, like the `.deb`. AppImageUpdate and Gear Lever update it from its `.zsync` file. | The AppImage itself. See the note below about the background agent. |
-| Any Linux, Flatpak bundle | Download `chatwithwork-desktop-X.Y.Z-x86_64.flatpak` (or `-aarch64`), then `flatpak install --user ./chatwithwork-desktop-*.flatpak`. It runs on the GNOME 51 runtime from Flathub. | **Chat with Work** in the applications menu. See the note below: the agent needs a terminal there. |
+| Any Linux, AppImage | Download `Chat-with-Work-Desktop-Linux-x86_64.AppImage` (or `-aarch64`), make it executable and run it. It uses your system's WebKitGTK 4.1 and GTK 3, and AppIndicator for its tray item when it's installed, like the `.deb`. AppImageUpdate and Gear Lever update it from its `.zsync` file. | The AppImage itself. See the note below about the background agent. |
+| Any Linux, Flatpak bundle | Download `Chat-with-Work-Desktop-X.Y.Z-Linux-x86_64.flatpak` (or `-aarch64`), then `flatpak install --user ./Chat-with-Work-Desktop-*.flatpak`. It runs on the GNOME 51 runtime from Flathub. | **Chat with Work** in the applications menu. See the note below: the agent needs a terminal there. |
 | NixOS, Nix (Linux, Apple silicon macOS) | `nix profile install github:crmne/chatwithwork-desktop` | `cww-app` or `cww`; the package also carries desktop integration. |
 | Linux or macOS, Homebrew formula | `brew install crmne/tap/cww` | `cww-app` or `cww`. Add the Homebrew prefix's `share` directory to your desktop session's `XDG_DATA_DIRS` for menu discovery. |
 
 **The Flatpak bundle and the AppImage can't start the background agent at login yet.** In the Flatpak, **Start Background Agent** and `cww daemon install` fail: the sandbox has no access to your systemd user session, and the unit would name a path only the sandbox sees. Run the agent yourself with `flatpak run --command=cww com.chatwithwork.desktop daemon run` (and `flatpak run --command=cww com.chatwithwork.desktop login` to pair); it reads and changes files in the folders you share, but it can't run commands, because Flatpak doesn't allow the bubblewrap sandbox commands run in inside its own. The AppImage's **Start Background Agent** registers the copy of `cww` inside the AppImage's temporary mount under `/tmp`, which the agent's hardened service can't see (it gets a private `/tmp`) and which is gone once the AppImage closes, so the agent can't start from it. Without an AppIndicator library on the system, the AppImage runs without its tray item. Use a package above, or the portable archive, for an agent that runs at every login. The plan is in [#138](https://github.com/crmne/chatwithwork-desktop/issues/138). There's no Snap.
 
-Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
+Linux desktop binaries need glibc 2.39 or newer and WebKitGTK 4.1 (Ubuntu 24.04+, Debian 13+, Fedora 40+; Rocky and RHEL 10 have no WebKitGTK 4.1); the packages install the libraries they need. A tray that shows StatusNotifierItems, such as Waybar, KDE, or GNOME with the AppIndicator extension, keeps the app available when its windows close. The separate `Chat-with-Work-Desktop-X.Y.Z-Linux-<arch>-terminal-only.tar.gz` downloads remain available for terminal-only use on older distributions and servers.
 
 **Starting the background agent**
 
@@ -50,7 +62,7 @@ The Mac app from the `.dmg` and the Windows installer's app update themselves. A
 **One line, macOS or Linux, no root**
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-install.sh | sh
 ```
 
 It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, and registers the desktop launcher and icon on Linux. On macOS the app goes in `~/Applications`. Set `CWW_INSTALL_DIR` to change the command directory. The installer uses `XDG_DATA_HOME` for Linux desktop files and `XDG_CACHE_HOME` for temporary downloads, defaulting to `~/.local/share` and `~/.cache`.
@@ -58,7 +70,7 @@ It checks release checksums, installs `cww` and `cww-app` into `~/.local/bin`, a
 **One line, Windows**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-install.ps1 | iex"
 ```
 
 It checks that the background agent started, and warns when it didn't, with the reason the installer gave (over SSH, for example, the agent's logon task can't run without a desktop session).
@@ -67,9 +79,9 @@ Windows installers and programs are signed by PlentyLabs. While the signature bu
 
 **Portable Linux desktop app**
 
-The `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu.tar.gz` archive contains both executables, the service, launcher, icon, documentation and licenses. Put `cww-app` and `cww` on your PATH, `cww-app.desktop` in `~/.local/share/applications/`, and `cww-app.svg` in `~/.local/share/icons/hicolor/scalable/apps/`. Then run `cww daemon install`.
+The `Chat-with-Work-Desktop-X.Y.Z-Linux-<arch>.tar.gz` archive (its folder inside is `cww-app-vX.Y.Z-<arch>-unknown-linux-gnu`) contains both executables, the service, launcher, icon, documentation and licenses. Put `cww-app` and `cww` on your PATH, `cww-app.desktop` in `~/.local/share/applications/`, and `cww-app.svg` in `~/.local/share/icons/hicolor/scalable/apps/`. Then run `cww daemon install`.
 
-The terminal-only `cww-vX.Y.Z-<arch>-unknown-linux-musl.tar.gz` archive includes `cww` and `cww-notify`. Keep both executables together on your PATH so native notifications can work without the desktop app. Install its `cww-app.desktop` and `cww-app.svg` in the same locations above; this desktop entry is hidden from application menus. A headless server without a desktop notification service retains the browser notification fallback.
+The terminal-only `Chat-with-Work-Desktop-X.Y.Z-Linux-<arch>-terminal-only.tar.gz` archive includes `cww` and `cww-notify`. Keep both executables together on your PATH so native notifications can work without the desktop app. Install its `cww-app.desktop` and `cww-app.svg` in the same locations above; this desktop entry is hidden from application menus. A headless server without a desktop notification service retains the browser notification fallback.
 
 **From source** (Rust 1.98 or newer for the desktop app)
 
@@ -85,7 +97,7 @@ For a Linux terminal-only build with native notification support, install `notif
 Release downloads come with SHA-256 checksums (`checksums.txt`, signed for the desktop app's updater; GitHub also shows each file's SHA-256 on the release), and the archives, MSIs, `.pkg` and `.dmg` with GitHub artifact attestations. [PACKAGING.md](PACKAGING.md#release-assets) lists every file. To check a download:
 
 ```sh
-gh attestation verify cww-app-v0.3.0-x86_64-unknown-linux-gnu.tar.gz --repo crmne/chatwithwork-desktop
+gh attestation verify Chat-with-Work-Desktop-0.20.0-Linux-x86_64.tar.gz --repo crmne/chatwithwork-desktop
 ```
 
 [PACKAGING.md](PACKAGING.md) explains packaging, signing, startup and removal. Open the desktop app or run `cww` to pair and choose folders, or follow the steps below.

@@ -24,7 +24,7 @@ use serde::Serialize;
 const DOWNLOADS: &str = "https://github.com/crmne/chatwithwork-desktop/releases/download";
 
 /// The README's one-line installer, for a copy it put there.
-pub const INSTALLER: &str = "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desktop/releases/latest/download/cww-installer.sh | sh";
+pub const INSTALLER: &str = "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crmne/chatwithwork-desktop/releases/latest/download/Chat-with-Work-Desktop-install.sh | sh";
 
 /// What the notice says for this copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -251,7 +251,6 @@ pub fn notice_from(
         Some(folder) => shell_path(&folder.join(name), crate::paths::home_dir().as_deref()),
         None => format!("./{name}"),
     };
-    let deb_arch = if arch == "aarch64" { "arm64" } else { "amd64" };
     let (how, command, download): (&str, Option<String>, Option<String>) = match installed {
         Installed::Managed(managed) => {
             let how = match (managed.manager, managed.command.is_some()) {
@@ -275,7 +274,7 @@ pub fn notice_from(
             (how, managed.command.clone(), None)
         }
         Installed::Deb => {
-            let name = format!("chatwithwork-desktop_{version}_{deb_arch}.deb");
+            let name = format!("Chat-with-Work-Desktop-{version}-Linux-{arch}.deb");
             (
                 "Installed from a .deb package. Download the new one, then install it.",
                 Some(format!("sudo apt install {}", saved(&name))),
@@ -286,12 +285,12 @@ pub fn notice_from(
             "Installed from an .rpm package. Install the new one with dnf.",
             Some(format!(
                 "sudo dnf install {}",
-                file(format!("chatwithwork-desktop-{version}-1.{arch}.rpm"))
+                file(format!("Chat-with-Work-Desktop-{version}-Linux-{arch}.rpm"))
             )),
             None,
         ),
         Installed::FlatpakBundle => {
-            let name = format!("chatwithwork-desktop-{version}-{arch}.flatpak");
+            let name = format!("Chat-with-Work-Desktop-{version}-Linux-{arch}.flatpak");
             (
                 "Installed from a Flatpak bundle. Download the new one, then install it.",
                 Some(format!("flatpak install --user {}", saved(&name))),
@@ -305,7 +304,7 @@ pub fn notice_from(
                 shell_path(path, crate::paths::home_dir().as_deref())
             )),
             Some(file(format!(
-                "chatwithwork-desktop-{version}-{arch}.AppImage"
+                "Chat-with-Work-Desktop-{version}-Linux-{arch}.AppImage"
             ))),
         ),
         Installed::Installer => (
@@ -316,7 +315,9 @@ pub fn notice_from(
         Installed::Pkg => (
             "Installed with the .pkg installer. Download the new one and open it.",
             None,
-            Some(file(format!("cww-v{version}-macos-universal.pkg"))),
+            Some(file(format!(
+                "Chat-with-Work-Desktop-{version}-macOS-universal.pkg"
+            ))),
         ),
         Installed::Other(Unsupported::SystemDirectory) => (
             "Installed system-wide. Update it with the package manager that installed it.",
@@ -491,7 +492,7 @@ mod tests {
         );
         assert_eq!(
             notice.download.as_deref(),
-            Some("http://127.0.0.1:8799/chatwithwork-desktop_0.12.0_amd64.deb")
+            Some("http://127.0.0.1:8799/Chat-with-Work-Desktop-0.12.0-Linux-x86_64.deb")
         );
     }
 
@@ -516,7 +517,7 @@ mod tests {
         assert_eq!(
             notice(&rpm, "0.12.0", "aarch64", None).command.as_deref(),
             Some(
-                "sudo dnf install https://github.com/crmne/chatwithwork-desktop/releases/download/v0.12.0/chatwithwork-desktop-0.12.0-1.aarch64.rpm"
+                "sudo dnf install https://github.com/crmne/chatwithwork-desktop/releases/download/v0.12.0/Chat-with-Work-Desktop-0.12.0-Linux-aarch64.rpm"
             )
         );
     }
@@ -539,12 +540,12 @@ mod tests {
         assert_eq!(
             notice.download.as_deref(),
             Some(
-                "https://github.com/crmne/chatwithwork-desktop/releases/download/v0.12.0/chatwithwork-desktop_0.12.0_amd64.deb"
+                "https://github.com/crmne/chatwithwork-desktop/releases/download/v0.12.0/Chat-with-Work-Desktop-0.12.0-Linux-x86_64.deb"
             )
         );
         assert_eq!(
             notice.command.as_deref(),
-            Some("sudo apt install /srv/dl/chatwithwork-desktop_0.12.0_amd64.deb")
+            Some("sudo apt install /srv/dl/Chat-with-Work-Desktop-0.12.0-Linux-x86_64.deb")
         );
         let flatpak = at(
             Unsupported::Flatpak,
@@ -556,7 +557,7 @@ mod tests {
             super::notice(&flatpak, "0.12.0", "x86_64", Some(Path::new("/d")))
                 .command
                 .as_deref(),
-            Some("flatpak install --user /d/chatwithwork-desktop-0.12.0-x86_64.flatpak")
+            Some("flatpak install --user /d/Chat-with-Work-Desktop-0.12.0-Linux-x86_64.flatpak")
         );
     }
 
@@ -588,7 +589,7 @@ mod tests {
             notice
                 .download
                 .unwrap()
-                .ends_with("/v0.12.0/chatwithwork-desktop-0.12.0-x86_64.AppImage")
+                .ends_with("/v0.12.0/Chat-with-Work-Desktop-0.12.0-Linux-x86_64.AppImage")
         );
         // A program an AppImage started isn't that AppImage.
         assert_ne!(
@@ -637,7 +638,7 @@ mod tests {
         assert!(
             pkg.download
                 .unwrap()
-                .ends_with("/cww-v0.12.0-macos-universal.pkg")
+                .ends_with("/Chat-with-Work-Desktop-0.12.0-macOS-universal.pkg")
         );
         let system = notice(
             &Installed::Other(Unsupported::SystemDirectory),

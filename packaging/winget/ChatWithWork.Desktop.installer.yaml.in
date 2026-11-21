@@ -22,10 +22,10 @@ AppsAndFeaturesEntries:
   InstallerType: wix
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-x86_64-pc-windows-msvc.msi
+  InstallerUrl: https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/Chat-with-Work-Desktop-@VERSION@-Windows-x64.msi
   InstallerSha256: @WINDOWS_X64_MSI_SHA256@
 - Architecture: arm64
-  InstallerUrl: https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/cww-v@VERSION@-aarch64-pc-windows-msvc.msi
+  InstallerUrl: https://github.com/crmne/chatwithwork-desktop/releases/download/v@VERSION@/Chat-with-Work-Desktop-@VERSION@-Windows-arm64.msi
   InstallerSha256: @WINDOWS_ARM64_MSI_SHA256@
 ManifestType: installer
 ManifestVersion: 1.12.0

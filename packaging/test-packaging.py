@@ -269,10 +269,21 @@ cp "{served}" "$out"
                     self.assertTrue(any(path == entry or path.startswith(entry.rstrip("/") + "/")
                                         for entry in listed), path)
 
-    def installer(self, *, daemon_exit=0, uid="1000", corrupt=False, unusual_path=False):
+    def installer(self, *, daemon_exit=0, uid="1000", corrupt=False, unusual_path=False, renamed=False):
         archive = self.archive()
+        if renamed:
+            # A release from 0.20.0, its build's folder inside the archive.
+            new = archive.with_name("Chat-with-Work-Desktop-9.8.7-Linux-x86_64.tar.gz")
+            shutil.copy(archive, new)
+            terminal = archive.with_name("Chat-with-Work-Desktop-9.8.7-Linux-x86_64-terminal-only.tar.gz")
+            terminal.write_bytes(b"not this one")
+            archive.unlink()
+            archive = new
         checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
-        (archive.parent / "checksums.txt").write_text(f"{checksum}  {archive.name}\n")
+        lines = f"{checksum}  {archive.name}\n"
+        if renamed:
+            lines = f"{'0' * 64}  Chat-with-Work-Desktop-9.8.7-Linux-x86_64-terminal-only.tar.gz\n" + lines
+        (archive.parent / "checksums.txt").write_text(lines)
         if corrupt:
             archive.write_bytes(b"broken download")
         mocks = self.work / "mocks"
@@ -394,6 +405,66 @@ esac
         self.assertIn(f'Exec="{install}/cww-app" %u', entry)
         self.assertIn("x-scheme-handler/chatwithwork;", entry)
         self.assertTrue((data / "icons/hicolor/scalable/apps/cww-app.svg").is_file())
+
+    def test_installer_takes_the_renamed_archive(self):
+        result, install, _ = self.installer(renamed=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Downloading Chat-with-Work-Desktop-9.8.7-Linux-x86_64.tar.gz", result.stdout)
+        self.assertTrue(os.access(install / "cww-app", os.X_OK))
+        self.assertTrue(os.access(install / "cww", os.X_OK))
+
+    def test_release_names_rename_keep_old_names_and_copy_without_the_version(self):
+        built = [
+            "chat-with-work-v1.2.3-macos-universal.dmg", "cww-v1.2.3-macos-universal.pkg",
+            "cww-v1.2.3-macos-universal.tar.gz", "cww-v1.2.3-x86_64-pc-windows-msvc.msi",
+            "cww-v1.2.3-aarch64-pc-windows-msvc.msi", "cww-app-v1.2.3-x86_64-unknown-linux-gnu.tar.gz",
+            "cww-v1.2.3-x86_64-unknown-linux-musl.tar.gz", "chatwithwork-desktop_1.2.3_amd64.deb",
+            "chatwithwork-desktop-1.2.3-1.aarch64.rpm", "chatwithwork-desktop-1.2.3-x86_64.AppImage",
+            "chatwithwork-desktop-1.2.3-x86_64.flatpak", "cww-installer.sh", "cww-installer.ps1",
+            "checksums.txt",
+        ]
+
+        def named(*options):
+            folder = self.work / ("names" + "".join(options))
+            folder.mkdir()
+            for name in built:
+                (folder / name).write_text(name)
+            result = run("bash", str(ROOT / "packaging/release-names.sh"), str(folder), "v1.2.3", *options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return {p.name: p.read_text() for p in folder.iterdir()}
+
+        plain = named()
+        self.assertEqual(sorted(plain), sorted([
+            "Chat-with-Work-Desktop-1.2.3-macOS-universal.dmg", "Chat-with-Work-Desktop-1.2.3-macOS-universal.pkg",
+            "Chat-with-Work-Desktop-1.2.3-macOS-universal.tar.gz", "Chat-with-Work-Desktop-1.2.3-Windows-x64.msi",
+            "Chat-with-Work-Desktop-1.2.3-Windows-arm64.msi", "Chat-with-Work-Desktop-1.2.3-Linux-x86_64.tar.gz",
+            "Chat-with-Work-Desktop-1.2.3-Linux-x86_64-terminal-only.tar.gz",
+            "Chat-with-Work-Desktop-1.2.3-Linux-x86_64.deb", "Chat-with-Work-Desktop-1.2.3-Linux-aarch64.rpm",
+            "Chat-with-Work-Desktop-1.2.3-Linux-x86_64.AppImage", "Chat-with-Work-Desktop-1.2.3-Linux-x86_64.flatpak",
+            "Chat-with-Work-Desktop-install.sh", "Chat-with-Work-Desktop-install.ps1", "checksums.txt",
+        ]))
+        self.assertEqual(plain["Chat-with-Work-Desktop-1.2.3-Windows-x64.msi"], "cww-v1.2.3-x86_64-pc-windows-msvc.msi")
+
+        everything = named("--stable", "--legacy")
+        # What installed apps (0.19.0 and older) look for stays.
+        for old in ("chat-with-work-v1.2.3-macos-universal.dmg", "cww-v1.2.3-macos-universal.pkg",
+                    "cww-v1.2.3-x86_64-pc-windows-msvc.msi", "cww-v1.2.3-aarch64-pc-windows-msvc.msi",
+                    "chatwithwork-desktop-1.2.3-x86_64.AppImage", "chatwithwork-desktop_1.2.3_amd64.deb",
+                    "chatwithwork-desktop-1.2.3-1.aarch64.rpm", "chatwithwork-desktop-1.2.3-x86_64.flatpak",
+                    "cww-app-v1.2.3-x86_64-unknown-linux-gnu.tar.gz", "cww-installer.sh", "cww-installer.ps1"):
+            self.assertIn(old, everything)
+        # Nothing reads the old names of the other archives.
+        for gone in ("cww-v1.2.3-macos-universal.tar.gz", "cww-v1.2.3-x86_64-unknown-linux-musl.tar.gz"):
+            self.assertNotIn(gone, everything)
+        # releases/latest/download/<name> for each download people pick.
+        for stable, source in (("Chat-with-Work-Desktop-macOS-universal.dmg", "chat-with-work-v1.2.3-macos-universal.dmg"),
+                               ("Chat-with-Work-Desktop-Windows-x64.msi", "cww-v1.2.3-x86_64-pc-windows-msvc.msi"),
+                               ("Chat-with-Work-Desktop-Windows-arm64.msi", "cww-v1.2.3-aarch64-pc-windows-msvc.msi"),
+                               ("Chat-with-Work-Desktop-Linux-x86_64.AppImage", "chatwithwork-desktop-1.2.3-x86_64.AppImage"),
+                               ("Chat-with-Work-Desktop-Linux-x86_64.deb", "chatwithwork-desktop_1.2.3_amd64.deb"),
+                               ("Chat-with-Work-Desktop-Linux-aarch64.rpm", "chatwithwork-desktop-1.2.3-1.aarch64.rpm")):
+            self.assertEqual(everything[stable], source)
+        self.assertNotIn("Chat-with-Work-Desktop-macOS-universal.pkg", everything)
 
     def test_installer_reports_failed_service_setup_without_failing_install(self):
         result, install, _ = self.installer(daemon_exit=1)
@@ -650,7 +721,7 @@ cp "$TEST_RELEASE/$name" "$output"
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         row = next(line for line in readme.splitlines() if line.startswith("| Windows 10 and 11"))
         self.assertIn("releases/latest", row)
-        self.assertIn("cww-installer.ps1", readme)
+        self.assertIn("releases/latest/download/Chat-with-Work-Desktop-install.ps1", readme)
         self.assertIn("winget-pkgs/pull/460095", readme)
 
     def test_readme_names_the_windows_that_runs_commands(self):
