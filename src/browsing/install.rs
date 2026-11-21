@@ -206,9 +206,10 @@ fn write(
         if only_changed && std::fs::read_to_string(&file).ok().as_deref() == Some(text.as_str()) {
             return Ok(Vec::new());
         }
+        // The keys first, the file last: a key that fails leaves the file
+        // as it was, so the next refresh tries every key again.
         let mut done = Vec::new();
         std::fs::create_dir_all(&paths.data_dir)?;
-        std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
         for browser in BROWSERS {
             let Some(key) = browser.windows else { continue };
             let key = format!(r"{key}\NativeMessagingHosts\{HOST_NAME}");
@@ -219,6 +220,7 @@ fn write(
                 location: format!(r"HKCU\{key}"),
             });
         }
+        std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
         Ok(done)
     }
 }
@@ -319,12 +321,14 @@ pub fn keeps_registration(cww_home: Option<&std::ffi::OsStr>) -> bool {
 
 /// Run on a thread of the daemon's unconfined side: while the browser is
 /// on, register with every browser that lacks it, now and every
-/// `KEEP_REGISTERED_EVERY`. Never removes a registration; `cww browser
-/// disable` does that.
+/// `KEEP_REGISTERED_EVERY`. When it sees the browser turned off, it
+/// removes the registrations, as `cww browser disable` does, in case a
+/// pass wrote one after that command removed them.
 pub fn keep_registered(paths: Paths) {
     let mut failing = false;
+    let mut was_on = false;
     loop {
-        match refresh_if_on(&paths) {
+        match pass(&paths, &mut was_on) {
             Ok(done) => {
                 failing = false;
                 for registered in done {
@@ -333,13 +337,26 @@ pub fn keep_registered(paths: Paths) {
             }
             Err(e) => {
                 if !failing {
-                    tracing::warn!("couldn't register with the browsers: {e:#}");
+                    tracing::warn!("couldn't keep the browsers' registration: {e:#}");
                 }
                 failing = true;
             }
         }
         std::thread::sleep(KEEP_REGISTERED_EVERY);
     }
+}
+
+fn pass(paths: &Paths, was_on: &mut bool) -> Result<Vec<Registered>> {
+    let on = crate::config::Config::load(paths)?.browser.enabled;
+    if turned_off(was_on, on) {
+        unregister(paths)?;
+    }
+    refresh_if_on(paths)
+}
+
+/// Whether the browser was on at the last pass and is off now.
+fn turned_off(was_on: &mut bool, on: bool) -> bool {
+    std::mem::replace(was_on, on) && !on
 }
 
 fn refresh_if_on(paths: &Paths) -> Result<Vec<Registered>> {
@@ -509,6 +526,16 @@ mod tests {
             registrations_in(tmp.path(), false).0,
             ["Google Chrome", "Chromium"]
         );
+    }
+
+    #[test]
+    fn removes_the_registrations_once_when_it_sees_the_browser_turned_off() {
+        let mut was_on = false;
+        assert!(!turned_off(&mut was_on, false), "never on: nothing to undo");
+        assert!(!turned_off(&mut was_on, true));
+        assert!(!turned_off(&mut was_on, true));
+        assert!(turned_off(&mut was_on, false));
+        assert!(!turned_off(&mut was_on, false), "only once");
     }
 
     #[test]
