@@ -43,7 +43,11 @@ and publish the manual ZIP with the committed notes in
 `packaging/release-notes/browser-v<version>.md`. Use `gh release create
 browser-v<version> <manual-zip> --latest=false --notes-file <notes>`: extension
 releases must never replace Desktop as the repository's latest release, which
-the Desktop updater reads. There is no automatic browser-tag workflow.
+the Desktop updater and the stable download links read. If one does,
+`keep-desktop-latest.yml` marks it not latest and the newest Desktop release
+latest again as soon as it's published or edited, and its daily run catches
+anything else. There is no automatic
+browser-tag workflow.
 Uploading to the Chrome Web Store is a separate, explicitly authorized step
 in [the store checklist](store/checklist.md).
 
