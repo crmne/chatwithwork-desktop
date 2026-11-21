@@ -108,3 +108,14 @@ test("uploads say how to turn on the browser's file access, only when it's off",
     {changes:true, extension:{browser:"Chrome"}},
   ]) assert.equal(byKey(render(fixture(overrides).app), "browser-uploads"), null);
 });
+
+test("with no browser connected, it names the browsers this system supports", () => {
+  for (const [platform, has, lacks] of [["macos", "Arc", "Chromium"], ["linux", "Helium", "Arc"], ["windows", "Chromium", "Helium"]]) {
+    const {app} = fixture();
+    app.info = { platform };
+    const text = render(app).textContent;
+    assert.ok(text.includes("No browser connected"), platform);
+    assert.ok(text.includes(has) && !text.includes(lacks), `${platform}: ${text}`);
+    assert.ok(text.includes("It connects within two minutes."), platform);
+  }
+});

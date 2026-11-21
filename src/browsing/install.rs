@@ -9,10 +9,14 @@
 //!   com.chatwithwork.desktop` for each browser.
 //!
 //! The manifest allows only the extension IDs `bridge::origins` names.
-//! This runs in the `cww` command or the desktop app, never in the
-//! confined daemon, which can't write there.
+//! This runs in the `cww` command, the desktop app, and the daemon's
+//! unconfined side (its supervisor, or the daemon itself where it runs
+//! without a sandbox), which keeps the registration while the browser is
+//! on (`keep_registered`), never in the confined worker, which can't write
+//! there.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -69,15 +73,59 @@ pub const BROWSERS: &[Browser] = &[
         windows: Some(r"Software\Microsoft\Edge"),
     },
     Browser {
+        name: "Microsoft Edge Beta",
+        linux: None,
+        macos: Some("Microsoft Edge Beta"),
+        windows: None,
+    },
+    Browser {
+        name: "Microsoft Edge Dev",
+        linux: None,
+        macos: Some("Microsoft Edge Dev"),
+        windows: None,
+    },
+    Browser {
+        name: "Microsoft Edge Canary",
+        linux: None,
+        macos: Some("Microsoft Edge Canary"),
+        windows: None,
+    },
+    Browser {
         name: "Brave",
         linux: Some("BraveSoftware/Brave-Browser"),
         macos: Some("BraveSoftware/Brave-Browser"),
         windows: Some(r"Software\BraveSoftware\Brave-Browser"),
     },
     Browser {
+        name: "Brave Beta",
+        linux: None,
+        macos: Some("BraveSoftware/Brave-Browser-Beta"),
+        windows: None,
+    },
+    Browser {
+        name: "Brave Nightly",
+        linux: None,
+        macos: Some("BraveSoftware/Brave-Browser-Nightly"),
+        windows: None,
+    },
+    // On Windows, Vivaldi reads Google Chrome's key, which is registered.
+    Browser {
         name: "Vivaldi",
         linux: Some("vivaldi"),
         macos: Some("Vivaldi"),
+        windows: None,
+    },
+    // Arc keeps its profiles one folder down, in "User Data".
+    Browser {
+        name: "Arc",
+        linux: None,
+        macos: Some("Arc/User Data"),
+        windows: None,
+    },
+    Browser {
+        name: "Helium",
+        linux: Some("net.imput.helium"),
+        macos: Some("net.imput.helium"),
         windows: None,
     },
 ];
@@ -124,24 +172,41 @@ pub struct Registered {
 /// stable path of this `cww`, or `cww-agent.exe` on Windows, which opens
 /// no console window).
 pub fn register(paths: &Paths, exe: &Path, origins: &[String]) -> Result<Vec<Registered>> {
+    write(paths, exe, origins, false)
+}
+
+/// Like `register`, but writes only what is missing or different, and
+/// says only what it wrote: a browser installed or first opened since the
+/// last time, or a manifest that named another `cww`.
+pub fn refresh(paths: &Paths, exe: &Path, origins: &[String]) -> Result<Vec<Registered>> {
+    write(paths, exe, origins, true)
+}
+
+fn write(
+    paths: &Paths,
+    exe: &Path,
+    origins: &[String],
+    only_changed: bool,
+) -> Result<Vec<Registered>> {
     let text = serde_json::to_string_pretty(&manifest(exe, origins))?;
-    let mut done = Vec::new();
     #[cfg(not(windows))]
     {
         let _ = paths;
-        for (browser, file) in manifest_paths(&config_root()?, cfg!(target_os = "macos")) {
-            let dir = file.parent().context("manifest folder")?;
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-            std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
-            done.push(Registered {
-                browser,
-                location: file.display().to_string(),
-            });
-        }
+        write_in(
+            &config_root()?,
+            cfg!(target_os = "macos"),
+            &text,
+            only_changed,
+        )
     }
     #[cfg(windows)]
     {
         let file = paths.data_dir.join(format!("{HOST_NAME}.json"));
+        // The keys name the file, so they only change with its folder.
+        if only_changed && std::fs::read_to_string(&file).ok().as_deref() == Some(text.as_str()) {
+            return Ok(Vec::new());
+        }
+        let mut done = Vec::new();
         std::fs::create_dir_all(&paths.data_dir)?;
         std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
         for browser in BROWSERS {
@@ -154,8 +219,139 @@ pub fn register(paths: &Paths, exe: &Path, origins: &[String]) -> Result<Vec<Reg
                 location: format!(r"HKCU\{key}"),
             });
         }
+        Ok(done)
+    }
+}
+
+/// Write `text` as the manifest of every browser found under
+/// `config_root`, skipping those that already have it when `only_changed`.
+#[cfg_attr(windows, allow(dead_code))]
+fn write_in(
+    config_root: &Path,
+    macos: bool,
+    text: &str,
+    only_changed: bool,
+) -> Result<Vec<Registered>> {
+    let mut done = Vec::new();
+    for (browser, file) in manifest_paths(config_root, macos) {
+        if only_changed && std::fs::read_to_string(&file).ok().as_deref() == Some(text) {
+            continue;
+        }
+        let dir = file.parent().context("manifest folder")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
+        done.push(Registered {
+            browser,
+            location: file.display().to_string(),
+        });
     }
     Ok(done)
+}
+
+/// The browsers found on this computer that have our host registered, and
+/// those found without it, by name. On Windows every key is written at
+/// once, so it is all or nothing.
+pub fn registrations(paths: &Paths) -> (Vec<&'static str>, Vec<&'static str>) {
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        match config_root() {
+            Ok(root) => registrations_in(&root, cfg!(target_os = "macos")),
+            Err(_) => (Vec::new(), Vec::new()),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let names = BROWSERS
+            .iter()
+            .filter(|b| b.windows.is_some())
+            .map(|b| b.name)
+            .collect();
+        if paths.data_dir.join(format!("{HOST_NAME}.json")).is_file() {
+            (names, Vec::new())
+        } else {
+            (Vec::new(), names)
+        }
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn registrations_in(config_root: &Path, macos: bool) -> (Vec<&'static str>, Vec<&'static str>) {
+    let ours = |file: &Path| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|value| value["name"] == HOST_NAME)
+    };
+    let (with, without): (Vec<_>, Vec<_>) = manifest_paths(config_root, macos)
+        .into_iter()
+        .partition(|(_, file)| ours(file));
+    (
+        with.into_iter().map(|(name, _)| name).collect(),
+        without.into_iter().map(|(name, _)| name).collect(),
+    )
+}
+
+/// The program the browsers start: the stable path of this `cww`, or on
+/// Windows `cww-agent.exe` beside it, which opens no console window.
+pub fn host_exe() -> Result<PathBuf> {
+    let exe = crate::service::stable_exe()?;
+    if cfg!(windows) {
+        let agent = exe.with_file_name("cww-agent.exe");
+        if agent.is_file() {
+            return Ok(agent);
+        }
+    }
+    Ok(exe)
+}
+
+/// How often the daemon looks for a browser installed or first opened
+/// since it last registered. The extension tries to connect every 30
+/// seconds, so a new browser connects within about a minute and a half.
+pub const KEEP_REGISTERED_EVERY: Duration = Duration::from_secs(60);
+
+/// Whether this daemon keeps the registration: only one that uses the
+/// person's own settings. A `CWW_HOME` daemon (the tests, a second copy)
+/// must never point the person's browsers at itself.
+pub fn keeps_registration(cww_home: Option<&std::ffi::OsStr>) -> bool {
+    cww_home.is_none_or(|home| home.is_empty())
+}
+
+/// Run on a thread of the daemon's unconfined side: while the browser is
+/// on, register with every browser that lacks it, now and every
+/// `KEEP_REGISTERED_EVERY`. Never removes a registration; `cww browser
+/// disable` does that.
+pub fn keep_registered(paths: Paths) {
+    let mut failing = false;
+    loop {
+        match refresh_if_on(&paths) {
+            Ok(done) => {
+                failing = false;
+                for registered in done {
+                    tracing::info!(browser = registered.browser, "registered with a browser");
+                }
+            }
+            Err(e) => {
+                if !failing {
+                    tracing::warn!("couldn't register with the browsers: {e:#}");
+                }
+                failing = true;
+            }
+        }
+        std::thread::sleep(KEEP_REGISTERED_EVERY);
+    }
+}
+
+fn refresh_if_on(paths: &Paths) -> Result<Vec<Registered>> {
+    let config = crate::config::Config::load(paths)?;
+    if !config.browser.enabled {
+        return Ok(Vec::new());
+    }
+    refresh(
+        paths,
+        &host_exe()?,
+        &crate::browsing::bridge::origins(&config.browser.extension_ids),
+    )
 }
 
 /// Remove every registration `register` made.
@@ -254,6 +450,74 @@ mod tests {
             tmp.path()
                 .join("google-chrome/NativeMessagingHosts/com.chatwithwork.desktop.json")
         );
+    }
+
+    #[test]
+    fn finds_arc_and_helium_where_they_keep_their_profiles() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Arc/User Data")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("net.imput.helium")).unwrap();
+        let mac: Vec<_> = manifest_paths(tmp.path(), true)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(mac, ["Arc", "Helium"]);
+        let linux: Vec<_> = manifest_paths(tmp.path(), false)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(linux, ["Helium"]);
+        assert_eq!(
+            manifest_paths(tmp.path(), true)[0].1,
+            tmp.path()
+                .join("Arc/User Data/NativeMessagingHosts/com.chatwithwork.desktop.json")
+        );
+    }
+
+    #[test]
+    fn refreshing_writes_only_browsers_that_lack_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("chromium")).unwrap();
+        let text = "{\"name\": \"com.chatwithwork.desktop\"}";
+        let first = write_in(tmp.path(), false, text, true).unwrap();
+        assert_eq!(
+            first.iter().map(|r| r.browser).collect::<Vec<_>>(),
+            ["Chromium"]
+        );
+        assert!(write_in(tmp.path(), false, text, true).unwrap().is_empty());
+        // A browser first opened later gets it on the next pass.
+        std::fs::create_dir_all(tmp.path().join("google-chrome")).unwrap();
+        assert_eq!(
+            registrations_in(tmp.path(), false),
+            (vec!["Chromium"], vec!["Google Chrome"])
+        );
+        let later = write_in(tmp.path(), false, text, true).unwrap();
+        assert_eq!(
+            later.iter().map(|r| r.browser).collect::<Vec<_>>(),
+            ["Google Chrome"]
+        );
+        // One that names another cww is pointed back at this one.
+        let changed = write_in(
+            tmp.path(),
+            false,
+            "{\"name\": \"com.chatwithwork.desktop\", \"path\": \"/new\"}",
+            true,
+        )
+        .unwrap();
+        assert_eq!(changed.len(), 2);
+        assert_eq!(
+            registrations_in(tmp.path(), false).0,
+            ["Google Chrome", "Chromium"]
+        );
+    }
+
+    #[test]
+    fn only_a_daemon_with_the_persons_own_settings_registers() {
+        assert!(keeps_registration(None));
+        assert!(keeps_registration(Some(std::ffi::OsStr::new(""))));
+        assert!(!keeps_registration(Some(std::ffi::OsStr::new(
+            "/tmp/cww-e2e"
+        ))));
     }
 
     #[test]

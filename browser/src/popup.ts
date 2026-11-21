@@ -34,8 +34,11 @@ function render(state: PopupState): void {
     detail = "Resume it from Chat with Work Desktop's menu, or with cww browser resume.";
   } else if (state.native !== "connected") {
     tone = "attention";
-    text = "Chat with Work Desktop isn't installed";
-    detail = "Install Chat with Work Desktop, then turn on the browser in its settings.";
+    // The browser found no host: Desktop isn't installed, Use your browser
+    // is off, or Desktop hasn't registered with this browser yet, which it
+    // does within a minute of the browser being installed or first opened.
+    text = "Can't reach Chat with Work Desktop";
+    detail = "Open Chat with Work Desktop and turn on Use your browser. This browser connects within two minutes.";
   } else if (state.daemon === "not_running") {
     tone = "attention";
     text = "Chat with Work Desktop isn't running";

@@ -391,12 +391,13 @@ enum BrowserCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Offer the browser tools, and register cww with Chrome, Chromium,
-    /// Edge and Brave so the extension can reach it.
+    /// Offer the browser tools, and register cww with the Chromium-family
+    /// browsers found so the extension can reach it.
     Enable,
     /// Stop offering the browser tools, and remove the registration.
     Disable,
-    /// Register cww with the browsers again (after installing a browser).
+    /// Register cww with the browsers now. The daemon also does it within
+    /// a minute of a browser being installed or first opened.
     Register,
     /// Allow a site: a host like github.com (with its subdomains, over
     /// HTTPS) or an origin like http://localhost:3000.
@@ -2282,11 +2283,13 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
     use cww::browsing::{bridge, install, settings};
     let mut config = Config::load(paths)?;
     let register = |config: &Config| -> Result<()> {
-        let exe = host_exe()?;
+        let exe = install::host_exe()?;
         let done = install::register(paths, &exe, &bridge::origins(&config.browser.extension_ids))?;
         if done.is_empty() {
             println!(
-                "No Chrome, Chromium, Edge or Brave found for this user. Install one and run                  `cww browser register`."
+                "No supported browser found for this user. Install Chrome, Chromium, Edge, \
+                 Brave, Vivaldi or Helium (or Arc on a Mac) and open it once: Chat with Work Desktop registers \
+                 with it within a minute, or now with `cww browser register`."
             );
         }
         for registered in done {
@@ -2354,6 +2357,26 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
                     }
                 ),
                 None => println!("Connected: no browser"),
+            }
+            let (registered, missing) = install::registrations(paths);
+            if !config.browser.enabled {
+            } else if registered.is_empty() && missing.is_empty() {
+                println!("Registered with: no supported browser found");
+            } else {
+                println!(
+                    "Registered with: {}",
+                    if registered.is_empty() {
+                        "none".to_string()
+                    } else {
+                        registered.join(", ")
+                    }
+                );
+                if !missing.is_empty() {
+                    println!(
+                        "Not registered yet: {} (`cww browser register`)",
+                        missing.join(", ")
+                    );
+                }
             }
             if config.browser.all_sites {
                 println!("Sites: all except blocked sites");
@@ -2476,19 +2499,6 @@ fn browser(paths: &Paths, command: BrowserCommand) -> Result<()> {
     }
     notify_daemon(paths, "");
     Ok(())
-}
-
-/// The program the browsers start: this `cww`, or on Windows `cww-agent`
-/// beside it, which opens no console window.
-fn host_exe() -> Result<PathBuf> {
-    let exe = service::stable_exe()?;
-    if cfg!(windows) {
-        let agent = exe.with_file_name("cww-agent.exe");
-        if agent.is_file() {
-            return Ok(agent);
-        }
-    }
-    Ok(exe)
 }
 
 /// Records a change `cww` made to the config itself, with no agent to make

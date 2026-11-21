@@ -181,6 +181,17 @@ pub fn run_foreground(paths: Paths, options: &Foreground) -> Result<()> {
     }
     let config = Config::load(&paths)?;
     crate::browsing::engine::initialize(&config, &paths);
+    // The unconfined side keeps the browsers' registration (it writes in
+    // their folders, which the confined worker can't): a thread started
+    // here never runs in a sandbox, since only the worker confines itself.
+    if !options.worker
+        && crate::browsing::install::keeps_registration(std::env::var_os("CWW_HOME").as_deref())
+    {
+        let paths = paths.clone();
+        let _ = std::thread::Builder::new()
+            .name("browser-registration".into())
+            .spawn(move || crate::browsing::install::keep_registered(paths));
+    }
     let sandboxed = options.sandbox
         && config.sandbox.enabled
         && cfg!(any(target_os = "linux", target_os = "macos"));

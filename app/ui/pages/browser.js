@@ -29,10 +29,14 @@ function useBrowser(app, browser, on) {
 const setting = (titleText, text, control) =>
   h("div", { class: "row" }, h("div", { class: "row__body" }, h("h3", {}, titleText), text ? h("p", {}, text) : null), h("div", { class: "row__actions" }, control));
 
-function connection(browser) {
+// Desktop registers with a browser within a minute of it being installed
+// or first opened, and the extension retries every 30 seconds.
+function connection(app, browser) {
   const ext = browser.extension;
+  const browsers = { macos: "Chrome, Edge, Brave, Arc, Vivaldi or Helium", windows: "Chrome, Edge, Brave, Chromium or Vivaldi" }[app.info?.platform]
+    ?? "Chrome, Edge, Brave, Chromium, Vivaldi or Helium";
   if (!ext) return h("div", { class: "row" },
-    h("div", { class: "row__body" }, h("h3", {}, "No browser connected"), h("p", {}, "Install the extension in Chrome, Edge, Brave or Chromium.")),
+    h("div", { class: "row__body" }, h("h3", {}, "No browser connected"), h("p", {}, `Add the extension to ${browsers}. It connects within two minutes.`)),
     h("div", { class: "row__actions" }, button("Get extension", () => call("open_url", { url: EXTENSION_URL }))));
   const updateNeeded = (browser.all_sites || browser.blocked_sites.length > 0) && (ext.site_policy_version || 0) < 2;
   return h("div", { class: "row" }, h("div", { class: "row__body" },
@@ -105,7 +109,7 @@ export function render(app) {
   append(page, group(
     setting("Use your browser", stoppedByExtension ? "Resume in the browser extension." : null,
       switchInput(on, enabled => useBrowser(app, browser, enabled), { label: "Use your browser", key: "use-browser", disabled: view.busy || stoppedByExtension })),
-    browser.enabled ? connection(browser) : null,
+    browser.enabled ? connection(app, browser) : null,
     browser.enabled ? setting("Allow actions", "Click, type and navigate on permitted sites.",
       switchInput(browser.changes, changes => change(app, { cmd: "browser_changes", changes }), { label: "Allow actions in the browser", key: "browser-actions", disabled: view.busy })) : null,
     browser.enabled ? uploads(browser) : null,
