@@ -98,7 +98,7 @@ whisper-rs = { version = "0.16.0", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Failed loads, for the offline page (offline.rs), and pictures of the
 # windows in --demo builds (snapshot.rs). Already in the tree through Tauri.
-webkit2gtk = "2.0"
+webkit2gtk = "3.0"
 # Opens the display before Tauri does (linux.rs), so a session without one
 # exits with a sentence instead of tao's panic. The version WebKitGTK and
 # tao already use.
