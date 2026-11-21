@@ -33,7 +33,7 @@ const setting = (titleText, text, control) =>
 // or first opened, and the extension retries every 30 seconds.
 function connection(app, browser) {
   const ext = browser.extension;
-  const browsers = { macos: "Chrome, Edge, Brave, Arc, Vivaldi or Helium", windows: "Chrome, Edge, Brave, Chromium or Vivaldi" }[app.info?.platform]
+  const browsers = { macos: "Chrome, Edge, Brave, Chromium, Arc, Vivaldi or Helium", windows: "Chrome, Edge, Brave, Chromium or Vivaldi" }[app.info?.platform]
     ?? "Chrome, Edge, Brave, Chromium, Vivaldi or Helium";
   if (!ext) return h("div", { class: "row" },
     h("div", { class: "row__body" }, h("h3", {}, "No browser connected"), h("p", {}, `Add the extension to ${browsers}. It connects within two minutes.`)),

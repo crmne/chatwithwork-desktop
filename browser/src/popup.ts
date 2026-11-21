@@ -38,7 +38,7 @@ function render(state: PopupState): void {
     // is off, or Desktop hasn't registered with this browser yet, which it
     // does within a minute of the browser being installed or first opened.
     text = "Can't reach Chat with Work Desktop";
-    detail = "Open Chat with Work Desktop and turn on Use your browser. This browser connects within two minutes.";
+    detail = "Install or open Chat with Work Desktop and turn on Use your browser. This browser connects within two minutes.";
   } else if (state.daemon === "not_running") {
     tone = "attention";
     text = "Chat with Work Desktop isn't running";

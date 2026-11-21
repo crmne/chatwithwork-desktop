@@ -202,27 +202,48 @@ fn write(
     #[cfg(windows)]
     {
         let file = paths.data_dir.join(format!("{HOST_NAME}.json"));
-        // The keys name the file, so they only change with its folder.
-        if only_changed && std::fs::read_to_string(&file).ok().as_deref() == Some(text.as_str()) {
-            return Ok(Vec::new());
-        }
-        // The keys first, the file last: a key that fails leaves the file
-        // as it was, so the next refresh tries every key again.
-        let mut done = Vec::new();
+        let location = file.display().to_string();
         std::fs::create_dir_all(&paths.data_dir)?;
+        // The keys first, the file last: a key that fails leaves the file
+        // as it was. Each key is checked on its own, so one removed since
+        // (a browser uninstalled and installed again) is set again.
+        let mut done = Vec::new();
         for browser in BROWSERS {
             let Some(key) = browser.windows else { continue };
             let key = format!(r"{key}\NativeMessagingHosts\{HOST_NAME}");
-            registry::set_default(&key, &file.display().to_string())
+            if only_changed && registry::get_default(&key).as_deref() == Some(location.as_str()) {
+                continue;
+            }
+            registry::set_default(&key, &location)
                 .with_context(|| format!("registering with {}", browser.name))?;
             done.push(Registered {
                 browser: browser.name,
                 location: format!(r"HKCU\{key}"),
             });
         }
-        std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
+        if !only_changed || std::fs::read_to_string(&file).ok().as_deref() != Some(text.as_str()) {
+            replace_file(&file, &text)?;
+            if done.is_empty() {
+                done.push(Registered {
+                    browser: "every browser",
+                    location,
+                });
+            }
+        }
         Ok(done)
     }
+}
+
+/// Write `text` to `file` whole: into a file beside it, then renamed over
+/// it, so a browser reading it meanwhile never sees half a manifest.
+fn replace_file(file: &Path, text: &str) -> Result<()> {
+    let name = file.file_name().context("manifest name")?.to_string_lossy();
+    let temporary = file.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, text).with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, file).with_context(|| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("writing {}", file.display())
+    })
 }
 
 /// Write `text` as the manifest of every browser found under
@@ -241,7 +262,7 @@ fn write_in(
         }
         let dir = file.parent().context("manifest folder")?;
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
+        replace_file(&file, text)?;
         done.push(Registered {
             browser,
             location: file.display().to_string(),
@@ -264,16 +285,21 @@ pub fn registrations(paths: &Paths) -> (Vec<&'static str>, Vec<&'static str>) {
     }
     #[cfg(windows)]
     {
-        let names = BROWSERS
-            .iter()
-            .filter(|b| b.windows.is_some())
-            .map(|b| b.name)
-            .collect();
-        if paths.data_dir.join(format!("{HOST_NAME}.json")).is_file() {
-            (names, Vec::new())
-        } else {
-            (Vec::new(), names)
+        // Registered: its key names our manifest, and the manifest is there.
+        let file = paths.data_dir.join(format!("{HOST_NAME}.json"));
+        let location = file.display().to_string();
+        let present = file.is_file();
+        let (mut with, mut without) = (Vec::new(), Vec::new());
+        for browser in BROWSERS {
+            let Some(key) = browser.windows else { continue };
+            let key = format!(r"{key}\NativeMessagingHosts\{HOST_NAME}");
+            if present && registry::get_default(&key).as_deref() == Some(location.as_str()) {
+                with.push(browser.name);
+            } else {
+                without.push(browser.name);
+            }
         }
+        (with, without)
     }
 }
 
@@ -428,6 +454,47 @@ mod registry {
         Ok(())
     }
 
+    /// The default value of `HKCU\<key>`, when it is a string.
+    pub fn get_default(key: &str) -> Option<String> {
+        use windows_sys::Win32::System::Registry::{RRF_RT_REG_SZ, RegGetValueW};
+        let key = wide(key);
+        let mut size: u32 = 0;
+        // SAFETY: a NUL-terminated name; a null buffer asks only for the size.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                std::ptr::null(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if status != 0 || size == 0 {
+            return None;
+        }
+        let mut buffer: Vec<u16> = vec![0; size as usize / 2 + 1];
+        let mut size = (buffer.len() * 2) as u32;
+        // SAFETY: the buffer holds `size` bytes, and outlives the call.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                std::ptr::null(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..len]))
+    }
+
     pub fn remove(key: &str) {
         let key = wide(key);
         // SAFETY: a NUL-terminated UTF-16 string that outlives the call.
@@ -526,6 +593,16 @@ mod tests {
             registrations_in(tmp.path(), false).0,
             ["Google Chrome", "Chromium"]
         );
+    }
+
+    #[test]
+    fn replaces_a_manifest_whole_and_leaves_nothing_beside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("com.chatwithwork.desktop.json");
+        std::fs::write(&file, "old").unwrap();
+        replace_file(&file, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 1);
     }
 
     #[test]

@@ -110,7 +110,7 @@ test("uploads say how to turn on the browser's file access, only when it's off",
 });
 
 test("with no browser connected, it names the browsers this system supports", () => {
-  for (const [platform, has, lacks] of [["macos", "Arc", "Chromium"], ["linux", "Helium", "Arc"], ["windows", "Chromium", "Helium"]]) {
+  for (const [platform, has, lacks] of [["macos", "Arc", "Firefox"], ["linux", "Helium", "Arc"], ["windows", "Chromium", "Helium"]]) {
     const {app} = fixture();
     app.info = { platform };
     const text = render(app).textContent;
