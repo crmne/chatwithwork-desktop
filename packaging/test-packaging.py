@@ -668,8 +668,8 @@ cp "$TEST_RELEASE/$name" "$output"
         formula = (ROOT / "packaging/homebrew/cww.rb.in").read_text()
         self.assertIn("depends_on macos: :ventura", formula)
 
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn(f"| macOS {minimum} or later |", readme)
+        install = (ROOT / "docs/install.md").read_text(encoding="utf-8")
+        self.assertIn(f"| macOS {minimum} or later |", install)
 
     def test_every_platform_registers_the_same_link_schemes(self):
         source = (ROOT / "app/src/links.rs").read_text()
@@ -713,25 +713,27 @@ cp "$TEST_RELEASE/$name" "$output"
         # may offer `winget install`, and each names a download that works.
         if (ROOT / "packaging/winget/PUBLISHED").exists():
             self.skipTest("the WinGet package is published")
-        for path in ("README.md", "packaging/release-notes/TEMPLATE.md"):
+        for path in ("README.md", "docs/install.md", "packaging/release-notes/TEMPLATE.md"):
             text = (ROOT / path).read_text(encoding="utf-8")
             self.assertTrue([line for line in text.splitlines() if line.startswith("| Windows")], path)
             self.assertNotIn("winget install", text, path)
             self.assertNotIn("`winget upgrade`", text, path)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        row = next(line for line in readme.splitlines() if line.startswith("| Windows 10 and 11"))
+        install = (ROOT / "docs/install.md").read_text(encoding="utf-8")
+        row = next(line for line in install.splitlines() if line.startswith("| Windows 10 and 11"))
         self.assertIn("releases/latest", row)
-        self.assertIn("releases/latest/download/Chat-with-Work-Desktop-install.ps1", readme)
-        self.assertIn("winget-pkgs/pull/460095", readme)
+        self.assertIn("releases/latest/download/Chat-with-Work-Desktop-install.ps1", install)
+        self.assertIn("winget-pkgs/pull/460095", install)
 
     def test_readme_names_the_windows_that_runs_commands(self):
         # Commands need a BaseContainer: Windows 11 24H2 with its August 2026
         # update or later (docs/commands.md). Every mention says so.
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        mentions = [m for m in re.finditer(r"Windows 11 24H2", readme)]
-        self.assertTrue(mentions)
-        for mention in mentions:
-            self.assertIn("August 2026 update", readme[mention.start():mention.start() + 80])
+        found = False
+        for path in ("README.md", "docs/install.md", "docs/tools.md", "docs/threat-model.md"):
+            text = (ROOT / path).read_text(encoding="utf-8")
+            for mention in re.finditer(r"Windows 11 24H2", text):
+                found = True
+                self.assertIn("August 2026 update", text[mention.start():mention.start() + 80], path)
+        self.assertTrue(found)
 
     def test_installer_source_is_well_formed_and_purges_only_on_uninstall(self):
         from xml.etree import ElementTree

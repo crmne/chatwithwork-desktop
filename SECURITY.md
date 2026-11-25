@@ -44,7 +44,7 @@ Time-based limits set under `[limits]` are the only checks on volume that hold w
 
 ## Out of scope
 
-- Reading files the user shared that aren't on the deny list. That is the product working as designed; see the threat model in README.md.
+- Reading files the user shared that aren't on the deny list. That is the product working as designed; see the [threat model](docs/threat-model.md).
 - Attacks that need the user's own account on the machine (for example malware running as the user).
 - Vulnerabilities in the Chat with Work web app itself. Report those to the same address, but they are handled separately.
 

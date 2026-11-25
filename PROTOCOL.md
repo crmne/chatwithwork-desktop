@@ -411,7 +411,7 @@ Every path is **`<root_id>:<relative path>`**. The daemon rejects the following 
 
 `.` components and empty components (`a//b`) are ignored. `<root_id>:` on its own means the root folder. Paths the daemon returns are always normalized in this form. Absolute local paths are never sent.
 
-Resolution then follows the rules in README.md ("Threat model"): symlinks are not followed, the path must stay inside the root, the deny list applies, and only regular files (for `read`) and directories (for `list`) are served.
+Resolution then follows the rules in [docs/threat-model.md](docs/threat-model.md): symlinks are not followed, the path must stay inside the root, the deny list applies, and only regular files (for `read`) and directories (for `list`) are served.
 
 ### 8.2 Results
 
