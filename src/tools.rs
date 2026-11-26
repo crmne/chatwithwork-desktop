@@ -95,6 +95,10 @@ pub const PLANS: &str = "plans";
 /// Ask the person on this computer to let a chat think with an agent's
 /// own sign-in here.
 pub const ASK_PLAN: &str = "ask_plan";
+/// Take back this computer's yes for a chat (or its bot) to think with an
+/// agent's own sign-in here. Only narrows, so the server may ask it without
+/// the person (PROTOCOL.md 7.2.2).
+pub const WITHDRAW_PLAN: &str = "withdraw_plan";
 /// One step of a chat's thinking with an agent's own sign-in.
 pub const THINK: &str = "think";
 
@@ -114,6 +118,15 @@ pub struct UnattendedGrant {
     pub root: String,
     pub bot: String,
     pub done: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+/// A yes to take back (`withdraw_plan`), for the daemon to apply, and
+/// whether there was one.
+pub struct PlanWithdrawal {
+    pub agent: crate::coding::Agent,
+    /// The bot whose yes it is, or `None` for the owner's own chats.
+    pub bot: Option<String>,
+    pub done: tokio::sync::oneshot::Sender<Result<bool, String>>,
 }
 
 /// Who a call is for: a person (any shared folder, as each allows), or a
@@ -189,6 +202,9 @@ struct Inner {
     asks: Option<Arc<crate::unattended_asks::Asks>>,
     /// Always allow pressed on a bot's command card, for the daemon to apply.
     unattended_grants: Option<tokio::sync::mpsc::UnboundedSender<UnattendedGrant>>,
+    /// Yeses to think with an agent's sign-in taken back from the server,
+    /// for the daemon to apply.
+    plan_withdrawals: Option<tokio::sync::mpsc::UnboundedSender<PlanWithdrawal>>,
     /// Whoever starts commands, which also starts thinking steps, whether
     /// or not a folder allows commands.
     runner: Option<crate::commands::Runner>,
@@ -220,6 +236,7 @@ impl LocalFiles {
                 browser: None,
                 asks: None,
                 unattended_grants: None,
+                plan_withdrawals: None,
                 runner: None,
                 reader,
                 writer,
@@ -289,6 +306,21 @@ impl LocalFiles {
         Self {
             inner: Arc::new(Inner {
                 unattended_grants: Some(grants),
+                ..inner
+            }),
+        }
+    }
+
+    /// Take back a yes to think with an agent's own sign-in
+    /// (`withdraw_plan`).
+    pub fn with_plan_withdrawals(
+        self,
+        withdrawals: tokio::sync::mpsc::UnboundedSender<PlanWithdrawal>,
+    ) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| unreachable!("not shared yet"));
+        Self {
+            inner: Arc::new(Inner {
+                plan_withdrawals: Some(withdrawals),
                 ..inner
             }),
         }
@@ -386,6 +418,9 @@ impl LocalFiles {
                     && self.commands().is_some())
                 || ((name == PLANS || name == THINK) && self.inner.runner.is_some())
                 || (name == ASK_PLAN && self.inner.runner.is_some() && self.inner.asks.is_some())
+                || (name == WITHDRAW_PLAN
+                    && self.inner.runner.is_some()
+                    && self.inner.plan_withdrawals.is_some())
                 || self.browser().is_some_and(|browser| browser.offers(name)));
         if !known {
             let mut entry = AuditEntry::event("tool");
@@ -988,6 +1023,45 @@ impl LocalFiles {
         Ok(Output::Ask(json!({ "status": "asked" })))
     }
 
+    /// Take back this computer's yes for this chat's owner, or its bot, to
+    /// think with an agent's own sign-in, and a request for one still
+    /// waiting. It only narrows, so it needs no yes here and works whether
+    /// or not the agent is offered; the daemon edits the config, audits
+    /// `plan_withdrawn` and reloads, as `cww plans allow --off` does.
+    async fn withdraw_plan(&self, args: Value, caller: &Caller) -> Result<Output, ToolError> {
+        let PlanArgs { agent: key } = parse_args(args)?;
+        let agent = crate::plans::agent(&key)
+            .filter(|_| key != "claude")
+            .ok_or_else(|| ToolError::invalid_argument("`agent` is `codex` or `claude_code`"))?;
+        let bot = caller_bot(caller);
+        if let Some(bot) = &bot
+            && !crate::plans::valid_bot(bot)
+        {
+            return Err(ToolError::invalid_argument("that isn't a bot's ID"));
+        }
+        let (done, heard) = tokio::sync::oneshot::channel();
+        let withdrawals = self
+            .inner
+            .plan_withdrawals
+            .as_ref()
+            .expect("offered only with withdrawals");
+        let unavailable = || ToolError::new(ErrorCode::Internal, "the daemon is stopping");
+        withdrawals
+            .send(PlanWithdrawal { agent, bot, done })
+            .map_err(|_| unavailable())?;
+        let withdrawn = heard.await.map_err(|_| unavailable())?.map_err(|message| {
+            // The server hears only that it couldn't, never a path here.
+            tracing::warn!("a plan's yes wasn't taken back: {message}");
+            ToolError::new(
+                ErrorCode::Internal,
+                "This computer couldn't change its settings to take the yes back.",
+            )
+        })?;
+        Ok(Output::Ask(json!({
+            "status": if withdrawn { "withdrawn" } else { "already" }
+        })))
+    }
+
     /// One thinking step: the agent answers with text, or asks for Chat with
     /// Work's tools, which go back to the server to run. Whoever starts
     /// commands checks the yes itself; this side reports the text as it
@@ -1189,6 +1263,7 @@ impl LocalFiles {
             PREPARE_STATUS => self.prepare(args, caller, true).await,
             PLANS => self.plans(args, caller).await,
             ASK_PLAN => self.ask_plan(args, caller).await,
+            WITHDRAW_PLAN => self.withdraw_plan(args, caller).await,
             THINK => self.think(args, chat, progress, caller).await,
             "roots" => {
                 let _: EmptyArgs = parse_args(args)?;

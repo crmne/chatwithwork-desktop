@@ -6868,3 +6868,73 @@ async fn a_chat_thinks_with_a_plan_only_once_this_computer_said_yes() {
         .unwrap()
         .unwrap();
 }
+
+/// The server takes back a yes to think with a plan over the wire
+/// (`withdraw_plan`, PROTOCOL.md 7.2.2): never listed, it needs no yes here
+/// and no offer of the agent, takes the owner's yes and then a bot's, says
+/// "already" when there's none, and is audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_server_takes_back_a_plans_yes_without_asking() {
+    let fx = fixture();
+    let mut server = FakeServer::start().await;
+    pair_for_changes(&fx, &server, false, None);
+    let mut config = Config::load(&fx.paths).unwrap();
+    config.plans.codex.chats = true;
+    config.plans.codex.bots = vec!["42".into()];
+    assert!(!config.plans.offer_codex, "withdrawing needs no offer");
+    config.save(&fx.paths).unwrap();
+
+    let shutdown = CancellationToken::new();
+    let daemon = tokio::spawn(cww::daemon::run(fx.paths.clone(), shutdown.clone(), false));
+    let mut s = connect(&mut server).await;
+
+    let tools = s.request("tools/list", json!({})).await;
+    assert!(!tool_names(&tools).contains(&"withdraw_plan".to_string()));
+
+    let withdrawn = s.call("withdraw_plan", json!({ "agent": "codex" })).await;
+    assert_eq!(
+        withdrawn["structuredContent"],
+        json!({ "status": "withdrawn" }),
+        "{withdrawn}"
+    );
+    let config = Config::load(&fx.paths).unwrap();
+    assert!(!config.plans.codex.chats);
+    assert_eq!(
+        config.plans.codex.bots,
+        vec!["42".to_string()],
+        "a bot's yes is its own"
+    );
+
+    let mut s = connect_or_keep(&mut server, s).await;
+    let already = s.call("withdraw_plan", json!({ "agent": "codex" })).await;
+    assert_eq!(already["structuredContent"], json!({ "status": "already" }));
+    let bot = s
+        .bot_call("withdraw_plan", json!({ "agent": "codex" }), "42")
+        .await;
+    assert_eq!(
+        bot["structuredContent"],
+        json!({ "status": "withdrawn" }),
+        "{bot}"
+    );
+    assert!(Config::load(&fx.paths).unwrap().plans.codex.bots.is_empty());
+    let mut s = connect_or_keep(&mut server, s).await;
+    let refused = s.call("withdraw_plan", json!({ "agent": "gemini" })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+
+    let entries = control(&fx.paths, ControlRequest::AuditTail { lines: Some(50) }).await;
+    let withdrawals: Vec<&str> = entries["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["event"] == "plan_withdrawn")
+        .map(|e| e["detail"].as_str().unwrap())
+        .collect();
+    assert_eq!(withdrawals, ["codex for your chats", "codex for bot 42"]);
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), daemon)
+        .await
+        .expect("daemon stops")
+        .unwrap()
+        .unwrap();
+}
