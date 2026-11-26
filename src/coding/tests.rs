@@ -78,14 +78,14 @@ fn a_claude_code_sign_in_that_ended_is_not_signed_in() {
             .unwrap()
             .as_millis() as u64
     };
-    let write = |refresh_ends: u64| {
+    let write = |refresh_ends: u64, access_ends: u64| {
         std::fs::write(
             home.join(CONFIG_DIR).join(CREDENTIALS_FILE),
             serde_json::json!({
                 "claudeAiOauth": {
                     "accessToken": TOKEN,
                     "refreshToken": "sk-ant-ort01-refreshREFRESH0123456789",
-                    "expiresAt": 1,
+                    "expiresAt": access_ends,
                     "refreshTokenExpiresAt": refresh_ends,
                     "subscriptionType": "max",
                 }
@@ -96,12 +96,19 @@ fn a_claude_code_sign_in_that_ended_is_not_signed_in() {
     };
     let now = std::time::SystemTime::now();
 
-    write(ms(now - std::time::Duration::from_secs(3600)));
+    write(ms(now - std::time::Duration::from_secs(3600)), 1);
     let ended = Login::find(&home);
     assert!(ended.ended());
     assert!(!ended.signed_in());
 
-    write(ms(now + std::time::Duration::from_secs(7 * 3600)));
+    // An access token renewed past that date doesn't move it.
+    write(
+        ms(now - std::time::Duration::from_secs(3600)),
+        ms(now + std::time::Duration::from_secs(3600)),
+    );
+    assert!(!Login::find(&home).signed_in());
+
+    write(ms(now + std::time::Duration::from_secs(7 * 3600)), 1);
     let ending = Login::find(&home);
     assert!(ending.signed_in());
     assert!(ending.ends.is_some_and(|ends| ends > now));

@@ -641,20 +641,18 @@ fn is_named(name: &std::ffi::OsStr, wanted: &str) -> bool {
     }
 }
 
+/// When Claude Code's sign-in in `.credentials.json` ends for good: its
+/// refresh token's end (`refreshTokenExpiresAt`, in milliseconds), which
+/// renewing the access token never moves. None where it doesn't say.
+fn credentials_ending(text: Option<&str>) -> Option<std::time::SystemTime> {
+    let value: Value = serde_json::from_str(text?).ok()?;
+    let refresh = value["claudeAiOauth"]["refreshTokenExpiresAt"].as_u64()?;
+    Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(refresh))
+}
+
 /// Claude Code's credentials say a subscription (`pro`, `max`, `team`...) by
 /// its `subscriptionType`; a sign-in with a Console account has none and
 /// bills the API.
-/// When Claude Code's sign-in in `.credentials.json` ends for good: its
-/// refresh token's end (`refreshTokenExpiresAt`, in milliseconds), or its
-/// access token's where that comes later. None where it doesn't say.
-fn credentials_ending(text: Option<&str>) -> Option<std::time::SystemTime> {
-    let value: Value = serde_json::from_str(text?).ok()?;
-    let oauth = &value["claudeAiOauth"];
-    let refresh = oauth["refreshTokenExpiresAt"].as_u64()?;
-    let access = oauth["expiresAt"].as_u64().unwrap_or(0);
-    Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(refresh.max(access)))
-}
-
 fn claude_billing(text: &str) -> Billing {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return Billing::Unknown;
