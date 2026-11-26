@@ -505,7 +505,8 @@ impl Preparations {
                 .unwrap_or_default()
         });
         if let Some(repo) = &existing
-            && let Some(view) = already_prepared(paths, repo, &root, ask, agent, billing)
+            && let Some(view) =
+                already_prepared(paths, repo, &root, &config.roots, ask, agent, billing)
         {
             return Ok(view);
         }
@@ -567,12 +568,17 @@ fn folder_billing(config: &Config, paths: &Paths, root: &str, agent: Agent) -> O
         .then_some(Billing::ApiKey)
 }
 
+/// How long answering for a prepared repository may wait on fetching its
+/// mirror: the server waits 20 seconds for the whole answer.
+const PREPARED_FETCH_LIMIT: Duration = Duration::from_secs(10);
+
 /// A repository's answer when it needs no work: one a run prepared before, or
 /// one the person set up with `cww coding setup`, whose checkout is there.
 fn already_prepared(
     paths: &Paths,
     repo: &Repository,
     root: &Root,
+    roots: &[Root],
     ask: &Ask,
     agent: Agent,
     billing: Billing,
@@ -592,6 +598,14 @@ fn already_prepared(
     let checkout = crate::roots::canonical(&root.path.join(&repo.name)).ok()?;
     if !checkout.starts_with(&folder) || !checkout.is_dir() {
         return None;
+    }
+    // What it needs is read from the mirror, so it's fetched first: nothing
+    // fetches a mirror while no command runs in its folder, and one idle for
+    // hours named what the project needed then. A fetch that fails or takes
+    // too long leaves the copy it has; the run's first command fetches again.
+    // Never a mirror a command could have changed, as for a run.
+    if !repositories::writable_by_commands(&mirror, roots) {
+        repositories::fetch_if_stale(&mirror, Some(repo), PREPARED_FETCH_LIMIT, &|| false);
     }
     let needs = super::needs::from_mirror(&mirror, &crate::reach::HostNetwork::current());
     if !super::needs::allowed(root, &needs) {
@@ -1089,6 +1103,88 @@ mod tests {
             tests: true,
         };
         (dir, config, paths, ask)
+    }
+
+    /// Nothing fetches a mirror while no command runs in its folder, so one
+    /// prepared before can be hours old when a run asks for it: it's fetched
+    /// before what the project needs is read from it.
+    #[cfg(unix)]
+    #[test]
+    fn a_prepared_repository_is_fetched_before_its_needs_are_read() {
+        let (dir, config, paths, ask) = fixture(&["acme"], true);
+        let upstream = dir.path().join("upstream");
+        std::fs::create_dir(&upstream).unwrap();
+        let git = |args: &[&str]| {
+            let done = std::process::Command::new("git")
+                .args(["-c", "commit.gpgsign=false", "-c", "user.name=Test"])
+                .args(["-c", "user.email=test@example.com"])
+                .args(args)
+                .current_dir(&upstream)
+                .output()
+                .unwrap();
+            assert!(done.status.success(), "{args:?}: {done:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(upstream.join("Makefile"), "test:\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "one"]);
+        let repo = Repository {
+            root: "bots".into(),
+            name: "app".into(),
+            url: format!("file://{}", upstream.display()),
+            ssh_key: None,
+            github: None,
+            cloned: None,
+        };
+        let mirror = repositories::create_mirror(&paths, &repo, &config.roots).unwrap();
+        repositories::fetch(&mirror, Some(&repo)).unwrap();
+        std::fs::create_dir(config.roots[0].path.join("app")).unwrap();
+        let hours_ago = std::time::SystemTime::now() - Duration::from_secs(13 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(mirror.join("cww-fetched"))
+            .unwrap()
+            .set_modified(hours_ago)
+            .unwrap();
+        std::fs::write(
+            upstream.join("docker-compose.yml"),
+            "services:\n  db:\n    image: postgres:17\n    ports:\n      - \"5432:5432\"\n",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "two"]);
+
+        let view = already_prepared(
+            &paths,
+            &repo,
+            &config.roots[0],
+            &config.roots,
+            &ask,
+            Agent::ClaudeCode,
+            Billing::default(),
+        )
+        .expect("prepared");
+
+        assert_eq!(view.checkout.as_deref(), Some("app"), "{view:?}");
+        assert!(
+            view.services.iter().any(|s| s.name == "PostgreSQL"),
+            "what it needs is the service main added since: {view:?}"
+        );
+        let age = repositories::fetched_at(&mirror)
+            .unwrap()
+            .elapsed()
+            .unwrap();
+        assert!(age < Duration::from_secs(60), "fetched {age:?} ago");
+        let compose = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&mirror)
+            .args(["cat-file", "-e", "HEAD:docker-compose.yml"])
+            .status()
+            .unwrap();
+        assert!(
+            compose.success(),
+            "what it needs is read from main as it is now"
+        );
     }
 
     /// The server can name a repository, and that's all: another bot, an agent
