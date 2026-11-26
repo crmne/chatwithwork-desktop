@@ -1944,7 +1944,11 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
-    async fn remove_root(&self, which: String) -> Result<Value> {
+    async fn remove_root(
+        &self,
+        which: String,
+        via: Option<crate::control::ChangeSource>,
+    ) -> Result<Value> {
         // The removal is saved first, then the folder's list deleted.
         let (root, config) = self
             .edit_config(move |config, _| {
@@ -1962,6 +1966,7 @@ impl Daemon {
         }
         let mut entry = AuditEntry::event("root_removed");
         entry.detail = Some(format!("{} ({})", root.id, root.label));
+        entry.via = via.map(|via| via.key().to_string());
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
@@ -2420,7 +2425,7 @@ impl ControlHandler for Daemon {
         // Taken as it arrives, before anything it does can stall.
         let asked = self.change_order.ticket();
         let folder = match &request {
-            ControlRequest::RootsRemove { root }
+            ControlRequest::RootsRemove { root, .. }
             | ControlRequest::RootsWritable { root, .. }
             | ControlRequest::RootsCommands { root, .. }
             | ControlRequest::RootsLocalServices { root, .. }
@@ -2538,7 +2543,7 @@ impl Daemon {
                 Ok(json!({ "stopping": true }))
             }
             request @ ControlRequest::RootsAdd { .. } => self.add_root(request).await,
-            ControlRequest::RootsRemove { root } => self.remove_root(root).await,
+            ControlRequest::RootsRemove { root, via } => self.remove_root(root, via).await,
             ControlRequest::RootsWritable {
                 root,
                 writable,

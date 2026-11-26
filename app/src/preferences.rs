@@ -511,6 +511,10 @@ pub fn question(
             folder: root.clone(),
             on: *on,
         }),
+        // Asks only for a folder lent to bots, naming them.
+        R::RootsRemove { root, .. } => Some(Change::Remove {
+            folder: root.clone(),
+        }),
         _ => None,
     };
     if let Some(change) = change {
@@ -1437,6 +1441,42 @@ mod tests {
         ] {
             assert!(!has_inline_confirmation(&request));
         }
+    }
+
+    /// The app's own Shared folders page asks in the app's dialog, as a
+    /// page in its window does, before stopping sharing a folder lent to a
+    /// bot, and only then.
+    #[test]
+    fn the_settings_ask_before_stopping_sharing_a_folder_lent_to_a_bot() {
+        use cww::control::ControlRequest as R;
+        let mut status = crate::model::Status {
+            roots: vec![crate::model::RootStatus {
+                id: "work".into(),
+                label: "Work".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let request = R::RootsRemove {
+            root: "work".into(),
+            via: None,
+        };
+        assert!(!has_inline_confirmation(&request));
+        assert_eq!(question(&request, &status, &Value::Null).unwrap(), None);
+
+        status.roots[0].bots.push(crate::model::BotLoan {
+            id: "34".into(),
+            name: "Issue fixer".into(),
+            unattended: true,
+        });
+        let asked = question(&request, &status, &Value::Null)
+            .unwrap()
+            .expect("asks");
+        assert!(
+            asked.message.contains("Issue fixer (bot 34) uses it"),
+            "{}",
+            asked.message
+        );
     }
 
     #[test]

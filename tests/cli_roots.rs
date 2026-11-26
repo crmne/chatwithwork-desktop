@@ -52,6 +52,7 @@ fn removing_a_folder_from_the_terminal_is_audited() {
         .collect();
     assert_eq!(removed.len(), 1, "{log}");
     assert_eq!(removed[0]["detail"], format!("{id} (Projects)"));
+    assert_eq!(removed[0]["via"], "cww", "it says the command asked");
 }
 
 /// With the agent running, the removal goes through it: it audits it once,
@@ -161,4 +162,8 @@ fn removing_a_folder_with_the_agent_running_goes_through_it() {
         .collect();
     assert_eq!(removed.len(), 1, "{log}");
     assert_eq!(removed[0]["detail"], format!("{id} (Projects)"));
+    assert_eq!(
+        removed[0]["via"], "cww",
+        "the agent records that the command asked"
+    );
 }

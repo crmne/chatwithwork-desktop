@@ -345,7 +345,10 @@ fn run(paths: &Paths, command: &DaemonCommand) -> Result<(String, bool)> {
             ))
         }
         DaemonCommand::RemoveRoot { id } => {
-            let request = ControlRequest::RootsRemove { root: id.clone() };
+            let request = ControlRequest::RootsRemove {
+                root: id.clone(),
+                via: Some(crate::control::ChangeSource::Tui),
+            };
             if let Some(v) = control::request(&socket, request)? {
                 let root = &v["root"];
                 return Ok((

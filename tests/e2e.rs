@@ -2670,6 +2670,7 @@ async fn the_settings_app_manages_folders_over_the_control_channel() {
         &fx.paths,
         ControlRequest::RootsRemove {
             root: "docs".into(),
+            via: None,
         },
     )
     .await;
