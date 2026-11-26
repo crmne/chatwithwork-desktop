@@ -65,6 +65,63 @@ fn signed_in_home(home: &Path) {
     std::fs::write(home.join(CONFIG_FILE), "{}").unwrap();
 }
 
+/// A sign-in whose refresh token has ended asks for `claude auth login` in a
+/// run (chalk, 2026-11-26: a bot's run printed only that, and timed out), so
+/// it isn't signed in here either; one that ends later is, until then.
+#[test]
+fn a_claude_code_sign_in_that_ended_is_not_signed_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    signed_in_home(&home);
+    let ms = |at: std::time::SystemTime| {
+        at.duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let write = |refresh_ends: u64, access_ends: u64| {
+        std::fs::write(
+            home.join(CONFIG_DIR).join(CREDENTIALS_FILE),
+            serde_json::json!({
+                "claudeAiOauth": {
+                    "accessToken": TOKEN,
+                    "refreshToken": "sk-ant-ort01-refreshREFRESH0123456789",
+                    "expiresAt": access_ends,
+                    "refreshTokenExpiresAt": refresh_ends,
+                    "subscriptionType": "max",
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    let now = std::time::SystemTime::now();
+
+    write(ms(now - std::time::Duration::from_secs(3600)), 1);
+    let ended = Login::find(&home);
+    assert!(ended.ended());
+    assert!(!ended.signed_in());
+
+    // An access token renewed past that date doesn't move it.
+    write(
+        ms(now - std::time::Duration::from_secs(3600)),
+        ms(now + std::time::Duration::from_secs(3600)),
+    );
+    assert!(!Login::find(&home).signed_in());
+
+    write(ms(now + std::time::Duration::from_secs(7 * 3600)), 1);
+    let ending = Login::find(&home);
+    assert!(ending.signed_in());
+    assert!(ending.ends.is_some_and(|ends| ends > now));
+
+    signed_in_home(&home);
+    let unsaid = Login::find(&home);
+    assert!(
+        unsaid.signed_in(),
+        "credentials that don't say when it ends"
+    );
+    assert_eq!(unsaid.ends, None);
+}
+
 #[test]
 fn the_login_is_found_where_claude_code_keeps_it() {
     let dir = tempfile::tempdir().unwrap();

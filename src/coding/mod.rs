@@ -356,6 +356,10 @@ pub struct Login {
     /// What the agent's own settings, outside the folder a run gets, tell a
     /// run's environment: OpenCode's chosen model, and nothing else of them.
     pub env: Vec<(String, String)>,
+    /// When a Claude Code sign-in ends for good, as its credentials say
+    /// (`refreshTokenExpiresAt`): renewing its token doesn't move that date,
+    /// and after it a run asks for `claude auth login` instead of working.
+    pub ends: Option<std::time::SystemTime>,
 }
 
 impl Login {
@@ -413,6 +417,7 @@ impl Login {
             secrets,
             billing,
             env: Vec::new(),
+            ends: None,
         }
     }
 
@@ -442,6 +447,7 @@ impl Login {
             secrets: long_strings(&auth),
             billing,
             env: Vec::new(),
+            ends: None,
         }
     }
 
@@ -494,6 +500,7 @@ impl Login {
             secrets,
             billing,
             env,
+            ends: None,
         }
     }
 
@@ -516,6 +523,7 @@ impl Login {
             secrets: codex_secrets(&auth),
             billing: codex_billing(&auth),
             env: Vec::new(),
+            ends: None,
         }
     }
 
@@ -544,6 +552,7 @@ impl Login {
         let credentials = dir
             .as_ref()
             .and_then(|d| read_small(&d.join(CREDENTIALS_FILE)));
+        let ends = credentials_ending(credentials.as_deref());
         let mut billing = credentials
             .as_deref()
             .map_or(Billing::Unknown, claude_billing);
@@ -586,13 +595,20 @@ impl Login {
             secrets,
             billing,
             env: Vec::new(),
+            ends,
         }
     }
 
     /// Whether the agent is signed in here: tokens in its folder, or in
-    /// the keychain.
+    /// the keychain, and not a sign-in that ended.
     pub fn signed_in(&self) -> bool {
-        self.keychain || !self.secrets.is_empty()
+        (self.keychain || !self.secrets.is_empty()) && !self.ended()
+    }
+
+    /// A sign-in past the date it ends, which no refresh renews.
+    pub fn ended(&self) -> bool {
+        self.ends
+            .is_some_and(|ends| ends <= std::time::SystemTime::now())
     }
 
     /// The paths a run reads and writes for it.
@@ -623,6 +639,15 @@ fn is_named(name: &std::ffi::OsStr, wanted: &str) -> bool {
     } else {
         name == wanted
     }
+}
+
+/// When Claude Code's sign-in in `.credentials.json` ends for good: its
+/// refresh token's end (`refreshTokenExpiresAt`, in milliseconds), which
+/// renewing the access token never moves. None where it doesn't say.
+fn credentials_ending(text: Option<&str>) -> Option<std::time::SystemTime> {
+    let value: Value = serde_json::from_str(text?).ok()?;
+    let refresh = value["claudeAiOauth"]["refreshTokenExpiresAt"].as_u64()?;
+    Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(refresh))
 }
 
 /// Claude Code's credentials say a subscription (`pro`, `max`, `team`...) by

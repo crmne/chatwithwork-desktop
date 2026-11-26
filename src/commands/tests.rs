@@ -2214,6 +2214,7 @@ fn only_claude_codes_sign_in_is_added_to_what_a_run_writes() {
             secrets: Vec::new(),
             billing: Default::default(),
             env: Vec::new(),
+            ends: None,
         },
     }];
     let mut expected = own.clone();
