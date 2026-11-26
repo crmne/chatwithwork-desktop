@@ -1484,16 +1484,29 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
             .and_then(|t| t.elapsed().ok())
             .map_or_else(
                 || "never fetched".to_string(),
-                |age| format!("fetched {} minutes ago", age.as_secs() / 60),
+                |age| format!("fetched {}", ago(age)),
             );
         let failure = repositories::last_failure(&mirror)
             .map(|f| format!("; the last fetch failed: {f}"))
             .unwrap_or_default();
         println!(
-            "Repository {} in {}: {}, {fetched}{failure}",
+            "Repository {} in {}: {}, {fetched}{failure} (fetched again before the next command there)",
             repo.name, repo.root, repo.url
         );
     }
+}
+
+/// How long ago, as people say it: "3 minutes ago", "13 hours ago". A mirror
+/// is fetched before each command in its folder, so an old one only means
+/// nothing ran there lately.
+fn ago(age: std::time::Duration) -> String {
+    let minutes = age.as_secs() / 60;
+    let (n, unit) = match minutes {
+        0..=89 => (minutes, "minute"),
+        90..=2879 => ((minutes + 30) / 60, "hour"),
+        _ => ((minutes + 720) / 1440, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
 /// The program a run would use.
@@ -1618,6 +1631,17 @@ mod tests {
             cloned,
         });
         config
+    }
+
+    #[test]
+    fn a_mirrors_age_reads_as_people_say_it() {
+        let ago = |minutes: u64| ago(std::time::Duration::from_secs(minutes * 60 + 5));
+        assert_eq!(ago(0), "0 minutes ago");
+        assert_eq!(ago(1), "1 minute ago");
+        assert_eq!(ago(89), "89 minutes ago");
+        assert_eq!(ago(90), "2 hours ago");
+        assert_eq!(ago(798), "13 hours ago");
+        assert_eq!(ago(2880), "2 days ago");
     }
 
     #[test]
