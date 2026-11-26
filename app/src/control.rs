@@ -121,6 +121,7 @@ impl Client {
         self.request(&ControlRequest::RootsRemove {
             root: id.into(),
             via: None,
+            bots: None,
         })
         .map(drop)
     }

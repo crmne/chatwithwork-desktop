@@ -1460,6 +1460,7 @@ mod tests {
         let request = R::RootsRemove {
             root: "work".into(),
             via: None,
+            bots: None,
         };
         assert!(!has_inline_confirmation(&request));
         assert_eq!(question(&request, &status, &Value::Null).unwrap(), None);

@@ -219,7 +219,7 @@ The rules are the same as `cww roots add`. Errors include: the folder doesn't ex
 {"cmd": "roots_remove", "root": "documents"}
 ```
 
-`root` is an ID, a path, or a label that matches exactly one root. Answers with the removed `root`. Its documents are dropped from the index, and a `root_removed` audit entry is written, with `via` when the request names where it was asked: `app` (the app's own settings), `page` (a Chat with Work page in the app's window), `cww` (the command) or `tui` (the terminal UI). The client says it; any same-user client could remove the folder anyway, so it records, never authorizes.
+`root` is an ID, a path, or a label that matches exactly one root. Answers with the removed `root`. Its documents are dropped from the index, and a `root_removed` audit entry is written, with `via` when the request names where it was asked: `app` (the app's own settings), `page` (a Chat with Work page in the app's window), `cww` (the command) or `tui` (the terminal UI). The client says it; any same-user client could remove the folder anyway, so it records, never authorizes. `bots`, when given, lists the IDs of the bots the person was told it's lent to (`[]` where nobody was asked): the daemon checks it in the same config edit as the removal and refuses when the folder is lent to others by then, so a removal never stops a bot it didn't name. The app sends it from a page and from its own settings.
 
 ### `roots_writable`
 

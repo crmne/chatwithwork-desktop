@@ -1367,6 +1367,7 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                     match client.call_raw(&ControlRequest::RootsRemove {
                         root: id.clone(),
                         via: Some(cww::control::ChangeSource::Cww),
+                        bots: None,
                     }) {
                         Ok(answer) => Some(answer),
                         // An agent that can't answer doesn't keep the folder

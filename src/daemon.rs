@@ -1948,10 +1948,21 @@ impl Daemon {
         &self,
         which: String,
         via: Option<crate::control::ChangeSource>,
+        bots: Option<Vec<String>>,
     ) -> Result<Value> {
         // The removal is saved first, then the folder's list deleted.
         let (root, config) = self
             .edit_config(move |config, _| {
+                // In the same edit as the removal: a bot lent it after the
+                // person was asked keeps it.
+                if let Some(expected) = bots {
+                    let lent = crate::roots::find(config, &which)?;
+                    if !crate::roots::lent_to_exactly(lent, &expected) {
+                        anyhow::bail!(
+                            "the bots this folder is lent to changed since you were asked; ask again"
+                        );
+                    }
+                }
                 let root = remove_root(config, &which)?;
                 config.folder_env.retain(|id| id != &root.id);
                 Ok((root, config.clone()))
@@ -2543,7 +2554,9 @@ impl Daemon {
                 Ok(json!({ "stopping": true }))
             }
             request @ ControlRequest::RootsAdd { .. } => self.add_root(request).await,
-            ControlRequest::RootsRemove { root, via } => self.remove_root(root, via).await,
+            ControlRequest::RootsRemove { root, via, bots } => {
+                self.remove_root(root, via, bots).await
+            }
             ControlRequest::RootsWritable {
                 root,
                 writable,

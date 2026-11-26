@@ -239,6 +239,7 @@ pub async fn control(
         // The audit log says the app's own settings asked, whatever the page sent.
         let request = match request {
             ControlRequest::RootsRemove { root, .. } => ControlRequest::RootsRemove {
+                bots: Some(crate::computer::lent_bot_ids(&status, &root)),
                 root,
                 via: Some(cww::control::ChangeSource::App),
             },

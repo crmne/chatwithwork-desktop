@@ -2671,6 +2671,7 @@ async fn the_settings_app_manages_folders_over_the_control_channel() {
         ControlRequest::RootsRemove {
             root: "docs".into(),
             via: None,
+            bots: None,
         },
     )
     .await;

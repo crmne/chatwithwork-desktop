@@ -130,6 +130,18 @@ pub fn with_changes(request: ControlRequest, status: &Status) -> ControlRequest 
     }
 }
 
+/// The IDs of the bots folder `root` is lent to, as `status` has them: what a
+/// removal tells the daemon it was asked about, so one lent to others by then
+/// stays.
+pub fn lent_bot_ids(status: &Status, root: &str) -> Vec<String> {
+    status
+        .roots
+        .iter()
+        .find(|folder| folder.id == root)
+        .map(|folder| folder.bots.iter().map(|bot| bot.id.clone()).collect())
+        .unwrap_or_default()
+}
+
 /// The bots a folder is lent to, as its question names them: "Issue fixer
 /// (bot 34) and bot 62".
 fn bot_names(bots: &[crate::model::BotLoan]) -> String {
@@ -236,6 +248,7 @@ impl Change {
                     ControlRequest::RootsRemove {
                         root: root.id.clone(),
                         via: Some(cww::control::ChangeSource::Page),
+                        bots: Some(lent_bot_ids(status, &root.id)),
                     },
                     question,
                 )
@@ -696,6 +709,7 @@ mod tests {
             ControlRequest::RootsRemove {
                 root: "app".into(),
                 via: Some(cww::control::ChangeSource::Page),
+                bots: Some(vec!["42".into()]),
             }
         );
         let question = question.expect("asks");

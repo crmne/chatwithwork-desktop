@@ -347,6 +347,12 @@ pub enum ControlRequest {
         root: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         via: Option<ChangeSource>,
+        /// The bots the person was told it's lent to (none, where nobody
+        /// was asked): when given, a folder lent to others by the time the
+        /// daemon removes it stays, so a removal never stops a bot it didn't
+        /// name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bots: Option<Vec<String>>,
     },
     /// The last `lines` audit entries (default 50, at most 1000), oldest first.
     AuditTail {
