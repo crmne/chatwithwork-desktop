@@ -55,7 +55,7 @@ crossbeam-channel = "0.5"
 # Opens links, the config file and the log in their default apps.
 open = "5"
 # Local times in the tray's last access line.
-jiff = "0.2"
+jiff = "1.0"
 # Start at login in the tray: the XDG autostart entry on Linux, a login
 # item with the bundle's launch agent on macOS, the Run key on Windows. Same
 # release as fastframe-audio.
