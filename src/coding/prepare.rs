@@ -1148,7 +1148,7 @@ mod tests {
             .unwrap();
         std::fs::write(
             upstream.join("docker-compose.yml"),
-            "services:\n  db:\n    image: postgres:17\n",
+            "services:\n  db:\n    image: postgres:17\n    ports:\n      - \"5432:5432\"\n",
         )
         .unwrap();
         git(&["add", "."]);
@@ -1166,6 +1166,10 @@ mod tests {
         .expect("prepared");
 
         assert_eq!(view.checkout.as_deref(), Some("app"), "{view:?}");
+        assert!(
+            view.services.iter().any(|s| s.name == "PostgreSQL"),
+            "what it needs is the service main added since: {view:?}"
+        );
         let age = repositories::fetched_at(&mirror)
             .unwrap()
             .elapsed()

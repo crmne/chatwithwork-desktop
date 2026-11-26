@@ -1489,8 +1489,14 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
         let failure = repositories::last_failure(&mirror)
             .map(|f| format!("; the last fetch failed: {f}"))
             .unwrap_or_default();
+        // A run never fetches a mirror a command could have changed.
+        let next = if repositories::writable_by_commands(&mirror, &config.roots) {
+            "a command there could change it, so only `cww coding fetch` fetches it"
+        } else {
+            "fetched again before the next command there"
+        };
         println!(
-            "Repository {} in {}: {}, {fetched}{failure} (fetched again before the next command there)",
+            "Repository {} in {}: {}, {fetched}{failure} ({next})",
             repo.name, repo.root, repo.url
         );
     }
