@@ -77,6 +77,10 @@ pub struct AuditEntry {
     pub results: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Where a change to the shared folders was asked for: `app`, `page`
+    /// (a Chat with Work page in the app's window), `cww` or `tui`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     /// How long the daemon took to answer a tool call, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<f64>,

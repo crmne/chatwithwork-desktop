@@ -460,6 +460,15 @@ pub fn canonical(path: &Path) -> Result<PathBuf> {
 }
 
 /// Remove a root by ID, label or path.
+/// Whether `root` is lent to exactly the bots `expected` names, in any order.
+pub fn lent_to_exactly(root: &Root, expected: &[String]) -> bool {
+    let mut lent: Vec<&str> = root.bots.iter().map(|bot| bot.id.as_str()).collect();
+    let mut expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+    lent.sort_unstable();
+    expected.sort_unstable();
+    lent == expected
+}
+
 pub fn remove_root(config: &mut Config, which: &str) -> Result<Root> {
     let index = find_root(config, which)?;
     let root = config.roots.remove(index);
@@ -796,6 +805,24 @@ fn widens(before: Option<&Root>, after: &Root) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A removal the person was asked about names the bots it stops; a folder
+    /// lent to another by the time the daemon removes it doesn't match.
+    #[test]
+    fn a_removal_matches_only_the_bots_it_named() {
+        let loan = |id: &str| -> BotLoan {
+            serde_json::from_value(serde_json::json!({ "id": id })).unwrap()
+        };
+        let mut root: Root = serde_json::from_value(serde_json::json!({
+            "id": "bots", "label": "bots", "path": "/tmp/bots"
+        }))
+        .unwrap();
+        assert!(lent_to_exactly(&root, &[]));
+        root.bots = vec![loan("34"), loan("62")];
+        assert!(lent_to_exactly(&root, &["62".into(), "34".into()]));
+        assert!(!lent_to_exactly(&root, &["34".into()]));
+        assert!(!lent_to_exactly(&root, &[]));
+    }
     use crate::config::Limits;
 
     #[test]

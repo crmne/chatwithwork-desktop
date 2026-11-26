@@ -1364,7 +1364,11 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
             let id = cww::roots::find(&config, &root)?.id.clone();
             let answer = match control::Client::connect(&paths.socket_path()) {
                 Ok(Some(mut client)) => {
-                    match client.call_raw(&ControlRequest::RootsRemove { root: id.clone() }) {
+                    match client.call_raw(&ControlRequest::RootsRemove {
+                        root: id.clone(),
+                        via: Some(cww::control::ChangeSource::Cww),
+                        bots: None,
+                    }) {
                         Ok(answer) => Some(answer),
                         // An agent that can't answer doesn't keep the folder
                         // shared: it's removed here, as with no agent, and an
@@ -1412,11 +1416,12 @@ fn roots(paths: &Paths, command: RootsCommand) -> Result<()> {
                         return Ok(());
                     };
                     cww::commands::env::delete_logged(&config, paths, &removed.id);
-                    audit_here(
-                        paths,
-                        "root_removed",
-                        format!("{} ({})", removed.id, removed.label),
-                    );
+                    let mut entry = audit::AuditEntry::event("root_removed");
+                    entry.detail = Some(format!("{} ({})", removed.id, removed.label));
+                    entry.via = Some(cww::control::ChangeSource::Cww.key().to_string());
+                    if let Err(e) = audit::append_from_outside(&paths.audit_file(), &entry) {
+                        eprintln!("warning: couldn't write the audit log: {e:#}");
+                    }
                     println!(
                         "Stopped sharing {} ({}).",
                         removed.path.display(),
@@ -2495,14 +2500,6 @@ fn host_exe() -> Result<PathBuf> {
 /// it, in the audit log, as the agent records the same change made through
 /// it. A log that can't be written is said, not fatal: the change is
 /// already saved.
-fn audit_here(paths: &Paths, event: &str, detail: String) {
-    let mut entry = audit::AuditEntry::event(event);
-    entry.detail = Some(detail);
-    if let Err(e) = audit::append_from_outside(&paths.audit_file(), &entry) {
-        eprintln!("warning: couldn't write the audit log: {e:#}");
-    }
-}
-
 fn notify_daemon(paths: &Paths, if_not_running: &str) {
     match control::request(&paths.socket_path(), ControlRequest::Reload) {
         Ok(Some(_)) => println!("The daemon picked up the change."),

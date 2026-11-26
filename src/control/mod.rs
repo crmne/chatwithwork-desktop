@@ -54,6 +54,32 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// base64, with room for the rest of the request.
 const MAX_UPLOAD_REQUEST_BYTES: usize = crate::chats::MAX_UPLOAD_BYTES.div_ceil(3) * 4 + 4096;
 
+/// Where a change to the shared folders was asked for, as the audit log
+/// records it (`via`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeSource {
+    /// The app's own settings pages.
+    App,
+    /// A Chat with Work page in the app's window, through its page API.
+    Page,
+    /// The `cww` command.
+    Cww,
+    /// The terminal UI.
+    Tui,
+}
+
+impl ChangeSource {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::Page => "page",
+            Self::Cww => "cww",
+            Self::Tui => "tui",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "cmd")]
 pub enum ControlRequest {
@@ -314,9 +340,19 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repository: Option<String>,
     },
-    /// Stop sharing a folder, by ID, label or path.
+    /// Stop sharing a folder, by ID, label or path. `via` says where the
+    /// person asked for it, for the audit log: whoever sends it says, as a
+    /// same-user client could remove the folder anyway.
     RootsRemove {
         root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        via: Option<ChangeSource>,
+        /// The bots the person was told it's lent to (none, where nobody
+        /// was asked): when given, a folder lent to others by the time the
+        /// daemon removes it stays, so a removal never stops a bot it didn't
+        /// name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bots: Option<Vec<String>>,
     },
     /// The last `lines` audit entries (default 50, at most 1000), oldest first.
     AuditTail {

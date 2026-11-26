@@ -130,6 +130,46 @@ pub fn with_changes(request: ControlRequest, status: &Status) -> ControlRequest 
     }
 }
 
+/// The IDs of the bots folder `root` is lent to, as `status` has them: what a
+/// removal tells the daemon it was asked about, so one lent to others by then
+/// stays.
+pub fn lent_bot_ids(status: &Status, root: &str) -> Vec<String> {
+    status
+        .roots
+        .iter()
+        .find(|folder| folder.id == root)
+        .map(|folder| folder.bots.iter().map(|bot| bot.id.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// The bots a folder is lent to, as its question names them: "Issue fixer
+/// (bot 34) and bot 62".
+fn bot_names(bots: &[crate::model::BotLoan]) -> String {
+    let names: Vec<String> = bots
+        .iter()
+        .map(|bot| {
+            if bot.name.trim().is_empty() {
+                format!("bot {}", bot.id)
+            } else {
+                format!("{} (bot {})", bot.name.trim(), bot.id)
+            }
+        })
+        .collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => capitalized(one),
+        [rest @ .., last] => capitalized(&format!("{} and {last}", rest.join(", "))),
+    }
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 /// What a page may ask. Anything else is refused before it reaches the
 /// daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -187,12 +227,32 @@ impl Change {
                     None
                 },
             ),
-            Change::Remove { folder } => (
-                ControlRequest::RootsRemove {
-                    root: find(folder)?.id.clone(),
-                },
-                None,
-            ),
+            Change::Remove { folder } => {
+                let root = find(folder)?;
+                // Narrowing needs no question, except for a folder lent to
+                // bots: stopping sharing it stops them working here, which a
+                // page script, or a test run against the real app, could do
+                // without anyone meaning it (chalk, 2026-11-25).
+                let question = (!root.bots.is_empty()).then(|| Question {
+                    title: "Stop Sharing".into(),
+                    message: format!(
+                        "Stop sharing “{}”? {} {} it, and stop working on this computer until it's shared with {} again. Nothing on this computer is deleted.",
+                        root.label,
+                        bot_names(&root.bots),
+                        if root.bots.len() == 1 { "uses" } else { "use" },
+                        if root.bots.len() == 1 { "it" } else { "them" },
+                    ),
+                    yes: "Stop Sharing".into(),
+                });
+                (
+                    ControlRequest::RootsRemove {
+                        root: root.id.clone(),
+                        via: Some(cww::control::ChangeSource::Page),
+                        bots: Some(lent_bot_ids(status, &root.id)),
+                    },
+                    question,
+                )
+            }
             Change::Rename { folder, label } => {
                 let label = label.trim();
                 if label.is_empty() || label.chars().count() > 80 {
@@ -633,6 +693,49 @@ mod tests {
             let (_, question) = change(asked.clone()).plan(&status).unwrap();
             assert_eq!(question, None, "{asked}");
         }
+    }
+
+    /// A folder lent to bots is the one narrowing that asks: stopping
+    /// sharing it stops them working here, and on chalk both bots' folders
+    /// went at once without anyone meaning it (2026-11-25).
+    #[test]
+    fn stopping_sharing_a_folder_lent_to_bots_asks_and_names_them() {
+        let mut status = status();
+        let (request, question) = change(json!({ "action": "remove", "folder": "app" }))
+            .plan(&status)
+            .unwrap();
+        assert_eq!(
+            request,
+            ControlRequest::RootsRemove {
+                root: "app".into(),
+                via: Some(cww::control::ChangeSource::Page),
+                bots: Some(vec!["42".into()]),
+            }
+        );
+        let question = question.expect("asks");
+        assert_eq!(question.yes, "Stop Sharing");
+        assert!(
+            question
+                .message
+                .starts_with("Stop sharing “App”? Fixer (bot 42) uses it,"),
+            "{}",
+            question.message
+        );
+
+        status.roots[1].bots.push(BotLoan {
+            id: "62".into(),
+            name: String::new(),
+            unattended: false,
+        });
+        let (_, question) = change(json!({ "action": "remove", "folder": "app" }))
+            .plan(&status)
+            .unwrap();
+        assert!(
+            question
+                .unwrap()
+                .message
+                .contains("Fixer (bot 42) and bot 62 use it, and stop working on this computer until it's shared with them again."),
+        );
     }
 
     #[test]

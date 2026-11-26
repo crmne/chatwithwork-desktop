@@ -120,6 +120,12 @@ pub async fn computer_change(
             if !confirm(&app, &label, &question) {
                 return Ok(json!({ "declined": true }));
             }
+            // What the yes was for must still be all it does: a bot lent the
+            // folder while the dialog was open isn't named in it.
+            let now = desktop.client.status().map_err(|e| e.to_string())?;
+            if change.plan(&now)?.1.as_ref() != Some(&question) {
+                return Err("That changed while you were deciding. Try again.".to_string());
+            }
         }
         desktop
             .client

@@ -1944,10 +1944,25 @@ impl Daemon {
         Ok(json!({ "root": root }))
     }
 
-    async fn remove_root(&self, which: String) -> Result<Value> {
+    async fn remove_root(
+        &self,
+        which: String,
+        via: Option<crate::control::ChangeSource>,
+        bots: Option<Vec<String>>,
+    ) -> Result<Value> {
         // The removal is saved first, then the folder's list deleted.
         let (root, config) = self
             .edit_config(move |config, _| {
+                // In the same edit as the removal: a bot lent it after the
+                // person was asked keeps it.
+                if let Some(expected) = bots {
+                    let lent = crate::roots::find(config, &which)?;
+                    if !crate::roots::lent_to_exactly(lent, &expected) {
+                        anyhow::bail!(
+                            "the bots this folder is lent to changed since you were asked; ask again"
+                        );
+                    }
+                }
                 let root = remove_root(config, &which)?;
                 config.folder_env.retain(|id| id != &root.id);
                 Ok((root, config.clone()))
@@ -1962,6 +1977,7 @@ impl Daemon {
         }
         let mut entry = AuditEntry::event("root_removed");
         entry.detail = Some(format!("{} ({})", root.id, root.label));
+        entry.via = via.map(|via| via.key().to_string());
         self.audit.append(&entry);
         self.reload().await?;
         Ok(json!({ "root": root }))
@@ -2420,7 +2436,7 @@ impl ControlHandler for Daemon {
         // Taken as it arrives, before anything it does can stall.
         let asked = self.change_order.ticket();
         let folder = match &request {
-            ControlRequest::RootsRemove { root }
+            ControlRequest::RootsRemove { root, .. }
             | ControlRequest::RootsWritable { root, .. }
             | ControlRequest::RootsCommands { root, .. }
             | ControlRequest::RootsLocalServices { root, .. }
@@ -2538,7 +2554,9 @@ impl Daemon {
                 Ok(json!({ "stopping": true }))
             }
             request @ ControlRequest::RootsAdd { .. } => self.add_root(request).await,
-            ControlRequest::RootsRemove { root } => self.remove_root(root).await,
+            ControlRequest::RootsRemove { root, via, bots } => {
+                self.remove_root(root, via, bots).await
+            }
             ControlRequest::RootsWritable {
                 root,
                 writable,

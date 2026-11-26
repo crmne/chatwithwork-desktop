@@ -216,10 +216,35 @@ pub async fn control(
             // A dialog can outlive navigation or bot removal.
             crate::preferences::grant_context(&app, &desktop, &webview, &request)
                 .map_err(|e| refusal("forbidden", e))?;
+            // What the yes was for must still be all it does: a bot lent the
+            // folder while the dialog was open isn't named in it.
+            let now = desktop
+                .client
+                .status()
+                .map_err(|e| refusal("not_running", e.to_string()))?;
+            if crate::preferences::question(&request, &now, &context)
+                .map_err(|e| refusal("refused", e))?
+                .as_ref()
+                != Some(&question)
+            {
+                return Err(refusal(
+                    "changed",
+                    "That changed while you were deciding. Try again.",
+                ));
+            }
         }
         // Run commands in a read-only folder: its one question covered
         // changes too, so the agent allows both in one edit.
         let request = crate::computer::with_changes(request, &status);
+        // The audit log says the app's own settings asked, whatever the page sent.
+        let request = match request {
+            ControlRequest::RootsRemove { root, .. } => ControlRequest::RootsRemove {
+                bots: Some(crate::computer::lent_bot_ids(&status, &root)),
+                root,
+                via: Some(cww::control::ChangeSource::App),
+            },
+            other => other,
+        };
         desktop.client.request(&request).map_err(|e| match e {
             crate::control::ControlError::NotRunning => refusal("not_running", e.to_string()),
             other => refusal("refused", other.to_string()),

@@ -118,8 +118,12 @@ impl Client {
 
     #[cfg(test)]
     pub fn remove_root(&self, id: &str) -> Result<()> {
-        self.request(&ControlRequest::RootsRemove { root: id.into() })
-            .map(drop)
+        self.request(&ControlRequest::RootsRemove {
+            root: id.into(),
+            via: None,
+            bots: None,
+        })
+        .map(drop)
     }
 
     #[cfg(test)]
