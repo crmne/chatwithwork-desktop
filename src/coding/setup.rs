@@ -1428,11 +1428,25 @@ fn proof_step(
     Ok(())
 }
 
+/// A sign-in that ends for good within two days, as status warns of it:
+/// renewing its token doesn't move the date, and bots' runs stop working then.
+fn ending_soon(ends: Option<std::time::SystemTime>) -> Option<String> {
+    let left = ends?.duration_since(std::time::SystemTime::now()).ok()?;
+    let hours = left.as_secs().div_ceil(3600);
+    (hours <= 48).then(|| {
+        format!(
+            ", until it ends in {hours} hour{}: sign in again with `claude auth login` before then, or bots' runs stop",
+            if hours == 1 { "" } else { "s" }
+        )
+    })
+}
+
 /// What each folder lent to a bot has, as `cww coding status` prints it.
 pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
     for agent in Agent::ALL {
         let name = agent.name();
-        let stored = login(agent, paths).signed_in();
+        let found = login(agent, paths);
+        let stored = found.signed_in();
         let program = installed(agent, config);
         match &program {
             Some(p) => println!("{name}: {}", p.display()),
@@ -1445,7 +1459,15 @@ pub fn summary(config: &Config, paths: &Paths, only_bot: Option<&str>) {
         println!(
             "Sign-in: {}",
             if stored {
-                format!("{name} is signed in on this computer")
+                format!(
+                    "{name} is signed in on this computer{}",
+                    ending_soon(found.ends).unwrap_or_default()
+                )
+            } else if found.ended() {
+                format!(
+                    "{name}'s sign-in on this computer has ended, so bots' runs can't use it: {}",
+                    agent.sign_in_hint()
+                )
             } else {
                 format!(
                     "{name} isn't signed in on this computer: {}",
@@ -1626,6 +1648,17 @@ pub fn status_json(config: &Config, paths: &Paths, only_bot: Option<&str>) -> Va
 mod tests {
     use super::*;
     use crate::config::Repository;
+
+    #[test]
+    fn status_warns_of_a_sign_in_that_ends_within_two_days() {
+        let now = std::time::SystemTime::now();
+        let hours = |h: u64| Some(now + std::time::Duration::from_secs(h * 3600 - 60));
+        assert!(ending_soon(hours(7)).unwrap().contains("ends in 7 hours"));
+        assert!(ending_soon(hours(1)).unwrap().contains("ends in 1 hour:"));
+        assert!(ending_soon(hours(48)).is_some());
+        assert_eq!(ending_soon(hours(72)), None);
+        assert_eq!(ending_soon(None), None);
+    }
 
     fn with_repository(cloned: Option<bool>) -> Config {
         let mut config = Config::default();

@@ -111,7 +111,7 @@ Nothing else of the home folder is writable, and little else is there: not `~/.s
 
 **The right `claude`.** For such a run the sandbox reads the folder holding the program setup recorded (for the native installer, `~/.local/share/claude/versions`, where `~/.local/bin/claude` leads), and `PATH` starts with a folder of the run's own holding only a link named `claude` to it (on Windows, the folder holding `claude.exe` goes first). mise's shims and everything else stay after it, so a `claude` that mise or npm also installed doesn't shadow it, and no wrapper is needed.
 
-**Not signed in.** `cww coding status` and setup say "Claude Code isn't signed in on this computer: run `claude` once and sign in". The server's `roots` comes from `config.toml`, which doesn't know, so a run there hears it from Claude Code itself ("Not logged in").
+**Not signed in.** `cww coding status` and setup say "Claude Code isn't signed in on this computer: run `claude` once and sign in". The server's `roots` comes from `config.toml`, which doesn't know, so a run there hears it from Claude Code itself ("Not logged in"). A sign-in also ends for good on a date its credentials keep (`refreshTokenExpiresAt`), which renewing its token doesn't move: past it, it counts as not signed in, so `coding_prepare` answers `not_signed_in` before a run starts rather than a run that prints "Run claude auth login now" and times out (chalk, 2026-11-26), and `cww coding status` says it ended. Within two days of it, status says how many hours are left, so you sign in again with `claude auth login` before bots' runs stop.
 
 **What it can't promise.** A command given the sign-in can use it, and a command can be any line of shell:
 
