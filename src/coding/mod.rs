@@ -1230,7 +1230,22 @@ pub fn agent_state(agent: Agent, root: &Root, bot: &str) -> AgentState {
 /// What a bot's `roots` says of a folder lent to it: whether each agent is
 /// ready, whether this computer prepares repositories by itself, and the
 /// repositories' names. Never a path, an address or a token.
-pub fn coding_for_bot(coding: &CodingConfig, root: &Root, bot: &str) -> Value {
+///
+/// `signed_out` names the agents whose sign-in here is missing or ended, as
+/// the command runner found them: one the config calls ready reads
+/// `not_signed_in`, so the server asks for a sign-in before a run starts.
+pub fn coding_for_bot(
+    coding: &CodingConfig,
+    root: &Root,
+    bot: &str,
+    signed_out: &[String],
+) -> Value {
+    let state = |agent: Agent| match agent_state(agent, root, bot) {
+        AgentState::Ready if signed_out.iter().any(|key| key == agent.key()) => {
+            AgentState::NotSignedIn
+        }
+        state => state,
+    };
     let held = || {
         coding
             .repositories
@@ -1250,13 +1265,13 @@ pub fn coding_for_bot(coding: &CodingConfig, root: &Root, bot: &str) -> Value {
         .collect();
     json!({
         // Kept for servers that know only this one.
-        "claude_code": agent_state(Agent::ClaudeCode, root, bot).name(),
+        "claude_code": state(Agent::ClaudeCode).name(),
         "agents": Agent::ALL
             .iter()
             .map(|agent| {
                 let state = match agent.unavailable() {
                     Some(_) => "not_available",
-                    None => agent_state(*agent, root, bot).name(),
+                    None => state(*agent).name(),
                 };
                 (agent.key().to_string(), json!(state))
             })

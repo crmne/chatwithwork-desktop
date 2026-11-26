@@ -222,11 +222,30 @@ fn a_bot_sees_whether_claude_is_ready_and_repository_names_only() {
         github: None,
         cloned: None,
     });
-    let value = coding_for_bot(&coding, &root(Some(loan(true))), "42");
+    let value = coding_for_bot(&coding, &root(Some(loan(true))), "42", &[]);
     assert_eq!(value["claude_code"], "ready");
     assert_eq!(value["repositories"], serde_json::json!(["app"]));
     let text = value.to_string();
     assert!(!text.contains("github.com") && !text.contains("/home/u"));
+
+    // A ready loan whose agent isn't signed in here (or its sign-in ended)
+    // says so, so the server asks for a sign-in before a run starts.
+    let value = coding_for_bot(
+        &coding,
+        &root(Some(loan(true))),
+        "42",
+        &["claude_code".to_string()],
+    );
+    assert_eq!(value["claude_code"], "not_signed_in");
+    assert_eq!(value["agents"]["claude_code"], "not_signed_in");
+    // Only a ready one: a loan that doesn't allow it still says so.
+    let value = coding_for_bot(
+        &coding,
+        &root(Some(loan(false))),
+        "42",
+        &["claude_code".to_string()],
+    );
+    assert_eq!(value["claude_code"], "not_allowed");
 }
 
 #[test]
@@ -789,7 +808,7 @@ fn each_agent_has_its_own_switch_on_a_loan() {
     assert_eq!(run.agents[0].agent, Agent::Codex);
     assert_eq!(run.agents[0].program, codex);
 
-    let value = coding_for_bot(&config.coding, &config.roots[0], "42");
+    let value = coding_for_bot(&config.coding, &config.roots[0], "42", &[]);
     assert_eq!(value["agents"]["codex"], "ready");
     assert_eq!(value["agents"]["claude_code"], "not_allowed");
     assert_eq!(
@@ -1087,7 +1106,7 @@ fn opencode_gemini_and_pi_each_have_their_own_switch_on_a_loan() {
             };
             assert_eq!(agent_state(other, &config.roots[0], "42"), want);
         }
-        let value = coding_for_bot(&config.coding, &config.roots[0], "42");
+        let value = coding_for_bot(&config.coding, &config.roots[0], "42", &[]);
         let said = if agent.unavailable().is_some() {
             "not_available"
         } else {
