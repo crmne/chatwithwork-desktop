@@ -466,7 +466,13 @@ impl LocalFiles {
                         &caller,
                     )
                     .await;
-                output.map(|output| self.for_caller(output, &caller))
+                // Which agents aren't signed in here, for what a bot's `roots` says
+                // is ready: only the command runner can look in the home folder.
+                let signed_out = match (&output, &caller) {
+                    (Ok(Output::Roots(_)), Caller::Bot { .. }) => self.signed_out().await,
+                    _ => Vec::new(),
+                };
+                output.map(|output| self.for_caller(output, &caller, &signed_out))
             }
             Err(err) => Err(err),
         };
@@ -1122,7 +1128,24 @@ impl LocalFiles {
 
     /// What a bot sees of the list of folders: only those lent to it, each
     /// saying whether its commands there start unattended.
-    fn for_caller(&self, output: Output, caller: &Caller) -> Output {
+    /// The agents whose sign-in on this computer is missing or ended, as the
+    /// command runner sees them. Empty when it can't say.
+    async fn signed_out(&self) -> Vec<String> {
+        let Some(commands) = self.commands() else {
+            return Vec::new();
+        };
+        match commands.runner.coding_look(None).await {
+            Ok(look) => look
+                .agents
+                .into_iter()
+                .filter(|agent| agent.installed && !agent.signed_in)
+                .map(|agent| agent.agent)
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn for_caller(&self, output: Output, caller: &Caller, signed_out: &[String]) -> Output {
         match (output, caller) {
             (Output::Roots(_), Caller::Bot { id, .. }) => {
                 let reader = &self.inner.reader;
@@ -1132,7 +1155,7 @@ impl LocalFiles {
                     .filter_map(|mut root| {
                         let loan = reader.loan(&root.id, id)?;
                         root.unattended = Some(loan.unattended && root.allows_commands);
-                        root.coding = reader.coding_for_bot(&root.id, id);
+                        root.coding = reader.coding_for_bot(&root.id, id, signed_out);
                         Some(root)
                     })
                     .collect();

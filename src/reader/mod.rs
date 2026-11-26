@@ -419,13 +419,19 @@ impl Reader {
 
     /// Whether Claude Code is ready for bot `bot` in folder `root`, and the
     /// repositories checked out there (docs/coding-computers.md).
-    pub fn coding_for_bot(&self, root: &str, bot: &str) -> Option<serde_json::Value> {
+    pub fn coding_for_bot(
+        &self,
+        root: &str,
+        bot: &str,
+        signed_out: &[String],
+    ) -> Option<serde_json::Value> {
         let state = self.state.read().expect("reader state");
         let configured = state.configured.iter().find(|r| r.id == root)?;
         Some(crate::coding::coding_for_bot(
             &state.coding,
             configured,
             bot,
+            signed_out,
         ))
     }
 
