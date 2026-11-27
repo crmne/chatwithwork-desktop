@@ -1111,6 +1111,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_prepared_repository_is_fetched_before_its_needs_are_read() {
+        // Nix's check phase has no git.
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
         let (dir, config, paths, ask) = fixture(&["acme"], true);
         let upstream = dir.path().join("upstream");
         std::fs::create_dir(&upstream).unwrap();
